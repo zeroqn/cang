@@ -9,12 +9,12 @@ use std::slice;
 
 use rustix::io::retry_on_intr;
 use rustix::net::{
-    RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
-    SendAncillaryMessage, SendFlags, recvmsg, send, sendmsg,
+    recvmsg, send, sendmsg, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags,
+    SendAncillaryBuffer, SendAncillaryMessage, SendFlags,
 };
 
 use super::protocol::{ArgumentType, Message};
-use super::wire::{MessageParseError, MessageWriteError, parse_message, write_to_buffers};
+use super::wire::{parse_message, write_to_buffers, MessageParseError, MessageWriteError};
 
 /// Maximum number of FD that can be sent in a single socket message
 pub const MAX_FDS_OUT: usize = 28;
@@ -462,20 +462,14 @@ mod tests {
 
     #[test]
     fn write_read_cycle_fd() {
+        let (read, write) = std::io::pipe().unwrap();
+
         let msg = Message {
             sender_id: 42,
             opcode: 7,
             args: smallvec![
-                Argument::Fd(
-                    unsafe { BorrowedFd::borrow_raw(1) }
-                        .try_clone_to_owned()
-                        .unwrap()
-                ), // stdin
-                Argument::Fd(
-                    unsafe { BorrowedFd::borrow_raw(0) }
-                        .try_clone_to_owned()
-                        .unwrap()
-                ), // stdout
+                Argument::Fd(read.as_fd().try_clone_to_owned().unwrap()),
+                Argument::Fd(write.as_fd().try_clone_to_owned().unwrap()),
             ],
         };
 
@@ -499,14 +493,13 @@ mod tests {
                 }
             })
             .unwrap();
-        assert_eq_msgs(
-            &msg.map_fd(|fd| fd.as_raw_fd()),
-            &ret_msg.map_fd(IntoRawFd::into_raw_fd),
-        );
+        assert_eq_msgs(&msg, &ret_msg);
     }
 
     #[test]
     fn write_read_cycle_multiple() {
+        let (read, write) = std::io::pipe().unwrap();
+
         let messages = vec![
             Message {
                 sender_id: 42,
@@ -520,16 +513,8 @@ mod tests {
                 sender_id: 42,
                 opcode: 1,
                 args: smallvec![
-                    Argument::Fd(
-                        unsafe { BorrowedFd::borrow_raw(1) }
-                            .try_clone_to_owned()
-                            .unwrap()
-                    ), // stdin
-                    Argument::Fd(
-                        unsafe { BorrowedFd::borrow_raw(0) }
-                            .try_clone_to_owned()
-                            .unwrap()
-                    ), // stdout
+                    Argument::Fd(read.as_fd().try_clone_to_owned().unwrap()),
+                    Argument::Fd(write.as_fd().try_clone_to_owned().unwrap()),
                 ],
             },
             Message {
@@ -575,10 +560,7 @@ mod tests {
         }
         assert_eq!(recv_msgs.len(), 3);
         for (msg1, msg2) in messages.into_iter().zip(recv_msgs.into_iter()) {
-            assert_eq_msgs(
-                &msg1.map_fd(|fd| fd.as_raw_fd()),
-                &msg2.map_fd(IntoRawFd::into_raw_fd),
-            );
+            assert_eq_msgs(&msg1, &msg2);
         }
     }
 
@@ -619,9 +601,6 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq_msgs(
-            &msg.map_fd(|fd| fd.as_raw_fd()),
-            &ret_msg.map_fd(IntoRawFd::into_raw_fd),
-        );
+        assert_eq_msgs(&msg, &ret_msg);
     }
 }
