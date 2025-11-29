@@ -1,0 +1,107 @@
+use std::os::unix::net::UnixStream;
+
+use anyhow::Context;
+use calloop::{
+    EventSource, Interest, Mode, Poll, PostAction, Readiness, Token, TokenFactory, generic::Generic,
+};
+use log::info;
+use wayland_server::{BindError, ListeningSocket};
+
+/// A Wayland listening socket event source.
+///
+/// This implements [`EventSource`] and may be inserted into an event loop.
+#[derive(Debug)]
+pub struct ListeningSocketSource {
+    socket: Generic<ListeningSocket>,
+}
+
+impl ListeningSocketSource {
+    /// Creates a new listening socket, automatically choosing the next available `wayland` socket name.
+    pub fn new_auto() -> Result<ListeningSocketSource, BindError> {
+        // Try socket numbers 1-32. Remember the upper bound of Range is exclusive.
+        //
+        // We don't try wayland-0 due since clients may connect to the wrong compositor. Clients these days
+        // should be connecting based off the WAYLAND_DISPLAY or WAYLAND_SOCKET environment variables.
+        let socket = ListeningSocket::bind_auto("wayland", 1..33)?;
+        info!("Created new socket: {:?}", socket.socket_name());
+
+        Ok(ListeningSocketSource {
+            socket: Generic::new(socket, Interest::READ, Mode::Level),
+        })
+    }
+
+    /*
+    /// Creates a new listening socket with the specified name.
+    pub fn with_name(name: &str) -> Result<ListeningSocketSource, BindError> {
+        let socket = ListeningSocket::bind(name)?;
+        info!("Created new socket: {:?}", socket.socket_name());
+
+        Ok(ListeningSocketSource {
+            socket: Generic::new(socket, Interest::READ, Mode::Level),
+        })
+    }
+
+    /// Returns the name of the listening socket.
+    pub fn socket_name(&self) -> &OsStr {
+        self.socket.get_ref().socket_name().unwrap()
+    }
+    */
+}
+
+impl EventSource for ListeningSocketSource {
+    /// A stream to the new client.
+    ///
+    /// You must register the  client using the stream by calling
+    /// [`DisplayHandle::insert_client`](wayland_server::DisplayHandle::insert_client).
+    type Event = UnixStream;
+    type Metadata = ();
+    type Ret = Result<(), anyhow::Error>;
+    type Error = anyhow::Error;
+
+    fn process_events<F>(
+        &mut self,
+        readiness: Readiness,
+        token: Token,
+        mut callback: F,
+    ) -> Result<PostAction, anyhow::Error>
+    where
+        F: FnMut(Self::Event, &mut Self::Metadata) -> Self::Ret,
+    {
+        let mut res = Ok(PostAction::Continue);
+
+        self.socket
+            .process_events(readiness, token, |_, socket| {
+                while let Some(client) = socket.accept()? {
+                    info!("New client connected: {:?}", client);
+                    if let Err(err) = callback(client, &mut ()) {
+                        res = Err(err);
+                    }
+                }
+
+                Ok(PostAction::Continue)
+            })
+            .context("Failed to process wayland events")?;
+
+        res
+    }
+
+    fn register(
+        &mut self,
+        poll: &mut Poll,
+        token_factory: &mut TokenFactory,
+    ) -> calloop::Result<()> {
+        self.socket.register(poll, token_factory)
+    }
+
+    fn reregister(
+        &mut self,
+        poll: &mut Poll,
+        token_factory: &mut TokenFactory,
+    ) -> calloop::Result<()> {
+        self.socket.reregister(poll, token_factory)
+    }
+
+    fn unregister(&mut self, poll: &mut Poll) -> calloop::Result<()> {
+        self.socket.unregister(poll)
+    }
+}
