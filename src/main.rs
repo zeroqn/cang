@@ -76,8 +76,17 @@ fn main() -> anyhow::Result<()> {
 
     let drm_device =
         find_virtio_dri_node().with_context(|| "Failed to find virtio_gpu dri device")?;
-    let wayland_source = self::source::listen::ListeningSocketSource::new_auto()
-        .with_context(|| "Failed to listen for wayland connections")?;
+
+    let wayland_source = if let Some(socket_fd) = sd_listen_fds::get()
+        .ok()
+        .and_then(|fds| fds.into_iter().next())
+        .map(|(_name, fd)| fd.into_std())
+    {
+        self::source::listen::ListeningSocketSource::from(socket_fd)
+    } else {
+        self::source::listen::ListeningSocketSource::new_auto()
+            .with_context(|| "Failed to listen for wayland connections")?
+    };
 
     let mut event_loop =
         EventLoop::<'static, State>::try_new().with_context(|| "Failed to create event loop")?;

@@ -1,4 +1,13 @@
-use std::os::unix::net::UnixStream;
+use std::{
+    io,
+    os::{
+        fd::{AsFd, OwnedFd},
+        unix::{
+            net::{UnixListener, UnixStream},
+            prelude::BorrowedFd,
+        },
+    },
+};
 
 use anyhow::Context;
 use calloop::{
@@ -12,7 +21,47 @@ use wayland_server::{BindError, ListeningSocket};
 /// This implements [`EventSource`] and may be inserted into an event loop.
 #[derive(Debug)]
 pub struct ListeningSocketSource {
-    socket: Generic<ListeningSocket>,
+    socket: Generic<Socket>,
+}
+
+#[derive(Debug)]
+enum Socket {
+    WlServer(ListeningSocket),
+    DirectUnix(UnixListener),
+}
+
+impl Socket {
+    pub fn accept(&self) -> std::io::Result<Option<UnixStream>> {
+        match self {
+            Socket::WlServer(wl) => wl.accept(),
+            Socket::DirectUnix(s) => match s.accept() {
+                Ok((socket, _)) => Ok(Some(socket)),
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(None),
+                Err(err) => Err(err),
+            },
+        }
+    }
+}
+
+impl From<ListeningSocket> for Socket {
+    fn from(value: ListeningSocket) -> Self {
+        Socket::WlServer(value)
+    }
+}
+
+impl From<UnixListener> for Socket {
+    fn from(value: UnixListener) -> Self {
+        Socket::DirectUnix(value)
+    }
+}
+
+impl AsFd for Socket {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        match self {
+            Socket::WlServer(wl) => wl.as_fd(),
+            Socket::DirectUnix(s) => s.as_fd(),
+        }
+    }
 }
 
 impl ListeningSocketSource {
@@ -26,7 +75,7 @@ impl ListeningSocketSource {
         info!("Created new socket: {:?}", socket.socket_name());
 
         Ok(ListeningSocketSource {
-            socket: Generic::new(socket, Interest::READ, Mode::Level),
+            socket: Generic::new(socket.into(), Interest::READ, Mode::Level),
         })
     }
 
@@ -46,6 +95,18 @@ impl ListeningSocketSource {
         self.socket.get_ref().socket_name().unwrap()
     }
     */
+}
+
+impl TryFrom<OwnedFd> for ListeningSocketSource {
+    type Error = io::Error;
+
+    fn try_from(value: OwnedFd) -> Result<Self, io::Error> {
+        let listener = UnixListener::from(value);
+        listener.set_nonblocking(true)?;
+        Ok(ListeningSocketSource {
+            socket: Generic::new(listener.into(), Interest::READ, Mode::Level),
+        })
+    }
 }
 
 impl EventSource for ListeningSocketSource {

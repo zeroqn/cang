@@ -449,6 +449,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sd-listen-fds"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bb51d45a99c1bafff550fd40ce1d2152917dc9908fb3090c283e3f058d39b3f"
+
+[[package]]
 name = "serde_core"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -700,6 +706,7 @@ dependencies = [
  "libc",
  "log",
  "rustix 1.1.2",
+ "sd-listen-fds",
  "smallvec",
  "wayland-protocols",
  "wayland-protocols-wlr",
