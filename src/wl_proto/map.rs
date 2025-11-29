@@ -1,8 +1,7 @@
 //! Wayland objects map
-
 use super::protocol::Interface;
 
-use std::cmp::Ordering;
+use std::collections::HashMap;
 
 /// Limit separating server-created from client-created objects IDs in the namespace
 pub const SERVER_ID_LIMIT: u32 = 0xFF00_0000;
@@ -25,16 +24,16 @@ pub struct Object<Data> {
 /// interface object, and which is currently unused.
 #[derive(Debug, Default)]
 pub struct ObjectMap<Data> {
-    client_objects: Vec<Option<Object<Data>>>,
-    server_objects: Vec<Option<Object<Data>>>,
+    client_objects: HashMap<u32, Object<Data>>,
+    server_objects: HashMap<u32, Object<Data>>,
 }
 
 impl<Data: Clone> ObjectMap<Data> {
     /// Create a new empty object map
     pub fn new() -> Self {
         Self {
-            client_objects: Vec::new(),
-            server_objects: Vec::new(),
+            client_objects: HashMap::new(),
+            server_objects: HashMap::new(),
         }
     }
 
@@ -43,13 +42,9 @@ impl<Data: Clone> ObjectMap<Data> {
         if id == 0 {
             None
         } else if id >= SERVER_ID_LIMIT {
-            self.server_objects
-                .get((id - SERVER_ID_LIMIT) as usize)
-                .and_then(Clone::clone)
+            self.server_objects.get(&(id - SERVER_ID_LIMIT)).cloned()
         } else {
-            self.client_objects
-                .get((id - 1) as usize)
-                .and_then(Clone::clone)
+            self.client_objects.get(&(id - 1)).cloned()
         }
     }
 
@@ -60,11 +55,9 @@ impl<Data: Clone> ObjectMap<Data> {
         if id == 0 {
             // nothing
         } else if id >= SERVER_ID_LIMIT {
-            if let Some(place) = self.server_objects.get_mut((id - SERVER_ID_LIMIT) as usize) {
-                *place = None;
-            }
-        } else if let Some(place) = self.client_objects.get_mut((id - 1) as usize) {
-            *place = None;
+            self.server_objects.remove(&(id - SERVER_ID_LIMIT));
+        } else {
+            self.client_objects.remove(&(id - 1));
         }
     }
 
@@ -76,13 +69,11 @@ impl<Data: Clone> ObjectMap<Data> {
         if id == 0 {
             Err(())
         } else if id >= SERVER_ID_LIMIT {
-            insert_in_at(
-                &mut self.server_objects,
-                (id - SERVER_ID_LIMIT) as usize,
-                object,
-            )
+            self.server_objects.insert(id - SERVER_ID_LIMIT, object);
+            Ok(())
         } else {
-            insert_in_at(&mut self.client_objects, (id - 1) as usize, object)
+            self.client_objects.insert(id - 1, object);
+            Ok(())
         }
     }
 
@@ -123,27 +114,4 @@ impl<Data: Clone> ObjectMap<Data> {
         client_side_iter.chain(server_side_iter)
     }
     */
-}
-
-// insert an object at a given place in a store
-fn insert_in_at<Data>(
-    store: &mut Vec<Option<Object<Data>>>,
-    id: usize,
-    object: Object<Data>,
-) -> Result<(), ()> {
-    match id.cmp(&store.len()) {
-        Ordering::Greater => Err(()),
-        Ordering::Equal => {
-            store.push(Some(object));
-            Ok(())
-        }
-        Ordering::Less => {
-            let previous = &mut store[id];
-            if !previous.is_none() {
-                return Err(());
-            }
-            *previous = Some(object);
-            Ok(())
-        }
-    }
 }

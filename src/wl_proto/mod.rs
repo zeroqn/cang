@@ -280,6 +280,9 @@ impl EventSource for ClientConnection {
                             _ => {},
                         }
                     }
+                    if desc.is_destructor {
+                        self.map.remove(msg.sender_id);
+                    }
                 }
 
                 if let Err(err) = callback(msg, &mut obj) {
