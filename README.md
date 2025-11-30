@@ -46,6 +46,3 @@ on top of `wl-cross-domain-proxy` or proxy X11 separately (e.g. through adopting
 - Compile using `cargo build --release`
 - Make sure `XDG_RUNTIME_DIR` is set
 - Run the binary
-
-(there is currently no support to explicitly specify the wayland socket name
- or use something like systemd socket activation, see issues.)
