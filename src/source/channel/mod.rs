@@ -77,8 +77,7 @@ const REQUIRED_PARAMS: [Param; 6] = [
 static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
 
 impl ClientChannel {
-    pub fn new(local: UnixStream, node: DrmNode) -> anyhow::Result<Self> {
-        let mut filters = Vec::new();
+    pub fn new(local: UnixStream, node: DrmNode, mut filters: Vec<String>) -> anyhow::Result<Self> {
         let drm = DrmDevice(Rc::new(
             OpenOptions::new()
                 .read(true)

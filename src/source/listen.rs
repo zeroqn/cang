@@ -7,6 +7,7 @@ use std::{
             prelude::BorrowedFd,
         },
     },
+    path::Path,
 };
 
 use anyhow::Context;
@@ -79,22 +80,24 @@ impl ListeningSocketSource {
         })
     }
 
-    /*
     /// Creates a new listening socket with the specified name.
     pub fn with_name(name: &str) -> Result<ListeningSocketSource, BindError> {
         let socket = ListeningSocket::bind(name)?;
         info!("Created new socket: {:?}", socket.socket_name());
 
         Ok(ListeningSocketSource {
-            socket: Generic::new(socket, Interest::READ, Mode::Level),
+            socket: Generic::new(socket.into(), Interest::READ, Mode::Level),
         })
     }
 
-    /// Returns the name of the listening socket.
-    pub fn socket_name(&self) -> &OsStr {
-        self.socket.get_ref().socket_name().unwrap()
+    /// Creates a new listening socket with the specified path.
+    pub fn with_path(path: impl AsRef<Path>) -> Result<ListeningSocketSource, BindError> {
+        let socket = ListeningSocket::bind_absolute(path.as_ref().to_path_buf())?;
+
+        Ok(ListeningSocketSource {
+            socket: Generic::new(socket.into(), Interest::READ, Mode::Level),
+        })
     }
-    */
 }
 
 impl TryFrom<OwnedFd> for ListeningSocketSource {
