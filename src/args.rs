@@ -122,9 +122,9 @@ pub fn parse_args() -> Result<Args, anyhow::Error> {
         .values_from_str(["-f", "--filter-global"])
         .context("Failed to parse arguments")?;
 
-    if args.contains(["--help", "-h"]) {
+    if args.contains(["-h", "--help"]) {
         Ok(Mode::Help.into())
-    } else if args.contains(["--version", "-V"]) {
+    } else if args.contains(["-V", "--version"]) {
         Ok(Mode::Version.into())
     } else if args.contains("--accept-fd") {
         check_flag("--accept-fd", args)?;
