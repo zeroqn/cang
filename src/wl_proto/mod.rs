@@ -280,9 +280,7 @@ impl EventSource for ClientConnection {
                             _ => {},
                         }
                     }
-                    if desc.is_destructor {
-                        self.map.remove(msg.sender_id);
-                    }
+                    // DO NOT delete if this is a destructor. Deletion must be ACKed by the server with delete_id.
                 }
 
                 if let Err(err) = callback(msg, &mut obj) {
