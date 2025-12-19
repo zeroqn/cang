@@ -660,10 +660,26 @@ fn try_read_message(
         let object_id = u32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
         let word_2 = u32::from_ne_bytes([data[4], data[5], data[6], data[7]]);
         let opcode = (word_2 & 0x0000_FFFF) as u16;
+        let len = (word_2 >> 16) as usize;
 
-        let obj = obj_map
-            .find(object_id)
-            .ok_or(MessageParseError::Malformed)?;
+        let Some(obj) = obj_map.find(object_id) else {
+            // This *really* should not happen, as e.g. incoming events for destroyed objects
+            // (before the destruction was ACKed) are handled in the regular happy path.
+            error!(
+                "try_read_message: could not find object id {object_id} for msg (op={opcode}, len={len}), trying to skip",
+            );
+            if fds.len() != 0 {
+                // FDs act as receive barriers, so they *should* belong to the first message we see in a recvmsg.
+                // If these semantics hold with the virtgpu transport, this might even work, but scream extra loudly nonetheless.
+                error!(
+                    "try_read_message: expect further breakage since a message with file descriptors ({}) is being skipped",
+                    fds.len()
+                );
+                fds.clear();
+            }
+            buffer.offset(len);
+            return Err(MessageParseError::Malformed);
+        };
         if let Some(sig) = obj
             .interface
             .events
