@@ -57,6 +57,16 @@ pub struct WlShmPool {
     destroyed: bool,
 }
 
+impl Drop for WlShmPool {
+    fn drop(&mut self) {
+        // SAFETY: we do not create WlShmPool with any pointers other than successful mmap results
+        unsafe {
+            libc::munmap(self.guest_mmap, self.size);
+            libc::munmap(self.host_mmap, self.size);
+        }
+    }
+}
+
 pub struct WlShmBuffer {
     pool: u32,
     offset: usize,
@@ -434,6 +444,9 @@ impl ProtocolState {
 
         // lastly update our pool data
 
+        unsafe {
+            libc::munmap(pool.host_mmap, pool.size);
+        }
         pool.res_handle = blob.res_handle;
         pool.blob_fd = fd;
         pool.host_mmap = host_mmap;
