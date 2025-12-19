@@ -99,9 +99,10 @@ impl ClientChannel {
         }
 
         let caps = drm.get_capset::<CrossDomainCapabilities>()?;
-        if caps.supports_dmabuf == 0 {
-            filters.push("zwp_linux_dmabuf_v1".to_owned());
-        }
+
+        // do *NOT* add a check for caps.supports_dmabuf here!
+        // supports_dmabuf refers to dmabuf allocation *via* the cross-domain capability.
+        // 3D Wayland clients allocate via the virglrenderer one, so that is *not* required.
 
         // we never expose the old mesa protocol and just use dmabufs.
         filters.push("wl_drm".to_owned());
