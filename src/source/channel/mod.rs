@@ -478,20 +478,23 @@ impl EventSource for ClientChannel {
                     self.remote_data.advance(data.len());
                     self.remote_fds.extend(fds.into_iter());
 
-                    while let Some(msg) = try_read_message(
+                    while let Some((msg, obj)) = try_read_message(
                         &mut self.remote_data,
                         &mut self.remote_fds,
                         &self.local.map,
                     )
                     .inspect_err(|err| debug!("end of messages: {:?}", err))
                     .ok()
-                    .and_then(|(msg, obj)| {
-                        self.protocol_state
+                    {
+                        // NOTE: Do not and_then the filtering, the loop must continue if we skip a message!
+                        if let Some(msg) = self
+                            .protocol_state
                             .filter_host_message(&self.node, msg, &obj)
-                    }) {
-                        self.local
-                            .write_message(&msg)
-                            .context("Failed to write message")?;
+                        {
+                            self.local
+                                .write_message(&msg)
+                                .context("Failed to write message")?;
+                        }
                     }
                     self.local.flush().context("Failed to flush messages")?;
                 }
