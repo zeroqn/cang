@@ -49,7 +49,7 @@ pub struct ProtocolState {
 pub struct WlShmPool {
     size: usize,
 
-    _fd: OwnedFd,
+    fd: OwnedFd,
     guest_mmap: *mut c_void,
 
     res_handle: RawResourceHandle,
@@ -248,7 +248,7 @@ impl ProtocolState {
             WlShmPool {
                 size: size as usize,
 
-                _fd: orig_fd,
+                fd: orig_fd,
                 guest_mmap,
 
                 res_handle: blob.res_handle,
@@ -359,6 +359,21 @@ impl ProtocolState {
             .buffer_to_prime_fd(blob.bo_handle, CLOEXEC | RDWR)
             .inspect_err(|err| error!("Unable to get fd from bo handle: {}", err))?;
 
+        let guest_mmap = unsafe {
+            libc::mmap(
+                ptr::null_mut(),
+                size as usize,
+                PROT_READ | PROT_WRITE,
+                MAP_SHARED,
+                pool.fd.as_raw_fd(),
+                0,
+            )
+        };
+        if guest_mmap.is_null() {
+            error!("Failed to mmap guest shm pool.");
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+
         let host_mmap = unsafe {
             libc::mmap(
                 ptr::null_mut(),
@@ -449,10 +464,12 @@ impl ProtocolState {
         // lastly update our pool data
 
         unsafe {
+            libc::munmap(pool.guest_mmap, pool.size);
             libc::munmap(pool.host_mmap, pool.size);
         }
         pool.res_handle = blob.res_handle;
         pool.blob_fd = fd;
+        pool.guest_mmap = guest_mmap;
         pool.host_mmap = host_mmap;
         pool.size = size as usize;
 
