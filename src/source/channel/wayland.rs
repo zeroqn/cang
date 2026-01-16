@@ -135,6 +135,33 @@ impl From<Vec<Message<u32, Identifier>>> for MessageIter {
     }
 }
 
+#[derive(Debug)]
+pub enum TransformError {
+    Io(io::Error),
+    Protocol {
+        object_id: u32,
+        code: u32,
+        message: &'static std::ffi::CStr,
+    },
+}
+
+impl From<io::Error> for TransformError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
+impl std::fmt::Display for TransformError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(io) => io.fmt(f),
+            Self::Protocol { message, .. } => write!(f, "protocol error: {message:?}"),
+        }
+    }
+}
+
+impl std::error::Error for TransformError {}
+
 impl ProtocolState {
     pub fn new() -> Self {
         ProtocolState {
@@ -570,7 +597,7 @@ impl ProtocolState {
     fn handle_surface_commit(
         &mut self,
         message: Message<u32, OwnedFd>,
-    ) -> io::Result<Message<u32, Identifier>> {
+    ) -> Result<Message<u32, Identifier>, TransformError> {
         if let Some(surface) = self.surfaces.get_mut(&message.sender_id) {
             if let Some(buffer_id) = surface.pending_buffer.take() {
                 if let Some(shm_buffer) = self.shm_buffers.get(&buffer_id) {
@@ -588,9 +615,12 @@ impl ProtocolState {
                         }
 
                         if guard.has_faulted() {
-                            // TODO: Ideally we should return a protocol error specifically referring to the pool object..
                             warn!("faulted when accessing guest shm buffer");
-                            return Err(io::ErrorKind::InvalidData.into());
+                            return Err(TransformError::Protocol {
+                                object_id: buffer_id,
+                                code: 2,
+                                message: c"error accessing SHM buffer",
+                            });
                         }
 
                         // TODO (optimization): We can send release to the client now and hide the host one later
@@ -650,14 +680,15 @@ impl ProtocolState {
         guest_pipes: &mut HashMap<u32, OwnedFd>,
         message: Message<u32, OwnedFd>,
         obj: &Object<Data>,
-    ) -> io::Result<impl Iterator<Item = Message<u32, Identifier>>> {
+    ) -> Result<impl Iterator<Item = Message<u32, Identifier>>, TransformError> {
         match (
             obj.interface.name,
             obj.interface.requests[message.opcode as usize].name,
         ) {
             ("wl_shm", "create_pool") => self
                 .handle_shm_create_pool(drm, query_ring, message)
-                .map(MessageIter::from),
+                .map(MessageIter::from)
+                .map_err(TransformError::from),
             ("wl_shm", "release") => Ok(if self.wl_shm.is_some_and(|id| id == message.sender_id) {
                 MessageIter::None
             } else {
@@ -665,7 +696,8 @@ impl ProtocolState {
             }),
             ("wl_shm_pool", "resize") => self
                 .handle_shm_resize(drm, query_ring, message)
-                .map(Into::into),
+                .map(Into::into)
+                .map_err(TransformError::from),
             ("wl_shm_pool", "destroy") => {
                 if let Some(pool) = self.shm_pools.get_mut(&message.sender_id) {
                     pool.destroyed = true;
@@ -680,12 +712,14 @@ impl ProtocolState {
 
                 Ok(message.map_fd(|_| unreachable!()).into())
             }
-            ("wl_shm_pool", "create_buffer") => {
-                self.handle_shm_pool_create_buffer(message).map(Into::into)
-            }
-            ("zwp_linux_buffer_params_v1", "add") => {
-                self.handle_dmabuf_params_add(drm, message).map(Into::into)
-            }
+            ("wl_shm_pool", "create_buffer") => self
+                .handle_shm_pool_create_buffer(message)
+                .map(Into::into)
+                .map_err(TransformError::from),
+            ("zwp_linux_buffer_params_v1", "add") => self
+                .handle_dmabuf_params_add(drm, message)
+                .map(Into::into)
+                .map_err(TransformError::from),
             ("wl_buffer", "destroy") => {
                 if let Some(buffer) = self.shm_buffers.remove(&message.sender_id) {
                     let id = buffer.pool;
@@ -708,7 +742,7 @@ impl ProtocolState {
                         pending_buffer: None,
                     });
                 let &Argument::Object(buffer) = &message.args[0] else {
-                    return Err(io::ErrorKind::InvalidData.into());
+                    return Err(TransformError::Io(io::ErrorKind::InvalidData.into()));
                 };
                 surface.pending_buffer = self.shm_buffers.contains_key(&buffer).then_some(buffer);
 
@@ -722,9 +756,10 @@ impl ProtocolState {
             }
             ("wl_data_offer", "receive")
             | ("ext_data_control_offer_v1", "receive")
-            | ("zwp_primary_selection_offer_v1", "receive") => {
-                self.handle_receive(guest_pipes, message).map(Into::into)
-            }
+            | ("zwp_primary_selection_offer_v1", "receive") => self
+                .handle_receive(guest_pipes, message)
+                .map(Into::into)
+                .map_err(TransformError::from),
             ("wp_image_description_creator_icc_v1", "set_icc_file") => unimplemented!(),
             (interface, name) => Ok(message
                 .map_fd(|_| panic!("Unhandled file descriptor: {}.{}", interface, name))

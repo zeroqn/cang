@@ -23,7 +23,7 @@ use drm::{
 use drm_sys::drm_event;
 use log::{debug, error, warn};
 use smallvec::SmallVec;
-use wayland_server::backend::protocol::Message;
+use wayland_server::backend::protocol::{Argument, Message};
 use zerocopy::{FromBytes, IntoBytes};
 
 use crate::{
@@ -307,7 +307,8 @@ impl EventSource for ClientChannel {
         let mut res = PostAction::Continue;
 
         let drm = unsafe { self.drm.get_mut() };
-        match self.local.process_events(readiness, token, |msg, obj| {
+        let mut err_msg: Option<Message<u32, OwnedFd>> = None;
+        let local_result = self.local.process_events(readiness, token, |msg, obj| {
             log::debug!("Wayland socket event");
 
             // SAFETY: we don't drop the stream
@@ -323,7 +324,26 @@ impl EventSource for ClientChannel {
                     msg,
                     obj,
                 )
-                .inspect_err(|err| warn!("Failed to transform message: {}", err))?
+                .inspect_err(|err| match err {
+                    wayland::TransformError::Io(err) => {
+                        warn!("Failed to transform message: {}", err)
+                    }
+                    wayland::TransformError::Protocol {
+                        object_id,
+                        code,
+                        message,
+                    } => {
+                        err_msg = Some(Message {
+                            sender_id: 1,
+                            opcode: 0,
+                            args: smallvec::smallvec![
+                                Argument::Object(*object_id),
+                                Argument::Uint(*code),
+                                Argument::Str(Some(Box::new((*message).into()))),
+                            ],
+                        })
+                    }
+                })?
             {
                 let read_bytes = write_to_buffers(
                     &msg,
@@ -369,7 +389,13 @@ impl EventSource for ClientChannel {
             }
 
             Ok(PostAction::Continue)
-        })? {
+        })?;
+        if let Some(msg) = err_msg.take() {
+            self.local.write_message(&msg)?;
+            self.local.flush()?;
+            return Ok(PostAction::Remove);
+        }
+        match local_result {
             PostAction::Reregister if res == PostAction::Continue => {
                 res = PostAction::Reregister;
             }
