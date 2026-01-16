@@ -18,6 +18,7 @@ use wayland_server::backend::protocol::{Argument, Message};
 
 use crate::{
     cross_domain::{CROSS_DOMAIN_ID_TYPE_READ_PIPE, CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB},
+    sigbus::SIGBUS_WATCHER,
     source::channel::{ImageDesc, Ring, query_image},
     virtio_gpu::{BlobFlags, BlobMem, VirtioDevice},
     wl_proto::{Data, Object, TryClone},
@@ -575,13 +576,21 @@ impl ProtocolState {
                 if let Some(shm_buffer) = self.shm_buffers.get(&buffer_id) {
                     if let Some(pool) = self.shm_pools.get(&shm_buffer.pool) {
                         // TODO (optimization): Use (buffer)damage
-                        // TODO (critical): We need to guard against SIGBUS here to not crash the whole proxy
+
+                        let guard = SIGBUS_WATCHER.watch(pool.guest_mmap, pool.size);
+
                         unsafe {
                             ptr::copy_nonoverlapping(
                                 pool.guest_mmap.byte_add(shm_buffer.offset),
                                 pool.host_mmap.byte_add(shm_buffer.offset),
                                 shm_buffer.stride * shm_buffer.height,
                             );
+                        }
+
+                        if guard.has_faulted() {
+                            // TODO: Ideally we should return a protocol error specifically referring to the pool object..
+                            warn!("faulted when accessing guest shm buffer");
+                            return Err(io::ErrorKind::InvalidData.into());
                         }
 
                         // TODO (optimization): We can send release to the client now and hide the host one later

@@ -27,6 +27,7 @@ use crate::{
 
 mod args;
 mod cross_domain;
+mod sigbus;
 mod source;
 #[allow(unused)]
 mod virtio_gpu;
@@ -81,6 +82,7 @@ struct State {
 
 fn main() -> Result<ExitCode, anyhow::Error> {
     env_logger::init();
+    sigbus::install_handler();
 
     let drm_device =
         find_virtio_dri_node().with_context(|| "Failed to find virtio_gpu dri device")?;
