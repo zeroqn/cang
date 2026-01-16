@@ -334,6 +334,7 @@ fn global_to_interface(interface_name: &str, version: u32) -> Option<(&'static I
     use wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::server::__interfaces::ZWP_KEYBOARD_SHORTCUTS_INHIBIT_MANAGER_V1_INTERFACE;
     use wayland_protocols::wp::linux_dmabuf::zv1::server::__interfaces::ZWP_LINUX_DMABUF_V1_INTERFACE;
     use wayland_protocols::wp::pointer_constraints::zv1::server::__interfaces::ZWP_POINTER_CONSTRAINTS_V1_INTERFACE;
+    use wayland_protocols::wp::pointer_gestures::zv1::server::__interfaces::ZWP_POINTER_GESTURES_V1_INTERFACE;
     use wayland_protocols::wp::pointer_warp::v1::server::__interfaces::WP_POINTER_WARP_V1_INTERFACE;
     use wayland_protocols::wp::presentation_time::server::__interfaces::WP_PRESENTATION_INTERFACE;
     use wayland_protocols::wp::primary_selection::zv1::server::__interfaces::ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1_INTERFACE;
@@ -400,6 +401,7 @@ fn global_to_interface(interface_name: &str, version: u32) -> Option<(&'static I
             (&ZWP_KEYBOARD_SHORTCUTS_INHIBIT_MANAGER_V1_INTERFACE, 1)
         }
         "zwp_pointer_constraints_v1" => (&ZWP_POINTER_CONSTRAINTS_V1_INTERFACE, 1),
+        "zwp_pointer_gestures_v1" => (&ZWP_POINTER_GESTURES_V1_INTERFACE, 3),
         "zwp_primary_selection_device_manager_v1" => {
             (&ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1_INTERFACE, 1)
         }
