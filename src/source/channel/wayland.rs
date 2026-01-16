@@ -12,7 +12,7 @@ use std::{
 use drm::{CLOEXEC, RDWR, buffer::Handle, control::RawResourceHandle, node::DrmNode};
 use drm_fourcc::DrmFourcc;
 use libc::{MAP_SHARED, PROT_READ, PROT_WRITE};
-use log::{error, warn};
+use log::{debug, error, warn};
 use smallvec::smallvec;
 use wayland_server::backend::protocol::{Argument, Message};
 
@@ -42,6 +42,8 @@ pub struct ProtocolState {
     shm_pools: HashMap<u32, WlShmPool>,
     shm_buffers: HashMap<u32, WlShmBuffer>,
     surfaces: HashMap<u32, WlSurface>,
+
+    destructions_to_skip: HashMap<u32, usize>,
 }
 
 pub struct WlShmPool {
@@ -141,6 +143,7 @@ impl ProtocolState {
             shm_pools: HashMap::new(),
             shm_buffers: HashMap::new(),
             surfaces: HashMap::new(),
+            destructions_to_skip: HashMap::new(),
         }
     }
 
@@ -385,6 +388,7 @@ impl ProtocolState {
             opcode: 1,
             args: smallvec![],
         });
+        *self.destructions_to_skip.entry(pool_id).or_default() += 1;
 
         // wl_shm::create_pool
         let Some(global_id) = self.wl_shm.as_ref() else {
@@ -712,6 +716,22 @@ impl ProtocolState {
             obj.interface.name,
             obj.interface.events[message.opcode as usize].name,
         ) {
+            // The client is not supposed to reuse IDs without receiving delete_id as a confirmation
+            // that it is safe to do so. However if handle_shm_resize is called a few times in a row,
+            // what happens is exactly that, so we need to deal with the consequences here.
+            ("wl_display", "delete_id") => {
+                let &[Argument::Uint(ref id)] = message.args.as_slice() else {
+                    unreachable!()
+                };
+                if let Some(cnt) = self.destructions_to_skip.get_mut(id)
+                    && *cnt > 0
+                {
+                    *cnt -= 1;
+                    debug!("Skipping delete_id({id}), skips left: {cnt}");
+                    return None;
+                }
+                Some(message)
+            }
             ("wl_buffer", "release") => {
                 // TODO (optimization): send early and then hide this message
                 Some(message)
