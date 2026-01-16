@@ -340,6 +340,7 @@ fn global_to_interface(interface_name: &str, version: u32) -> Option<(&'static I
     use wayland_protocols::wp::primary_selection::zv1::server::__interfaces::ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1_INTERFACE;
     use wayland_protocols::wp::relative_pointer::zv1::server::__interfaces::ZWP_RELATIVE_POINTER_MANAGER_V1_INTERFACE;
     use wayland_protocols::wp::single_pixel_buffer::v1::server::__interfaces::WP_SINGLE_PIXEL_BUFFER_MANAGER_V1_INTERFACE;
+    use wayland_protocols::wp::tablet::zv2::server::__interfaces::ZWP_TABLET_MANAGER_V2_INTERFACE;
     use wayland_protocols::wp::text_input::zv3::server::__interfaces::ZWP_TEXT_INPUT_MANAGER_V3_INTERFACE;
     use wayland_protocols::wp::viewporter::server::__interfaces::WP_VIEWPORTER_INTERFACE;
     use wayland_protocols::xdg::activation::v1::server::__interfaces::XDG_ACTIVATION_V1_INTERFACE;
@@ -406,6 +407,7 @@ fn global_to_interface(interface_name: &str, version: u32) -> Option<(&'static I
             (&ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1_INTERFACE, 1)
         }
         "zwp_relative_pointer_manager_v1" => (&ZWP_RELATIVE_POINTER_MANAGER_V1_INTERFACE, 1),
+        "zwp_tablet_manager_v2" => (&ZWP_TABLET_MANAGER_V2_INTERFACE, 2),
         "zwp_text_input_manager_v3" => (&ZWP_TEXT_INPUT_MANAGER_V3_INTERFACE, 1),
         "zxdg_decoration_manager_v1" => (&ZXDG_DECORATION_MANAGER_V1_INTERFACE, 1),
         "zxdg_exporter_v2" => (&ZXDG_EXPORTER_V2_INTERFACE, 1),
