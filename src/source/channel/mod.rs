@@ -62,7 +62,7 @@ pub struct ClientChannel {
     channel_ring: Ring,
     pipe_id: u32,
     pipes_write_from_host: HashMap<u32, OwnedFd>,
-    pipes_read_from_guest: HashMap<u32, Generic<OwnedFd, anyhow::Error>>,
+    pipes_read_from_guest: HashMap<u32, (Generic<OwnedFd, anyhow::Error>, bool)>,
 }
 
 const REQUIRED_PARAMS: [Param; 6] = [
@@ -487,7 +487,14 @@ impl EventSource for ClientChannel {
                                     rustix::pipe::pipe().context("Failed to allocate pipe")?;
                                 self.pipes_read_from_guest.insert(
                                     cmd.identifiers[i],
-                                    Generic::new_with_error(read_fd, Interest::READ, Mode::Level),
+                                    (
+                                        Generic::new_with_error(
+                                            read_fd,
+                                            Interest::READ,
+                                            Mode::Level,
+                                        ),
+                                        false,
+                                    ),
                                 );
                                 res = PostAction::Reregister;
 
@@ -570,7 +577,7 @@ impl EventSource for ClientChannel {
 
         let mut to_remove = Vec::new();
         let drm = unsafe { self.drm.get_mut() };
-        for (id, pipe) in self.pipes_read_from_guest.iter_mut() {
+        for (id, (pipe, _)) in self.pipes_read_from_guest.iter_mut() {
             match pipe.process_events(readiness, token, |_, pipe| {
                 log::debug!("Local pipe event");
                 let mut res = PostAction::Continue;
@@ -647,7 +654,7 @@ impl EventSource for ClientChannel {
     ) -> calloop::Result<()> {
         self.local.register(poll, token_factory)?;
         self.drm.register(poll, token_factory)?;
-        for pipe in self.pipes_read_from_guest.values_mut() {
+        for (pipe, _) in self.pipes_read_from_guest.values_mut() {
             pipe.register(poll, token_factory)?;
         }
         Ok(())
@@ -660,8 +667,13 @@ impl EventSource for ClientChannel {
     ) -> calloop::Result<()> {
         self.local.reregister(poll, token_factory)?;
         self.drm.reregister(poll, token_factory)?;
-        for pipe in self.pipes_read_from_guest.values_mut() {
-            pipe.reregister(poll, token_factory)?;
+        for (pipe, is_registered) in self.pipes_read_from_guest.values_mut() {
+            if *is_registered {
+                pipe.reregister(poll, token_factory)?;
+            } else {
+                pipe.register(poll, token_factory)?;
+                *is_registered = true;
+            }
         }
         Ok(())
     }
@@ -669,8 +681,10 @@ impl EventSource for ClientChannel {
     fn unregister(&mut self, poll: &mut calloop::Poll) -> calloop::Result<()> {
         self.local.unregister(poll)?;
         self.drm.unregister(poll)?;
-        for pipe in self.pipes_read_from_guest.values_mut() {
-            pipe.unregister(poll)?;
+        for (pipe, is_registered) in self.pipes_read_from_guest.values_mut() {
+            if *is_registered {
+                pipe.unregister(poll)?;
+            }
         }
         Ok(())
     }
