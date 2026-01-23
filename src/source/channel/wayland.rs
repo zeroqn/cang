@@ -166,7 +166,7 @@ impl ProtocolState {
     pub fn new() -> Self {
         ProtocolState {
             image_cache: HashMap::new(),
-            pipe_id: 0x80000000,
+            pipe_id: 0x80000001,
             wl_shm: None,
             shm_pools: HashMap::new(),
             shm_buffers: HashMap::new(),
@@ -652,7 +652,7 @@ impl ProtocolState {
         let id = self.pipe_id;
         let (next, overflow) = self.pipe_id.overflowing_add(1);
         if overflow {
-            self.pipe_id = 0x80000000;
+            self.pipe_id = 0x80000001;
         } else {
             self.pipe_id = next;
         }
