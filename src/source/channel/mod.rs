@@ -616,7 +616,7 @@ impl EventSource for ClientChannel {
 
                 cmd.write_to(&mut buf[0..mem::size_of::<CrossDomainReadWrite>()])
                     .unwrap();
-                drm.execbuffer(&buf, Some(&self.channel_ring))
+                drm.execbuffer(&buf[0..cmd.hdr.cmd_size as usize], None)
                     .context("execbuf pipe write failed")?;
 
                 Ok(res)
