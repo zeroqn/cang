@@ -571,37 +571,36 @@ impl ProtocolState {
         &mut self,
         message: Message<u32, OwnedFd>,
     ) -> Result<Message<u32, Identifier>, TransformError> {
-        if let Some(surface) = self.surfaces.get_mut(&message.sender_id) {
-            if let Some(buffer_id) = surface.pending_buffer.take() {
-                if let Some(shm_buffer) = self.shm_buffers.get(&buffer_id) {
-                    if let Some(pool) = self.shm_pools.get(&shm_buffer.pool) {
-                        // TODO (optimization): Use (buffer)damage
+        if let Some(surface) = self.surfaces.get_mut(&message.sender_id)
+            && let Some(buffer_id) = surface.pending_buffer.take()
+            && let Some(shm_buffer) = self.shm_buffers.get(&buffer_id)
+        {
+            let Some(pool) = self.shm_pools.get(&shm_buffer.pool) else {
+                panic!("Commit of shm_buffer without pool?");
+            };
 
-                        let guard = SIGBUS_WATCHER.watch(pool.guest_mmap, pool.size);
+            // TODO (optimization): Use (buffer)damage
 
-                        unsafe {
-                            ptr::copy_nonoverlapping(
-                                pool.guest_mmap.byte_add(shm_buffer.offset),
-                                pool.host_mmap.byte_add(shm_buffer.offset),
-                                shm_buffer.stride * shm_buffer.height,
-                            );
-                        }
+            let guard = SIGBUS_WATCHER.watch(pool.guest_mmap, pool.size);
 
-                        if guard.has_faulted() {
-                            warn!("faulted when accessing guest shm buffer");
-                            return Err(TransformError::Protocol {
-                                object_id: buffer_id,
-                                code: 2,
-                                message: c"error accessing SHM buffer",
-                            });
-                        }
-
-                        // TODO (optimization): We can send release to the client now and hide the host one later
-                    } else {
-                        panic!("Commit of shm_buffer without pool?");
-                    }
-                }
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    pool.guest_mmap.byte_add(shm_buffer.offset),
+                    pool.host_mmap.byte_add(shm_buffer.offset),
+                    shm_buffer.stride * shm_buffer.height,
+                );
             }
+
+            if guard.has_faulted() {
+                warn!("faulted when accessing guest shm buffer");
+                return Err(TransformError::Protocol {
+                    object_id: buffer_id,
+                    code: 2,
+                    message: c"error accessing SHM buffer",
+                });
+            }
+
+            // TODO (optimization): We can send release to the client now and hide the host one later
         }
 
         Ok(message.map_fd(|_| unreachable!("wl_surface::commit with fd?")))
