@@ -2,16 +2,13 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     io,
     num::NonZero,
-    os::{
-        fd::{AsFd, AsRawFd, OwnedFd},
-        raw::c_void,
-    },
+    os::fd::{AsFd, OwnedFd},
     ptr,
 };
 
 use drm::{CLOEXEC, RDWR, buffer::Handle, control::RawResourceHandle, node::DrmNode};
 use drm_fourcc::DrmFourcc;
-use libc::{MAP_SHARED, PROT_READ, PROT_WRITE};
+use libc::{PROT_READ, PROT_WRITE};
 use log::{debug, error, warn};
 use smallvec::smallvec;
 use wayland_server::backend::protocol::{Argument, Message};
@@ -20,6 +17,7 @@ use crate::{
     cross_domain::{CROSS_DOMAIN_ID_TYPE_READ_PIPE, CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB},
     sigbus::SIGBUS_WATCHER,
     source::channel::{ImageDesc, Ring, query_image},
+    util::MmapGuard,
     virtio_gpu::{BlobFlags, BlobMem, VirtioDevice},
     wl_proto::{Data, Object, TryClone},
 };
@@ -51,23 +49,13 @@ pub struct WlShmPool {
     size: usize,
 
     fd: OwnedFd,
-    guest_mmap: *mut c_void,
+    guest_mmap: MmapGuard,
 
     res_handle: RawResourceHandle,
     blob_fd: OwnedFd,
-    host_mmap: *mut c_void,
+    host_mmap: MmapGuard,
 
     destroyed: bool,
-}
-
-impl Drop for WlShmPool {
-    fn drop(&mut self) {
-        // SAFETY: we do not create WlShmPool with any pointers other than successful mmap results
-        unsafe {
-            libc::munmap(self.guest_mmap, self.size);
-            libc::munmap(self.host_mmap, self.size);
-        }
-    }
 }
 
 pub struct WlShmBuffer {
@@ -254,34 +242,10 @@ impl ProtocolState {
         let (fd, identifier) =
             Self::create_sharable_blob(&mut self.image_cache, drm, query_ring, size as u32)?;
 
-        let guest_mmap = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size as usize,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                orig_fd.as_raw_fd(),
-                0,
-            )
-        };
-        if guest_mmap.is_null() {
-            error!("Failed to mmap guest shm pool.");
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-        let host_mmap = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size as usize,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                fd.as_raw_fd(),
-                0,
-            )
-        };
-        if host_mmap.is_null() {
-            error!("Failed to mmap host shm pool.");
-            return Err(io::ErrorKind::InvalidData.into());
-        }
+        let guest_mmap = MmapGuard::map_fd(&orig_fd, size as usize, PROT_READ | PROT_WRITE)
+            .inspect_err(|_| error!("Failed to mmap guest shm pool."))?;
+        let host_mmap = MmapGuard::map_fd(&fd, size as usize, PROT_READ | PROT_WRITE)
+            .inspect_err(|_| error!("Failed to mmap host shm pool."))?;
 
         if let Some(_old) = self.shm_pools.insert(
             new_pool,
@@ -360,38 +324,13 @@ impl ProtocolState {
         let (fd, identifier) =
             Self::create_sharable_blob(&mut self.image_cache, drm, query_ring, size as u32)?;
 
-        let guest_mmap = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size as usize,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                pool.fd.as_raw_fd(),
-                0,
-            )
-        };
-        if guest_mmap.is_null() {
-            error!("Failed to mmap guest shm pool.");
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-
-        let host_mmap = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size as usize,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                fd.as_raw_fd(),
-                0,
-            )
-        };
-        if host_mmap.is_null() {
-            error!("Failed to mmap host shm pool.");
-            return Err(io::ErrorKind::InvalidData.into());
-        }
+        let guest_mmap = MmapGuard::map_fd(&pool.fd, size as usize, PROT_READ | PROT_WRITE)
+            .inspect_err(|_| error!("Failed to mmap guest shm pool."))?;
+        let host_mmap = MmapGuard::map_fd(&fd, size as usize, PROT_READ | PROT_WRITE)
+            .inspect_err(|_| error!("Failed to mmap host shm pool."))?;
 
         unsafe {
-            ptr::copy_nonoverlapping(pool.host_mmap, host_mmap, pool.size);
+            ptr::copy_nonoverlapping(pool.host_mmap.ptr(), host_mmap.ptr(), pool.size);
         }
 
         // now lets construct all the messages
@@ -464,10 +403,6 @@ impl ProtocolState {
 
         // lastly update our pool data
 
-        unsafe {
-            libc::munmap(pool.guest_mmap, pool.size);
-            libc::munmap(pool.host_mmap, pool.size);
-        }
         pool.res_handle = identifier.identifier;
         pool.blob_fd = fd;
         pool.guest_mmap = guest_mmap;
@@ -581,12 +516,12 @@ impl ProtocolState {
 
             // TODO (optimization): Use (buffer)damage
 
-            let guard = SIGBUS_WATCHER.watch(pool.guest_mmap, pool.size);
+            let guard = SIGBUS_WATCHER.watch(pool.guest_mmap.ptr(), pool.size);
 
             unsafe {
                 ptr::copy_nonoverlapping(
-                    pool.guest_mmap.byte_add(shm_buffer.offset),
-                    pool.host_mmap.byte_add(shm_buffer.offset),
+                    pool.guest_mmap.ptr().byte_add(shm_buffer.offset),
+                    pool.host_mmap.ptr().byte_add(shm_buffer.offset),
                     shm_buffer.stride * shm_buffer.height,
                 );
             }
