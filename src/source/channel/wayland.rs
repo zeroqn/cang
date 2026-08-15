@@ -175,38 +175,19 @@ impl ProtocolState {
         }
     }
 
-    fn handle_shm_create_pool(
-        &mut self,
+    fn create_sharable_blob(
+        image_cache: &mut HashMap<ImageReqs, ImageDesc>,
         drm: &impl VirtioDevice,
         query_ring: &Ring,
-        mut message: Message<u32, OwnedFd>,
-    ) -> io::Result<Message<u32, Identifier>> {
-        self.wl_shm = Some(message.sender_id);
-
-        let [
-            Argument::NewId(new_pool),
-            Argument::Fd(orig_fd),
-            Argument::Int(size),
-        ] = ({
-            let mut args = message.args.drain(0..3);
-            [
-                args.next().ok_or(io::ErrorKind::InvalidData)?,
-                args.next().ok_or(io::ErrorKind::InvalidData)?,
-                args.next().ok_or(io::ErrorKind::InvalidData)?,
-            ]
-        })
-        else {
-            error!("Invalid args for wl_shm::create_pool");
-            return Err(io::ErrorKind::InvalidData.into());
-        };
-
+        size: u32,
+    ) -> io::Result<(OwnedFd, Identifier)> {
         let reqs = ImageReqs {
             width: size as u32,
             height: 1,
             drm_format: DrmFourcc::R8 as u32,
         };
 
-        let desc = match self.image_cache.entry(reqs) {
+        let desc = match image_cache.entry(reqs) {
             Entry::Occupied(e) => *e.get(),
             Entry::Vacant(e) => {
                 let desc = query_image(
@@ -241,6 +222,37 @@ impl ProtocolState {
         let fd = drm
             .buffer_to_prime_fd(blob.bo_handle, CLOEXEC | RDWR)
             .inspect_err(|err| error!("Unable to get fd from bo handle: {}", err))?;
+
+        Ok((fd, identifier))
+    }
+
+    fn handle_shm_create_pool(
+        &mut self,
+        drm: &impl VirtioDevice,
+        query_ring: &Ring,
+        mut message: Message<u32, OwnedFd>,
+    ) -> io::Result<Message<u32, Identifier>> {
+        self.wl_shm = Some(message.sender_id);
+
+        let [
+            Argument::NewId(new_pool),
+            Argument::Fd(orig_fd),
+            Argument::Int(size),
+        ] = ({
+            let mut args = message.args.drain(0..3);
+            [
+                args.next().ok_or(io::ErrorKind::InvalidData)?,
+                args.next().ok_or(io::ErrorKind::InvalidData)?,
+                args.next().ok_or(io::ErrorKind::InvalidData)?,
+            ]
+        })
+        else {
+            error!("Invalid args for wl_shm::create_pool");
+            return Err(io::ErrorKind::InvalidData.into());
+        };
+
+        let (fd, identifier) =
+            Self::create_sharable_blob(&mut self.image_cache, drm, query_ring, size as u32)?;
 
         let guest_mmap = unsafe {
             libc::mmap(
@@ -279,7 +291,7 @@ impl ProtocolState {
                 fd: orig_fd,
                 guest_mmap,
 
-                res_handle: blob.res_handle,
+                res_handle: identifier.identifier,
                 blob_fd: fd,
                 host_mmap,
 
@@ -345,47 +357,8 @@ impl ProtocolState {
 
         // first lets worry about creating the new buffer and copying.
 
-        let reqs = ImageReqs {
-            width: size as u32,
-            height: 1,
-            drm_format: DrmFourcc::R8 as u32,
-        };
-
-        let desc = match self.image_cache.entry(reqs) {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(e) => {
-                let desc = query_image(
-                    drm,
-                    query_ring,
-                    size as u32,
-                    1,
-                    DrmFourcc::R8 as u32,
-                    SCANOUT | LINEAR,
-                )
-                .inspect_err(|err| error!("Unable to query host blob parameters: {}", err))?;
-                *e.insert(desc)
-            }
-        };
-
-        let blob = drm
-            .resource_create_blob(
-                desc.host_size as usize,
-                BlobMem::Host3d,
-                BlobFlags::USE_MAPPABLE | BlobFlags::USE_SHARABLE,
-                Some(desc.blob_id as u64),
-            )
-            .inspect_err(|err| error!("Unable to create host blob: {}", err))?;
-
-        let identifier = Identifier {
-            type_: CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB,
-            size: size as u32,
-            identifier: blob.res_handle,
-            bo: Some(blob.bo_handle),
-        };
-
-        let fd = drm
-            .buffer_to_prime_fd(blob.bo_handle, CLOEXEC | RDWR)
-            .inspect_err(|err| error!("Unable to get fd from bo handle: {}", err))?;
+        let (fd, identifier) =
+            Self::create_sharable_blob(&mut self.image_cache, drm, query_ring, size as u32)?;
 
         let guest_mmap = unsafe {
             libc::mmap(
@@ -495,7 +468,7 @@ impl ProtocolState {
             libc::munmap(pool.guest_mmap, pool.size);
             libc::munmap(pool.host_mmap, pool.size);
         }
-        pool.res_handle = blob.res_handle;
+        pool.res_handle = identifier.identifier;
         pool.blob_fd = fd;
         pool.guest_mmap = guest_mmap;
         pool.host_mmap = host_mmap;
