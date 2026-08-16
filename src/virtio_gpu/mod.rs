@@ -72,6 +72,14 @@ pub struct Blob {
 }
 
 pub trait VirtioDevice: drm::control::Device {
+    fn ensure_feature(&self, param: Param) -> Result<()> {
+        if self.get_param(param)? == 0 {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        } else {
+            Ok(())
+        }
+    }
+
     fn get_param(&self, param: Param) -> Result<u64> {
         let mut value = 0u64;
 

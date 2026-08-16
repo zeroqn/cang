@@ -57,22 +57,12 @@ pub struct ClientChannel {
     remote_data: Buffer<u8>,
     remote_fds: VecDeque<OwnedFd>,
 
-    params: HashMap<Param, u64>,
     query_ring: Ring,
     channel_ring: Ring,
     pipe_id: u32,
     pipes_write_from_host: HashMap<u32, OwnedFd>,
     pipes_read_from_guest: HashMap<u32, (Generic<OwnedFd, anyhow::Error>, bool)>,
 }
-
-const REQUIRED_PARAMS: [Param; 6] = [
-    Param::_3dFeatures,
-    Param::CapsetQueryFix,
-    Param::ResourceBlob,
-    Param::HostVisible,
-    Param::ContextInit,
-    Param::SupportedCapsetIds,
-];
 
 static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
 
@@ -89,16 +79,32 @@ impl ClientChannel {
                 .context("Failed to open virtio-gpu device")?,
         ));
 
-        let params = REQUIRED_PARAMS
-            .iter()
-            .map(|param| Ok((*param, drm.get_param(*param)?)))
-            .collect::<io::Result<HashMap<Param, u64>>>()?;
-        if params[&Param::SupportedCapsetIds] & (1 << ffi::VIRTGPU_DRM_CAPSET_CROSS_DOMAIN) == 0 {
+        drm.ensure_feature(Param::_3dFeatures)
+            .context("Host does not support the virgl feature (blocks all kinds of contexts)")?;
+        drm.ensure_feature(Param::CapsetQueryFix)
+            .context("Kernel is too old, needs capset query fix")?;
+        drm.ensure_feature(Param::ResourceBlob)
+            .context("Host does not support the resource_blob feature")?;
+        drm.ensure_feature(Param::ContextInit)
+            .context("Host does not support the context_init feature")?;
+        drm.ensure_feature(Param::HostVisible)
+            .context("Host does not support the host_visible feature")?;
+
+        let capset_ids = drm
+            .get_param(Param::SupportedCapsetIds)
+            .context("Host does not support capsets")?;
+
+        if capset_ids & (1 << ffi::VIRTGPU_DRM_CAPSET_CROSS_DOMAIN) == 0 {
             return Err(io::Error::from(ErrorKind::Unsupported))
-                .context("Host does not support cross domain protocol");
+                .context("Host does not support the cross-domain protocol");
         }
 
         let caps = drm.get_capset::<CrossDomainCapabilities>()?;
+
+        if (caps.supported_channels & (1 << CROSS_DOMAIN_CHANNEL_TYPE_WAYLAND)) == 0 {
+            return Err(io::Error::from(ErrorKind::Unsupported))
+                .context("Host does not support the wayland cross-domain channel type");
+        }
 
         // do *NOT* add a check for caps.supports_dmabuf here!
         // supports_dmabuf refers to dmabuf allocation *via* the cross-domain capability.
@@ -111,11 +117,6 @@ impl ClientChannel {
         // this would be interesting, but needs cooperation from the hypervisor.
         // we'd probably be better off to completely implement this protocol in the guest.
         filters.push("wp_drm_lease_device_v1".to_owned());
-
-        if (caps.supported_channels & (1 << CROSS_DOMAIN_CHANNEL_TYPE_WAYLAND)) == 0 {
-            return Err(io::Error::from(ErrorKind::Unsupported))
-                .context("Host does not support wayland channel type");
-        }
 
         drm.context_init(&[
             ffi::drm_virtgpu_context_set_param {
@@ -163,7 +164,6 @@ impl ClientChannel {
             remote_data: Buffer::new(MAX_BYTES_OUT * 2),
             remote_fds: VecDeque::new(),
 
-            params,
             query_ring,
             channel_ring,
             pipes_read_from_guest: HashMap::new(),
