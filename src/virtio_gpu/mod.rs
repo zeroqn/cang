@@ -52,6 +52,8 @@ pub enum Param {
     ExplicitDebugName = VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME as _,
     /// Device alignment requirements for blobs
     BlobAlignment = VIRTGPU_PARAM_BLOB_ALIGNMENT as _,
+    /// (XXX: NOT UPSTREAM YET) Host handles for guest blob resources
+    CreateGuestHandle = 10,
 }
 
 pub unsafe trait Capset: Default + Sized {
@@ -76,6 +78,7 @@ bitflags! {
         const USE_MAPPABLE = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
         const USE_SHARABLE = VIRTGPU_BLOB_FLAG_USE_SHAREABLE;
         const USE_CROSS_DEVICE = VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE;
+        const CREATE_GUEST_HANDLE = 8; // XXX: NOT UPSTREAM YET
     }
 }
 

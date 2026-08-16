@@ -90,6 +90,11 @@ impl ClientChannel {
         drm.ensure_feature(Param::HostVisible)
             .context("Host does not support the host_visible feature")?;
 
+        let has_create_guest_handle = drm
+            .ensure_feature(Param::CreateGuestHandle)
+            .inspect_err(|e| debug!("Host does not support the create_guest_handle feature: {e:?}"))
+            .is_ok();
+
         let capset_ids = drm
             .get_param(Param::SupportedCapsetIds)
             .context("Host does not support capsets")?;
@@ -157,7 +162,9 @@ impl ClientChannel {
         let local = ClientConnection::new(local, filters);
         Ok(ClientChannel {
             local,
-            protocol_state: ProtocolState::new(),
+            protocol_state: ProtocolState::new(wayland::HostFeatures {
+                has_create_guest_handle,
+            }),
 
             node,
             drm,
