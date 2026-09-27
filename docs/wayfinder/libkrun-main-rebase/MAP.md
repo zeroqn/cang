@@ -13,7 +13,11 @@ published as the permanent fork release **`v2.0.0-cang.1`**, pinned in
 ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
-**Status (2026-09-27): tickets 01, 02, 03, 04, 11 and 12 resolved.** The fork is
+**Status (2026-09-27): tickets 01, 02, 03, 04, 06, 07, 11 and 12 resolved.** The
+fork's `cang` branch is pushed (tip `d578e4e2`) and the permanent release
+**`v2.0.0-cang.1`** is published and pinned. cang's runtime is *not* runnable
+against that pin until ticket 09 lands, and the fork's own C extensions return in
+ticket 10. The fork is
 rebased (main + CI/docs + PRs 865/840) and `nix build ./nix/dev#cang-dev` is
 green on it. The next work is the cang-side port (ticket 09) and the fork's own
 C extensions (ticket 10); the release (ticket 06) needs bob's push and a
@@ -77,6 +81,8 @@ Frontier: ticket **04** (the rebase), with ticket **11** (cherry-pick matrix for
 
 ## Decisions so far
 
+- [Pin v2.0.0-cang.1 and adapt cang](tickets/07-pin-and-adapt-cang.md): pin `v2.0.0-cang.1` with both asset hashes; the submodule pointer moves to the tag's commit `d578e4e2`; `DEFAULT_LIBKRUN_NAMES` gains `libkrun.so.2`; both packagers ship `libkrun_init.so*`; `libkrun.nix` gives the init blob `$ORIGIN` and drops the now-dead pipewire edge. Expected window: cang launches fail until ticket 09 ports the binding.
+- [Publish the permanent v2.0.0-cang.1 fork release](tickets/06-publish-v2-release.md): pushed the rebased branch to the fork's `cang` (force-with-lease) and pushed the `v2.0.0-cang.1` tag with plain `git` - the workflow triggers on tags, so no `workflow_dispatch` auth was needed; CI published both assets with the init blob, pc files and headers included.
 - [Make nix/dev build main's libkrun (musl guest init)](tickets/12-nix-dev-build-main-libkrun.md): split the build - `pkgsStatic`'s rust builds `init/init-binary` for musl (with `timesync`), and `KRUN_INIT_BINARY_PATH` makes the ordinary Makefile flow embed it, so no Makefile patching; plus `withTimesync`, no `withSound`, `version = 2.0.0-cang`, and `rustfmt` for ffier. `nix build ./nix/dev#cang-dev` is green.
 - [Rebase cang onto main and fold in the three PRs](tickets/04-rebase-cang-onto-main.md): `cang-main-rebase` = `a980e779` + 7 replayed fork commits (CI/docs), 7 cherry-picked PR commits (865, 840) and 1 adaptation commit; the fork's Rust delta is absent by design (ticket 10), the pin/pointer are untouched (ticket 07), and the build check passes.
 
