@@ -51,6 +51,17 @@ fn is_versioned_fork_release_tag(tag: &str) -> bool {
     parts.len() == 3 && parts.iter().all(|part| is_numeric(part)) && is_numeric(counter)
 }
 
+/// A permanent cang release tag of the form `v<major>.<minor>.<patch>`. The
+/// release workflow never prunes versioned releases, while it keeps only the 20
+/// newest rolling `sha-<revision>` prereleases.
+fn is_cang_version_tag(tag: &str) -> bool {
+    let Some(rest) = tag.strip_prefix('v') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|part| is_numeric(part))
+}
+
 fn pinned_release_tag(attr_name: &str) -> String {
     let body = nix_top_level_attr_body(PINS_NIX, attr_name);
     body.split("tag = \"")
@@ -300,6 +311,16 @@ fn versioned_fork_release_tag_shape_is_enforced() {
 }
 
 #[test]
+fn cang_version_tag_shape_is_enforced() {
+    for accepted in ["v0.7.1", "v1.0.0", "v10.20.30"] {
+        assert!(is_cang_version_tag(accepted), "should accept {accepted}");
+    }
+    for rejected in ["sha-3300a11ece86", "0.7.1", "v0.7", "v0.7.1.2", "v0.7.x"] {
+        assert!(!is_cang_version_tag(rejected), "should reject {rejected}");
+    }
+}
+
+#[test]
 fn publish_release_gates_tagged_releases_on_permanent_fork_pins() {
     for required in [
         "Require versioned libkrun/libkrunfw pins",
@@ -465,14 +486,31 @@ fn cang_prebuilt_package_pins_and_patches_neutral_elf() {
     for required in [
         "owner = \"zeroqn\";",
         "repo = \"cang\";",
-        "tag = \"sha-",
         "systems = {",
         "x86_64-linux = {",
-        "asset = \"cang-x86_64-unknown-linux-gnu\";",
         "hash = \"sha256-",
     ] {
         assert!(cang_pin.contains(required), "missing {required}");
     }
+
+    // A rolling sha-<revision> prerelease carries the unversioned neutral asset
+    // name, a permanent v<version> release the versioned one; the tag and the
+    // asset name have to agree or pkgs.fetchurl cannot resolve the pin.
+    let tag = pinned_release_tag("cangPrebuiltRelease");
+    assert!(
+        tag.starts_with("sha-") || is_cang_version_tag(&tag),
+        "cangPrebuiltRelease pins {tag}; pin a rolling sha-<revision> prerelease \
+         or a permanent v<version> release"
+    );
+    let expected_asset = if tag.starts_with("sha-") {
+        "cang-x86_64-unknown-linux-gnu".to_owned()
+    } else {
+        format!("cang-{tag}-x86_64-unknown-linux-gnu")
+    };
+    assert!(
+        cang_pin.contains(&format!("asset = \"{expected_asset}\";")),
+        "cangPrebuiltRelease tag {tag} should pin the {expected_asset} asset"
+    );
     assert!(
         !cang_pin.contains("systems = { };"),
         "cang prebuilt pin should not remain in bootstrap-empty state"

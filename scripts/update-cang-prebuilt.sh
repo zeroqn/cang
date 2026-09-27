@@ -17,7 +17,11 @@ GitHub Releases, rejecting legacy/concrete-store-referencing payloads, and
 recomputing the binary SRI hash.
 
 Defaults:
-  --tag     newest sha-* prerelease containing the selected cang asset
+  --tag     newest rolling sha-<revision> prerelease containing the selected
+            cang asset. Pass a permanent v<version> tag (for example
+            --tag v0.7.1) to pin an artifact from a versioned release: those
+            releases are never pruned, while the release workflow deletes all
+            but the 20 newest sha-<revision> prereleases.
   --system  x86_64-linux
 USAGE
 }
@@ -55,10 +59,10 @@ done
 # historical `loftd-*` prefix and stay resolvable through that name.
 case "$system" in
   x86_64-linux)
-    asset_name="cang-x86_64-unknown-linux-gnu"
+    asset_arch="x86_64"
     ;;
   aarch64-linux)
-    asset_name="cang-aarch64-unknown-linux-gnu"
+    asset_arch="aarch64"
     ;;
   *)
     echo "unsupported system: $system" >&2
@@ -66,12 +70,34 @@ case "$system" in
     ;;
 esac
 
+releases_api="https://api.github.com/repos/$owner/$repo/releases?per_page=100"
+
+# A permanent v<version> release publishes its neutral asset under the versioned
+# name cang-v<version>-<arch>-unknown-linux-gnu, while a rolling sha-<revision>
+# prerelease made from a branch push carries the unversioned
+# cang-<arch>-unknown-linux-gnu name.
+if [ -n "$release_tag" ]; then
+  case "$release_tag" in
+    sha-*)
+      asset_name="cang-$asset_arch-unknown-linux-gnu"
+      ;;
+    v[0-9]*)
+      asset_name="cang-$release_tag-$asset_arch-unknown-linux-gnu"
+      ;;
+    *)
+      echo "unsupported release tag: $release_tag" >&2
+      echo "expected a rolling sha-<revision> or a permanent v<version> release" >&2
+      exit 1
+      ;;
+  esac
+else
+  asset_name="cang-$asset_arch-unknown-linux-gnu"
+fi
+
 if [[ "$asset_name" == *-linux-flake-locked ]]; then
   echo "internal error: refusing legacy cang flake-locked asset name: $asset_name" >&2
   exit 1
 fi
-
-releases_api="https://api.github.com/repos/$owner/$repo/releases?per_page=100"
 
 if [ -z "$release_tag" ]; then
   release_tag="$(

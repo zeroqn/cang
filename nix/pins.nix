@@ -146,10 +146,10 @@ in
     # Pinned by scripts/update-cang-prebuilt.sh, which rejects wrapper-script,
     # legacy flake-locked, and concrete /nix/store/<hash>-referencing cang
     # release payloads.
-    tag = "sha-3300a11ece86";
+    tag = "v0.7.1";
     systems = {
       x86_64-linux = {
-        asset = "cang-x86_64-unknown-linux-gnu";
+        asset = "cang-v0.7.1-x86_64-unknown-linux-gnu";
         hash = "sha256-vrZrzmZDX8Yla193n7nfwKJo40JrGv6jSjuRGrYvmgE=";
       };
     };

@@ -4,14 +4,20 @@ Pinned-asset refresh scripts for `nix/pins.nix`, run from the dev shell
 (`nix develop`).
 
 Refresh pinned cang prebuilt release metadata in `nix/pins.nix` from a neutral
-raw-ELF `sha-*` release. The updater rejects wrapper-script assets, legacy
+raw-ELF release. The updater rejects wrapper-script assets, legacy
 flake-locked names, and payloads containing concrete
-`/nix/store/<hash>-...` references. `sha-*` releases are rolling dev
-artifacts: the release workflow keeps the 20 newest and never deletes versioned
-releases, so re-run this updater before a pinned `sha-*` release ages out:
+`/nix/store/<hash>-...` references.
+
+`sha-*` releases are rolling dev artifacts: the release workflow keeps the 20
+newest and never deletes versioned releases, so re-run this updater before a
+pinned `sha-*` release ages out. A permanent `v<version>` release is never
+pruned and names its asset after the tag, so pin a released artifact with
+`--tag`; the updater derives the `cang-<tag>-<arch>-unknown-linux-gnu` name
+from the tag:
 
 ```bash
 nix develop --command ./scripts/update-cang-prebuilt.sh
+nix develop --command ./scripts/update-cang-prebuilt.sh --tag v0.7.1
 ```
 
 Refresh pinned RTK prebuilt release metadata in `nix/pins.nix`:
