@@ -1,0 +1,85 @@
+$ git -C deps/libkrun fetch --no-tags https://github.com/libkrun/libkrun.git refs/pull/822/head:refs/remotes/upstream/pr-822
+  -> refs/remotes/upstream/pr-822 = 3819ce5fc090a890dec7dc4fbba50bee5c805b17
+
+$ git -C deps/libkrun log -1 --format='%H%n%ci%n%an <%ae>%n%s' upstream/pr-822
+3819ce5fc090a890dec7dc4fbba50bee5c805b17
+2026-08-27 00:21:21 -0300
+Val Packett <val@invisiblethingslab.com>
+virtio/gpu: use the udmabuf driver to implement CREATE_GUEST_HANDLE
+
+$ git -C deps/libkrun merge-base upstream/pr-822 upstream/main
+0d75eb4b9d7f742e9b290b7372e4be491e68b173
+
+$ git -C deps/libkrun log --oneline upstream/main..upstream/pr-822
+3819ce5f virtio/gpu: use the udmabuf driver to implement CREATE_GUEST_HANDLE
+6c51645c virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker
+230f2c55 [XXX] virtio/gpu: update VIRTIO_GPU_F_CREATE_GUEST_HANDLE constant
+b3f9c114 utils/linux: Add udmabuf driver wrapper
+16e116ae rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+3391f3c5 rutabaga_gfx: cross_domain: support creating guest resources with handles
+ec9e5562 rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+a8fd2784 rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+a3962256 vmm/builder: seal file-backed memory against size changes
+4ef22a14 vmm/builder: create file-backed memory for gpu udmabuf as well
+5849c08d virtio/blk: use imago's new fully sync API instead of sync-wrappers
+65088540 Upgrade to vm-memory 0.18, vmm-sys-util 0.15
+
+$ git -C deps/libkrun rev-list --count upstream/main..upstream/pr-822 ; git -C deps/libkrun rev-list --count upstream/pr-822..upstream/main
+12
+116
+
+$ git -C deps/libkrun log -1 --format='%H %ci %s' 0d75eb4b
+0d75eb4b9d7f742e9b290b7372e4be491e68b173 2026-08-26 11:17:39 +0200 virtio/gpu: add configurable EDID manufacturer and display name
+
+$ git -C deps/libkrun diff --stat 0d75eb4b..upstream/pr-822   # == GitHub 3-dot +372/-148 over 36 files
+ Cargo.lock                                   |  83 ++++++---------
+ src/arch/Cargo.toml                          |  10 +-
+ src/arch/src/riscv64/mod.rs                  |   2 +-
+ src/arch/src/x86_64/mptable.rs               |   2 +-
+ src/arch/src/x86_64/regs.rs                  |   2 +-
+ src/arch/src/x86_64/windows/regs.rs          |   2 +-
+ src/cpuid/Cargo.toml                         |   4 +-
+ src/devices/Cargo.toml                       |   8 +-
+ src/devices/src/virtio/balloon/device.rs     |   2 +-
+ src/devices/src/virtio/block/device.rs       |  32 +++---
+ src/devices/src/virtio/console/process_rx.rs |   2 +-
+ src/devices/src/virtio/console/process_tx.rs |   2 +-
+ src/devices/src/virtio/descriptor_utils.rs   |   5 +-
+ src/devices/src/virtio/gpu/device.rs         |  27 ++++-
+ src/devices/src/virtio/gpu/mod.rs            |   4 +-
+ src/devices/src/virtio/gpu/virtio_gpu.rs     |  35 ++++++-
+ src/devices/src/virtio/gpu/worker.rs         |   9 ++
+ src/devices/src/virtio/queue.rs              |   4 +-
+ src/devices/src/virtio/vhost_user/device.rs  |   2 +-
+ src/devices/src/virtio/vsock/packet.rs       |   4 +-
+ src/kernel/Cargo.toml                        |   2 +-
+ src/kernel/src/loader/mod.rs                 |   2 +-
+ src/libkrun/Cargo.toml                       |   6 +-
+ src/rutabaga_gfx/src/cross_domain/mod.rs     |  46 ++++----
+ src/rutabaga_gfx/src/rutabaga_core.rs        |  14 ++-
+ src/rutabaga_gfx/src/rutabaga_utils.rs       |   1 +
+ src/smbios/Cargo.toml                        |   2 +-
+ src/utils/Cargo.toml                         |   5 +-
+ src/utils/src/linux/mod.rs                   |   1 +
+ src/utils/src/linux/udmabuf.rs               | 150 +++++++++++++++++++++++++++
+ src/vmm/Cargo.toml                           |  10 +-
+ src/vmm/src/builder.rs                       |  30 ++++--
+ src/vmm/src/linux/tee/amdsnp/mod.rs          |   2 +-
+ src/vmm/src/linux/vstate.rs                  |   4 +-
+ src/vmm/src/macos/vstate.rs                  |   2 +-
+ src/vmm/src/worker.rs                        |   2 +-
+ 36 files changed, 372 insertions(+), 148 deletions(-)
+
+$ git -C deps/libkrun diff --stat 5849c08d..upstream/pr-822   # payload with the two dep-bump commits excluded
+ src/devices/src/virtio/gpu/device.rs     |  27 +++++-
+ src/devices/src/virtio/gpu/mod.rs        |   4 +-
+ src/devices/src/virtio/gpu/virtio_gpu.rs |  33 ++++++-
+ src/devices/src/virtio/gpu/worker.rs     |   9 ++
+ src/rutabaga_gfx/src/cross_domain/mod.rs |  46 +++++-----
+ src/rutabaga_gfx/src/rutabaga_core.rs    |  14 ++-
+ src/rutabaga_gfx/src/rutabaga_utils.rs   |   1 +
+ src/utils/Cargo.toml                     |   3 +
+ src/utils/src/linux/mod.rs               |   1 +
+ src/utils/src/linux/udmabuf.rs           | 150 +++++++++++++++++++++++++++++++
+ src/vmm/src/builder.rs                   |  26 +++++-
+ 11 files changed, 280 insertions(+), 34 deletions(-)

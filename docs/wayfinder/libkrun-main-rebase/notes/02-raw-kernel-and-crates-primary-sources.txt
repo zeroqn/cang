@@ -1,0 +1,170 @@
+v6.12.109 drivers/gpu/drm/virtio/virtgpu_ioctl.c
+  https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/drivers/gpu/drm/virtio/virtgpu_ioctl.c?h=v6.12.109
+
+  getparam switch (line 88-127): handles params 1..8, default -> -EINVAL
+static int virtio_gpu_getparam_ioctl(struct drm_device *dev, void *data,
+				     struct drm_file *file)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct drm_virtgpu_getparam *param = data;
+	int value;
+
+	switch (param->param) {
+	case VIRTGPU_PARAM_3D_FEATURES:
+		value = vgdev->has_virgl_3d ? 1 : 0;
+		break;
+	case VIRTGPU_PARAM_CAPSET_QUERY_FIX:
+		value = 1;
+		break;
+	case VIRTGPU_PARAM_RESOURCE_BLOB:
+		value = vgdev->has_resource_blob ? 1 : 0;
+		break;
+	case VIRTGPU_PARAM_HOST_VISIBLE:
+		value = vgdev->has_host_visible ? 1 : 0;
+		break;
+	case VIRTGPU_PARAM_CROSS_DEVICE:
+		value = vgdev->has_resource_assign_uuid ? 1 : 0;
+		break;
+	case VIRTGPU_PARAM_CONTEXT_INIT:
+		value = vgdev->has_context_init ? 1 : 0;
+		break;
+	case VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs:
+		value = vgdev->capset_id_mask;
+		break;
+	case VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME:
+		value = vgdev->has_context_init ? 1 : 0;
+		break;
+	default:
+		return -EINVAL;
+	}
+	if (copy_to_user(u64_to_user_ptr(param->value), &value, sizeof(int)))
+		return -EFAULT;
+
+	return 0;
+}
+
+  verify_blob (line 439-481): rejects any blob_flags outside VIRTGPU_BLOB_FLAG_USE_MASK
+static int verify_blob(struct virtio_gpu_device *vgdev,
+		       struct virtio_gpu_fpriv *vfpriv,
+		       struct virtio_gpu_object_params *params,
+		       struct drm_virtgpu_resource_create_blob *rc_blob,
+		       bool *guest_blob, bool *host3d_blob)
+{
+	if (!vgdev->has_resource_blob)
+		return -EINVAL;
+
+	if (rc_blob->blob_flags & ~VIRTGPU_BLOB_FLAG_USE_MASK)
+		return -EINVAL;
+
+	if (rc_blob->blob_flags & VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE) {
+		if (!vgdev->has_resource_assign_uuid)
+			return -EINVAL;
+	}
+
+	switch (rc_blob->blob_mem) {
+	case VIRTGPU_BLOB_MEM_GUEST:
+		*guest_blob = true;
+		break;
+	case VIRTGPU_BLOB_MEM_HOST3D_GUEST:
+		*guest_blob = true;
+		fallthrough;
+	case VIRTGPU_BLOB_MEM_HOST3D:
+		*host3d_blob = true;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (*host3d_blob) {
+		if (!vgdev->has_virgl_3d)
+			return -EINVAL;
+
+		/* Must be dword aligned. */
+		if (rc_blob->cmd_size % 4 != 0)
+			return -EINVAL;
+
+		params->ctx_id = vfpriv->ctx_id;
+		params->blob_id = rc_blob->blob_id;
+	} else {
+		if (rc_blob->blob_id != 0)
+
+v6.12.109 include/uapi/drm/virtgpu_drm.h blob flags
+93:#define VIRTGPU_PARAM_3D_FEATURES 1 /* do we have 3D features in the hw */
+94:#define VIRTGPU_PARAM_CAPSET_QUERY_FIX 2 /* do we have the capset fix */
+95:#define VIRTGPU_PARAM_RESOURCE_BLOB 3 /* DRM_VIRTGPU_RESOURCE_CREATE_BLOB */
+96:#define VIRTGPU_PARAM_HOST_VISIBLE 4 /* Host blob resources are mappable */
+97:#define VIRTGPU_PARAM_CROSS_DEVICE 5 /* Cross virtio-device resource sharing  */
+98:#define VIRTGPU_PARAM_CONTEXT_INIT 6 /* DRM_VIRTGPU_CONTEXT_INIT */
+99:#define VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs 7 /* Bitmask of supported capability set ids */
+100:#define VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME 8 /* Ability to set debug name from userspace */
+175:#define VIRTGPU_BLOB_MEM_GUEST             0x0001
+176:#define VIRTGPU_BLOB_MEM_HOST3D            0x0002
+177:#define VIRTGPU_BLOB_MEM_HOST3D_GUEST      0x0003
+179:#define VIRTGPU_BLOB_FLAG_USE_MAPPABLE     0x0001
+180:#define VIRTGPU_BLOB_FLAG_USE_SHAREABLE    0x0002
+181:#define VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE 0x0004
+190:	 * for 3D contexts with VIRTGPU_BLOB_MEM_HOST3D_GUEST and
+191:	 * VIRTGPU_BLOB_MEM_HOST3D otherwise, must be zero.
+
+v6.12.109 drivers/gpu/drm/virtio/virtgpu_drv.c feature table
+149:	VIRTIO_GPU_F_VIRGL,
+151:	VIRTIO_GPU_F_EDID,
+152:	VIRTIO_GPU_F_RESOURCE_UUID,
+153:	VIRTIO_GPU_F_RESOURCE_BLOB,
+154:	VIRTIO_GPU_F_CONTEXT_INIT,
+
+v6.12.109 drivers/dma-buf/udmabuf.c seal requirements + size limit
+19:static int list_limit = 1024;
+20:module_param(list_limit, int, 0644);
+21:MODULE_PARM_DESC(list_limit, "udmabuf_create_list->count limit. Default is 1024.");
+23:static int size_limit_mb = 64;
+24:module_param(size_limit_mb, int, 0644);
+25:MODULE_PARM_DESC(size_limit_mb, "Max size of a dmabuf, in megabytes. Default is 64.");
+253:#define SEALS_WANTED (F_SEAL_SHRINK)
+254:#define SEALS_DENIED (F_SEAL_WRITE|F_SEAL_FUTURE_WRITE)
+267:	if ((seals & SEALS_WANTED) != SEALS_WANTED ||
+268:	    (seals & SEALS_DENIED) != 0)
+357:	pglimit = ((u64)size_limit_mb * 1024 * 1024) >> PAGE_SHIFT;
+464:	if (head.count > list_limit)
+
+rutabaga_gfx 0.1.85 (crates.io tarball, the version main depends on) has no CREATE_GUEST_HANDLE
+77:pub const RUTABAGA_BLOB_FLAG_USE_MAPPABLE: u32 = 0x0001;
+78:pub const RUTABAGA_BLOB_FLAG_USE_SHAREABLE: u32 = 0x0002;
+79:pub const RUTABAGA_BLOB_FLAG_USE_CROSS_DEVICE: u32 = 0x0004;
+  cross_domain/context.rs attach() still drops handles for guest blobs:
+    fn attach(&mut self, resource: &mut RutabagaResource) {
+        if resource.blob_mem == RUTABAGA_BLOB_MEM_GUEST {
+            self.context_resources.lock().unwrap().insert(
+                resource.resource_id,
+                ContextResource {
+                    handle: None,
+                    backing_iovecs: resource.backing_iovecs.take(),
+                },
+            );
+        } else if let Some(ref handle) = resource.handle {
+            self.context_resources.lock().unwrap().insert(
+                resource.resource_id,
+                ContextResource {
+                    handle: Some(handle.clone()),
+                    backing_iovecs: None,
+                },
+            );
+  cross_domain/component.rs create_blob() still ignores _handle_opt:
+    fn create_blob(
+        &mut self,
+        _ctx_id: u32,
+        resource_id: u32,
+        resource_create_blob: ResourceCreateBlob,
+        iovec_opt: Option<Vec<RutabagaIovec>>,
+        _handle_opt: Option<RutabagaHandle>,
+    ) -> RutabagaResult<RutabagaResource> {
+        if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST
+            && resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE
+        {
+            return Err(MagmaGpuError::WithContext("expected only guest memory blobs").into());
+        }
+
+        Ok(RutabagaResource {
+            resource_id,
+            handle: None,
+            blob: true,

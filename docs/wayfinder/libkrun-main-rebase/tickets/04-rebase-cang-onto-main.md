@@ -19,11 +19,11 @@ Perform the rebase in `deps/libkrun` and leave the result buildable:
    structure and re-apply the fork's addition**; never take the fork side
    wholesale. Expect conflicts in the GPU files, `src/libkrun/src/lib.rs`,
    `src/vmm/src/builder.rs`, `src/vmm/src/lib.rs`.
-3. Cherry-pick 822 / 865 / 840 in the order ticket 03 decided, preserving
-   authorship and upstream commit messages (plus the drop-me trailer). Mind that
-   **822 (2026-08-27) and 840 (2026-09-05) predate main's 2026-09-11 ABI
-   rewrite**, so their content may need adaptation to the v2 tree; 865
-   (2026-09-17) postdates it. Record the adaptation for each.
+3. Cherry-pick **865 and 840** (822 is out of scope - bob, 2026-09-27),
+   preserving authorship and upstream commit messages plus a
+   `(cherry picked from upstream PR #N …)` trailer so each is droppable. Mind
+   that **840 (2026-09-05) predates main's 2026-09-11 ABI rewrite** while 865
+   (2026-09-17) postdates it; record the adaptation each needed.
 3b. Re-establish the fork's own C extensions on main's structure - that is
    ticket 10, which runs alongside this one; do not leave the rebase "green but
    missing `krun_set_gpu_options3`" without saying so.

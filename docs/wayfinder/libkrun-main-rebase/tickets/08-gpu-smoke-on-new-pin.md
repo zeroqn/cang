@@ -10,8 +10,9 @@ claimed_by: unclaimed
 
 Prove the rebased libkrun still does GPU/wayland work on this host, honestly:
 
-1. Run `tools/chromium-cang-smoke` (GPU modes, plus the wayland path relevant to
-   the guest-handle work) against the new pin on the btrfs-backed live-VM setup.
+1. Run `tools/chromium-cang-smoke` (GPU and wayland modes) against the new pin
+   on the btrfs-backed live-VM setup. The PR-822 guest-handle fast path is **not**
+   part of this map, so the smoke cannot and must not be expected to exercise it.
 2. Attribute any failure: is it introduced by the rebase, by a cherry-picked PR,
    or pre-existing? When unsure, run the same smoke against the **old pin**
    (v1.19.5-cang.1) to separate the two, rather than assuming.

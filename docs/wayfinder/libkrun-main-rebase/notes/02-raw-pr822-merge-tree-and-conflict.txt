@@ -1,0 +1,156 @@
+$ git -C deps/libkrun merge-tree --write-tree upstream/main upstream/pr-822
+ad57229eb0e6b45431916c40af9df9bf74823e37
+100644 f1a69f7226a4dca83745e1114d7a18a9bbf64075 1	Cargo.lock
+100644 6cd75dacdc9978dec4b3deb85ed13b10f414fb39 2	Cargo.lock
+100644 635a21f33131d0db62455605c1dbe3befc301837 3	Cargo.lock
+100644 77d5fe18ccacaf92b59e927afb85c4e298f465c6 1	src/devices/Cargo.toml
+100644 309720de6d8d49e15ae3b7d63b9bb3f5c28e7397 2	src/devices/Cargo.toml
+100644 879366aff273a8998b5bd488aa2dc448e0ff6a65 3	src/devices/Cargo.toml
+100644 7f65a2083e94492d1cb46aaf7b282cea8abfb9ca 1	src/devices/src/virtio/block/device.rs
+100644 6991375f95c7ae466872ffd1515981db5d2f16bb 2	src/devices/src/virtio/block/device.rs
+100644 51b7b187d89c473f2e9fdca99593575c7f77181d 3	src/devices/src/virtio/block/device.rs
+100644 c4a65bed3d1b29eff669a4df43dd166b73362404 1	src/devices/src/virtio/gpu/virtio_gpu.rs
+100644 fa09f59b4ff224ba091f96769d887cd05a273606 2	src/devices/src/virtio/gpu/virtio_gpu.rs
+100644 eb57e6f2197e18e3c76ff32dc75dcf9a2d972068 3	src/devices/src/virtio/gpu/virtio_gpu.rs
+100644 d88dbcc61008d8b85a527e6e646c418bd8667e0b 1	src/devices/src/virtio/vhost_user/device.rs
+100644 3e72b2904893c8957bcf1e582b16537daf15ebd0 2	src/devices/src/virtio/vhost_user/device.rs
+100644 18f6b1627bc868469a80a9a968f19f50e4252c81 3	src/devices/src/virtio/vhost_user/device.rs
+100644 f2b7a0ebe96bff22efec0f9abbee435e57e1a45d 1	src/libkrun/Cargo.toml
+100644 7d523624170287625387f5750ba35d9d14ee96b5 2	src/libkrun/Cargo.toml
+100644 0299dd5a6cda2ee97baa580b01c74cf5d6759b2b 3	src/libkrun/Cargo.toml
+100644 a0d4c6f2337376c2076d62901e99ebd1e8023315 1	src/libkrun/src/vmm/builder.rs
+100644 df64ef2da59236f20dd751bb935a44110b9ac9c5 2	src/libkrun/src/vmm/builder.rs
+100644 a70cc94aedb6759ce0330bc289435855ede62a69 3	src/libkrun/src/vmm/builder.rs
+100644 0f1e25ba6a86142919214a53a1954cb4465aa378 1	src/libkrun/src/vmm/linux/vstate.rs
+100644 c7f363abba817b402c37886ebed2f9adfe657258 2	src/libkrun/src/vmm/linux/vstate.rs
+100644 ad91edab5ef32ce386dd714f2d16611f882c5c97 3	src/libkrun/src/vmm/linux/vstate.rs
+100644 c1ffbd7d2395d7b2d28f63fb48bda7376be9326e 1	src/rutabaga_gfx/src/cross_domain/mod.rs
+100644 d2208453a35e77e774c47aa4d565df7d3683c2c1 3	src/rutabaga_gfx/src/cross_domain/mod.rs
+100644 f5b349a937c0d745aa66770cd5d45d2ae904f767 1	src/rutabaga_gfx/src/rutabaga_core.rs
+100644 19e95114fad547d4f72dffc79dbc68281d2f8a29 3	src/rutabaga_gfx/src/rutabaga_core.rs
+100644 912200a7aa0b319b1adc094c27081e9facd80014 1	src/rutabaga_gfx/src/rutabaga_utils.rs
+100644 9bd846740ee5002a918a01f4b61484439591f4b5 3	src/rutabaga_gfx/src/rutabaga_utils.rs
+100644 765b6e76947912b2ced374b02b8cbb119c101aaa 1	src/utils/Cargo.toml
+100644 347c4c08c0e1e6114a1cbc80637d8cf78fa53745 2	src/utils/Cargo.toml
+100644 340824c74cbb3b26a147937ffda9645d41b58c20 3	src/utils/Cargo.toml
+100644 1c51dce94c7f3003cfe8892f36d447fa9a781244 1	src/vmm/Cargo.toml
+100644 7f74138a922574a45e6fd8a735f0498f0d7b3917 3	src/vmm/Cargo.toml
+
+Auto-merging Cargo.lock
+CONFLICT (content): Merge conflict in Cargo.lock
+Auto-merging src/arch/Cargo.toml
+Auto-merging src/arch/src/riscv64/mod.rs
+Auto-merging src/arch/src/x86_64/windows/regs.rs
+Auto-merging src/devices/Cargo.toml
+CONFLICT (content): Merge conflict in src/devices/Cargo.toml
+Auto-merging src/devices/src/virtio/balloon/device.rs
+Auto-merging src/devices/src/virtio/block/device.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/block/device.rs
+Auto-merging src/devices/src/virtio/gpu/device.rs
+Auto-merging src/devices/src/virtio/gpu/virtio_gpu.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/gpu/virtio_gpu.rs
+Auto-merging src/devices/src/virtio/gpu/worker.rs
+Auto-merging src/devices/src/virtio/vhost_user/device.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/vhost_user/device.rs
+Auto-merging src/devices/src/virtio/vsock/packet.rs
+Auto-merging src/libkrun/Cargo.toml
+CONFLICT (content): Merge conflict in src/libkrun/Cargo.toml
+Auto-merging src/libkrun/src/vmm/builder.rs
+CONFLICT (content): Merge conflict in src/libkrun/src/vmm/builder.rs
+Auto-merging src/libkrun/src/vmm/linux/tee/amdsnp/mod.rs
+Auto-merging src/libkrun/src/vmm/linux/vstate.rs
+CONFLICT (content): Merge conflict in src/libkrun/src/vmm/linux/vstate.rs
+Auto-merging src/libkrun/src/vmm/macos/vstate.rs
+Auto-merging src/libkrun/src/vmm/worker.rs
+CONFLICT (modify/delete): src/rutabaga_gfx/src/cross_domain/mod.rs deleted in upstream/main and modified in upstream/pr-822.  Version upstream/pr-822 of src/rutabaga_gfx/src/cross_domain/mod.rs left in tree.
+CONFLICT (modify/delete): src/rutabaga_gfx/src/rutabaga_core.rs deleted in upstream/main and modified in upstream/pr-822.  Version upstream/pr-822 of src/rutabaga_gfx/src/rutabaga_core.rs left in tree.
+CONFLICT (modify/delete): src/rutabaga_gfx/src/rutabaga_utils.rs deleted in upstream/main and modified in upstream/pr-822.  Version upstream/pr-822 of src/rutabaga_gfx/src/rutabaga_utils.rs left in tree.
+Auto-merging src/utils/Cargo.toml
+CONFLICT (content): Merge conflict in src/utils/Cargo.toml
+CONFLICT (modify/delete): src/vmm/Cargo.toml deleted in upstream/main and modified in upstream/pr-822.  Version upstream/pr-822 of src/vmm/Cargo.toml left in tree.
+rc=1
+
+=== 6c51645c conflict hunks in src/devices/src/virtio/gpu/virtio_gpu.rs (clone in $SCRATCH)
+<<<<<<< HEAD
+use std::os::unix::io::{AsFd, AsRawFd};
+=======
+use std::os::fd::{AsRawFd, IntoRawFd};
+>>>>>>> 6c51645c (virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker)
+<<<<<<< HEAD
+#[cfg(any(
+    all(target_os = "linux", feature = "virgl_resource_map2"),
+    target_os = "macos"
+))]
+use rutabaga_gfx::RUTABAGA_HANDLE_TYPE_MEM_DMABUF;
+=======
+#[cfg(target_os = "macos")]
+use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_APPLE;
+#[cfg(target_os = "linux")]
+use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_DMABUF;
+>>>>>>> 6c51645c (virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker)
+<<<<<<< HEAD
+    RUTABAGA_MAP_ACCESS_MASK, RUTABAGA_MAP_ACCESS_READ, RUTABAGA_MAP_ACCESS_RW,
+    RUTABAGA_MAP_ACCESS_WRITE, RUTABAGA_PATH_TYPE_PIPEWIRE, RUTABAGA_PATH_TYPE_X11,
+=======
+    RUTABAGA_CHANNEL_TYPE_PW, RUTABAGA_CHANNEL_TYPE_X11, RUTABAGA_MAP_ACCESS_MASK,
+    RUTABAGA_MAP_ACCESS_READ, RUTABAGA_MAP_ACCESS_RW, RUTABAGA_MAP_ACCESS_WRITE,
+    RutabagaDescriptor, RutabagaFromRawDescriptor, RutabagaHandle,
+>>>>>>> 6c51645c (virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker)
+
+=== main's rewritten builder has no gpu_virgl_flags (the PR's use_gpu_udmabuf source)
+$ git -C deps/libkrun grep -n 'gpu_virgl_flags' upstream/main -- src/libkrun/src/vmm
+$ git -C deps/libkrun show upstream/main:src/libkrun/src/vmm/builder.rs | sed -n '1898,1912p'
+    #[cfg(feature = "gpu")]
+    if let Some(size) = gpu_shm_size {
+        shm_manager
+            .create_gpu_region(size)
+            .map_err(StartMicrovmError::ShmCreate)?;
+    }
+    #[cfg(not(feature = "gpu"))]
+    let _ = gpu_shm_size;
+
+    let _ = use_vhost_user;
+
+    // Add SHM regions before creating guest memory
+    arch_mem_regions.extend(shm_manager.regions());
+
+    let guest_mem = if use_vhost_user {
+
+$ git -C deps/libkrun show upstream/main:src/libkrun/src/vmm/builder.rs | sed -n '1907,1935p'   (memfd branch the PR extends)
+    let _ = use_vhost_user;
+
+    // Add SHM regions before creating guest memory
+    arch_mem_regions.extend(shm_manager.regions());
+
+    let guest_mem = if use_vhost_user {
+        #[cfg(all(feature = "vhost-user", target_os = "linux"))]
+        {
+            debug!(
+                "Creating file-backed memory for vhost-user (regions: {})",
+                arch_mem_regions.len()
+            );
+            // Create file-backed memory regions using memfd
+            let regions_with_files: Vec<_> = arch_mem_regions
+                .iter()
+                .map(|(addr, size)| {
+                    debug!(
+                        "Creating memfd for region: addr=0x{:x}, size=0x{:x}",
+                        addr.0, size
+                    );
+                    // SAFETY: memfd_create is called with a valid null-terminated C string and valid flags.
+                    // File descriptor ownership is transferred to File::from_raw_fd below.
+                    let memfd = unsafe {
+                        let fd = libc::memfd_create(c"guest_mem".as_ptr(), libc::MFD_CLOEXEC);
+                        if fd < 0 {
+                            error!("Failed to create memfd: {:?}", io::Error::last_os_error());
+                            return Err(io::Error::last_os_error());
+                        }
+                        if libc::ftruncate(fd, *size as i64) < 0 {
+
+$ git -C deps/libkrun grep -n 'gpu_shm_size' upstream/main -- src/libkrun/src/vmm/builder.rs
+upstream/main:src/libkrun/src/vmm/builder.rs:723:    let gpu_shm_size = requirements.iter().filter_map(|r| r.gpu_shm).next();
+upstream/main:src/libkrun/src/vmm/builder.rs:725:    let gpu_shm_size: Option<usize> = None;
+upstream/main:src/libkrun/src/vmm/builder.rs:760:        gpu_shm_size,
+upstream/main:src/libkrun/src/vmm/builder.rs:1815:    gpu_shm_size: Option<usize>,
+upstream/main:src/libkrun/src/vmm/builder.rs:1899:    if let Some(size) = gpu_shm_size {
+upstream/main:src/libkrun/src/vmm/builder.rs:1905:    let _ = gpu_shm_size;

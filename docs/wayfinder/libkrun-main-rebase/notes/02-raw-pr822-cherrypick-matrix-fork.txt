@@ -1,0 +1,93 @@
+# per-commit 3-way cherry-pick of the PR-822 payload onto the cang fork branch (local branch 'cang' = 28e79624, the fork tip on top of v1.19.5-cang.1)
+# rc=128 == patch applied OK, commit failed only for lack of committer identity
+
+=== 4ef22a14 vmm/builder: create file-backed memory for gpu udmabuf as well
+rc=1
+Auto-merging src/vmm/src/builder.rs
+CONFLICT (content): Merge conflict in src/vmm/src/builder.rs
+error: could not apply 4ef22a14... vmm/builder: create file-backed memory for gpu udmabuf as well
+--- status --porcelain
+UU src/vmm/src/builder.rs
+
+=== a3962256 vmm/builder: seal file-backed memory against size changes
+rc=1
+Auto-merging src/vmm/src/builder.rs
+CONFLICT (content): Merge conflict in src/vmm/src/builder.rs
+error: could not apply a3962256... vmm/builder: seal file-backed memory against size changes
+--- status --porcelain
+UU src/vmm/src/builder.rs
+
+=== a8fd2784 rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+rc=0
+Auto-merging src/rutabaga_gfx/src/cross_domain/mod.rs
+[cang 43728d31] rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+ Author: Val Packett <val@invisiblethingslab.com>
+ Date: Mon Aug 17 02:50:02 2026 -0300
+ 1 file changed, 7 insertions(+), 17 deletions(-)
+--- status --porcelain
+
+=== ec9e5562 rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+rc=0
+Auto-merging src/rutabaga_gfx/src/rutabaga_utils.rs
+[cang 61012967] rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+ Author: Val Packett <val@invisiblethingslab.com>
+ Date: Thu Aug 27 00:07:55 2026 -0300
+ 1 file changed, 1 insertion(+)
+--- status --porcelain
+
+=== 3391f3c5 rutabaga_gfx: cross_domain: support creating guest resources with handles
+rc=0
+Auto-merging src/rutabaga_gfx/src/cross_domain/mod.rs
+[cang d56a07b1] rutabaga_gfx: cross_domain: support creating guest resources with handles
+ Author: Val Packett <val@invisiblethingslab.com>
+ Date: Thu Aug 27 00:08:31 2026 -0300
+ 1 file changed, 17 insertions(+), 5 deletions(-)
+--- status --porcelain
+
+=== 16e116ae rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+rc=0
+[cang 1ecd9cf7] rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+ Author: Val Packett <val@invisiblethingslab.com>
+ Date: Thu Aug 27 00:08:54 2026 -0300
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+--- status --porcelain
+
+=== b3f9c114 utils/linux: Add udmabuf driver wrapper
+rc=1
+Auto-merging src/utils/Cargo.toml
+CONFLICT (content): Merge conflict in src/utils/Cargo.toml
+error: could not apply b3f9c114... utils/linux: Add udmabuf driver wrapper
+--- status --porcelain
+UU src/utils/Cargo.toml
+M  src/utils/src/linux/mod.rs
+A  src/utils/src/linux/udmabuf.rs
+
+=== 230f2c55 [XXX] virtio/gpu: update VIRTIO_GPU_F_CREATE_GUEST_HANDLE constant
+rc=0
+Auto-merging src/devices/src/virtio/gpu/mod.rs
+[cang 5a1a78a6] [XXX] virtio/gpu: update VIRTIO_GPU_F_CREATE_GUEST_HANDLE constant
+ Author: Val Packett <val@invisiblethingslab.com>
+ Date: Thu Aug 27 00:11:59 2026 -0300
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+--- status --porcelain
+
+=== 6c51645c virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker
+rc=1
+Auto-merging src/devices/src/virtio/gpu/device.rs
+Auto-merging src/devices/src/virtio/gpu/virtio_gpu.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/gpu/virtio_gpu.rs
+Auto-merging src/devices/src/virtio/gpu/worker.rs
+error: could not apply 6c51645c... virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker
+--- status --porcelain
+M  src/devices/src/virtio/gpu/device.rs
+UU src/devices/src/virtio/gpu/virtio_gpu.rs
+M  src/devices/src/virtio/gpu/worker.rs
+
+=== 3819ce5f virtio/gpu: use the udmabuf driver to implement CREATE_GUEST_HANDLE
+rc=0
+Auto-merging src/devices/src/virtio/gpu/virtio_gpu.rs
+[cang 53c5aaaf] virtio/gpu: use the udmabuf driver to implement CREATE_GUEST_HANDLE
+ Author: Val Packett <val@invisiblethingslab.com>
+ Date: Thu Aug 27 00:16:50 2026 -0300
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+--- status --porcelain

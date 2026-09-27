@@ -1,0 +1,76 @@
+$ git diff --name-status 0d75eb4b..upstream/pr-822
+M	Cargo.lock
+M	src/arch/Cargo.toml
+M	src/arch/src/riscv64/mod.rs
+M	src/arch/src/x86_64/mptable.rs
+M	src/arch/src/x86_64/regs.rs
+M	src/arch/src/x86_64/windows/regs.rs
+M	src/cpuid/Cargo.toml
+M	src/devices/Cargo.toml
+M	src/devices/src/virtio/balloon/device.rs
+M	src/devices/src/virtio/block/device.rs
+M	src/devices/src/virtio/console/process_rx.rs
+M	src/devices/src/virtio/console/process_tx.rs
+M	src/devices/src/virtio/descriptor_utils.rs
+M	src/devices/src/virtio/gpu/device.rs
+M	src/devices/src/virtio/gpu/mod.rs
+M	src/devices/src/virtio/gpu/virtio_gpu.rs
+M	src/devices/src/virtio/gpu/worker.rs
+M	src/devices/src/virtio/queue.rs
+M	src/devices/src/virtio/vhost_user/device.rs
+M	src/devices/src/virtio/vsock/packet.rs
+M	src/kernel/Cargo.toml
+M	src/kernel/src/loader/mod.rs
+M	src/libkrun/Cargo.toml
+M	src/rutabaga_gfx/src/cross_domain/mod.rs
+M	src/rutabaga_gfx/src/rutabaga_core.rs
+M	src/rutabaga_gfx/src/rutabaga_utils.rs
+M	src/smbios/Cargo.toml
+M	src/utils/Cargo.toml
+M	src/utils/src/linux/mod.rs
+A	src/utils/src/linux/udmabuf.rs
+M	src/vmm/Cargo.toml
+M	src/vmm/src/builder.rs
+M	src/vmm/src/linux/tee/amdsnp/mod.rs
+M	src/vmm/src/linux/vstate.rs
+M	src/vmm/src/macos/vstate.rs
+M	src/vmm/src/worker.rs
+
+$ git diff --stat 0d75eb4b..upstream/pr-822
+ Cargo.lock                                   |  83 ++++++---------
+ src/arch/Cargo.toml                          |  10 +-
+ src/arch/src/riscv64/mod.rs                  |   2 +-
+ src/arch/src/x86_64/mptable.rs               |   2 +-
+ src/arch/src/x86_64/regs.rs                  |   2 +-
+ src/arch/src/x86_64/windows/regs.rs          |   2 +-
+ src/cpuid/Cargo.toml                         |   4 +-
+ src/devices/Cargo.toml                       |   8 +-
+ src/devices/src/virtio/balloon/device.rs     |   2 +-
+ src/devices/src/virtio/block/device.rs       |  32 +++---
+ src/devices/src/virtio/console/process_rx.rs |   2 +-
+ src/devices/src/virtio/console/process_tx.rs |   2 +-
+ src/devices/src/virtio/descriptor_utils.rs   |   5 +-
+ src/devices/src/virtio/gpu/device.rs         |  27 ++++-
+ src/devices/src/virtio/gpu/mod.rs            |   4 +-
+ src/devices/src/virtio/gpu/virtio_gpu.rs     |  35 ++++++-
+ src/devices/src/virtio/gpu/worker.rs         |   9 ++
+ src/devices/src/virtio/queue.rs              |   4 +-
+ src/devices/src/virtio/vhost_user/device.rs  |   2 +-
+ src/devices/src/virtio/vsock/packet.rs       |   4 +-
+ src/kernel/Cargo.toml                        |   2 +-
+ src/kernel/src/loader/mod.rs                 |   2 +-
+ src/libkrun/Cargo.toml                       |   6 +-
+ src/rutabaga_gfx/src/cross_domain/mod.rs     |  46 ++++----
+ src/rutabaga_gfx/src/rutabaga_core.rs        |  14 ++-
+ src/rutabaga_gfx/src/rutabaga_utils.rs       |   1 +
+ src/smbios/Cargo.toml                        |   2 +-
+ src/utils/Cargo.toml                         |   5 +-
+ src/utils/src/linux/mod.rs                   |   1 +
+ src/utils/src/linux/udmabuf.rs               | 150 +++++++++++++++++++++++++++
+ src/vmm/Cargo.toml                           |  10 +-
+ src/vmm/src/builder.rs                       |  30 ++++--
+ src/vmm/src/linux/tee/amdsnp/mod.rs          |   2 +-
+ src/vmm/src/linux/vstate.rs                  |   4 +-
+ src/vmm/src/macos/vstate.rs                  |   2 +-
+ src/vmm/src/worker.rs                        |   2 +-
+ 36 files changed, 372 insertions(+), 148 deletions(-)

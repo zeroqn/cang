@@ -1,0 +1,107 @@
+### libkrunfw pin
+9616ca0ff8789d74ca0917472ddbb1eae6ed0ee3 ci: trigger permanent releases from version tags
+v5.6.2-cang.1
+
+### pinned kernel configs: UDMABUF
+v5.6.2-cang.1:config-libkrunfw_aarch64:2498:# CONFIG_UDMABUF is not set
+v5.6.2-cang.1:config-libkrunfw_riscv64:2241:# CONFIG_UDMABUF is not set
+v5.6.2-cang.1:config-libkrunfw_x86_64:1933:# CONFIG_UDMABUF is not set
+
+### does any libkrunfw patch mention CREATE_GUEST_HANDLE / udmabuf / blob_flags?
+$ git -C deps/libkrunfw grep -n 'CREATE_GUEST_HANDLE' v5.6.2-cang.1
+$ git -C deps/libkrunfw grep -n 'udmabuf' v5.6.2-cang.1 -- patches patches-tee
+$ git -C deps/libkrunfw grep -c 'blob_flags' v5.6.2-cang.1 -- patches
+
+### libkrunfw patches that touch drm/virtio
+patches/0018-drm-virtio-Support-fence-passing-feature.patch
+patches/0022-virtgpu-gem-partial-map.patch
+patches/0023-virtgpu-mixed-page-size.patch
+
+### patch 0018 (also present in upstream v5.6.2): feature bit 5 = FENCE_PASSING
+10:Guest userspace must enable new VIRTGPU_CONTEXT_PARAM_FENCE_PASSING flag
+11:and host must support new VIRTIO_GPU_F_FENCE_PASSING feature in order to
+46:+	VIRTIO_GPU_F_FENCE_PASSING,
+165:+		case VIRTGPU_CONTEXT_PARAM_FENCE_PASSING:
+184:+	if (virtio_has_feature(vgdev->vdev, VIRTIO_GPU_F_FENCE_PASSING)) {
+412:+#define VIRTGPU_CONTEXT_PARAM_FENCE_PASSING   0x0005
+427:+#define VIRTIO_GPU_F_FENCE_PASSING       5
+
+### libkrun (pinned HEAD = v1.19.5-cang.1) gpu constants + panic
+HEAD:src/devices/src/virtio/gpu/mod.rs:24:        pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
+HEAD:src/devices/src/virtio/gpu/mod.rs:25:        pub const VIRTIO_GPU_F_EDID: u32 = 1;
+HEAD:src/devices/src/virtio/gpu/mod.rs:26:        pub const VIRTIO_GPU_F_RESOURCE_UUID: u32 = 2;
+HEAD:src/devices/src/virtio/gpu/mod.rs:27:        pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
+HEAD:src/devices/src/virtio/gpu/mod.rs:28:        pub const VIRTIO_GPU_F_CONTEXT_INIT: u32 = 4;
+HEAD:src/devices/src/virtio/gpu/mod.rs:30:        pub const VIRTIO_GPU_F_RESOURCE_SYNC: u32 = 5;
+HEAD:src/devices/src/virtio/gpu/mod.rs:31:        pub const VIRTIO_GPU_F_CREATE_GUEST_HANDLE: u32 = 6;
+HEAD:src/devices/src/virtio/gpu/device.rs:23:pub(crate) const AVAIL_FEATURES: u64 = (1u64 << uapi::VIRTIO_F_VERSION_1)
+HEAD:src/devices/src/virtio/gpu/device.rs:57:            avail_features: AVAIL_FEATURES,
+HEAD:src/devices/src/virtio/gpu/virtio_gpu.rs:13:    GpuResponse, GpuResponsePlaneInfo, VirtioGpuResult, VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE,
+HEAD:src/devices/src/virtio/gpu/virtio_gpu.rs:597:        panic!("virtio_gpu: transfer_read unimplemented");
+HEAD:src/devices/src/virtio/gpu/virtio_gpu.rs:760:        if resource_create_blob.blob_flags & VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE != 0 {
+HEAD:src/devices/src/virtio/gpu/virtio_gpu.rs:761:            panic!("GUEST_HANDLE unimplemented");
+
+### upstream/main gpu constants + panic
+upstream/main:src/devices/src/virtio/gpu/mod.rs:22:        pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
+upstream/main:src/devices/src/virtio/gpu/mod.rs:23:        pub const VIRTIO_GPU_F_EDID: u32 = 1;
+upstream/main:src/devices/src/virtio/gpu/mod.rs:24:        pub const VIRTIO_GPU_F_RESOURCE_UUID: u32 = 2;
+upstream/main:src/devices/src/virtio/gpu/mod.rs:25:        pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
+upstream/main:src/devices/src/virtio/gpu/mod.rs:26:        pub const VIRTIO_GPU_F_CONTEXT_INIT: u32 = 4;
+upstream/main:src/devices/src/virtio/gpu/mod.rs:28:        pub const VIRTIO_GPU_F_RESOURCE_SYNC: u32 = 5;
+upstream/main:src/devices/src/virtio/gpu/mod.rs:29:        pub const VIRTIO_GPU_F_CREATE_GUEST_HANDLE: u32 = 6;
+upstream/main:src/devices/src/virtio/gpu/virtio_gpu.rs:12:    GpuResponse, GpuResponsePlaneInfo, VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE,
+upstream/main:src/devices/src/virtio/gpu/virtio_gpu.rs:635:        panic!("virtio_gpu: transfer_read unimplemented");
+upstream/main:src/devices/src/virtio/gpu/virtio_gpu.rs:773:        if resource_create_blob.blob_flags & VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE != 0 {
+upstream/main:src/devices/src/virtio/gpu/virtio_gpu.rs:774:            panic!("GUEST_HANDLE unimplemented");
+
+### does the cang libkrun fork advertise or implement bit 5 / fence passing?
+$ git -C deps/libkrun grep -n 'FENCE_PASSING|fence_passing' cang
+$ git -C deps/libkrun grep -n 'RESOURCE_SYNC' cang
+cang:src/devices/src/virtio/gpu/mod.rs:30:        pub const VIRTIO_GPU_F_RESOURCE_SYNC: u32 = 5;
+  ...but the device half of the extended SUBMIT_3D framing is present:
+HEAD:src/devices/src/virtio/gpu/protocol.rs:418:    pub num_in_fences: u32,
+HEAD:src/devices/src/virtio/gpu/worker.rs:341:                    let num_in_fences = info.num_in_fences as usize;
+HEAD:src/devices/src/virtio/gpu/worker.rs:344:                    let mut fence_ids: Vec<u64> = Vec::with_capacity(num_in_fences);
+HEAD:src/devices/src/virtio/gpu/worker.rs:346:                    for _ in 0..num_in_fences {
+
+  and rutabaga_gfx::Rutabaga::submit_command carries fence_ids:
+HEAD:src/devices/src/virtio/gpu/virtio_gpu.rs:687:        fence_ids: &[u64],
+HEAD:src/devices/src/virtio/gpu/virtio_gpu.rs:689:        self.rutabaga.submit_command(ctx_id, commands, fence_ids)?;
+
+### wl-cross-domain-proxy (deps/wl-cross-domain-proxy = cang subtree, upstream PR #24 merged)
+cc64c65f8d31c32d92feac41ae0f85815201ad4b
+merge(deps): wl-cross-domain-proxy upstream PR #24 (zero-copy SHM fast path)
+56:    CreateGuestHandle = 10,
+93:        let has_create_guest_handle = drm
+166:                has_create_guest_handle,
+22:    udmabuf::Udmabuf,
+53:    udmabuf: Option<Udmabuf>,
+223:        let udmabuf = Udmabuf::open()
+224:            .inspect_err(|e| debug!("Could not open udmabuf device: {e:?}"))
+235:            udmabuf,
+292:    fn import_memfd_via_udmabuf(
+294:        udmabuf: &Option<Udmabuf>,
+299:        let Some(udmabuf) = udmabuf else {
+300:            return Err(anyhow::anyhow!("udmabuf device absent"));
+308:                "memfd sealed against writing, cannot use udmabuf"
+321:                    "memfd sealed against growing and size not page aligned, cannot use udmabuf"
+330:        let dma_fd = udmabuf
+$ grep -rn 'BlobFlags::' deps/wl-cross-domain-proxy/src   (CREATE_GUEST_HANDLE is defined but never passed)
+/home/dev/cang/cang/deps/wl-cross-domain-proxy/src/source/channel/wayland.rs:273:                BlobFlags::USE_MAPPABLE | BlobFlags::USE_SHARABLE,
+/home/dev/cang/cang/deps/wl-cross-domain-proxy/src/source/channel/mod.rs:204:            .resource_create_blob(page_size, BlobMem::Guest, BlobFlags::USE_MAPPABLE, None)
+/home/dev/cang/cang/deps/wl-cross-domain-proxy/src/source/channel/mod.rs:477:                                        BlobFlags::USE_MAPPABLE | BlobFlags::USE_SHARABLE,
+
+### host /dev/udmabuf on the dev host
+crw-rw---- 1 root kvm 10, 258 Sep 25 15:53 /dev/udmabuf
+7.2.4-cachyos-lto
+
+=== cang fork (28e79624) AVAIL_FEATURES excludes both bit 5 and bit 6
+$ git -C deps/libkrun show cang:src/devices/src/virtio/gpu/device.rs | sed -n '22,29p'
+// Supported features.
+pub(crate) const AVAIL_FEATURES: u64 = (1u64 << uapi::VIRTIO_F_VERSION_1)
+    | (1u64 << uapi::VIRTIO_GPU_F_VIRGL)
+    | (1u64 << uapi::VIRTIO_GPU_F_EDID)
+    | (1u64 << uapi::VIRTIO_GPU_F_RESOURCE_UUID)
+    | (1u64 << uapi::VIRTIO_GPU_F_RESOURCE_BLOB)
+    | (1u64 << uapi::VIRTIO_GPU_F_CONTEXT_INIT);
+

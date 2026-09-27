@@ -1,0 +1,237 @@
+# per-commit 3-way cherry-pick of each PR-822 commit onto upstream/main (a980e779)
+# harness: clone of deps/libkrun in $SCRATCH, reset --hard upstream/main before each commit
+# rc=128 == apply OK, commit failed only for lack of a committer identity in the clone
+error: you need to resolve your current index first
+src/devices/src/virtio/gpu/virtio_gpu.rs: needs merge
+
+=== 65088540 Upgrade to vm-memory 0.18, vmm-sys-util 0.15
+rc=1
+Auto-merging Cargo.lock
+CONFLICT (content): Merge conflict in Cargo.lock
+Auto-merging src/arch/Cargo.toml
+Auto-merging src/arch/src/riscv64/mod.rs
+Auto-merging src/arch/src/x86_64/windows/regs.rs
+Auto-merging src/devices/Cargo.toml
+CONFLICT (content): Merge conflict in src/devices/Cargo.toml
+Auto-merging src/devices/src/virtio/balloon/device.rs
+Auto-merging src/devices/src/virtio/gpu/virtio_gpu.rs
+Auto-merging src/devices/src/virtio/vhost_user/device.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/vhost_user/device.rs
+Auto-merging src/devices/src/virtio/vsock/packet.rs
+Auto-merging src/libkrun/Cargo.toml
+CONFLICT (content): Merge conflict in src/libkrun/Cargo.toml
+Auto-merging src/libkrun/src/vmm/builder.rs
+CONFLICT (content): Merge conflict in src/libkrun/src/vmm/builder.rs
+Auto-merging src/libkrun/src/vmm/linux/tee/amdsnp/mod.rs
+Auto-merging src/libkrun/src/vmm/linux/vstate.rs
+CONFLICT (content): Merge conflict in src/libkrun/src/vmm/linux/vstate.rs
+Auto-merging src/libkrun/src/vmm/macos/vstate.rs
+Auto-merging src/libkrun/src/vmm/worker.rs
+Auto-merging src/utils/Cargo.toml
+CONFLICT (modify/delete): src/vmm/Cargo.toml deleted in HEAD and modified in 65088540 (Upgrade to vm-memory 0.18, vmm-sys-util 0.15).  Version 65088540 (Upgrade to vm-memory 0.18, vmm-sys-util 0.15) of src/vmm/Cargo.toml left in tree.
+error: could not apply 65088540... Upgrade to vm-memory 0.18, vmm-sys-util 0.15
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+UU Cargo.lock
+UU src/devices/Cargo.toml
+UU src/devices/src/virtio/vhost_user/device.rs
+UU src/libkrun/Cargo.toml
+UU src/libkrun/src/vmm/builder.rs
+UU src/libkrun/src/vmm/linux/vstate.rs
+DU src/vmm/Cargo.toml
+
+=== 5849c08d virtio/blk: use imago's new fully sync API instead of sync-wrappers
+rc=1
+Auto-merging Cargo.lock
+Auto-merging src/devices/Cargo.toml
+CONFLICT (content): Merge conflict in src/devices/Cargo.toml
+Auto-merging src/devices/src/virtio/block/device.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/block/device.rs
+error: could not apply 5849c08d... virtio/blk: use imago's new fully sync API instead of sync-wrappers
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+UU src/devices/Cargo.toml
+UU src/devices/src/virtio/block/device.rs
+
+=== 4ef22a14 vmm/builder: create file-backed memory for gpu udmabuf as well
+rc=128
+Auto-merging src/libkrun/src/vmm/builder.rs
+Committer identity unknown
+
+*** Please tell me who you are.
+
+Run
+
+  git config --global user.email "you@example.com"
+  git config --global user.name "Your Name"
+
+to set your account's default identity.
+Omit --global to set the identity only in this repository.
+
+fatal: unable to auto-detect email address (got 'dev@disp.(none)')
+--- status --porcelain
+M  src/libkrun/src/vmm/builder.rs
+
+=== a3962256 vmm/builder: seal file-backed memory against size changes
+rc=128
+Auto-merging src/libkrun/src/vmm/builder.rs
+Committer identity unknown
+
+*** Please tell me who you are.
+
+Run
+
+  git config --global user.email "you@example.com"
+  git config --global user.name "Your Name"
+
+to set your account's default identity.
+Omit --global to set the identity only in this repository.
+
+fatal: unable to auto-detect email address (got 'dev@disp.(none)')
+--- status --porcelain
+M  src/libkrun/src/vmm/builder.rs
+
+=== a8fd2784 rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+rc=1
+CONFLICT (modify/delete): src/rutabaga_gfx/src/cross_domain/mod.rs deleted in HEAD and modified in a8fd2784 (rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles).  Version a8fd2784 (rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles) of src/rutabaga_gfx/src/cross_domain/mod.rs left in tree.
+error: could not apply a8fd2784... rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+DU src/rutabaga_gfx/src/cross_domain/mod.rs
+
+=== ec9e5562 rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+rc=1
+CONFLICT (modify/delete): src/rutabaga_gfx/src/rutabaga_utils.rs deleted in HEAD and modified in ec9e5562 (rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE).  Version ec9e5562 (rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE) of src/rutabaga_gfx/src/rutabaga_utils.rs left in tree.
+error: could not apply ec9e5562... rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+DU src/rutabaga_gfx/src/rutabaga_utils.rs
+
+=== 3391f3c5 rutabaga_gfx: cross_domain: support creating guest resources with handles
+rc=1
+CONFLICT (modify/delete): src/rutabaga_gfx/src/cross_domain/mod.rs deleted in HEAD and modified in 3391f3c5 (rutabaga_gfx: cross_domain: support creating guest resources with handles).  Version 3391f3c5 (rutabaga_gfx: cross_domain: support creating guest resources with handles) of src/rutabaga_gfx/src/cross_domain/mod.rs left in tree.
+error: could not apply 3391f3c5... rutabaga_gfx: cross_domain: support creating guest resources with handles
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+DU src/rutabaga_gfx/src/cross_domain/mod.rs
+
+=== 16e116ae rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+rc=1
+CONFLICT (modify/delete): src/rutabaga_gfx/src/rutabaga_core.rs deleted in HEAD and modified in 16e116ae (rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain).  Version 16e116ae (rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain) of src/rutabaga_gfx/src/rutabaga_core.rs left in tree.
+error: could not apply 16e116ae... rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+DU src/rutabaga_gfx/src/rutabaga_core.rs
+
+=== b3f9c114 utils/linux: Add udmabuf driver wrapper
+rc=128
+Auto-merging src/utils/Cargo.toml
+Committer identity unknown
+
+*** Please tell me who you are.
+
+Run
+
+  git config --global user.email "you@example.com"
+  git config --global user.name "Your Name"
+
+to set your account's default identity.
+Omit --global to set the identity only in this repository.
+
+fatal: unable to auto-detect email address (got 'dev@disp.(none)')
+--- status --porcelain
+M  src/utils/Cargo.toml
+M  src/utils/src/linux/mod.rs
+A  src/utils/src/linux/udmabuf.rs
+
+=== 230f2c55 [XXX] virtio/gpu: update VIRTIO_GPU_F_CREATE_GUEST_HANDLE constant
+rc=128
+Committer identity unknown
+
+*** Please tell me who you are.
+
+Run
+
+  git config --global user.email "you@example.com"
+  git config --global user.name "Your Name"
+
+to set your account's default identity.
+Omit --global to set the identity only in this repository.
+
+fatal: unable to auto-detect email address (got 'dev@disp.(none)')
+--- status --porcelain
+M  src/devices/src/virtio/gpu/mod.rs
+
+=== 6c51645c virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker
+rc=1
+Auto-merging src/devices/src/virtio/gpu/device.rs
+Auto-merging src/devices/src/virtio/gpu/virtio_gpu.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/gpu/virtio_gpu.rs
+Auto-merging src/devices/src/virtio/gpu/worker.rs
+error: could not apply 6c51645c... virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+M  src/devices/src/virtio/gpu/device.rs
+UU src/devices/src/virtio/gpu/virtio_gpu.rs
+M  src/devices/src/virtio/gpu/worker.rs
+
+=== 3819ce5f virtio/gpu: use the udmabuf driver to implement CREATE_GUEST_HANDLE
+rc=128
+Auto-merging src/devices/src/virtio/gpu/virtio_gpu.rs
+Committer identity unknown
+
+*** Please tell me who you are.
+
+Run
+
+  git config --global user.email "you@example.com"
+  git config --global user.name "Your Name"
+
+to set your account's default identity.
+Omit --global to set the identity only in this repository.
+
+fatal: unable to auto-detect email address (got 'dev@disp.(none)')
+--- status --porcelain
+M  src/devices/src/virtio/gpu/virtio_gpu.rs

@@ -1,0 +1,575 @@
+diff --git a/src/devices/src/virtio/gpu/device.rs b/src/devices/src/virtio/gpu/device.rs
+index 0f5d0ecf..cf1caaf0 100644
+--- a/src/devices/src/virtio/gpu/device.rs
++++ b/src/devices/src/virtio/gpu/device.rs
+@@ -15,6 +15,8 @@ use super::worker::Worker;
+ use crate::display::DisplayInfo;
+ use crate::virtio::InterruptTransport;
+ use krun_display::DisplayBackend;
++#[cfg(target_os = "linux")]
++use utils::linux::udmabuf::UdmabufDriver;
+ #[cfg(target_os = "macos")]
+ use utils::worker_message::WorkerMessage;
+ 
+@@ -38,6 +40,8 @@ pub struct Gpu {
+     virgl_flags: u32,
+     #[cfg(target_os = "macos")]
+     map_sender: Sender<WorkerMessage>,
++    #[cfg(target_os = "linux")]
++    udmabuf_driver: Option<UdmabufDriver>,
+     export_table: Option<ExportTable>,
+     displays: Box<[DisplayInfo]>,
+     display_backend: DisplayBackend<'static>,
+@@ -50,14 +54,33 @@ impl Gpu {
+         display_backend: DisplayBackend<'static>,
+         #[cfg(target_os = "macos")] map_sender: Sender<WorkerMessage>,
+     ) -> super::Result<Gpu> {
++        #[cfg(target_os = "linux")]
++        let udmabuf_driver = UdmabufDriver::new()
++            .inspect_err(|err| {
++                warn!("Could not open udmabuf device: {err}");
++            })
++            .ok();
++
++        #[cfg(target_os = "linux")]
++        let avail_features = AVAIL_FEATURES
++            | if udmabuf_driver.is_some() {
++                1u64 << uapi::VIRTIO_GPU_F_CREATE_GUEST_HANDLE
++            } else {
++                0
++            };
++        #[cfg(not(target_os = "linux"))]
++        let avail_features = AVAIL_FEATURES;
++
+         Ok(Gpu {
+-            avail_features: AVAIL_FEATURES,
++            avail_features,
+             acked_features: 0,
+             device_state: DeviceState::Inactive,
+             shm_region: None,
+             virgl_flags,
+             #[cfg(target_os = "macos")]
+             map_sender,
++            #[cfg(target_os = "linux")]
++            udmabuf_driver,
+             export_table: None,
+             displays,
+             display_backend,
+@@ -215,6 +238,8 @@ impl VirtioDevice for Gpu {
+             self.virgl_flags,
+             #[cfg(target_os = "macos")]
+             self.map_sender.clone(),
++            #[cfg(target_os = "linux")]
++            self.udmabuf_driver.take(),
+             self.export_table.take(),
+             self.displays.clone(),
+             self.display_backend,
+diff --git a/src/devices/src/virtio/gpu/mod.rs b/src/devices/src/virtio/gpu/mod.rs
+index b48b92f0..fd3d496d 100644
+--- a/src/devices/src/virtio/gpu/mod.rs
++++ b/src/devices/src/virtio/gpu/mod.rs
+@@ -25,8 +25,8 @@ mod defs {
+         pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
+         pub const VIRTIO_GPU_F_CONTEXT_INIT: u32 = 4;
+         /* The following capabilities are not upstreamed. */
+-        pub const VIRTIO_GPU_F_RESOURCE_SYNC: u32 = 5;
+-        pub const VIRTIO_GPU_F_CREATE_GUEST_HANDLE: u32 = 6;
++        // pub const VIRTIO_GPU_F_RESOURCE_SYNC: u32 = 5;
++        pub const VIRTIO_GPU_F_CREATE_GUEST_HANDLE: u32 = 5;
+ 
+         #[derive(Copy, Clone, Debug, Default)]
+         #[repr(C)]
+diff --git a/src/devices/src/virtio/gpu/virtio_gpu.rs b/src/devices/src/virtio/gpu/virtio_gpu.rs
+index 303f04a3..eb57e6f2 100644
+--- a/src/devices/src/virtio/gpu/virtio_gpu.rs
++++ b/src/devices/src/virtio/gpu/virtio_gpu.rs
+@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
+ use std::env;
+ use std::io::IoSliceMut;
+ #[cfg(target_os = "linux")]
+-use std::os::fd::AsRawFd;
++use std::os::fd::{AsRawFd, IntoRawFd};
+ use std::path::PathBuf;
+ use std::sync::{Arc, Mutex};
+ 
+@@ -20,7 +20,7 @@ use krun_display::{
+ use libc::c_void;
+ #[cfg(target_os = "macos")]
+ use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_APPLE;
+-#[cfg(all(feature = "virgl_resource_map2", target_os = "linux"))]
++#[cfg(target_os = "linux")]
+ use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_DMABUF;
+ #[cfg(all(not(feature = "virgl_resource_map2"), target_os = "linux"))]
+ use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD;
+@@ -30,12 +30,15 @@ use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_SHM;
+ use rutabaga_gfx::{
+     RUTABAGA_CHANNEL_TYPE_PW, RUTABAGA_CHANNEL_TYPE_X11, RUTABAGA_MAP_ACCESS_MASK,
+     RUTABAGA_MAP_ACCESS_READ, RUTABAGA_MAP_ACCESS_RW, RUTABAGA_MAP_ACCESS_WRITE,
++    RutabagaDescriptor, RutabagaFromRawDescriptor, RutabagaHandle,
+ };
+ use rutabaga_gfx::{
+     RUTABAGA_CHANNEL_TYPE_WAYLAND, RUTABAGA_MAP_CACHE_MASK, ResourceCreate3D, ResourceCreateBlob,
+     Rutabaga, RutabagaBuilder, RutabagaChannel, RutabagaFence, RutabagaFenceHandler, RutabagaIovec,
+     Transfer3D,
+ };
++#[cfg(target_os = "linux")]
++use utils::linux::udmabuf::UdmabufDriver;
+ #[cfg(target_os = "macos")]
+ use utils::worker_message::WorkerMessage;
+ use vm_memory::{GuestAddress, GuestMemoryBackend, GuestMemoryMmap, VolatileSlice};
+@@ -153,6 +156,8 @@ pub struct VirtioGpu {
+     fence_state: Arc<Mutex<FenceState>>,
+     #[cfg(target_os = "macos")]
+     map_sender: Sender<WorkerMessage>,
++    #[cfg(target_os = "linux")]
++    udmabuf_driver: Option<UdmabufDriver>,
+     scanouts: [Option<VirtioGpuScanout>; VIRTIO_GPU_MAX_SCANOUTS as usize],
+     displays: Box<[DisplayInfo]>,
+     display_backend: DisplayBackendInstance,
+@@ -306,6 +311,7 @@ impl VirtioGpu {
+         interrupt: InterruptTransport,
+         virgl_flags: u32,
+         #[cfg(target_os = "macos")] map_sender: Sender<WorkerMessage>,
++        #[cfg(target_os = "linux")] udmabuf_driver: Option<UdmabufDriver>,
+         export_table: Option<ExportTable>,
+         displays: Box<[DisplayInfo]>,
+         display_backend: DisplayBackend,
+@@ -348,6 +354,8 @@ impl VirtioGpu {
+             display_backend,
+             #[cfg(target_os = "macos")]
+             map_sender,
++            #[cfg(target_os = "linux")]
++            udmabuf_driver,
+         }
+     }
+ 
+@@ -727,9 +735,26 @@ impl VirtioGpu {
+         mem: &GuestMemoryMmap,
+     ) -> VirtioGpuResult {
+         let mut rutabaga_iovecs = None;
++        let mut handle = None;
+ 
+         if resource_create_blob.blob_flags & VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE != 0 {
+-            panic!("GUEST_HANDLE unimplemented");
++            if let Some(driver) = &self.udmabuf_driver {
++                handle = driver
++                    .create_udmabuf(mem, &vecs)
++                    .inspect_err(|err| {
++                        warn!("Failed to create udmabuf: {err}");
++                    })
++                    .map(|fd| RutabagaHandle {
++                        os_handle: unsafe {
++                            RutabagaDescriptor::from_raw_descriptor(fd.into_raw_fd())
++                        },
++                        handle_type: RUTABAGA_MEM_HANDLE_TYPE_DMABUF,
++                    })
++                    .ok();
++            } else {
++                // Not expecting well-behaved guests to hit this path, as we don't set the feature flag without the driver
++                return Err(ErrUnspec);
++            }
+         } else if resource_create_blob.blob_mem != VIRTIO_GPU_BLOB_MEM_HOST3D {
+             rutabaga_iovecs =
+                 Some(sglist_to_rutabaga_iovecs(&vecs[..], mem).map_err(|_| ErrUnspec)?);
+@@ -740,7 +765,7 @@ impl VirtioGpu {
+             resource_id,
+             resource_create_blob,
+             rutabaga_iovecs,
+-            None,
++            handle,
+         )?;
+ 
+         let resource = VirtioGpuResource::new(resource_id, 0, 0, None, resource_create_blob.size);
+diff --git a/src/devices/src/virtio/gpu/worker.rs b/src/devices/src/virtio/gpu/worker.rs
+index 53f0871b..95ec45e3 100644
+--- a/src/devices/src/virtio/gpu/worker.rs
++++ b/src/devices/src/virtio/gpu/worker.rs
+@@ -12,6 +12,8 @@ use rutabaga_gfx::{
+     RUTABAGA_PIPE_BIND_RENDER_TARGET, RUTABAGA_PIPE_TEXTURE_2D, ResourceCreate3D,
+     ResourceCreateBlob, RutabagaFence, Transfer3D,
+ };
++#[cfg(target_os = "linux")]
++use utils::linux::udmabuf::UdmabufDriver;
+ #[cfg(target_os = "macos")]
+ use utils::worker_message::WorkerMessage;
+ use vm_memory::{GuestAddress, GuestMemoryMmap};
+@@ -39,6 +41,8 @@ pub struct Worker {
+     virgl_flags: u32,
+     #[cfg(target_os = "macos")]
+     map_sender: Sender<WorkerMessage>,
++    #[cfg(target_os = "linux")]
++    udmabuf_driver: Option<UdmabufDriver>,
+     export_table: Option<ExportTable>,
+     displays: Box<[DisplayInfo]>,
+     display_backend: DisplayBackend<'static>,
+@@ -53,6 +57,7 @@ impl Worker {
+         shm_region: VirtioShmRegion,
+         virgl_flags: u32,
+         #[cfg(target_os = "macos")] map_sender: Sender<WorkerMessage>,
++        #[cfg(target_os = "linux")] udmabuf_driver: Option<UdmabufDriver>,
+         export_table: Option<ExportTable>,
+         displays: Box<[DisplayInfo]>,
+         display_backend: DisplayBackend<'static>,
+@@ -74,6 +79,8 @@ impl Worker {
+             virgl_flags,
+             #[cfg(target_os = "macos")]
+             map_sender,
++            #[cfg(target_os = "linux")]
++            udmabuf_driver,
+             export_table,
+             displays,
+             display_backend,
+@@ -95,6 +102,8 @@ impl Worker {
+             self.virgl_flags,
+             #[cfg(target_os = "macos")]
+             self.map_sender.clone(),
++            #[cfg(target_os = "linux")]
++            self.udmabuf_driver.take(),
+             self.export_table.take(),
+             self.displays.clone(),
+             self.display_backend,
+diff --git a/src/rutabaga_gfx/src/cross_domain/mod.rs b/src/rutabaga_gfx/src/cross_domain/mod.rs
+index c1ffbd7d..d2208453 100644
+--- a/src/rutabaga_gfx/src/cross_domain/mod.rs
++++ b/src/rutabaga_gfx/src/cross_domain/mod.rs
+@@ -1307,23 +1307,13 @@ impl RutabagaContext for CrossDomainContext {
+     }
+ 
+     fn attach(&mut self, resource: &mut RutabagaResource) {
+-        if resource.blob_mem == RUTABAGA_BLOB_MEM_GUEST {
+-            self.context_resources.lock().unwrap().insert(
+-                resource.resource_id,
+-                CrossDomainResource {
+-                    handle: None,
+-                    backing_iovecs: resource.backing_iovecs.take(),
+-                },
+-            );
+-        } else if let Some(ref handle) = resource.handle {
+-            self.context_resources.lock().unwrap().insert(
+-                resource.resource_id,
+-                CrossDomainResource {
+-                    handle: Some(handle.clone()),
+-                    backing_iovecs: None,
+-                },
+-            );
+-        }
++        self.context_resources.lock().unwrap().insert(
++            resource.resource_id,
++            CrossDomainResource {
++                handle: resource.handle.clone(),
++                backing_iovecs: resource.backing_iovecs.take(),
++            },
++        );
+     }
+ 
+     fn detach(&mut self, resource: &RutabagaResource) {
+@@ -1384,19 +1374,31 @@ impl RutabagaComponent for CrossDomain {
+         resource_id: u32,
+         resource_create_blob: ResourceCreateBlob,
+         iovec_opt: Option<Vec<RutabagaIovec>>,
+-        _handle_opt: Option<RutabagaHandle>,
++        handle_opt: Option<RutabagaHandle>,
+     ) -> RutabagaResult<RutabagaResource> {
+-        if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST
+-            && resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE
+-        {
++        if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST {
+             return Err(RutabagaError::SpecViolation(
+                 "expected only guest memory blobs",
+             ));
+         }
+ 
++        if resource_create_blob.blob_flags & RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++            == RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++        {
++            if handle_opt.is_none() {
++                return Err(RutabagaError::SpecViolation(
++                    "expected a handle when using CREATE_GUEST_HANDLE",
++                ));
++            }
++        } else if resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE {
++            return Err(RutabagaError::SpecViolation(
++                "expected only create-handle or mappable guest memory blobs",
++            ));
++        }
++
+         Ok(RutabagaResource {
+             resource_id,
+-            handle: None,
++            handle: handle_opt.map(Arc::new),
+             blob: true,
+             blob_mem: resource_create_blob.blob_mem,
+             blob_flags: resource_create_blob.blob_flags,
+diff --git a/src/rutabaga_gfx/src/rutabaga_core.rs b/src/rutabaga_gfx/src/rutabaga_core.rs
+index f5b349a9..19e95114 100644
+--- a/src/rutabaga_gfx/src/rutabaga_core.rs
++++ b/src/rutabaga_gfx/src/rutabaga_core.rs
+@@ -733,9 +733,21 @@ impl Rutabaga {
+             return Err(RutabagaError::InvalidResourceId);
+         }
+ 
++        // Imported guest resources (from udmabuf or a passed-through real GPU) with host handles
++        // cannot have a `ctx_id` set, we need to pass them to the cross-domain *component* to
++        // make a RutabagaResource that simply wraps the handle.
++        let component_type = if ctx_id == 0
++            && resource_create_blob.blob_flags & RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++                == RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++        {
++            &RutabagaComponentType::CrossDomain
++        } else {
++            &self.default_component
++        };
++
+         let component = self
+             .components
+-            .get_mut(&self.default_component)
++            .get_mut(component_type)
+             .ok_or(RutabagaError::InvalidComponent)?;
+ 
+         let mut context = None;
+diff --git a/src/rutabaga_gfx/src/rutabaga_utils.rs b/src/rutabaga_gfx/src/rutabaga_utils.rs
+index 912200a7..9bd84674 100644
+--- a/src/rutabaga_gfx/src/rutabaga_utils.rs
++++ b/src/rutabaga_gfx/src/rutabaga_utils.rs
+@@ -75,6 +75,7 @@ pub const RUTABAGA_BLOB_MEM_HOST3D_GUEST: u32 = 0x0003;
+ pub const RUTABAGA_BLOB_FLAG_USE_MAPPABLE: u32 = 0x0001;
+ pub const RUTABAGA_BLOB_FLAG_USE_SHAREABLE: u32 = 0x0002;
+ pub const RUTABAGA_BLOB_FLAG_USE_CROSS_DEVICE: u32 = 0x0004;
++pub const RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE: u32 = 0x0008;
+ #[repr(C)]
+ #[derive(Copy, Clone, Debug)]
+ pub struct ResourceCreateBlob {
+diff --git a/src/utils/Cargo.toml b/src/utils/Cargo.toml
+index 2a42db0c..340824c7 100644
+--- a/src/utils/Cargo.toml
++++ b/src/utils/Cargo.toml
+@@ -19,6 +19,9 @@ crossbeam-channel = ">=0.5.15"
+ 
+ [target.'cfg(target_os = "linux")'.dependencies]
+ kvm-bindings = { version = "0.14.1", features = ["fam-wrappers"] }
++vm-memory = { version = "0.18.0", default-features = false, features = ["backend-mmap"] }
++nix = { version = "0.30.1", features = ["ioctl"] }
++thiserror = "2.0.12"
+ 
+ [target.'cfg(target_os = "macos")'.dependencies]
+ nix = { version = "0.30.1", features = ["fs"] }
+diff --git a/src/utils/src/linux/mod.rs b/src/utils/src/linux/mod.rs
+index dbdb425f..6c868021 100644
+--- a/src/utils/src/linux/mod.rs
++++ b/src/utils/src/linux/mod.rs
+@@ -1,2 +1,3 @@
+ pub mod epoll;
+ pub mod eventfd;
++pub mod udmabuf;
+diff --git a/src/utils/src/linux/udmabuf.rs b/src/utils/src/linux/udmabuf.rs
+new file mode 100644
+index 00000000..de5f4872
+--- /dev/null
++++ b/src/utils/src/linux/udmabuf.rs
+@@ -0,0 +1,150 @@
++use std::os::fd::AsRawFd;
++use std::os::fd::FromRawFd;
++use std::os::fd::OwnedFd;
++use std::path::Path;
++
++use kvm_bindings::__IncompleteArrayField;
++use nix::fcntl;
++use nix::fcntl::OFlag;
++use nix::sys::stat::Mode;
++use nix::unistd::SysconfVar;
++use nix::unistd::sysconf;
++use thiserror::Error;
++use vm_memory::Address;
++use vm_memory::GuestAddress;
++use vm_memory::GuestMemoryBackend;
++use vm_memory::GuestMemoryMmap;
++use vm_memory::GuestMemoryRegion;
++use vmm_sys_util::fam::{self, FamStruct, FamStructWrapper};
++use vmm_sys_util::generate_fam_struct_impl;
++
++#[derive(Error, Debug)]
++pub enum UdmabufError {
++    #[error("system call returned {0}")]
++    NixError(nix::Error),
++
++    #[error("could not create ioctl struct: {0}")]
++    StructError(fam::Error),
++
++    #[error("page size unavailable")]
++    NoPageSize,
++
++    #[error("could not find memory region")]
++    RegionNotFound,
++
++    #[error("memory region not backed by memfd")]
++    RegionNotFileBacked,
++
++    #[error("provided address and length are out of bounds for a region")]
++    OutOfBounds,
++
++    #[error("starting address or length not page aligned")]
++    NotPageAligned,
++}
++
++pub type Result<T> = std::result::Result<T, UdmabufError>;
++
++const UDMABUF_FLAGS_CLOEXEC: u32 = 1;
++
++#[repr(C)]
++#[derive(Debug, Default, Copy, Clone)]
++struct UdmabufCreateItem {
++    memfd: i32,
++    __pad: u32,
++    offset: u64,
++    size: u64,
++}
++
++#[repr(C)]
++#[derive(Debug, Default)]
++struct UdmabufCreateList {
++    flags: u32,
++    count: u32,
++    list: __IncompleteArrayField<UdmabufCreateItem>,
++}
++
++generate_fam_struct_impl!(
++    UdmabufCreateList,
++    UdmabufCreateItem,
++    list,
++    u32,
++    count,
++    65535
++);
++
++type UdmabufCreateListWrapper = FamStructWrapper<UdmabufCreateList>;
++
++nix::ioctl_write_ptr!(create_list, b'u', 0x43, UdmabufCreateList);
++
++/// A convenience wrapper for the Linux kernel's udmabuf driver.
++pub struct UdmabufDriver {
++    driver_fd: OwnedFd,
++    page_size: usize,
++}
++
++impl UdmabufDriver {
++    pub fn new() -> Result<UdmabufDriver> {
++        const UDMABUF_PATH: &str = "/dev/udmabuf";
++        let path = Path::new(UDMABUF_PATH);
++        let driver_fd =
++            fcntl::open(path, OFlag::O_RDONLY, Mode::empty()).map_err(UdmabufError::NixError)?;
++
++        let page_size = sysconf(SysconfVar::PAGE_SIZE)
++            .map_err(UdmabufError::NixError)?
++            .ok_or(UdmabufError::NoPageSize)? as usize;
++
++        Ok(UdmabufDriver {
++            driver_fd,
++            page_size,
++        })
++    }
++
++    pub fn create_udmabuf(
++        &self,
++        mem: &GuestMemoryMmap,
++        iovecs: &[(GuestAddress, usize)],
++    ) -> Result<OwnedFd> {
++        log::warn!("create_udmabuf: {} iovecs", iovecs.len());
++        let mut list = UdmabufCreateListWrapper::from_header(UdmabufCreateList {
++            flags: UDMABUF_FLAGS_CLOEXEC,
++            ..Default::default()
++        })
++        .map_err(UdmabufError::StructError)?;
++        for &(addr, len) in iovecs.iter() {
++            let region = mem.find_region(addr).ok_or(UdmabufError::RegionNotFound)?;
++
++            let Some(file_offset) = region.file_offset() else {
++                return Err(UdmabufError::RegionNotFileBacked);
++            };
++
++            let map_offset = addr
++                .checked_sub(region.start_addr().0)
++                .ok_or(UdmabufError::OutOfBounds)?;
++
++            if map_offset.0 as usize + len > region.len() as usize {
++                return Err(UdmabufError::OutOfBounds);
++            }
++
++            let offset = file_offset.start() + map_offset.0;
++
++            if offset as usize % self.page_size != 0 || len % self.page_size != 0 {
++                return Err(UdmabufError::NotPageAligned);
++            }
++
++            list.push(UdmabufCreateItem {
++                memfd: file_offset.file().as_raw_fd(),
++                __pad: 0,
++                offset: offset,
++                size: len as u64,
++            })
++            .map_err(UdmabufError::StructError)?;
++        }
++
++        // SAFETY: We have correctly allocated the structure above
++        let fd = unsafe { create_list(self.driver_fd.as_raw_fd(), list.as_mut_fam_struct_ptr()) }
++            .map_err(UdmabufError::NixError)?;
++
++        // SAFETY: Returned i32 is a valid fd since it was positive
++        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
++    }
++}
+diff --git a/src/vmm/src/builder.rs b/src/vmm/src/builder.rs
+index 30b99eeb..a70cc94a 100644
+--- a/src/vmm/src/builder.rs
++++ b/src/vmm/src/builder.rs
+@@ -1900,14 +1900,19 @@ pub fn create_guest_memory(
+     #[cfg(not(all(feature = "vhost-user", target_os = "linux")))]
+     let use_vhost_user = false;
+ 
++    #[cfg(all(feature = "gpu", target_os = "linux"))]
++    let use_gpu_udmabuf = vm_resources.gpu_virgl_flags.is_some();
++    #[cfg(not(all(feature = "gpu", target_os = "linux")))]
++    let use_gpu_udmabuf = false;
++
+     // Add SHM regions before creating guest memory
+     arch_mem_regions.extend(shm_manager.regions());
+ 
+-    let guest_mem = if use_vhost_user {
+-        #[cfg(all(feature = "vhost-user", target_os = "linux"))]
++    let guest_mem = if use_vhost_user || use_gpu_udmabuf {
++        #[cfg(all(any(feature = "gpu", feature = "vhost-user"), target_os = "linux"))]
+         {
+             debug!(
+-                "Creating file-backed memory for vhost-user (regions: {})",
++                "Creating file-backed memory for gpu or vhost-user (regions: {})",
+                 arch_mem_regions.len()
+             );
+             // Create file-backed memory regions using memfd
+@@ -1921,7 +1926,10 @@ pub fn create_guest_memory(
+                     // SAFETY: memfd_create is called with a valid null-terminated C string and valid flags.
+                     // File descriptor ownership is transferred to File::from_raw_fd below.
+                     let memfd = unsafe {
+-                        let fd = libc::memfd_create(c"guest_mem".as_ptr(), libc::MFD_CLOEXEC);
++                        let fd = libc::memfd_create(
++                            c"guest_mem".as_ptr(),
++                            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
++                        );
+                         if fd < 0 {
+                             error!("Failed to create memfd: {:?}", io::Error::last_os_error());
+                             return Err(io::Error::last_os_error());
+@@ -1934,6 +1942,16 @@ pub fn create_guest_memory(
+                             libc::close(fd);
+                             return Err(io::Error::last_os_error());
+                         }
++                        if libc::fcntl(
++                            fd,
++                            libc::F_ADD_SEALS,
++                            libc::F_SEAL_GROW | libc::F_SEAL_SHRINK,
++                        ) < 0
++                        {
++                            error!("Failed to seal memfd: {:?}", io::Error::last_os_error());
++                            libc::close(fd);
++                            return Err(io::Error::last_os_error());
++                        }
+                         debug!("Created memfd with fd={}", fd);
+                         File::from_raw_fd(fd)
+                     };
