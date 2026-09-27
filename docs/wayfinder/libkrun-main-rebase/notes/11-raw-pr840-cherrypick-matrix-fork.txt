@@ -1,0 +1,47 @@
+# per-commit 3-way cherry-pick of PR commits onto refs/remotes/fork/cang (28e79624)
+# harness: clone of deps/libkrun in SCRATCH; reset --hard refs/remotes/fork/cang before each commit
+# rc=0 == clean apply+commit; rc=1 == conflict; other == other failure
+
+=== 3f3062e3 timesync: Enable timesync for Linux
+rc=0
+Auto-merging src/devices/src/virtio/vsock/mod.rs
+Auto-merging src/devices/src/virtio/vsock/muxer.rs
+--- status --porcelain
+M  src/devices/src/virtio/vsock/mod.rs
+M  src/devices/src/virtio/vsock/muxer.rs
+
+=== 32eb92b5 timesync: Allow an explicit time sync request from a guest
+rc=1
+CONFLICT (modify/delete): init/init-binary/src/timesync.rs deleted in HEAD and modified in 32eb92b5 (timesync: Allow an explicit time sync request from a guest).  Version 32eb92b5 (timesync: Allow an explicit time sync request from a guest) of init/init-binary/src/timesync.rs left in tree.
+Auto-merging src/devices/src/virtio/vsock/muxer.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/vsock/muxer.rs
+Auto-merging src/devices/src/virtio/vsock/timesync.rs
+error: could not apply 32eb92b5... timesync: Allow an explicit time sync request from a guest
+hint: after resolving the conflicts, mark the corrected paths
+hint: with 'git add <paths>' or 'git rm <paths>'
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+DU init/init-binary/src/timesync.rs
+UU src/devices/src/virtio/vsock/muxer.rs
+M  src/devices/src/virtio/vsock/timesync.rs
+
+=== 6d800f98 timesync: Reduce DELTA_SYNC to 10 ms
+rc=1
+CONFLICT (modify/delete): init/init-binary/src/timesync.rs deleted in HEAD and modified in 6d800f98 (timesync: Reduce DELTA_SYNC to 10 ms).  Version 6d800f98 (timesync: Reduce DELTA_SYNC to 10 ms) of init/init-binary/src/timesync.rs left in tree.
+error: could not apply 6d800f98... timesync: Reduce DELTA_SYNC to 10 ms
+hint: after resolving the conflicts, mark the corrected paths
+hint: with 'git add <paths>' or 'git rm <paths>'
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+DU init/init-binary/src/timesync.rs
+
+=== 2f37b0a3 init-blob: Enable timesync feature if requested
+rc=1
+Auto-merging Makefile
+CONFLICT (content): Merge conflict in Makefile
+error: could not apply 2f37b0a3... init-blob: Enable timesync feature if requested
+hint: after resolving the conflicts, mark the corrected paths
+hint: with 'git add <paths>' or 'git rm <paths>'
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+UU Makefile

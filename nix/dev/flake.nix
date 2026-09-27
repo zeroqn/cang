@@ -46,6 +46,11 @@
                 src = libkrunSrc;
                 cargoDeps = pkgs.rustPlatform.importCargoLock {
                   lockFile = libkrunSrc + "/Cargo.lock";
+                  # Upstream main's lock pulls ffier twice (tags 0.2.0rc1 and
+                  # v0.2.0-rc2); importCargoLock keys hashes by name-version.
+                  outputHashes = {
+                    "ffier-0.2.0" = "sha256-bicvHReD9zX9N7iLY9JQXZKFtBU4X7IHKqXCzOKdFvI=";
+                  };
                 };
               });
           rustPackages = import ../../nix/pkgs/cang-rust.nix {

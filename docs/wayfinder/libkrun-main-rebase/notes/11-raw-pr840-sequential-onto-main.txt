@@ -1,0 +1,38 @@
+# sequential cherry-pick of PR commits onto upstream/main (a980e779)
+
+=== [step 1] 3f3062e3 timesync: Enable timesync for Linux
+rc=0
+Auto-merging src/devices/src/virtio/vsock/muxer.rs
+[detached HEAD 8c3e8ab5] timesync: Enable timesync for Linux
+ Author: Milan Zamazal <mzamazal@redhat.com>
+ Date: Tue Sep 1 16:50:09 2026 +0200
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+=== [step 2] 32eb92b5 timesync: Allow an explicit time sync request from a guest
+rc=0
+Auto-merging src/devices/src/virtio/vsock/muxer.rs
+[detached HEAD f0512d65] timesync: Allow an explicit time sync request from a guest
+ Author: Milan Zamazal <mzamazal@redhat.com>
+ Date: Tue Sep 1 17:08:00 2026 +0200
+ 3 files changed, 53 insertions(+), 10 deletions(-)
+
+=== [step 3] 6d800f98 timesync: Reduce DELTA_SYNC to 10 ms
+rc=0
+[detached HEAD 37ba3bac] timesync: Reduce DELTA_SYNC to 10 ms
+ Author: Milan Zamazal <mzamazal@redhat.com>
+ Date: Sat Sep 5 19:26:49 2026 +0200
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+=== [step 4] 2f37b0a3 init-blob: Enable timesync feature if requested
+rc=0
+Auto-merging Makefile
+[detached HEAD 0228d9e0] init-blob: Enable timesync feature if requested
+ Author: Milan Zamazal <mzamazal@redhat.com>
+ Date: Mon Sep 14 18:04:47 2026 +0200
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+=== final log --oneline upstream/main..HEAD
+0228d9e0 init-blob: Enable timesync feature if requested
+37ba3bac timesync: Reduce DELTA_SYNC to 10 ms
+f0512d65 timesync: Allow an explicit time sync request from a guest
+8c3e8ab5 timesync: Enable timesync for Linux

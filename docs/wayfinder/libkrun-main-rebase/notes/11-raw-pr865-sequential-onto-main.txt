@@ -1,0 +1,29 @@
+# sequential cherry-pick of PR commits onto upstream/main (a980e779)
+
+=== [step 1] 802c9e1e virtio/blk: use RwLock for disk image access
+rc=0
+[detached HEAD 66da6969] virtio/blk: use RwLock for disk image access
+ Author: Jake Correnti <jakecorrenti+github@proton.me>
+ Date: Tue Sep 8 14:05:22 2026 -0400
+ 2 files changed, 10 insertions(+), 10 deletions(-)
+
+=== [step 2] 6b24d0d2 virtio/blk: dispatch read requests to a thread pool (fix #824)
+rc=0
+[detached HEAD b1b3f915] virtio/blk: dispatch read requests to a thread pool (fix #824)
+ Author: Jake Correnti <jakecorrenti+github@proton.me>
+ Date: Thu Sep 17 19:55:07 2026 +0000
+ 1 file changed, 223 insertions(+), 95 deletions(-)
+
+=== [step 3] 08a8773a virtio/blk: make parallel reads opt-in
+rc=0
+Auto-merging bindings/libkrun-via-cdylib-weak/ffier-krun.json
+Auto-merging src/libkrun/src/api/device_builders.rs
+[detached HEAD fd234b85] virtio/blk: make parallel reads opt-in
+ Author: Jake Correnti <jakecorrenti+github@proton.me>
+ Date: Thu Sep 17 19:55:07 2026 +0000
+ 5 files changed, 85 insertions(+), 23 deletions(-)
+
+=== final log --oneline upstream/main..HEAD
+fd234b85 virtio/blk: make parallel reads opt-in
+b1b3f915 virtio/blk: dispatch read requests to a thread pool (fix #824)
+66da6969 virtio/blk: use RwLock for disk image access

@@ -13,7 +13,8 @@ published as the permanent fork release **`v2.0.0-cang.1`**, pinned in
 ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
-**Status (2026-09-27): tickets 01, 02 and 03 resolved; re-charted twice.**
+**Status (2026-09-27): tickets 01, 02 and 03 resolved; ticket 04 in progress
+(rebased branch prepared, build check running).**
 Upstream `main` is a **ground-up C-ABI rewrite** (`a3d31822`, 2026-09-11;
 `ABI_VERSION=2`, `libkrun.so.2`): 20 of cang's 22 bound `krun_*` symbols are
 gone, init injection is caller-supplied via `libkrun_init.so`, and
@@ -58,6 +59,15 @@ Frontier: ticket **04** (the rebase), with ticket **11** (cherry-pick matrix for
   tag `v1.19.5-cang.1` = the pin; local `cang` is 1 commit ahead of that pointer
   (CI-only, `28e79624`); upstream `main` = `a980e779`, `FULL_VERSION=2.0.0`,
   369 commits past the last common ancestor (`8018a20c`, v1.18.0).
+- Triage finding (2026-09-27, `notes/04-fork-commit-triage.md`): of the fork's
+  16 commits, **seven replay** onto `main` (CI + docs), **three drop as
+  superseded** (upstream rustfmt; and the vaapi DRM work, which crates.io
+  `rutabaga_gfx` 0.1.85 already ships - `get_drm_fd` with an `O_RDWR` render-node
+  open), and **six re-derive** on the ABI-2 API (profiling, the render-server fd,
+  the fence/blob-map/poll device fixes) as ticket 10. **No vendored
+  `rutabaga_gfx` is needed**: the crate provides `set_server_descriptor`,
+  `set_use_render_server`, `poll_descriptor` and `get_drm_fd`. The rebased branch
+  is therefore upstream `main` + fork CI/docs until ticket 10 lands.
 - Harness note: `rlm.spawn` children **do** have tools in this session (tickets
   01 and 02 were resolved by research children), unlike the
   `waypipe-gpu-smoke` map's experience.
@@ -84,6 +94,10 @@ Frontier: ticket **04** (the rebase), with ticket **11** (cherry-pick matrix for
   nested-virt, the console/vsock/port-map surface and `cang`'s profile-path hook
   now sit on a reorganised workspace (`src/vmm` inside `src/libkrun`). Sharpens
   inside ticket 10.
+- **Whether the device-level GPU fixes (fence retirement, blob-map overflow,
+  idle poll, render-node gating) still apply to main's device code**, or whether
+  main/`rutabaga_gfx` 0.1.85 already covers some of them. Sharpens inside ticket
+  10; ticket 08's smoke is the backstop.
 - **The next update's base:** *this* rebase goes to `main` because the PRs live
   there; the standing policy after it (back to the stable line, as decided, or
   stay on main) is a later effort's decision, informed by what this one costs.

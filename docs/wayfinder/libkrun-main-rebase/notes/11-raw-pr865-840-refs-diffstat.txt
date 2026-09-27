@@ -1,0 +1,99 @@
+# refs and merge bases (all reads are ref-only; deps/libkrun worktree was concurrently mid-rebase by another session)
+# generated 2026-09-27T07:09:19Z
+$ git log -1 --format='%H %ci %an <%ae> | %s' upstream/main
+a980e7795b86c8151e867b32a43af4cb984364fa 2026-09-25 12:11:36 +0200 Sergio Lopez | ci/code-quality: add a Windows cross-build
+$ git log -1 --format='%H %ci %an <%ae> | %s' cang
+28e796241eb5c8aa43d3d074d369a59e3ada5300 2026-09-27 11:26:00 +0800 zeroqn | ci: scope the release concurrency group per ref
+$ git log -1 --format='%H %ci %an <%ae> | %s' upstream/pr-865
+08a8773a06dbe3c8107d2dfae1e1a9729559f587 2026-09-17 16:16:11 -0400 Jake Correnti | virtio/blk: make parallel reads opt-in
+$ git log -1 --format='%H %ci %an <%ae> | %s' upstream/pr-840
+2f37b0a342fe11529fb0eea51881bbb4d041112f 2026-09-15 10:57:16 +0200 Milan Zamazal | init-blob: Enable timesync feature if requested
+
+=== merge bases ===
+merge-base(pr-865, upstream/main) = e6cdb553185c51f54c694f73cf6f98157b33e863 macos: support VMs with more than 64GB of RAM
+merge-base(pr-840, upstream/main) = b4319e09990f419bfe9153cbb4086f038d9282b4 CI: Remove `libkrun/krun` tap usage
+merge-base(pr-865, cang)         = 8018a20cd46e2c0e888bd7bbb254a8b1b565873b
+merge-base(pr-840, cang)         = 8018a20cd46e2c0e888bd7bbb254a8b1b565873b
+merge-base(cang, upstream/main)  = 8018a20cd46e2c0e888bd7bbb254a8b1b565873b Bump version to 1.18.0
+main ahead of merge-base(865): 21 commits
+main ahead of merge-base(840): 47 commits
+
+=== rewrite ancestry ===
+a3d31822 = a3d3182215a00e30fa511b864b88359a8cc12950 2026-09-11 12:09:46 +0200 lib: remove old C API
+a3d31822 IS ancestor of upstream/main
+a3d31822 IS ancestor of upstream/pr-865
+a3d31822 IS ancestor of upstream/pr-840
+a3d31822 NOT ancestor of cang
+
+=== PR 865 commits (merge-base..head) ===
+08a8773a06dbe3c8107d2dfae1e1a9729559f587 2026-09-17 16:16:11 -0400 Jake Correnti | virtio/blk: make parallel reads opt-in
+6b24d0d2dca751f6f2076c3b682ea9578c0a6933 2026-09-17 16:16:04 -0400 Jake Correnti | virtio/blk: dispatch read requests to a thread pool (fix #824)
+802c9e1e8fc81f4735cb67d52011a5af8089bb43 2026-09-17 16:15:51 -0400 Jake Correnti | virtio/blk: use RwLock for disk image access
+
+=== PR 840 commits (merge-base..head) ===
+2f37b0a342fe11529fb0eea51881bbb4d041112f 2026-09-15 10:57:16 +0200 Milan Zamazal | init-blob: Enable timesync feature if requested
+6d800f985322bffa16b1b867c5f889f8e76a469d 2026-09-15 10:57:16 +0200 Milan Zamazal | timesync: Reduce DELTA_SYNC to 10 ms
+32eb92b5965059b46acd2378f31a36fa09b161e8 2026-09-15 10:57:12 +0200 Milan Zamazal | timesync: Allow an explicit time sync request from a guest
+3f3062e3c8b31314e33c79aad38b38afbd112209 2026-09-14 17:42:05 +0200 Milan Zamazal | timesync: Enable timesync for Linux
+
+=== already in main? (git cherry: '-' = patch-equivalent commit exists in main, '+' = new) ===
+$ git cherry upstream/main upstream/pr-865 <mb865>
++ 802c9e1e8fc81f4735cb67d52011a5af8089bb43
++ 6b24d0d2dca751f6f2076c3b682ea9578c0a6933
++ 08a8773a06dbe3c8107d2dfae1e1a9729559f587
+
+$ git cherry upstream/main upstream/pr-840 <mb840>
++ 3f3062e3c8b31314e33c79aad38b38afbd112209
++ 32eb92b5965059b46acd2378f31a36fa09b161e8
++ 6d800f985322bffa16b1b867c5f889f8e76a469d
++ 2f37b0a342fe11529fb0eea51881bbb4d041112f
+
+=== 3-dot diffstat (what the ticket reports) ===
+$ git diff --stat <mb865>..upstream/pr-865
+ bindings/libkrun-via-cdylib-weak/ffier-krun.json |  22 +-
+ include/libkrun.h                                |   9 +-
+ src/devices/src/virtio/block/device.rs           |  20 +-
+ src/devices/src/virtio/block/worker.rs           | 323 +++++++++++++++++------
+ src/devices/src/virtio/file_traits.rs            |   4 +-
+ src/libkrun/src/api/device_builders.rs           |  12 +-
+ 6 files changed, 290 insertions(+), 100 deletions(-)
+
+$ git diff --stat <mb840>..upstream/pr-840
+ Makefile                                 |  7 +++++--
+ init/init-binary/src/timesync.rs         | 10 +++++++++-
+ src/devices/src/virtio/vsock/mod.rs      |  2 +-
+ src/devices/src/virtio/vsock/muxer.rs    | 30 +++++++++++++++++++++++++-----
+ src/devices/src/virtio/vsock/timesync.rs | 29 ++++++++++++++++++++++-------
+ 5 files changed, 62 insertions(+), 16 deletions(-)
+
+=== 2-dot diffstat against main (for contrast: includes main's own advance) ===
+$ git diff --stat upstream/main..upstream/pr-865 | tail -1
+ 56 files changed, 785 insertions(+), 1764 deletions(-)
+$ git diff --stat upstream/main..upstream/pr-840 | tail -1
+ 104 files changed, 980 insertions(+), 4566 deletions(-)
+
+=== file intersection: do any of the 16 fork commits (v1.19.5..cang) touch the PRs' files? ===
+--- fork commits touching src/devices/src/virtio/block/:
+--- fork commits touching src/devices/src/virtio/file_traits.rs:
+--- fork commits touching src/devices/src/virtio/vsock/:
+--- fork commits touching init/init-binary/:
+--- fork commits touching Makefile:
+--- fork commits touching include/libkrun.h:
+2a583f8a gpu: harden render-server fd handling and fix poll/fence/lock issues
+329f14db feat(loftd): allow profile-only kernel diagnostics
+--- fork commits touching src/libkrun/src/api/device_builders.rs:
+--- fork commits touching src/libkrun/src/lib.rs:
+2a583f8a gpu: harden render-server fd handling and fix poll/fence/lock issues
+dacdbac4 gpu: add krun_set_gpu_options3 render-server fd plumbing
+329f14db feat(loftd): allow profile-only kernel diagnostics
+ac615be3 feat(loftd): add opt-in libkrun profiling
+--- fork commits touching src/devices/src/virtio/gpu/:
+7c20aa6f gpu: fix blob-map overflow, gate DRM render-node open, reclaim cookie on init failure, idle poll
+2a583f8a gpu: harden render-server fd handling and fix poll/fence/lock issues
+7f77a0ac virtio/gpu: fence-retirement fix — poll with 10ms timeout + event_poll
+dacdbac4 gpu: add krun_set_gpu_options3 render-server fd plumbing
+--- fork commits touching src/rutabaga_gfx/:
+7c20aa6f gpu: fix blob-map overflow, gate DRM render-node open, reclaim cookie on init failure, idle poll
+2a583f8a gpu: harden render-server fd handling and fix poll/fence/lock issues
+f0e2028d vaapi: open DRM render node O_RDWR for libva video
+1c68255f vaapi: add get_drm_fd renderer callback + video diagnostics

@@ -1,0 +1,17 @@
+# composite 3-way merge of each PR head into upstream/main (a980e779)
+# git merge-tree --write-tree upstream/main <pr-head>; exit 0 == clean, 1 == conflicts
+
+===== PR 865 into upstream/main =====
+cef56b6f85c2b0d7c8bc7ace56d6f69e0b98e5ca
+EXIT=0
+
+===== PR 840 into upstream/main =====
+31590d4a18c14d30ae37b2f18f621f735e9c4eb9
+EXIT=0
+
+# NOTE: no composite merge-tree is recorded for the fork tip (cang=28e79624).
+# The PR heads are descendants of upstream/main while cang descends from
+# upstream/stable-1.19.x; merging a main-derived branch 'into' cang drags in
+# all of main (and reports the fork-vs-main tree divergence), which is not
+# what ticket 04 does. The meaningful instrument there is the per-commit
+# cherry-pick matrix (11-raw-pr86*-cherrypick-matrix-fork.txt).

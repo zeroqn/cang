@@ -1,0 +1,59 @@
+# sequential cherry-pick of PR commits onto refs/remotes/fork/cang (28e79624)
+
+=== [step 1] 802c9e1e virtio/blk: use RwLock for disk image access
+rc=1
+Auto-merging src/devices/src/virtio/block/device.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/block/device.rs
+Auto-merging src/devices/src/virtio/file_traits.rs
+error: could not apply 802c9e1e... virtio/blk: use RwLock for disk image access
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- conflicts:
+src/devices/src/virtio/block/device.rs
+--- conflict hunks (git diff):
+diff --cc src/devices/src/virtio/block/device.rs
+index 9e83a776,59989fb7..00000000
+--- a/src/devices/src/virtio/block/device.rs
++++ b/src/devices/src/virtio/block/device.rs
+@@@ -68,14 -77,14 +68,22 @@@ impl CacheType 
+  /// Helper object for setting up all `Block` fields derived from its backing file.
+  pub(crate) struct DiskProperties {
+      cache_type: CacheType,
+++<<<<<<< HEAD
+ +    pub(crate) file: Arc<Mutex<SyncFormatAccess<Box<dyn DynStorage>>>>,
+++=======
++     pub(crate) file: Arc<RwLock<FormatAccess<Box<dyn DynStorage>>>>,
+++>>>>>>> 802c9e1e (virtio/blk: use RwLock for disk image access)
+      nsectors: u64,
+      image_id: Vec<u8>,
+  }
+  
+  impl DiskProperties {
+      pub fn new(
+++<<<<<<< HEAD
+ +        disk_image: Arc<Mutex<SyncFormatAccess<Box<dyn DynStorage>>>>,
+++=======
++         disk_image: Arc<RwLock<FormatAccess<Box<dyn DynStorage>>>>,
+++>>>>>>> 802c9e1e (virtio/blk: use RwLock for disk image access)
+          disk_image_id: Vec<u8>,
+          cache_type: CacheType,
+      ) -> io::Result<Self> {
+@@@ -215,7 -242,7 +223,11 @@@ pub struct Block 
+      // Host file and properties.
+      disk: Option<DiskProperties>,
+      cache_type: CacheType,
+++<<<<<<< HEAD
+ +    disk_image: Arc<Mutex<SyncFormatAccess<Box<dyn DynStorage>>>>,
+++=======
++     disk_image: Arc<RwLock<FormatAccess<Box<dyn DynStorage>>>>,
+++>>>>>>> 802c9e1e (virtio/blk: use RwLock for disk image access)
+      disk_image_id: Vec<u8>,
+      worker_thread: Option<JoinHandle<()>>,
+      worker_stopfd: EventFd,
+
+=== final log --oneline refs/remotes/fork/cang..HEAD

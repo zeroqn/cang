@@ -1,0 +1,228 @@
+# 865 opt-in surface + 840 build-time prerequisites (ref-only reads)
+# generated 2026-09-27T07:09:27Z
+
+=== 865: every occurrence of parallel_reads in PR-865 head ===
+upstream/pr-865:bindings/libkrun-via-cdylib-weak/ffier-krun.json:1763:            " [`SyncMode::Relaxed`], and serialized reads (`parallel_reads = false`)."
+upstream/pr-865:bindings/libkrun-via-cdylib-weak/ffier-krun.json:1853:          "name": "set_parallel_reads",
+upstream/pr-865:bindings/libkrun-via-cdylib-weak/ffier-krun.json:1870:          "ffi_name": "krun_block_device_set_parallel_reads"
+upstream/pr-865:include/libkrun.h:504: * [`SyncMode::Relaxed`], and serialized reads (`parallel_reads = false`).
+upstream/pr-865:include/libkrun.h:527:void krun_block_device_set_parallel_reads(KrunBlockDevice handle, bool enabled);
+upstream/pr-865:include/libkrun.h:528:typedef void (*krun_block_device_set_parallel_reads_fn)(KrunBlockDevice handle, bool enabled);
+upstream/pr-865:src/devices/src/virtio/block/device.rs:249:    parallel_reads: bool,
+upstream/pr-865:src/devices/src/virtio/block/device.rs:278:        parallel_reads: bool,
+upstream/pr-865:src/devices/src/virtio/block/device.rs:367:            parallel_reads,
+upstream/pr-865:src/devices/src/virtio/block/device.rs:465:            self.parallel_reads,
+upstream/pr-865:src/devices/src/virtio/block/worker.rs:158:    parallel_reads: bool,
+upstream/pr-865:src/devices/src/virtio/block/worker.rs:168:        parallel_reads: bool,
+upstream/pr-865:src/devices/src/virtio/block/worker.rs:176:            parallel_reads,
+upstream/pr-865:src/devices/src/virtio/block/worker.rs:194:            parallel_reads,
+upstream/pr-865:src/devices/src/virtio/block/worker.rs:207:        let (read_tx, mut read_workers) = if parallel_reads {
+upstream/pr-865:src/libkrun/src/api/device_builders.rs:1029:    parallel_reads: bool,
+upstream/pr-865:src/libkrun/src/api/device_builders.rs:1038:    /// [`SyncMode::Relaxed`], and serialized reads (`parallel_reads = false`).
+upstream/pr-865:src/libkrun/src/api/device_builders.rs:1047:            parallel_reads: false,
+upstream/pr-865:src/libkrun/src/api/device_builders.rs:1072:    pub fn set_parallel_reads(&mut self, enabled: bool) {
+upstream/pr-865:src/libkrun/src/api/device_builders.rs:1073:        self.parallel_reads = enabled;
+upstream/pr-865:src/libkrun/src/api/device_builders.rs:1093:            self.parallel_reads,
+
+=== 865: the gate in block/worker.rs (PR head) ===
+205-        });
+206-
+207:        let (read_tx, mut read_workers) = if parallel_reads {
+208-            let read_pool_size = thread::available_parallelism()
+209-                .map(|n| n.get().clamp(2, 8))
+210-                .unwrap_or(4);
+211-            let (read_tx, read_rx) = unbounded::<ReadJob>();
+212-            let workers: Vec<JoinHandle<()>> = (0..read_pool_size)
+213-                .map(|i| {
+214-                    thread::Builder::new()
+215-                        .name(format!("block read worker {i}"))
+216-                        .spawn({
+217-                            let rx = read_rx.clone();
+218-                            let shared = shared.clone();
+219-                            move || read_worker(rx, shared)
+220-                        })
+221-                        .unwrap()
+222-                })
+223-                .collect();
+224-            (Some(read_tx), workers)
+225-        } else {
+226-            (None, Vec::new())
+227-        };
+228-
+229-        let mut epoll = Epoll::new().unwrap();
+
+=== 865: default value in device_builders.rs (PR head) ===
+1041-            id: id.to_string(),
+1042-            disk_image_path: disk_image_path.to_string(),
+1043-            format,
+1044-            is_read_only: false,
+1045-            direct_io: false,
+1046-            sync_mode: SyncMode::default(),
+1047:            parallel_reads: false,
+1048-        })
+1049-    }
+1050-
+
+=== 865: crossbeam-channel already a main dependency? ===
+upstream/main:src/devices/Cargo.toml:28:crossbeam-channel = ">=0.5.15"
+
+=== 865: diffstat has no Cargo.toml/lock change ===
+bindings/libkrun-via-cdylib-weak/ffier-krun.json
+include/libkrun.h
+src/devices/src/virtio/block/device.rs
+src/devices/src/virtio/block/worker.rs
+src/devices/src/virtio/file_traits.rs
+src/libkrun/src/api/device_builders.rs
+
+=== 840: Makefile TIMESYNC + init-blob build (main, before PR) ===
+75-    FEATURE_FLAGS += --features vhost-user
+76-endif
+77:ifeq ($(TIMESYNC),1)
+78-    FEATURE_FLAGS += --features timesync
+79-endif
+80-ifeq ($(FFI),1)
+81-    FEATURE_FLAGS += --features ffi
+136:	cargo build -p krun-init-blob --features ffi
+219:	cargo build --release -p krun-init-blob --features ffi
+237:	cargo build -p krun-init-blob --features ffi
+
+=== 840: Makefile after PR ===
+76-endif
+77-
+78:INIT_BLOB_FEATURE_FLAGS = --features ffi
+79:ifeq ($(TIMESYNC),1)
+80-    FEATURE_FLAGS += --features timesync
+81:    INIT_BLOB_FEATURE_FLAGS += --features timesync
+82-endif
+83-ifeq ($(FFI),1)
+84-    FEATURE_FLAGS += --features ffi
+85-endif
+--
+235-$(LIBRARY_RELEASE_$(OS)): $(INIT_BINARY_BSD)
+236-	cargo build --release $(FEATURE_FLAGS)
+237:	cargo build --release -p krun-init-blob $(INIT_BLOB_FEATURE_FLAGS)
+238-ifeq ($(SEV),1)
+239-	mv target/release/libkrun.so target/release/$(KRUN_BASE_$(OS))
+240-endif
+241-ifeq ($(AWS_NITRO),1)
+--
+253-$(LIBRARY_DEBUG_$(OS)): $(INIT_BINARY_BSD)
+254-	cargo build $(FEATURE_FLAGS)
+255:	cargo build -p krun-init-blob $(INIT_BLOB_FEATURE_FLAGS)
+256-ifeq ($(SEV),1)
+257-	mv target/debug/libkrun.so target/debug/$(KRUN_BASE_$(OS))
+258-endif
+259-ifeq ($(TDX),1)
+
+=== 840/init: does the host library embed an init blob? (main) ===
+(no output above == libkrun no longer embeds the init blob on main)
+upstream/main:.github/workflows/code-quality.yml:65:          KRUN_INIT_BINARY_PATH: ${{ github.workspace }}/init/init
+upstream/main:init/init-blob/build.rs:180:    let init_binary_path = env::var_os("KRUN_INIT_BINARY_PATH")
+upstream/main:init/init-blob/build.rs:184:        "cargo:rustc-env=KRUN_INIT_BINARY_PATH={}",
+upstream/main:init/init-blob/build.rs:187:    println!("cargo:rerun-if-env-changed=KRUN_INIT_BINARY_PATH");
+upstream/main:init/init-blob/src/lib.rs:1:pub static INIT_BINARY: &[u8] = include_bytes!(env!("KRUN_INIT_BINARY_PATH"));
+
+=== 840/init: init-blob build.rs feature forwarding (main) ===
+            );
+        }
+    }
+
+    let mut features: Vec<&str> = Vec::new();
+    if cfg!(feature = "amd-sev") {
+        features.push("amd-sev");
+    }
+    if cfg!(feature = "tdx") {
+        features.push("tdx");
+    }
+    if cfg!(feature = "timesync") {
+        features.push("timesync");
+    }
+    if !features.is_empty() {
+        cmd.arg("--features").arg(features.join(","));
+    }
+
+    let status = cmd
+        .status()
+        .unwrap_or_else(|e| panic!("failed to run {cargo}: {e}"));
+
+=== 840/init: init-binary feature gates (main) ===
+10:#[cfg(feature = "timesync")]
+158:    #[cfg(feature = "timesync")]
+159:    timesync::run();
+[package]
+name = "krun-init"
+version = "0.1.0-2.0.0-dev"
+edition = "2024"
+description = "PID-1 init binary for libkrun guest VMs"
+license = "Apache-2.0"
+repository = "https://github.com/containers/libkrun"
+
+[[bin]]
+name = "krun-init"
+path = "src/main.rs"
+
+[features]
+amd-sev = []
+tdx = []
+timesync = []
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+
+=== 840: timesync cargo feature gates anywhere in main? ===
+upstream/main:init/init-binary/src/main.rs:10:#[cfg(feature = "timesync")]
+upstream/main:init/init-binary/src/main.rs:158:    #[cfg(feature = "timesync")]
+upstream/main:init/init-blob/build.rs:151:    if cfg!(feature = "timesync") {
+(only init-binary/init-blob -- src/devices' timesync feature is an empty no-op)
+
+=== 840: is the Linux timesync host path feature-gated at all? ===
+mod muxer;
+mod muxer_rxq;
+mod muxer_thread;
+#[allow(dead_code)]
+mod packet;
+mod proxy;
+mod reaper;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod timesync;
+mod tsi_dgram;
+mod tsi_stream;
+mod unix_proxy;
+
+        queue: Arc<Mutex<VirtQueue>>,
+        interrupt: InterruptTransport,
+    ) {
+        self.queue = Some(queue.clone());
+        self.mem = Some(mem.clone());
+        self.interrupt = Some(interrupt.clone());
+
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            let (timesync_request_sender, timesync_request_receiver) = unbounded();
+            let timesync = TimesyncThread::new(
+                self.cid,
+                mem.clone(),
+                queue.clone(),
+                interrupt.clone(),
+                timesync_request_receiver,
+            );
+            timesync.run();
+            self.timesync_request_sender = Some(timesync_request_sender);
+        }
+
+        let (sender, receiver) = unbounded();
+
+
+=== cang stack: fork release workflow feature flags (cang ref) ===
+59:          make clean
+60:          make BLK=1 NET=1 GPU=1 SND=1 INPUT=1
+61:          make DESTDIR="$PWD/tmp" PREFIX=/usr install
+85:          make clean
+180:          notes="Full-feature Linux libkrun artifacts for cang commit ${GITHUB_SHA}. Built with BLK, NET, GPU, SND, and INPUT enabled."
+
+=== cang stack: fork Makefile has no TIMESYNC (1.19.5 base) ===
+(no output == the 1.19.5 fork cannot build timesync at all)
+
+=== cang stack: cang's own source never mentions timesync ===
+(no output == cang has no timesync client in cang-guest-init and no TIMESYNC=1 build)

@@ -1,0 +1,34 @@
+# per-commit 3-way cherry-pick of PR commits onto upstream/main (a980e779)
+# harness: clone of deps/libkrun in SCRATCH; reset --hard upstream/main before each commit
+# rc=0 == clean apply+commit; rc=1 == conflict; other == other failure
+
+=== 802c9e1e virtio/blk: use RwLock for disk image access
+rc=0
+
+--- status --porcelain
+M  src/devices/src/virtio/block/device.rs
+M  src/devices/src/virtio/file_traits.rs
+
+=== 6b24d0d2 virtio/blk: dispatch read requests to a thread pool (fix #824)
+rc=0
+
+--- status --porcelain
+M  src/devices/src/virtio/block/worker.rs
+
+=== 08a8773a virtio/blk: make parallel reads opt-in
+rc=1
+Auto-merging bindings/libkrun-via-cdylib-weak/ffier-krun.json
+Auto-merging src/devices/src/virtio/block/device.rs
+Auto-merging src/devices/src/virtio/block/worker.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/block/worker.rs
+Auto-merging src/libkrun/src/api/device_builders.rs
+error: could not apply 08a8773a... virtio/blk: make parallel reads opt-in
+hint: after resolving the conflicts, mark the corrected paths
+hint: with 'git add <paths>' or 'git rm <paths>'
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+M  bindings/libkrun-via-cdylib-weak/ffier-krun.json
+M  include/libkrun.h
+M  src/devices/src/virtio/block/device.rs
+UU src/devices/src/virtio/block/worker.rs
+M  src/libkrun/src/api/device_builders.rs

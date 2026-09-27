@@ -1,0 +1,47 @@
+# per-commit 3-way cherry-pick of PR commits onto refs/remotes/fork/cang (28e79624)
+# harness: clone of deps/libkrun in SCRATCH; reset --hard refs/remotes/fork/cang before each commit
+# rc=0 == clean apply+commit; rc=1 == conflict; other == other failure
+
+=== 802c9e1e virtio/blk: use RwLock for disk image access
+rc=1
+Auto-merging src/devices/src/virtio/block/device.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/block/device.rs
+Auto-merging src/devices/src/virtio/file_traits.rs
+error: could not apply 802c9e1e... virtio/blk: use RwLock for disk image access
+hint: after resolving the conflicts, mark the corrected paths
+hint: with 'git add <paths>' or 'git rm <paths>'
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+UU src/devices/src/virtio/block/device.rs
+M  src/devices/src/virtio/file_traits.rs
+
+=== 6b24d0d2 virtio/blk: dispatch read requests to a thread pool (fix #824)
+rc=1
+Auto-merging src/devices/src/virtio/block/worker.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/block/worker.rs
+error: could not apply 6b24d0d2... virtio/blk: dispatch read requests to a thread pool (fix #824)
+hint: after resolving the conflicts, mark the corrected paths
+hint: with 'git add <paths>' or 'git rm <paths>'
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+UU src/devices/src/virtio/block/worker.rs
+
+=== 08a8773a virtio/blk: make parallel reads opt-in
+rc=1
+CONFLICT (modify/delete): bindings/libkrun-via-cdylib-weak/ffier-krun.json deleted in HEAD and modified in 08a8773a (virtio/blk: make parallel reads opt-in).  Version 08a8773a (virtio/blk: make parallel reads opt-in) of bindings/libkrun-via-cdylib-weak/ffier-krun.json left in tree.
+Auto-merging include/libkrun.h
+CONFLICT (content): Merge conflict in include/libkrun.h
+Auto-merging src/devices/src/virtio/block/device.rs
+Auto-merging src/devices/src/virtio/block/worker.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/block/worker.rs
+CONFLICT (modify/delete): src/libkrun/src/api/device_builders.rs deleted in HEAD and modified in 08a8773a (virtio/blk: make parallel reads opt-in).  Version 08a8773a (virtio/blk: make parallel reads opt-in) of src/libkrun/src/api/device_builders.rs left in tree.
+error: could not apply 08a8773a... virtio/blk: make parallel reads opt-in
+hint: after resolving the conflicts, mark the corrected paths
+hint: with 'git add <paths>' or 'git rm <paths>'
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- status --porcelain
+DU bindings/libkrun-via-cdylib-weak/ffier-krun.json
+UU include/libkrun.h
+M  src/devices/src/virtio/block/device.rs
+UU src/devices/src/virtio/block/worker.rs
+DU src/libkrun/src/api/device_builders.rs

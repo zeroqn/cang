@@ -1,0 +1,31 @@
+# sequential cherry-pick of PR commits onto refs/remotes/fork/cang (28e79624)
+
+=== [step 1] 3f3062e3 timesync: Enable timesync for Linux
+rc=0
+Auto-merging src/devices/src/virtio/vsock/mod.rs
+Auto-merging src/devices/src/virtio/vsock/muxer.rs
+[detached HEAD c94ee419] timesync: Enable timesync for Linux
+ Author: Milan Zamazal <mzamazal@redhat.com>
+ Date: Tue Sep 1 16:50:09 2026 +0200
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+=== [step 2] 32eb92b5 timesync: Allow an explicit time sync request from a guest
+rc=1
+CONFLICT (modify/delete): init/init-binary/src/timesync.rs deleted in HEAD and modified in 32eb92b5 (timesync: Allow an explicit time sync request from a guest).  Version 32eb92b5 (timesync: Allow an explicit time sync request from a guest) of init/init-binary/src/timesync.rs left in tree.
+Auto-merging src/devices/src/virtio/vsock/muxer.rs
+Auto-merging src/devices/src/virtio/vsock/timesync.rs
+error: could not apply 32eb92b5... timesync: Allow an explicit time sync request from a guest
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+--- conflicts:
+init/init-binary/src/timesync.rs
+--- conflict hunks (git diff):
+* Unmerged path init/init-binary/src/timesync.rs
+
+=== final log --oneline refs/remotes/fork/cang..HEAD
+c94ee419 timesync: Enable timesync for Linux

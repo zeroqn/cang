@@ -29,6 +29,26 @@ re-establish them on main's structure:
    (`BLK NET GPU INPUT`, main's `vhost-user`/`timesync`/`ffi` added, `SND`
    removed as a silent no-op).
 
+## What the 2026-09-27 triage already established
+
+From `notes/04-fork-commit-triage.md`:
+
+- **No vendored `rutabaga_gfx` is needed.** crates.io 0.1.85 already provides
+  `RutabagaBuilder::set_server_descriptor(Option<OwnedDescriptor>)` (`set_use_render_server`
+  too; `build()` now takes no arguments), `poll_descriptor()` (wrapping
+  `virgl_renderer_get_poll_fd`), and `get_drm_fd` with the `O_RDWR` render-node
+  open. The two vaapi commits (`1c68255f`, `f0e2028d`) are therefore dropped as
+  superseded rather than ported.
+- **Main moved GPU configuration out of `VmResources`**: there are no `gpu_*`
+  fields left there, and the builder takes `gpu_shm_size` from the device
+  requirements (`src/libkrun/src/vmm/builder.rs:723`). The v1
+  `krun_set_gpu_options3` entry point is gone, so the capability must be
+  expressed as a v2 GPU-device configuration/setter.
+- Commits to re-derive: `ac615be3` + `329f14db` (profiling), `dacdbac4`
+  (render-server fd), `7f77a0ac` (fence retirement), `2a583f8a`, `7c20aa6f`
+  (device fixes). `deps/libkrun/CANG.md` was updated to describe this state and
+  must stay true as the work lands.
+
 ## Deliverable
 
 The fork's feature set restored on main's code, with the file-level mapping

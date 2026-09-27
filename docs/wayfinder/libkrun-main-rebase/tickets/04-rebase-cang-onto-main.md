@@ -3,7 +3,7 @@ label: wayfinder:task
 title: Rebase cang onto main and fold in the three PRs
 status: open
 blocked_by: ["03-pr-822-gating-decision"]
-claimed_by: unclaimed
+claimed_by: pi session (2026-09-27)
 ---
 
 ## Question

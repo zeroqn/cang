@@ -1,0 +1,241 @@
+diff --git a/Makefile b/Makefile
+index a46c2079..95cd020e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -74,8 +74,11 @@ endif
+ ifeq ($(VHOST_USER),1)
+     FEATURE_FLAGS += --features vhost-user
+ endif
++
++INIT_BLOB_FEATURE_FLAGS = --features ffi
+ ifeq ($(TIMESYNC),1)
+     FEATURE_FLAGS += --features timesync
++    INIT_BLOB_FEATURE_FLAGS += --features timesync
+ endif
+ ifeq ($(FFI),1)
+     FEATURE_FLAGS += --features ffi
+@@ -231,7 +234,7 @@ clean-sysroot:
+ 
+ $(LIBRARY_RELEASE_$(OS)): $(INIT_BINARY_BSD)
+ 	cargo build --release $(FEATURE_FLAGS)
+-	cargo build --release -p krun-init-blob --features ffi
++	cargo build --release -p krun-init-blob $(INIT_BLOB_FEATURE_FLAGS)
+ ifeq ($(SEV),1)
+ 	mv target/release/libkrun.so target/release/$(KRUN_BASE_$(OS))
+ endif
+@@ -249,7 +252,7 @@ endif
+ 
+ $(LIBRARY_DEBUG_$(OS)): $(INIT_BINARY_BSD)
+ 	cargo build $(FEATURE_FLAGS)
+-	cargo build -p krun-init-blob --features ffi
++	cargo build -p krun-init-blob $(INIT_BLOB_FEATURE_FLAGS)
+ ifeq ($(SEV),1)
+ 	mv target/debug/libkrun.so target/debug/$(KRUN_BASE_$(OS))
+ endif
+diff --git a/init/init-binary/src/timesync.rs b/init/init-binary/src/timesync.rs
+index 3c1f73ae..f30fd343 100644
+--- a/init/init-binary/src/timesync.rs
++++ b/init/init-binary/src/timesync.rs
+@@ -6,7 +6,7 @@ use std::os::fd::AsRawFd;
+ 
+ const TSYNC_PORT: u32 = 123;
+ const NANOS_IN_SECOND: u64 = 1_000_000_000;
+-const DELTA_SYNC: u64 = 100_000_000; // 100ms — don't bother adjusting for smaller drifts
++const DELTA_SYNC: u64 = 10_000_000; // 10 ms — don't bother adjusting for smaller drifts
+ 
+ /// Spawn a child process that synchronises the guest clock from the host.
+ ///
+@@ -32,6 +32,7 @@ pub fn run() {
+     match unsafe { unistd::fork() } {
+         Ok(ForkResult::Child) => {
+             // Child: run the sync loop until the socket errors, then exit.
++            timesync_request(sock.as_raw_fd());
+             clock_worker(sock.as_raw_fd());
+             unsafe { libc::_exit(1) };
+         }
+@@ -42,6 +43,13 @@ pub fn run() {
+     }
+ }
+ 
++/// Tell the host the guest started listening, so the time can be synchronised
++/// immediately at the right moment.
++fn timesync_request(sock: libc::c_int) {
++    let addr = VsockAddr::new(libc::VMADDR_CID_HOST, TSYNC_PORT);
++    let _ = socket::sendto(sock, &[0u8], &addr, MsgFlags::empty());
++}
++
+ fn clock_worker(sock: libc::c_int) {
+     loop {
+         let mut buf = [0u8; 8];
+diff --git a/src/devices/src/virtio/vsock/mod.rs b/src/devices/src/virtio/vsock/mod.rs
+index 292d219b..7f7824ba 100644
+--- a/src/devices/src/virtio/vsock/mod.rs
++++ b/src/devices/src/virtio/vsock/mod.rs
+@@ -14,7 +14,7 @@ mod muxer_thread;
+ mod packet;
+ mod proxy;
+ mod reaper;
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "linux"))]
+ mod timesync;
+ mod tsi_dgram;
+ mod tsi_stream;
+diff --git a/src/devices/src/virtio/vsock/muxer.rs b/src/devices/src/virtio/vsock/muxer.rs
+index f2b6063a..70e0a9ec 100644
+--- a/src/devices/src/virtio/vsock/muxer.rs
++++ b/src/devices/src/virtio/vsock/muxer.rs
+@@ -16,8 +16,8 @@ use super::muxer_thread::MuxerThread;
+ use super::packet::{TsiConnectReq, TsiGetnameRsp, VsockPacket};
+ use super::proxy::{Proxy, ProxyRemoval, ProxyUpdate};
+ use super::reaper::ReaperThread;
+-#[cfg(target_os = "macos")]
+-use super::timesync::TimesyncThread;
++#[cfg(any(target_os = "macos", target_os = "linux"))]
++use super::timesync::{TSYNC_PORT, TimesyncThread};
+ use super::tsi_dgram::TsiDgramProxy;
+ use super::tsi_stream::TsiStreamProxy;
+ use super::unix_proxy::UnixProxy;
+@@ -116,6 +116,8 @@ pub struct VsockMuxer {
+     reaper_sender: Option<Sender<u64>>,
+     unix_ipc_port_map: Option<HashMap<u32, (PathBuf, bool)>>,
+     tsi_flags: TsiFlags,
++    #[cfg(any(target_os = "macos", target_os = "linux"))]
++    timesync_request_sender: Option<Sender<()>>,
+ }
+ 
+ impl VsockMuxer {
+@@ -137,6 +139,8 @@ impl VsockMuxer {
+             reaper_sender: None,
+             unix_ipc_port_map,
+             tsi_flags,
++            #[cfg(any(target_os = "macos", target_os = "linux"))]
++            timesync_request_sender: None,
+         }
+     }
+ 
+@@ -150,11 +154,18 @@ impl VsockMuxer {
+         self.mem = Some(mem.clone());
+         self.interrupt = Some(interrupt.clone());
+ 
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "linux"))]
+         {
+-            let timesync =
+-                TimesyncThread::new(self.cid, mem.clone(), queue.clone(), interrupt.clone());
++            let (timesync_request_sender, timesync_request_receiver) = unbounded();
++            let timesync = TimesyncThread::new(
++                self.cid,
++                mem.clone(),
++                queue.clone(),
++                interrupt.clone(),
++                timesync_request_receiver,
++            );
+             timesync.run();
++            self.timesync_request_sender = Some(timesync_request_sender);
+         }
+ 
+         let (sender, receiver) = unbounded();
+@@ -547,6 +558,8 @@ impl VsockMuxer {
+             defs::TSI_PROXY_RELEASE if self.tsi_flags.tsi_enabled() => {
+                 self.process_proxy_release(pkt)
+             }
++            #[cfg(any(target_os = "macos", target_os = "linux"))]
++            TSYNC_PORT if pkt.op() == uapi::VSOCK_OP_RW => self.process_timesync_request(),
+             _ => {
+                 if pkt.op() == uapi::VSOCK_OP_RW {
+                     self.process_dgram_rw(pkt);
+@@ -559,6 +572,13 @@ impl VsockMuxer {
+         Ok(())
+     }
+ 
++    #[cfg(any(target_os = "macos", target_os = "linux"))]
++    fn process_timesync_request(&self) {
++        if let Some(sender) = &self.timesync_request_sender {
++            let _ = sender.send(());
++        }
++    }
++
+     fn process_op_request(&mut self, pkt: &VsockPacket) {
+         debug!("OP_REQUEST");
+         let id: u64 = ((pkt.src_port() as u64) << 32) | (pkt.dst_port() as u64);
+diff --git a/src/devices/src/virtio/vsock/timesync.rs b/src/devices/src/virtio/vsock/timesync.rs
+index 0ca01759..e16ac194 100644
+--- a/src/devices/src/virtio/vsock/timesync.rs
++++ b/src/devices/src/virtio/vsock/timesync.rs
+@@ -2,6 +2,8 @@ use std::sync::{Arc, Mutex};
+ use std::thread;
+ use std::time;
+ 
++use crossbeam_channel::Receiver;
++
+ use super::super::Queue as VirtQueue;
+ use super::defs::uapi;
+ use super::packet::VsockPacket;
+@@ -11,13 +13,14 @@ use vm_memory::GuestMemoryMmap;
+ 
+ const UPDATE_INTERVAL: u64 = 60 * 1000 * 1000 * 1000;
+ const SLEEP_NSECS: u64 = 2 * 1000 * 1000 * 1000;
+-const TSYNC_PORT: u32 = 123;
++pub(super) const TSYNC_PORT: u32 = 123;
+ 
+ pub struct TimesyncThread {
+     cid: u64,
+     mem: GuestMemoryMmap,
+     queue_mutex: Arc<Mutex<VirtQueue>>,
+     interrupt: InterruptTransport,
++    timesync_request_receiver: Receiver<()>,
+ }
+ 
+ impl TimesyncThread {
+@@ -26,12 +29,14 @@ impl TimesyncThread {
+         mem: GuestMemoryMmap,
+         queue_mutex: Arc<Mutex<VirtQueue>>,
+         interrupt: InterruptTransport,
++        timesync_request_receiver: Receiver<()>,
+     ) -> Self {
+         Self {
+             cid,
+             mem,
+             queue_mutex,
+             interrupt,
++            timesync_request_receiver,
+         }
+     }
+ 
+@@ -62,20 +67,30 @@ impl TimesyncThread {
+         let mut last_update = 0u64;
+         let mut last_awake = utils::time::get_time(utils::time::ClockType::Real);
+         loop {
++            let mut force_update = false;
++            if let Ok(()) = self
++                .timesync_request_receiver
++                .recv_timeout(time::Duration::from_nanos(SLEEP_NSECS))
++            {
++                force_update = true;
++            }
++
+             let now = utils::time::get_time(utils::time::ClockType::Real);
+             /*
+-             * We send a time sync packet if we slept for 3 times more
+-             * nanoseconds than expected (which is an indication the
+-             * system forced us to take a long nap), or if UPDATE_INTERVAL
+-             * has been reached.
++             * We send a time sync packet if it was requested by the guest, or
++             * we slept for 3 times more nanoseconds than expected (which is an
++             * indication the system forced us to take a long nap), or if
++             * UPDATE_INTERVAL has been reached.
+              */
+-            if (now - last_awake) >= (SLEEP_NSECS * 3) || (now - last_update) >= UPDATE_INTERVAL {
++            if force_update
++                || (now - last_awake) >= (SLEEP_NSECS * 3)
++                || (now - last_update) >= UPDATE_INTERVAL
++            {
+                 self.send_time(now);
+                 last_update = now;
+             }
+ 
+             last_awake = utils::time::get_time(utils::time::ClockType::Real);
+-            thread::sleep(time::Duration::from_nanos(SLEEP_NSECS));
+         }
+     }
+ 
