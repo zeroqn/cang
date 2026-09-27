@@ -131,3 +131,23 @@ points at `dist/cli/index.js`, which `nix/pkgs/zvec-grep.nix` installs):
 ```bash
 nix develop --command ./scripts/update-zvec-grep.sh
 ```
+
+### wl-cross-domain-proxy subtree
+
+`deps/wl-cross-domain-proxy` is a git subtree of
+<https://codeberg.org/drakulix/wl-cross-domain-proxy>, not a submodule: the
+sources are committed directly so a flake build sees them without
+`?submodules=1`. `nix/wl-cross-domain-proxy.nix` builds that directory and the
+cang image installs the resulting guest proxy.
+
+Pull upstream commits with:
+
+```bash
+git subtree pull --prefix=deps/wl-cross-domain-proxy \
+  https://codeberg.org/drakulix/wl-cross-domain-proxy.git main -m "..."
+```
+
+`Cargo.lock` is committed inside the subtree, so a pull that changes
+dependencies invalidates the `cargoHash` in `nix/wl-cross-domain-proxy.nix`.
+Set it to `lib.fakeHash`, run `nix build .#wl-cross-domain-proxy`, and copy the
+hash printed in the mismatch error.
