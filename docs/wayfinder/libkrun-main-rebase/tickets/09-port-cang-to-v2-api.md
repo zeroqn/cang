@@ -3,8 +3,15 @@ label: wayfinder:task
 title: Port cang's launcher to libkrun's v2 API
 status: open
 blocked_by: ["04-rebase-cang-onto-main"]
-claimed_by: unclaimed
+claimed_by: pi session (2026-09-27)
 ---
+
+## Scoping
+
+`../notes/09-v2-api-port-design.md` has the v2 surface (111 `krun_*` functions
+plus 31 `krun_init_*`), the call-by-call mapping of `launcher.rs`'s current
+sequence, the work breakdown, and the one call with no 1:1 counterpart
+(`set_root`).
 
 ## Question
 
