@@ -1,7 +1,7 @@
 ---
 label: wayfinder:task
 title: Rebase cang onto main and fold in the three PRs
-status: open
+status: closed
 blocked_by: ["03-pr-822-gating-decision"]
 claimed_by: pi session (2026-09-27)
 ---
@@ -61,12 +61,13 @@ rebased branch therefore contains **no fork Rust code** except `CANG.md` and the
 CI workflows, which is expected: every line of the fork's C-side delta extends an
 API that main replaced.
 
-**Build check: FAILED, for a nix-side reason - ticket 12 owns it.** With the
-`fetchCargoVendor` fix in place the build reaches main's libkrun and dies in
-`krun-init-blob`'s build script, which requires the musl rust std that
-`nix/dev`'s host toolchain does not have (`../notes/04-build-check.md`). So the
-rebased content is not yet compile-verified, and this ticket stays open until
-ticket 12 gives it a build path.
+**Build check: PASSED (after ticket 12).** `nix build ./nix/dev#cang-dev`
+exits 0 on `cang-main-rebase`: the libkrun output carries `libkrun.so.2.0.0` and
+`libkrun_init.so.0.1.0` with their symlink chains, and cang compiles and passes
+its test suite against it. The intermediate failure (musl guest init) and its fix
+are in `../notes/04-build-check.md` and ticket 12. Note what the green build does
+**not** prove: cang's Rust code still binds the v1 C ABI at runtime, so a live
+boot fails until ticket 09 lands.
 
 **Build enablement found on the way:** `nix/dev` could vendor main's dependency
 set only after switching the fork-source override from `importCargoLock` to

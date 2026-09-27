@@ -47,3 +47,25 @@ for this. The **release path is unaffected** - the fork's
   library only and accept compile-only local verification, leaving all live
   booting to the published prebuilt; (c) keep iterating without a nix dev-build
   path (manual cargo/make in the devshell).
+
+## Outcome (2026-09-27): green
+
+Bob chose the split build (ticket 12). `init/init-blob/build.rs` honours
+`KRUN_INIT_BINARY_PATH`, so `nix/dev` now builds `init/init-binary` for musl with
+`pkgsStatic`'s rust (with the `timesync` feature) and points the ordinary
+Makefile flow at it; the blob's build script embeds that binary instead of
+cross-building it. With `ffier`'s rustfmt dependency and main's real feature set
+(`withTimesync`, no `withSound`) also fixed:
+
+```
+nix build ./nix/dev#cang-dev   ->  exit 0
+/nix/store/...-libkrun-2.0.0-cang/lib64 -> lib/
+  libkrun.so -> libkrun.so.2 -> libkrun.so.2.0.0
+  libkrun_init.so -> libkrun_init.so.0 -> libkrun_init.so.0.1.0
+dev: include/libkrun{,_display,_init,_input}.h, lib/pkgconfig/libkrun{,_init}.pc
+cang lib/cang -> libkrun.so.2* and libkrunfw.so.5* from the same local build
+```
+
+That proves the rebased tree compiles and links. It does **not** prove cang can
+boot: cang still binds the v1 C ABI (`krun_set_log_level` and friends) at
+runtime, which is ticket 09's port.

@@ -13,10 +13,11 @@ published as the permanent fork release **`v2.0.0-cang.1`**, pinned in
 ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
-**Status (2026-09-27): tickets 01, 02, 03 and 11 resolved; ticket 04's rebase
-and PR fold-in are done but its build check is blocked on ticket 12 (nix/dev
-cannot build main's libkrun: the guest init is musl and the host toolchain has no
-musl std).**
+**Status (2026-09-27): tickets 01, 02, 03, 04, 11 and 12 resolved.** The fork is
+rebased (main + CI/docs + PRs 865/840) and `nix build ./nix/dev#cang-dev` is
+green on it. The next work is the cang-side port (ticket 09) and the fork's own
+C extensions (ticket 10); the release (ticket 06) needs bob's push and a
+workflow dispatch.
 Upstream `main` is a **ground-up C-ABI rewrite** (`a3d31822`, 2026-09-11;
 `ABI_VERSION=2`, `libkrun.so.2`): 20 of cang's 22 bound `krun_*` symbols are
 gone, init injection is caller-supplied via `libkrun_init.so`, and
@@ -75,6 +76,9 @@ Frontier: ticket **04** (the rebase), with ticket **11** (cherry-pick matrix for
   `waypipe-gpu-smoke` map's experience.
 
 ## Decisions so far
+
+- [Make nix/dev build main's libkrun (musl guest init)](tickets/12-nix-dev-build-main-libkrun.md): split the build - `pkgsStatic`'s rust builds `init/init-binary` for musl (with `timesync`), and `KRUN_INIT_BINARY_PATH` makes the ordinary Makefile flow embed it, so no Makefile patching; plus `withTimesync`, no `withSound`, `version = 2.0.0-cang`, and `rustfmt` for ffier. `nix build ./nix/dev#cang-dev` is green.
+- [Rebase cang onto main and fold in the three PRs](tickets/04-rebase-cang-onto-main.md): `cang-main-rebase` = `a980e779` + 7 replayed fork commits (CI/docs), 7 cherry-picked PR commits (865, 840) and 1 adaptation commit; the fork's Rust delta is absent by design (ticket 10), the pin/pointer are untouched (ticket 07), and the build check passes.
 
 <!-- one line per closed ticket, gist plus link -->
 
