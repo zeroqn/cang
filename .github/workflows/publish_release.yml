@@ -25,6 +25,26 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
+      - name: Require versioned libkrun/libkrunfw pins
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+
+          # Rolling cang-<sha> libkrun/libkrunfw prereleases are pruned by the
+          # fork CI, so a tagged cang release must pin the permanent
+          # v<version>-cang.<n> release that the fork CI never deletes.
+          for pin in libkrunRelease libkrunfwRelease; do
+            tag="$(nix eval --raw --impure --expr "(import ./nix/pins.nix).${pin}.tag")"
+            case "${tag}" in
+              v[0-9]*-cang.*) ;;
+              *)
+                echo "refusing to publish a tagged cang release with a rolling fork pin: ${pin} = ${tag}" >&2
+                echo "publish a permanent release for ${pin} and re-pin with scripts/update-${pin%Release}.sh --tag v<version>-cang.<n>" >&2
+                exit 1
+                ;;
+            esac
+          done
+
       - name: Restore release sccache
         uses: actions/cache@v6
         with:

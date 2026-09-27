@@ -33,6 +33,33 @@ fn nix_top_level_attr_body<'a>(source: &'a str, attr_name: &str) -> &'a str {
         .unwrap_or_else(|| panic!("{attr_name} attrset should exist"))
 }
 
+fn is_numeric(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|character| character.is_ascii_digit())
+}
+
+/// A permanent fork release tag of the form `v<upstream version>-cang.<n>`.
+/// The fork CI publishes these on demand and never prunes them; its rolling
+/// `cang-<sha>` prereleases are deleted once ten newer ones exist.
+fn is_versioned_fork_release_tag(tag: &str) -> bool {
+    let Some(rest) = tag.strip_prefix('v') else {
+        return false;
+    };
+    let Some((base, counter)) = rest.rsplit_once("-cang.") else {
+        return false;
+    };
+    let parts: Vec<&str> = base.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|part| is_numeric(part)) && is_numeric(counter)
+}
+
+fn pinned_release_tag(attr_name: &str) -> String {
+    let body = nix_top_level_attr_body(PINS_NIX, attr_name);
+    body.split("tag = \"")
+        .nth(1)
+        .and_then(|tail| tail.split('"').next())
+        .unwrap_or_else(|| panic!("{attr_name} should pin a release tag"))
+        .to_owned()
+}
+
 fn heredoc_bodies<'a>(source: &'a str, start: &str, end: &str) -> Vec<&'a str> {
     source
         .split(start)
@@ -234,6 +261,54 @@ fn publish_release_prunes_only_dev_releases() {
         1,
         "the prune step should delete through one guarded call site"
     );
+}
+
+#[test]
+fn pinned_fork_releases_use_permanent_version_tags() {
+    for attr_name in ["libkrunRelease", "libkrunfwRelease"] {
+        let tag = pinned_release_tag(attr_name);
+        assert!(
+            is_versioned_fork_release_tag(&tag),
+            "{attr_name} pins rolling {tag}; pin a permanent v<version>-cang.<n> \
+             release so a tagged cang release cannot reference a pruned artifact"
+        );
+    }
+}
+
+#[test]
+fn versioned_fork_release_tag_shape_is_enforced() {
+    for accepted in ["v1.19.5-cang.1", "v5.6.2-cang.42", "v10.0.0-cang.7"] {
+        assert!(
+            is_versioned_fork_release_tag(accepted),
+            "should accept {accepted}"
+        );
+    }
+    for rejected in [
+        "cang-8390691dec6e",
+        "v1.19.5",
+        "1.19.5-cang.1",
+        "v1.19-cang.1",
+        "v1.19.5.1-cang.1",
+        "v1.19.5-cang",
+        "v1.19.5-cang.x",
+    ] {
+        assert!(
+            !is_versioned_fork_release_tag(rejected),
+            "should reject {rejected}"
+        );
+    }
+}
+
+#[test]
+fn publish_release_gates_tagged_releases_on_permanent_fork_pins() {
+    for required in [
+        "Require versioned libkrun/libkrunfw pins",
+        "refusing to publish a tagged cang release with a rolling fork pin",
+        "libkrunRelease",
+        "libkrunfwRelease",
+    ] {
+        assert!(PUBLISH_RELEASE_YML.contains(required), "missing {required}");
+    }
 }
 
 #[test]

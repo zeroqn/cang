@@ -107,15 +107,15 @@ in
   libkrunRelease = {
     owner = "zeroqn";
     repo = "libkrun";
-    tag = "cang-8390691dec6e";
+    tag = "v1.19.5-cang.1";
     systems = {
       x86_64-linux = {
         asset = "libkrun-x86_64-linux-full.tgz";
-        hash = "sha256-VoJVNco6Pmz4c9tIi9jGZXcLkJzK1EX7PHR+4fw4/GQ=";
+        hash = "sha256-5/tfcESC6468v21iEFROtnSkZyUKPoHfj/7p1t41EMc=";
       };
       aarch64-linux = {
         asset = "libkrun-aarch64-linux-full.tgz";
-        hash = "sha256-JD6fPfHNXSEDBgc5Ett98xHEKPrSWW4gE7HSiD6iAl8=";
+        hash = "sha256-72IXB9VjJ8D2qGqIPKhporJaXF6Pn2zULeIahiZAkLA=";
       };
     };
   };
@@ -123,19 +123,19 @@ in
   libkrunfwRelease = {
     owner = "zeroqn";
     repo = "libkrunfw";
-    tag = "cang-362dfe8735d7";
+    tag = "v5.6.2-cang.1";
     systems = {
       x86_64-linux = {
         asset = "libkrunfw-x86_64-kvm-lto.tgz";
-        hash = "sha256-XzAXlXegyTFSJU4Bs+S68gBCNCfmbXtXc5hAg8YlcW8=";
+        hash = "sha256-xPXOwubYEqswiHpiBiCuBH+QnnxvRCvJdTBo8H5we/s=";
       };
       aarch64-linux = {
         asset = "libkrunfw-aarch64.tgz";
-        hash = "sha256-MhRDzhGF04X6QcfmsSgA/MM0e40FooCuOV+M11MoHg4=";
+        hash = "sha256-J29n45sfIsCkv8XOWVMAmInIq3yFDqjcWIKwZYzhAfI=";
       };
       riscv64-linux = {
         asset = "libkrunfw-riscv64.tgz";
-        hash = "sha256-PBefqUtSV/FqT/MQA7Zv+Zhfxb4QB6/t3nmFgQCt/PQ=";
+        hash = "sha256-OCdFrXmoqlauC0nnC3QWEmW5DS1PyA8uN/r/gBrSJlg=";
       };
     };
   };

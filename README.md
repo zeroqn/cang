@@ -173,7 +173,10 @@ tag (`v*`):
 - **Versioned** (tag push, e.g. `v0.1.0`):
   `cang-<version>-<arch>-unknown-linux-gnu` is uploaded to a full
   (non-prerelease) release named after the tag, and to the matching
-  `sha-<12chars>` immutable prerelease.
+  `sha-<12chars>` immutable prerelease. A tag push is refused unless
+  `nix/pins.nix` names the permanent `v<version>-cang.<n>` libkrun/libkrunfw
+  fork releases rather than a rolling `cang-<sha>` one; see
+  [libkrun/libkrunfw fork release schemes](docs/maintenance.md#libkrunlibkrunfw-fork-release-schemes).
 - **Images** (`ghcr.io/<owner>/cang:<tag>`) are published by the image workflow
   on every push to `main` (`latest`, `sha-<12chars>`), every push to `dev`
   (`dev`, `sha-<12chars>`), and every tag push (the tag name itself, plus

@@ -63,8 +63,11 @@
   client: client and worker reject each other over a protocol-version mismatch.
 - `.#libkrunfw`: install the pinned `zeroqn/libkrunfw` release asset for the
   current system.
-- `.#libkrun`: install the pinned `zeroqn/libkrun` `cang-*` prebuilt release
-  asset for the current system, matching `.#libkrunfw`'s release-asset model.
+- `.#libkrun`: install the pinned `zeroqn/libkrun` prebuilt release asset for
+  the current system, matching `.#libkrunfw`'s release-asset model. Both pins
+  may name a rolling `cang-<sha>` or a permanent `v<version>-cang.<n>` fork
+  release; tagged cang releases pin the permanent form because the fork CI
+  prunes the rolling one.
   Root consumers (`.#cang`, images, and `.#cang-prebuilt`) all use this pinned
   prebuilt package. The package normalizes upstream Linux `lib64` payloads into
   `$out/lib` and regenerates `libkrun.pc` for the Nix store path. Local source

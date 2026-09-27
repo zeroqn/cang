@@ -25,12 +25,16 @@ Refresh the pinned zeroqn/libkrun prebuilt release metadata in nix/pins.nix by
 querying GitHub Releases and recomputing the selected release-asset SRI hashes.
 
 Default:
-  Select the newest cang-* release that contains every required Linux asset and
-  update libkrunRelease.tag plus all asset hashes from that single release.
+  Select the newest rolling cang-<sha> release that contains every required Linux
+  asset and update libkrunRelease.tag plus all asset hashes from that single
+  release. Rolling cang-<sha> releases are pruned by the fork's CI.
 
 Options:
-  --tag <tag>          Pin a specific cang-* release tag instead of auto-selecting
-                       the newest complete release.
+  --tag <tag>          Pin a specific release tag instead of auto-selecting the
+                       newest complete rolling release. Accepts either a rolling
+                       cang-<sha> tag or a permanent v<libkrun version>-cang.<n>
+                       release. Tagged cang releases should pin the permanent
+                       v*-cang.* release because rolling tags are pruned.
 
 Required release assets:
   libkrun-x86_64-linux-full.tgz
@@ -114,13 +118,10 @@ if [ -z "$release_tag" ]; then
   exit 1
 fi
 
-case "$release_tag" in
-  cang-*) ;;
-  *)
-    echo "unsupported libkrun release tag: $release_tag (expected cang-*)" >&2
-    exit 1
-    ;;
-esac
+if ! printf '%s' "$release_tag" | grep -Eq '^(cang-[0-9a-f]{12}|v[0-9]+\.[0-9]+\.[0-9]+-cang\.[0-9]+)$'; then
+  echo "unsupported libkrun release tag: $release_tag (expected cang-<sha> or v<version>-cang.<n>)" >&2
+  exit 1
+fi
 
 release_json="$(curl -fsSL "https://api.github.com/repos/$owner/$repo/releases/tags/$release_tag")"
 

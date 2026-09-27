@@ -6,16 +6,24 @@ pins_file="$repo_root/nix/pins.nix"
 owner="zeroqn"
 repo="libkrunfw"
 system="x86_64-linux"
+release_tag=""
 
 usage() {
   cat <<'USAGE_EOF'
-Usage: update-libkrunfw.sh [--system <system>]
+Usage: update-libkrunfw.sh [--system <system>] [--tag <release-tag>]
 
 Refresh the pinned zeroqn/libkrunfw release metadata in nix/pins.nix by querying
 GitHub Releases and recomputing the selected release-asset SRI hash.
 
 Default:
   --system  x86_64-linux
+  --tag     newest rolling cang-<sha> release that contains the system's asset.
+            Rolling cang-<sha> releases are pruned by the fork's CI, so tagged
+            cang releases should pin the permanent v<libkrunfw version>-cang.<n>
+            release instead.
+
+Because each run rewrites only the selected system, a versioned re-pin has to be
+run once per system with the same --tag.
 
 Supported systems:
   x86_64-linux, aarch64-linux, riscv64-linux
@@ -26,6 +34,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --system)
       system="${2:?missing value for --system}"
+      shift 2
+      ;;
+    --tag|--release-tag)
+      release_tag="${2:?missing value for $1}"
       shift 2
       ;;
     -h|--help)
@@ -63,25 +75,32 @@ case "$system" in
     ;;
 esac
 
-# GitHub's /releases/latest endpoint ignores prereleases. The cang libkrunfw
-# builds are prereleases, so choose the newest matching asset from the
-# releases list instead.
-release_tag="$(
-  curl -fsSL "https://api.github.com/repos/$owner/$repo/releases?per_page=100" |
-    jq -r --arg asset_name "$asset_name" '
-      [
-        .[]
-        | select(.tag_name | startswith("cang-"))
-        | select(any(.assets[]?; .name == $asset_name))
-      ]
-      | sort_by(.published_at // .created_at)
-      | last
-      | .tag_name // empty
-    '
-)"
-
 if [ -z "$release_tag" ]; then
-  echo "failed to determine latest libkrunfw release tag containing $asset_name" >&2
+  # GitHub's /releases/latest endpoint ignores prereleases. The cang libkrunfw
+  # builds are prereleases, so choose the newest matching asset from the
+  # releases list instead.
+  release_tag="$(
+    curl -fsSL "https://api.github.com/repos/$owner/$repo/releases?per_page=100" |
+      jq -r --arg asset_name "$asset_name" '
+        [
+          .[]
+          | select(.tag_name | startswith("cang-"))
+          | select(any(.assets[]?; .name == $asset_name))
+        ]
+        | sort_by(.published_at // .created_at)
+        | last
+        | .tag_name // empty
+      '
+  )"
+
+  if [ -z "$release_tag" ]; then
+    echo "failed to determine latest libkrunfw release tag containing $asset_name" >&2
+    exit 1
+  fi
+fi
+
+if ! printf '%s' "$release_tag" | grep -Eq '^(cang-[0-9a-f]{12}|v[0-9]+\.[0-9]+\.[0-9]+-cang\.[0-9]+)$'; then
+  echo "unsupported libkrunfw release tag: $release_tag (expected cang-<sha> or v<version>-cang.<n>)" >&2
   exit 1
 fi
 
