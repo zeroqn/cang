@@ -61,6 +61,13 @@ rebased branch therefore contains **no fork Rust code** except `CANG.md` and the
 CI workflows, which is expected: every line of the fork's C-side delta extends an
 API that main replaced.
 
+**Build check: FAILED, for a nix-side reason - ticket 12 owns it.** With the
+`fetchCargoVendor` fix in place the build reaches main's libkrun and dies in
+`krun-init-blob`'s build script, which requires the musl rust std that
+`nix/dev`'s host toolchain does not have (`../notes/04-build-check.md`). So the
+rebased content is not yet compile-verified, and this ticket stays open until
+ticket 12 gives it a build path.
+
 **Build enablement found on the way:** `nix/dev` could vendor main's dependency
 set only after switching the fork-source override from `importCargoLock` to
 `rustPlatform.fetchCargoVendor`, because upstream's lock pulls `ffier` from git

@@ -14,7 +14,9 @@ ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
 **Status (2026-09-27): tickets 01, 02, 03 and 11 resolved; ticket 04's rebase
-and PR fold-in are done and its build check is running.**
+and PR fold-in are done but its build check is blocked on ticket 12 (nix/dev
+cannot build main's libkrun: the guest init is musl and the host toolchain has no
+musl std).**
 Upstream `main` is a **ground-up C-ABI rewrite** (`a3d31822`, 2026-09-11;
 `ABI_VERSION=2`, `libkrun.so.2`): 20 of cang's 22 bound `krun_*` symbols are
 gone, init injection is caller-supplied via `libkrun_init.so`, and
@@ -102,6 +104,10 @@ Frontier: ticket **04** (the rebase), with ticket **11** (cherry-pick matrix for
 - **The next update's base:** *this* rebase goes to `main` because the PRs live
   there; the standing policy after it (back to the stable line, as decided, or
   stay on main) is a later effort's decision, informed by what this one costs.
+- **How much the dev-build gap constrains verification:** if `nix/dev` builds
+  only the host library (ticket 12's option 2), then every live-boot claim in
+  tickets 09/10 has to come from a published prebuilt. Sharpens with ticket 12's
+  answer.
 - **Fork CI adaptation:** whether the fork's `publish-cang-release.yml` (copied
   from an older upstream) needs more than the known `LIBDIR_Linux=lib64` fix and
   a feature-list update to build main. Sharpens inside ticket 06 if the release
