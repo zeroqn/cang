@@ -44,13 +44,13 @@
               (_oldAttrs: {
                 version = "1.19.5-cang-profile";
                 src = libkrunSrc;
-                cargoDeps = pkgs.rustPlatform.importCargoLock {
-                  lockFile = libkrunSrc + "/Cargo.lock";
-                  # Upstream main's lock pulls ffier twice (tags 0.2.0rc1 and
-                  # v0.2.0-rc2); importCargoLock keys hashes by name-version.
-                  outputHashes = {
-                    "ffier-0.2.0" = "sha256-bicvHReD9zX9N7iLY9JQXZKFtBU4X7IHKqXCzOKdFvI=";
-                  };
+                # Upstream main's lock vendors ffier twice (tags 0.2.0rc1 and
+                # v0.2.0-rc2) at the same name-version, which importCargoLock
+                # cannot express (it keys outputHashes by name-version), so the
+                # fork's source uses fetchCargoVendor instead.
+                cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+                  src = libkrunSrc;
+                  hash = "sha256-SjThWtfmffo38w3ormnO+hSa4H6IugRz2wq4DvWX5Jg=";
                 };
               });
           rustPackages = import ../../nix/pkgs/cang-rust.nix {

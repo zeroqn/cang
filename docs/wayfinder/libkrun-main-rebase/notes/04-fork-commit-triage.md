@@ -69,16 +69,22 @@ points* (profile path, render-server fd), the device-side plumbing that reaches
 
 ## Adjacent findings for tickets 06/07 (from the replay + a build attempt)
 
-- **`nix/dev/flake.nix` needed a new `outputHashes` entry.** main's `Cargo.lock`
-  vendors the new build-time dependency `ffier` from git
-  (`https://github.com/mtjhrc/ffier.git`), twice, at tags `0.2.0rc1`
-  (`9616083b...`) and `v0.2.0-rc2` (`4609b7a4...`), both name-version
-  `ffier-0.2.0`. `importCargoLock` keys `outputHashes` by `name-version`, so the
-  two revs collide on one key; the entry added uses the `0.2.0rc1` hash
-  (`sha256-bicvHReD9zX9N7iLY9JQXZKFtBU4X7IHKqXCzOKdFvI=`), with the `rc2` hash
-  (`sha256-meSiGiejRrPGrMvVTeY5RKbB6iAiWg3OSiannST5qy4=`) recorded here. Whether
-  vendoring tolerates the duplicate key is being tested by the build; if it does
-  not, `nix/dev` needs a different vendoring path for main.
+- **`nix/dev/flake.nix` could not vendor main's dependency set with
+  `importCargoLock`.** main's `Cargo.lock` pulls `ffier` from git twice, at tags
+  `0.2.0rc1` (`9616083b...`) and `v0.2.0-rc2` (`4609b7a4...`), both name-version
+  `ffier-0.2.0`. nixpkgs' `import-cargo-lock.nix` builds `namesGitShas` as a map
+  keyed by `${name}-${version}` (verified in the pinned nixpkgs source), so the
+  second revision has no expressible `outputHashes` key and evaluation fails with
+  *"No hash was found while vendoring the git dependency ffier-0.2.0"* - for
+  refs `9616083b` and `4609b7a4` the prefetch hashes are
+  `sha256-bicvHReD9zX9N7iLY9JQXZKFtBU4X7IHKqXCzOKdFvI=` and
+  `sha256-meSiGiejRrPGrMvVTeY5RKbB6iAiWg3OSiannST5qy4=`. Upstream tip still has
+  both revisions, so pinning a newer `main` does not dodge it.
+  **Fix applied:** the fork's source is vendored with
+  `rustPlatform.fetchCargoVendor` (the same helper nixpkgs' own `libkrun`
+  package uses), which runs `cargo vendor` and therefore tolerates the duplicate.
+  The prebuilt/release path (`nix/pkgs/libkrun.nix`, which fetches a release
+  tarball) is unaffected by this.
 - **The replayed `publish-cang-release.yml` needs a feature-list and packaging
   update for main** (ticket 06): its build step runs
   `make BLK=1 NET=1 GPU=1 SND=1 INPUT=1`, but main removed the snd feature
