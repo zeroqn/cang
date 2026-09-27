@@ -1,0 +1,30 @@
+[package]
+name = "wl-cross-domain-proxy"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Victoria Brekenfeld <codeberg@drakulix.de>"]
+readme = "README.md"
+repository = "https://codeberg.org/drakulix/wl-cross-domain-proxy"
+keywords = ["wayland", "virtio", "cross-domain"]
+rust-version = "1.87"
+
+[dependencies]
+anyhow = "1.0.100"
+bitflags = "2.10.0"
+bytemuck = "1.24.0"
+calloop = { version = "0.14.3", features = ["signals"] }
+drm = "0.14.1"
+drm-fourcc = "2.2.0"
+drm-sys = "0.8.0"
+env_logger = "0.11.8"
+libc = "0.2.177"
+log = "0.4.28"
+pico-args = "0.5.0"
+rustix = { version = "1.1.2", features = ["process"] }
+sd-listen-fds = "0.2.0"
+smallvec = "1.15.1"
+wayland-protocols = { version = "0.32.9", features = ["server", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3.9", features = ["server"] }
+wayland-server = "0.31.10"
+zerocopy = { version = "0.8.27", features = ["derive"] }
