@@ -100,3 +100,27 @@ points* (profile path, render-server fd), the device-side plumbing that reaches
   matches `libkrun.so*` only.
 - `nix/dev/flake.nix` also still passes `withSound = true` and pins
   `version = "1.19.5-cang-profile"`; both are stale for a 2.0.0 base (ticket 07).
+
+## The two upstream PRs, replayed (ticket 11's matrix)
+
+Replayed on `cang-main-rebase` in this order, all clean (no conflict, `-x`
+trailers added), per `notes/11-pr865-840-matrix.md`:
+
+| PR | commits (in order) | subject |
+|---|---|---|
+| 865 | `802c9e1e` -> `6b24d0d2` -> `08a8773a` | RwLock for disk image access; dispatch reads to a thread pool (fix #824); make parallel reads opt-in |
+| 840 | `3f3062e3` -> `32eb92b5` -> `6d800f98` -> `2f37b0a3` | enable timesync for Linux; allow an explicit time-sync request from a guest; reduce `DELTA_SYNC` to 10 ms; build the init blob with timesync when `TIMESYNC=1` |
+
+- The order inside 865 is load-bearing: `6b24d0d2` without `08a8773a` leaves
+  parallel reads permanently **on** and changes cang's block behaviour.
+- 865 stays inert for cang: its opt-in surface is a new
+  `krun_block_device_set_parallel_reads(handle, bool)` entry point (default
+  false, no cargo/env knob) that nothing in cang calls; only the `RwLock`
+  refactor is live.
+- 840's host half is unconditional; its guest half needs `TIMESYNC=1`, which the
+  fork's prebuilt workflow did not pass. Added in the adaptation commit
+  `d578e4e2`, which also asserts `libkrun_init.{so*,pc,h}` in the packaging step
+  (main moved the guest init out of `libkrun.so`).
+- Under ABI 2 the guest init is the separate `libkrun_init.so`: if cang keeps
+  libkrun's default init the `TIMESYNC=1` blob is what runs, otherwise cang's own
+  init must implement the time-sync request (`cang-guest-init` does not).

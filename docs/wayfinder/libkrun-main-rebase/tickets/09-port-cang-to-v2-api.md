@@ -36,6 +36,13 @@ Scope, from `notes/01-upstream-main-delta.md`:
 6. Anything `--gpu=drm`/`--wayland` needs from cang's side to call the fork's
    re-added GPU entry point (ticket 10) - coordinate, do not duplicate.
 
+Decide and record **which init runs**: under ABI 2 the guest init is the
+separate `libkrun_init.so`, and the prebuilt must ship it (ticket 07). If cang
+keeps libkrun's default init blob, that blob is built with `--features ffi`
+plus `timesync` when the workflow passes `TIMESYNC=1` (upstream PR 840's guest
+half, now carried). If cang supplies its own init instead, it has to implement
+the time-sync request itself - `cang-guest-init` does not do that today.
+
 Evidence to keep: the diff, the fixture-suite output, and a live boot of a
 trivial guest command (`cang --mem 4 --seccomp=off --landlock=off -- ...` under
 `script`, per `cang-local-validation-gates`).

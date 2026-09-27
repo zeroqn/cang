@@ -13,8 +13,8 @@ published as the permanent fork release **`v2.0.0-cang.1`**, pinned in
 ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
-**Status (2026-09-27): tickets 01, 02 and 03 resolved; ticket 04 in progress
-(rebased branch prepared, build check running).**
+**Status (2026-09-27): tickets 01, 02, 03 and 11 resolved; ticket 04's rebase
+and PR fold-in are done and its build check is running.**
 Upstream `main` is a **ground-up C-ABI rewrite** (`a3d31822`, 2026-09-11;
 `ABI_VERSION=2`, `libkrun.so.2`): 20 of cang's 22 bound `krun_*` symbols are
 gone, init injection is caller-supplied via `libkrun_init.so`, and
@@ -78,6 +78,7 @@ Frontier: ticket **04** (the rebase), with ticket **11** (cherry-pick matrix for
 
 - [Upstream-main delta for cang's libkrun integration](tickets/01-upstream-main-delta-for-cang.md): main is an ABI-2 rewrite, not a superset - 20 of cang's 22 bound `krun_*` symbols deleted, `krun_init_log`/`krun_check_nested_virt` changed, init injection now caller-supplied via `libkrun_init.so`, `rutabaga_gfx` moved to crates.io, soname `libkrun.so.2`; the fork's own extensions (`krun_set_gpu_options3`, `krun_set_profile_path`) have no main equivalent and must be re-added.
 - [Is cherry-picked PR 822 inert without the guest side?](tickets/02-pr-822-inert-check.md): the *path* is inert (pinned kernel rejects blob flag 0x8 in `verify_blob()`, param 10 is `-EINVAL`, `CONFIG_UDMABUF` unset on every arch) but the *patch* is not - `230f2c55` renumbers `VIRTIO_GPU_F_CREATE_GUEST_HANDLE` 6->5, colliding with our kernel's `VIRTIO_GPU_F_FENCE_PASSING = 5`; and its rutabaga half cannot be cherry-picked because crates.io `rutabaga_gfx 0.1.85` dropped guest-blob handles.
+- [Do 865 and 840 apply to main's post-rewrite tree?](tickets/11-pr865-840-matrix.md): both apply **cleanly as ordered sequences** (865: `802c9e1e`+`6b24d0d2`+`08a8773a`; 840: `3f3062e3`+`32eb92b5`+`6d800f98`+`2f37b0a3`) and are replayed on the rebased branch; 865's parallel reads are opt-in via a new `krun_block_device_set_parallel_reads` (stays off, only its `RwLock` refactor is live) and 840's guest half needs `TIMESYNC=1`, added to the fork's prebuilt workflow along with asserts on `libkrun_init.{so*,pc,h}`.
 - [Decide how PR 822 is carried in the fork](tickets/03-pr-822-gating-decision.md): **deferred out of this map** - the rebase carries 865 and 840 only; 822 returns with the libkrunfw `CONFIG_UDMABUF=y` + param-10/flag-8 kernel work, or when upstream merges it.
 
 ## Not yet specified
