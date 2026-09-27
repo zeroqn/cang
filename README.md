@@ -31,7 +31,7 @@ rootless Podman tooling for development.
   sonames. The pinned `libkrun` also carries an `$ORIGIN` runpath, so its own
   `libkrunfw.so.5` dlopen resolves against the same `$out/lib/cang` directory
   instead of an ambient `LD_LIBRARY_PATH`. Source/debug builds can set
-  `CANG_LIBKRUN_LIBRARY=/path/to/libkrun.so.1`.
+  `CANG_LIBKRUN_LIBRARY=/path/to/libkrun.so.2`.
 - `pasta`/`passt` for host-alias networking in both default passt and opt-in
   `--tsi` mode; included in the Nix `.#cang` helper dir, `.#cang-prebuilt`,
   and `nix develop` environments.
@@ -409,7 +409,7 @@ The container provides:
 - `gcc`, `musl`, `clang`
 - `mimalloc` enabled by default for Nix-linked dynamic binaries through `/etc/ld-nix.so.preload`; cang selects the task allocator with `--alloc=mimalloc`, `--alloc=hardened`, or `--alloc=glibc`, and `hardening-run` remains the per-command foreign/FHS `LD_PRELOAD` opt-in
 - RTK (`rtk`)
-- libkrun 1.18.0 (`libkrun.so`) plus pinned `libkrunfw.so` for nested KVM support inside the container
+- libkrun 2.0.0 (`libkrun.so.2`) plus pinned `libkrunfw.so` for nested KVM support inside the container
 - `nix` wrapper that clears the container NSS wrapper preload before invoking
   the real Nix binary, avoiding glibc-version mismatches in nested dev shells
 - `cang-nix-store-db-check` for non-mutating live `/nix/store` vs Nix DB

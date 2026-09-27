@@ -43,7 +43,9 @@ let
         ln -s ${pkgs.strace}/bin/strace "$out/libexec/cang-helpers/strace"
         ln -s ${pkgs.virglrenderer}/libexec/virgl_render_server "$out/libexec/cang-helpers/virgl_render_server"
         ${pkgs.lib.optionalString (libkrun != null) ''
-          for library in ${pkgs.lib.getLib libkrun}/lib/libkrun.so*; do
+          for library in ${pkgs.lib.getLib libkrun}/lib/libkrun.so* \
+            ${pkgs.lib.getLib libkrun}/lib/libkrun_init.so*; do
+            [ -e "$library" ] || continue
             ln -s "$library" "$out/lib/cang/$(basename "$library")"
           done
         ''}

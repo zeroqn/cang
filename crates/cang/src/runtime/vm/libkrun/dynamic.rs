@@ -10,7 +10,7 @@ use crate::runtime::host_tools::package_root_from_exe;
 use super::api::LibkrunApi;
 
 const LIBKRUN_LIBRARY_ENV: &str = "CANG_LIBKRUN_LIBRARY";
-const DEFAULT_LIBKRUN_NAMES: [&str; 2] = ["libkrun.so.1", "libkrun.so"];
+const DEFAULT_LIBKRUN_NAMES: [&str; 2] = ["libkrun.so.2", "libkrun.so"];
 const CANG_LIBKRUN_LOG_TARGET_STDERR_FD: i32 = 2;
 const CANG_LIBKRUN_LOG_STYLE_NEVER: u32 = 2;
 const CANG_LIBKRUN_LOG_OPTION_NO_ENV: u32 = 1;

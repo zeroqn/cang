@@ -86,7 +86,9 @@ if builtins.hasAttr prebuiltSystem cangPrebuiltRelease.systems then
         ln -s ${pkgs.passt}/bin/passt "$out/libexec/cang-helpers/passt"
         ln -s ${pkgs.virglrenderer}/libexec/virgl_render_server "$out/libexec/cang-helpers/virgl_render_server"
         ${pkgs.lib.optionalString (libkrun != null) ''
-          for library in ${pkgs.lib.getLib libkrun}/lib/libkrun.so*; do
+          for library in ${pkgs.lib.getLib libkrun}/lib/libkrun.so* \
+            ${pkgs.lib.getLib libkrun}/lib/libkrun_init.so*; do
+            [ -e "$library" ] || continue
             ln -s "$library" "$out/lib/cang/$(basename "$library")"
           done
         ''}

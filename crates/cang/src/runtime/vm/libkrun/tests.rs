@@ -441,11 +441,11 @@ fn libkrun_loader_prefers_explicit_library_override_before_sonames() {
     );
     assert_eq!(
         planned_libkrun_load_order(None),
-        vec!["libkrun.so.1", "libkrun.so"]
+        vec!["libkrun.so.2", "libkrun.so"]
     );
     assert_eq!(
         planned_libkrun_load_order(Some("")),
-        vec!["libkrun.so.1", "libkrun.so"]
+        vec!["libkrun.so.2", "libkrun.so"]
     );
 }
 
@@ -457,9 +457,9 @@ fn libkrun_loader_tries_package_relative_libraries_before_sonames() {
             Some(std::path::PathBuf::from("/nix/store/hash-cang/bin/cang"))
         ),
         vec![
-            "/nix/store/hash-cang/lib/cang/libkrun.so.1",
+            "/nix/store/hash-cang/lib/cang/libkrun.so.2",
             "/nix/store/hash-cang/lib/cang/libkrun.so",
-            "libkrun.so.1",
+            "libkrun.so.2",
             "libkrun.so",
         ]
     );
