@@ -22,8 +22,10 @@ struct TsiPublishMapping {
 }
 
 impl TsiPublishMapping {
-    fn port_map(self) -> String {
-        format!("{}:{}", self.host, self.guest)
+    /// libkrun ABI 2's `krun_vsock_device_add_port_forward` spells a mapping
+    /// `guest:host`, the reverse of the v1 `krun_set_port_map` entry.
+    fn libkrun_port_forward(self) -> String {
+        format!("{}:{}", self.guest, self.host)
     }
 
     fn pasta_tcp_forward(self) -> String {
@@ -61,10 +63,10 @@ fn tsi_publish_mappings(specs: &[String]) -> Result<Vec<TsiPublishMapping>> {
     Ok(mappings)
 }
 
-pub(crate) fn tsi_port_map(specs: &[String]) -> Result<Vec<String>> {
+pub(crate) fn tsi_port_forwards(specs: &[String]) -> Result<Vec<String>> {
     Ok(tsi_publish_mappings(specs)?
         .into_iter()
-        .map(TsiPublishMapping::port_map)
+        .map(TsiPublishMapping::libkrun_port_forward)
         .collect())
 }
 
@@ -144,9 +146,10 @@ mod tests {
 
     #[test]
     fn tsi_accepts_simple_tcp_port_maps() {
+        // A publish spec is host:guest; libkrun ABI 2 wants guest:host.
         assert_eq!(
-            tsi_port_map(&strings(&["1:65535", "65535:1"])).expect("valid port map"),
-            ["1:65535", "65535:1"]
+            tsi_port_forwards(&strings(&["1:65535", "65535:1"])).expect("valid port map"),
+            ["65535:1", "1:65535"]
         );
     }
 
@@ -180,7 +183,7 @@ mod tests {
             "none",
         ] {
             assert!(
-                tsi_port_map(&strings(&[spec])).is_err(),
+                tsi_port_forwards(&strings(&[spec])).is_err(),
                 "{spec} should fail"
             );
         }
@@ -188,8 +191,8 @@ mod tests {
 
     #[test]
     fn tsi_rejects_duplicate_host_or_guest_ports() {
-        assert!(tsi_port_map(&strings(&["8080:80", "8080:81"])).is_err());
-        assert!(tsi_port_map(&strings(&["8080:80", "8081:80"])).is_err());
+        assert!(tsi_port_forwards(&strings(&["8080:80", "8080:81"])).is_err());
+        assert!(tsi_port_forwards(&strings(&["8080:80", "8081:80"])).is_err());
     }
 
     #[test]

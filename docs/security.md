@@ -6,7 +6,7 @@ Host-side sandboxing (Landlock, seccomp) and guest capability grants.
 
 - Host-side cang Landlock is applied to the libkrun VM-worker process after
   prepared-root and libkrun setup that require broader host access, but before
-  `krun_start_enter`. It is applied before seccomp so the Landlock syscalls are
+  the VMM build. It is applied before seccomp so the Landlock syscalls are
   not blocked by the seccomp filter.
 - For ordinary task launches, omitting `--landlock` is equivalent to
   `--landlock=relax`. Relax mode is fail-closed for the non-network Landlock
@@ -68,7 +68,7 @@ Host-side sandboxing (Landlock, seccomp) and guest capability grants.
   log, and converts it to the requested JSONL trace when the helper observes
   the VM worker exit. The raw `.strace` sidecar can include VM-worker setup
   and cleanup syscalls; the finalized JSONL starts after the internal start
-  marker emitted immediately before `krun_start_enter` and then keeps only
+  marker emitted immediately before the VMM is built and then keeps only
   syscall lines from the traced PID that emitted that marker plus post-marker
   descendants linked by observed `clone3`, `clone`, `fork`, or `vfork` returns.
   This excludes unrelated parent cleanup syscalls such as
@@ -107,7 +107,7 @@ Host-side sandboxing (Landlock, seccomp) and guest capability grants.
   deterministic syscall-name order. The output is validated with `seccompiler`
   before cang writes it; the baseline policy file is not modified.
 - `--seccomp=enforce:<policy>` loads that `seccompiler` JSON policy and
-  installs it in the VM worker immediately before `krun_start_enter`. Passing an
+  installs it in the VM worker immediately before the VMM is built. Passing an
   explicit enforce path overrides the packaged default policy for that run.
 - Gap audit is a debugging aid, not proof that enforcement is safe. It compares
   syscall names only; it does not diff or prove seccompiler argument-condition

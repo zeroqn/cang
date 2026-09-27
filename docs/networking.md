@@ -4,7 +4,7 @@
 
 The default network mode is libkrun virtio-net/passt: cang starts a `passt`
 unix-socket backend inside the same namespace, sets guest env `CANG_USE_PASST=1`,
-and calls `krun_add_net_unixstream()` before `krun_start_enter()`. Passing `--tsi`
+and adds the libkrun net device before the VMM is built. Passing `--tsi`
 opts into libkrun's virtio-vsock/TSI proxy mode. In that mode cang does not add a
 libkrun network device, but the libkrun VMM still starts from the pasta-backed
 namespace so the guest's Podman-like host aliases can reach the host at

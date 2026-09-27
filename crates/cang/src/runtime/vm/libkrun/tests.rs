@@ -9,53 +9,93 @@ use crate::runtime::launch::config::{
 use crate::runtime::seccomp::{AuditMode, SeccompMode};
 use crate::runtime::vm::gpu::GpuMode;
 use crate::runtime::vm::libkrun::launcher::{
-    NET_FLAG_DHCP_CLIENT, PROFILE_KERNEL_CMDLINE_APPEND, guest_nofile_rlimit_entry,
-    with_audit_start_marker_hook_for_test,
+    PROFILE_KERNEL_CMDLINE_APPEND, guest_nofile_rlimit_entry, with_audit_start_marker_hook_for_test,
 };
 use crate::runtime::vm::libkrun::{
     CANG_LIBKRUN_COMPAT_NET_FEATURES, DirectLibkrunLauncher, LibkrunApi,
-    nested_virt_symbol_presence_for_test, planned_libkrun_load_order,
-    planned_libkrun_load_order_for_exe, required_rlimits_symbol_presence_for_test,
+    planned_libkrun_init_load_order_for_exe, planned_libkrun_load_order,
+    planned_libkrun_load_order_for_exe, required_symbol_presence_for_test,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
 use std::cell::RefCell;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+/// Handles the recording fake hands out. Only the VMM builder is reboxed: its
+/// C entry points take `KrunVmmBuilder*`, so libkrun may return a different
+/// pointer from every builder call and the launcher must follow it.
+const VMM_BUILDER: usize = 1;
+const DEVICES: usize = 2;
+const OVERLAY: usize = 3;
+const PAYLOAD: usize = 4;
+const INIT_BUILDER: usize = 5;
+const INIT_CONFIG: usize = 6;
+const VSOCK: usize = 7;
+const ROOTFS: usize = 8;
+const NET_DEVICE: usize = 9;
+const VMM: usize = 50;
+const CONSOLE_BUILDER_BASE: usize = 20;
+const CONSOLE_DEVICE_BASE: usize = 30;
+const BLOCK_DEVICE_BASE: usize = 40;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Call {
-    CreateCtx,
-    FreeCtx(u32),
     InitLog(u32),
-    SetVmConfig(u32, u8, u32),
-    SetGpuOptions3(u32, u32, u64, i32),
     CheckNestedVirt,
-    SetNestedVirt(u32, bool),
-    SetRoot(u32, String),
-    AddDisk(u32, String, String, bool),
-    AddNetUnixstream(u32, i32, u32),
-    AddVsockPort(u32, u32, String, bool),
-    SetPortMap(u32, Vec<String>),
-    DisableImplicitConsole(u32),
-    SetConsoleOutput(u32, String),
-    AddVirtioConsoleDefault(u32, i32, i32, i32),
-    SetWorkdir(u32, String),
-    SetExec(u32, String, Vec<String>, Vec<(String, String)>),
-    SetRlimits(u32, Vec<String>),
-    SetProfilePath(u32, String),
-    SetKernelCmdlineAppend(u32, String),
+    PayloadLoadKrunfw,
+    PayloadAppendCmdline(usize, String),
+    FsOverlayNew,
+    InitConfigBuilder,
+    InitBuilderArgs(usize, Vec<String>),
+    InitBuilderEnv(usize, Vec<(String, String)>),
+    InitBuilderWorkdir(usize, String),
+    InitBuilderRlimits(usize, Vec<String>),
+    InitBuilderDhcp(usize, bool),
+    InitBuilderBuild(usize),
+    InitConfigApplyIn(usize, usize, usize),
+    MmioDeviceManagerNew,
+    MmioDeviceManagerAdd(usize, usize),
+    FsDeviceNew(String, String, bool),
+    FsDeviceSetOverlay(usize, usize),
+    BlockDeviceNew(usize, String, String, bool),
+    NetDeviceNewUnixstreamFd(i32, u32, u32),
+    VsockDeviceNew(u64, u32),
+    VsockDeviceAddUnixPort(usize, u32, String, bool),
+    VsockDeviceAddPortForward(usize, String),
+    ConsoleDeviceBuilder,
+    ConsoleBuilderAddDefaultConsole(usize, i32, i32, i32),
+    ConsoleBuilderAddInoutPort(usize, String, Option<i32>, Option<i32>),
+    ConsoleBuilderBuild(usize),
+    GpuDeviceNew(u32, u64, i32),
+    VmmBuilderNew,
+    VmmBuilderVcpus(usize, u8),
+    VmmBuilderRamMib(usize, u32),
+    VmmBuilderNestedVirt(usize, bool),
+    VmmBuilderPayload(usize, usize),
+    VmmBuilderDevices(usize, usize),
+    VmmBuilderDestroy(usize),
+    VmmBuilderBuild(usize),
+    VmmRun(usize),
+    SetProfilePath(usize, String),
     PreEnterHook,
     AuditStartMarker,
-    StartEnter(u32),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NestedCheck {
+    Supported,
+    Unsupported,
+    Failing,
+}
+
 struct FakeLibkrunApi {
     calls: Rc<RefCell<Vec<Call>>>,
     fail_call: Option<&'static str>,
-    net_dhcp_flag_unsupported: bool,
-    nested_check_result: Option<i32>,
+    nested_check: NestedCheck,
+    next_console_builder: usize,
+    next_console_device: usize,
+    next_block_device: usize,
 }
 
 impl FakeLibkrunApi {
@@ -63,222 +103,333 @@ impl FakeLibkrunApi {
         Self {
             calls,
             fail_call: None,
-            net_dhcp_flag_unsupported: false,
-            nested_check_result: Some(1),
+            nested_check: NestedCheck::Supported,
+            next_console_builder: CONSOLE_BUILDER_BASE,
+            next_console_device: CONSOLE_DEVICE_BASE,
+            next_block_device: BLOCK_DEVICE_BASE,
         }
     }
 
     fn failing(calls: Rc<RefCell<Vec<Call>>>, fail_call: &'static str) -> Self {
         Self {
-            calls,
             fail_call: Some(fail_call),
-            net_dhcp_flag_unsupported: false,
-            nested_check_result: Some(1),
+            ..Self::new(calls)
         }
     }
 
-    fn net_dhcp_flag_unsupported(calls: Rc<RefCell<Vec<Call>>>) -> Self {
-        Self {
-            calls,
-            fail_call: None,
-            net_dhcp_flag_unsupported: true,
-            nested_check_result: Some(1),
-        }
-    }
-
-    fn nested_check_result(mut self, result: Option<i32>) -> Self {
-        self.nested_check_result = result;
+    fn nested_check(mut self, nested_check: NestedCheck) -> Self {
+        self.nested_check = nested_check;
         self
     }
 
-    fn rc(&self, call: &'static str) -> i32 {
-        if self.fail_call == Some(call) { -22 } else { 0 }
+    fn record(&self, call: Call) {
+        self.calls.borrow_mut().push(call);
+    }
+
+    fn fails(&self, name: &str) -> bool {
+        self.fail_call == Some(name)
+    }
+
+    fn checked(&self, name: &str) -> Result<()> {
+        if self.fails(name) {
+            bail!("fake {name} failure");
+        }
+        Ok(())
+    }
+
+    fn next_console_builder(&mut self) -> usize {
+        let handle = self.next_console_builder;
+        self.next_console_builder += 1;
+        handle
+    }
+
+    fn next_console_device(&mut self) -> usize {
+        let handle = self.next_console_device;
+        self.next_console_device += 1;
+        handle
+    }
+
+    fn next_block_device(&mut self) -> usize {
+        let handle = self.next_block_device;
+        self.next_block_device += 1;
+        handle
     }
 }
 
 impl LibkrunApi for FakeLibkrunApi {
-    fn create_ctx(&mut self) -> Result<u32> {
-        self.calls.borrow_mut().push(Call::CreateCtx);
-        Ok(7)
+    fn init_log(&mut self, level: u32) -> Result<()> {
+        self.record(Call::InitLog(level));
+        self.checked("krun_init_log")
     }
 
-    fn free_ctx(&mut self, ctx_id: u32) -> Result<()> {
-        self.calls.borrow_mut().push(Call::FreeCtx(ctx_id));
-        Ok(())
+    fn check_nested_virt(&mut self) -> Result<bool> {
+        self.record(Call::CheckNestedVirt);
+        match self.nested_check {
+            NestedCheck::Supported => Ok(true),
+            NestedCheck::Unsupported => Ok(false),
+            NestedCheck::Failing => Err(anyhow!("fake krun_check_nested_virt failure")),
+        }
     }
 
-    fn init_log(&mut self, level: u32) -> Result<i32> {
-        self.calls.borrow_mut().push(Call::InitLog(level));
-        Ok(self.rc("libkrun_log_init"))
+    fn payload_load_krunfw(&mut self) -> Result<usize> {
+        self.record(Call::PayloadLoadKrunfw);
+        self.checked("krun_payload_load_krunfw")?;
+        Ok(PAYLOAD)
     }
 
-    fn set_vm_config(&mut self, ctx_id: u32, vcpus: u8, ram_mib: u32) -> Result<i32> {
-        self.calls
-            .borrow_mut()
-            .push(Call::SetVmConfig(ctx_id, vcpus, ram_mib));
-        Ok(self.rc("krun_set_vm_config"))
+    fn payload_append_cmdline(&mut self, payload: usize, fragment: &str) -> Result<()> {
+        self.record(Call::PayloadAppendCmdline(payload, fragment.to_owned()));
+        self.checked("krun_payload_append_cmdline")
     }
 
-    fn set_gpu_options3(
+    fn fs_overlay_new(&mut self) -> Result<usize> {
+        self.record(Call::FsOverlayNew);
+        self.checked("krun_fs_overlay_new")?;
+        Ok(OVERLAY)
+    }
+
+    fn init_config_builder(&mut self) -> Result<usize> {
+        self.record(Call::InitConfigBuilder);
+        self.checked("krun_init_config_builder")?;
+        Ok(INIT_BUILDER)
+    }
+
+    fn init_builder_args(&mut self, builder: usize, args: &[String]) -> Result<usize> {
+        self.record(Call::InitBuilderArgs(builder, args.to_vec()));
+        self.checked("krun_init_builder_args")?;
+        Ok(builder)
+    }
+
+    fn init_builder_env(&mut self, builder: usize, env: &[(String, String)]) -> Result<usize> {
+        self.record(Call::InitBuilderEnv(builder, env.to_vec()));
+        self.checked("krun_init_builder_env")?;
+        Ok(builder)
+    }
+
+    fn init_builder_workdir(&mut self, builder: usize, workdir: &str) -> Result<usize> {
+        self.record(Call::InitBuilderWorkdir(builder, workdir.to_owned()));
+        self.checked("krun_init_builder_workdir")?;
+        Ok(builder)
+    }
+
+    fn init_builder_rlimits(&mut self, builder: usize, rlimits: &[String]) -> Result<usize> {
+        self.record(Call::InitBuilderRlimits(builder, rlimits.to_vec()));
+        self.checked("krun_init_builder_rlimits")?;
+        Ok(builder)
+    }
+
+    fn init_builder_dhcp(&mut self, builder: usize, enable: bool) -> Result<usize> {
+        self.record(Call::InitBuilderDhcp(builder, enable));
+        self.checked("krun_init_builder_dhcp")?;
+        Ok(builder)
+    }
+
+    fn init_builder_build(&mut self, builder: usize) -> Result<usize> {
+        self.record(Call::InitBuilderBuild(builder));
+        self.checked("krun_init_builder_build")?;
+        Ok(INIT_CONFIG)
+    }
+
+    fn init_config_apply_in(
         &mut self,
-        ctx_id: u32,
-        virgl_flags: u32,
-        shm_size: u64,
-        render_server_fd: i32,
-    ) -> Result<Option<i32>> {
-        self.calls.borrow_mut().push(Call::SetGpuOptions3(
-            ctx_id,
-            virgl_flags,
-            shm_size,
-            render_server_fd,
-        ));
-        Ok(Some(self.rc("krun_set_gpu_options3")))
+        config: usize,
+        overlay: usize,
+        payload: usize,
+    ) -> Result<()> {
+        self.record(Call::InitConfigApplyIn(config, overlay, payload));
+        self.checked("krun_init_config_apply_in")
     }
 
-    fn check_nested_virt(&mut self) -> Result<Option<i32>> {
-        self.calls.borrow_mut().push(Call::CheckNestedVirt);
-        Ok(self.nested_check_result)
+    fn mmio_device_manager_new(&mut self) -> Result<usize> {
+        self.record(Call::MmioDeviceManagerNew);
+        self.checked("krun_mmio_device_manager_new")?;
+        Ok(DEVICES)
     }
 
-    fn set_nested_virt(&mut self, ctx_id: u32, enabled: bool) -> Result<i32> {
-        self.calls
-            .borrow_mut()
-            .push(Call::SetNestedVirt(ctx_id, enabled));
-        Ok(self.rc("krun_set_nested_virt"))
+    fn mmio_device_manager_add(&mut self, devices: usize, device: usize) -> Result<()> {
+        self.record(Call::MmioDeviceManagerAdd(devices, device));
+        self.checked("krun_mmio_device_manager_add")
     }
 
-    fn set_root(&mut self, ctx_id: u32, root_path: &Path) -> Result<i32> {
-        self.calls
-            .borrow_mut()
-            .push(Call::SetRoot(ctx_id, root_path.display().to_string()));
-        Ok(self.rc("krun_set_root"))
-    }
-
-    fn add_disk(
-        &mut self,
-        ctx_id: u32,
-        block_id: &str,
-        disk_path: &Path,
-        read_only: bool,
-    ) -> Result<i32> {
-        self.calls.borrow_mut().push(Call::AddDisk(
-            ctx_id,
-            block_id.to_owned(),
-            disk_path.display().to_string(),
+    fn fs_device_new(&mut self, tag: &str, host_path: &Path, read_only: bool) -> Result<usize> {
+        self.record(Call::FsDeviceNew(
+            tag.to_owned(),
+            host_path.display().to_string(),
             read_only,
         ));
-        Ok(self.rc("krun_add_disk"))
+        self.checked("krun_fs_device_new")?;
+        Ok(ROOTFS)
     }
 
-    fn disable_implicit_console(&mut self, ctx_id: u32) -> Result<i32> {
-        self.calls
-            .borrow_mut()
-            .push(Call::DisableImplicitConsole(ctx_id));
-        Ok(self.rc("krun_disable_implicit_console"))
+    fn fs_device_set_overlay(&mut self, device: usize, overlay: usize) -> Result<()> {
+        self.record(Call::FsDeviceSetOverlay(device, overlay));
+        self.checked("krun_fs_device_set_overlay")
     }
 
-    fn set_console_output(&mut self, ctx_id: u32, output_path: &Path) -> Result<i32> {
-        self.calls.borrow_mut().push(Call::SetConsoleOutput(
-            ctx_id,
-            output_path.display().to_string(),
+    fn block_device_new(&mut self, id: &str, path: &Path, read_only: bool) -> Result<usize> {
+        self.checked("krun_block_device_new")?;
+        let handle = self.next_block_device();
+        self.record(Call::BlockDeviceNew(
+            handle,
+            id.to_owned(),
+            path.display().to_string(),
+            read_only,
         ));
-        Ok(self.rc("krun_set_console_output"))
+        Ok(handle)
     }
 
-    fn add_virtio_console_default(
+    fn net_device_new_unixstream_fd(
         &mut self,
-        ctx_id: u32,
+        _id: &str,
+        fd: i32,
+        mac: [u8; 6],
+        features: u32,
+        flags: u32,
+    ) -> Result<usize> {
+        self.record(Call::NetDeviceNewUnixstreamFd(fd, features, flags));
+        debug_assert_eq!(mac.len(), 6);
+        self.checked("krun_net_device_new_unixstream_fd")?;
+        Ok(NET_DEVICE)
+    }
+
+    fn vsock_device_new(&mut self, cid: u64, tsi_features: u32) -> Result<usize> {
+        self.record(Call::VsockDeviceNew(cid, tsi_features));
+        self.checked("krun_vsock_device_new")?;
+        Ok(VSOCK)
+    }
+
+    fn vsock_device_add_unix_port(
+        &mut self,
+        device: usize,
+        port: u32,
+        path: &Path,
+        listen: bool,
+    ) -> Result<()> {
+        self.record(Call::VsockDeviceAddUnixPort(
+            device,
+            port,
+            path.display().to_string(),
+            listen,
+        ));
+        self.checked("krun_vsock_device_add_unix_port")
+    }
+
+    fn vsock_device_add_port_forward(&mut self, device: usize, mapping: &str) -> Result<()> {
+        self.record(Call::VsockDeviceAddPortForward(device, mapping.to_owned()));
+        self.checked("krun_vsock_device_add_port_forward")
+    }
+
+    fn console_device_builder(&mut self) -> Result<usize> {
+        self.record(Call::ConsoleDeviceBuilder);
+        self.checked("krun_console_device_builder")?;
+        Ok(self.next_console_builder())
+    }
+
+    fn console_builder_add_default_console(
+        &mut self,
+        builder: usize,
         input_fd: i32,
         output_fd: i32,
         err_fd: i32,
-    ) -> Result<i32> {
-        self.calls.borrow_mut().push(Call::AddVirtioConsoleDefault(
-            ctx_id, input_fd, output_fd, err_fd,
+    ) -> Result<()> {
+        self.record(Call::ConsoleBuilderAddDefaultConsole(
+            builder, input_fd, output_fd, err_fd,
         ));
-        Ok(self.rc("krun_add_virtio_console_default"))
+        self.checked("krun_console_builder_add_default_console")
     }
 
-    fn add_net_unixstream(&mut self, ctx_id: u32, socket_fd: i32, flags: u32) -> Result<i32> {
-        self.calls
-            .borrow_mut()
-            .push(Call::AddNetUnixstream(ctx_id, socket_fd, flags));
-        if self.net_dhcp_flag_unsupported && flags == 2 {
-            return Ok(-libc::EINVAL);
-        }
-        Ok(self.rc("krun_add_net_unixstream"))
-    }
-
-    fn add_vsock_port(
+    fn console_builder_add_inout_port(
         &mut self,
-        ctx_id: u32,
-        guest_port: u32,
-        socket_path: &Path,
-        listen: bool,
-    ) -> Result<i32> {
-        self.calls.borrow_mut().push(Call::AddVsockPort(
-            ctx_id,
-            guest_port,
-            socket_path.display().to_string(),
-            listen,
+        builder: usize,
+        name: &str,
+        input_fd: Option<i32>,
+        output_fd: Option<i32>,
+    ) -> Result<()> {
+        self.record(Call::ConsoleBuilderAddInoutPort(
+            builder,
+            name.to_owned(),
+            input_fd,
+            output_fd,
         ));
-        Ok(self.rc("krun_add_vsock_port2"))
+        self.checked("krun_console_builder_add_inout_port")
     }
 
-    fn set_port_map(&mut self, ctx_id: u32, port_map: &[String]) -> Result<i32> {
-        self.calls
-            .borrow_mut()
-            .push(Call::SetPortMap(ctx_id, port_map.to_vec()));
-        Ok(self.rc("krun_set_port_map"))
+    fn console_builder_build(&mut self, builder: usize) -> Result<usize> {
+        self.record(Call::ConsoleBuilderBuild(builder));
+        self.checked("krun_console_builder_build")?;
+        Ok(self.next_console_device())
     }
 
-    fn set_workdir(&mut self, ctx_id: u32, workdir: &str) -> Result<i32> {
-        self.calls
-            .borrow_mut()
-            .push(Call::SetWorkdir(ctx_id, workdir.to_owned()));
-        Ok(self.rc("krun_set_workdir"))
-    }
-
-    fn set_exec(
+    fn gpu_device_new(
         &mut self,
-        ctx_id: u32,
-        exec_path: &str,
-        argv: &[String],
-        env: &[(String, String)],
-    ) -> Result<i32> {
-        self.calls.borrow_mut().push(Call::SetExec(
-            ctx_id,
-            exec_path.to_owned(),
-            argv.to_vec(),
-            env.to_vec(),
-        ));
-        Ok(self.rc("krun_set_exec"))
+        virgl_flags: u32,
+        shm_size: u64,
+        render_server_fd: i32,
+    ) -> Result<usize> {
+        self.record(Call::GpuDeviceNew(virgl_flags, shm_size, render_server_fd));
+        self.checked("krun_gpu_device_new")?;
+        Ok(10)
     }
 
-    fn set_rlimits(&mut self, ctx_id: u32, rlimits: &[String]) -> Result<i32> {
-        self.calls
-            .borrow_mut()
-            .push(Call::SetRlimits(ctx_id, rlimits.to_vec()));
-        Ok(self.rc("krun_set_rlimits"))
+    fn vmm_builder_new(&mut self) -> Result<usize> {
+        self.record(Call::VmmBuilderNew);
+        self.checked("krun_vmm_builder_new")?;
+        Ok(VMM_BUILDER)
     }
 
-    fn set_profile_path(&mut self, ctx_id: u32, profile_path: &Path) -> Result<i32> {
-        self.calls.borrow_mut().push(Call::SetProfilePath(
-            ctx_id,
+    fn vmm_builder_vcpus(&mut self, builder: usize, vcpus: u8) -> Result<usize> {
+        self.record(Call::VmmBuilderVcpus(builder, vcpus));
+        self.checked("krun_vmm_builder_vcpus")?;
+        Ok(builder + 1)
+    }
+
+    fn vmm_builder_ram_mib(&mut self, builder: usize, ram_mib: u32) -> Result<usize> {
+        self.record(Call::VmmBuilderRamMib(builder, ram_mib));
+        self.checked("krun_vmm_builder_ram_mib")?;
+        Ok(builder + 1)
+    }
+
+    fn vmm_builder_nested_virt(&mut self, builder: usize, enabled: bool) -> Result<usize> {
+        self.record(Call::VmmBuilderNestedVirt(builder, enabled));
+        self.checked("krun_vmm_builder_nested_virt")?;
+        Ok(builder + 1)
+    }
+
+    fn vmm_builder_payload(&mut self, builder: usize, payload: usize) -> Result<usize> {
+        self.record(Call::VmmBuilderPayload(builder, payload));
+        self.checked("krun_vmm_builder_payload")?;
+        Ok(builder + 1)
+    }
+
+    fn vmm_builder_devices(&mut self, builder: usize, devices: usize) -> Result<usize> {
+        self.record(Call::VmmBuilderDevices(builder, devices));
+        self.checked("krun_vmm_builder_devices")?;
+        Ok(builder + 1)
+    }
+
+    fn vmm_builder_destroy(&mut self, builder: usize) -> Result<()> {
+        self.record(Call::VmmBuilderDestroy(builder));
+        Ok(())
+    }
+
+    fn vmm_builder_build(&mut self, builder: usize) -> Result<usize> {
+        self.record(Call::VmmBuilderBuild(builder));
+        self.checked("krun_vmm_builder_build")?;
+        Ok(VMM)
+    }
+
+    fn vmm_run(&mut self, vmm: usize) -> Result<()> {
+        self.record(Call::VmmRun(vmm));
+        self.checked("krun_vmm_run")
+    }
+
+    fn set_profile_path(&mut self, builder: usize, profile_path: &Path) -> Result<usize> {
+        self.record(Call::SetProfilePath(
+            builder,
             profile_path.display().to_string(),
         ));
-        Ok(self.rc("krun_set_profile_path"))
-    }
-
-    fn set_kernel_cmdline_append(&mut self, ctx_id: u32, fragment: &str) -> Result<i32> {
-        self.calls
-            .borrow_mut()
-            .push(Call::SetKernelCmdlineAppend(ctx_id, fragment.to_owned()));
-        Ok(self.rc("krun_set_kernel_cmdline_append"))
-    }
-
-    fn start_enter(&mut self, ctx_id: u32) -> Result<i32> {
-        self.calls.borrow_mut().push(Call::StartEnter(ctx_id));
-        Ok(self.rc("krun_start_enter"))
+        self.checked("krun_vmm_builder_set_profile_path")?;
+        Ok(builder + 1)
     }
 }
 
@@ -348,10 +499,14 @@ fn managed_config(attach_socket: &Path) -> LaunchConfig {
             attach_socket_uid: unsafe { libc::geteuid() },
             attach_socket_gid: unsafe { libc::getegid() },
             cleanup_task_rootfs_on_exit: true,
-            guest_kernel_console_log: attach_socket.into(),
+            guest_kernel_console_log: managed_console_log_path(attach_socket),
         }),
         ..config()
     }
+}
+
+fn managed_console_log_path(attach_socket: &Path) -> PathBuf {
+    attach_socket.with_file_name("guest-kernel-console.log")
 }
 
 fn waypipe_managed_config(waypipe_socket: &Path, attach_socket: &Path) -> LaunchConfig {
@@ -368,7 +523,7 @@ fn waypipe_managed_config(waypipe_socket: &Path, attach_socket: &Path) -> Launch
             attach_socket_uid: unsafe { libc::geteuid() },
             attach_socket_gid: unsafe { libc::getegid() },
             cleanup_task_rootfs_on_exit: true,
-            guest_kernel_console_log: attach_socket.into(),
+            guest_kernel_console_log: managed_console_log_path(attach_socket),
         }),
         ..config()
     }
@@ -466,6 +621,24 @@ fn libkrun_loader_tries_package_relative_libraries_before_sonames() {
 }
 
 #[test]
+fn guest_init_loader_follows_an_explicit_libkrun_override() {
+    assert_eq!(
+        planned_libkrun_init_load_order_for_exe(
+            Some("/tmp/local/libkrun.so.2"),
+            Some(std::path::PathBuf::from("/nix/store/hash-cang/bin/cang"))
+        ),
+        vec![
+            "/tmp/local/libkrun_init.so.0",
+            "/tmp/local/libkrun_init.so",
+            "/nix/store/hash-cang/lib/cang/libkrun_init.so.0",
+            "/nix/store/hash-cang/lib/cang/libkrun_init.so",
+            "libkrun_init.so.0",
+            "libkrun_init.so",
+        ]
+    );
+}
+
+#[test]
 fn compat_net_features_match_libkrun_header_contract() {
     assert_eq!(
         CANG_LIBKRUN_COMPAT_NET_FEATURES,
@@ -474,93 +647,158 @@ fn compat_net_features_match_libkrun_header_contract() {
 }
 
 #[test]
-fn passt_net_flags_match_libkrun_header_width() {
-    fn assert_u32(_: u32) {}
-
-    assert_u32(NET_FLAG_DHCP_CLIENT);
-}
-
-#[test]
-fn nested_virt_symbol_resolution_allows_missing_check_but_requires_set() {
-    let set_symbol = std::ptr::dangling_mut::<std::os::raw::c_void>();
-    assert_eq!(
-        nested_virt_symbol_presence_for_test(None, Some(set_symbol))
-            .expect("missing diagnostic check symbol should be accepted"),
-        (false, true)
-    );
-
-    let err = nested_virt_symbol_presence_for_test(Some(set_symbol), None)
-        .expect_err("missing set symbol should fail");
-    assert!(format!("{err:#}").contains("krun_set_nested_virt"));
-}
-
-#[test]
-fn rlimits_symbol_resolution_requires_krun_set_rlimits() {
-    let set_rlimits_symbol = std::ptr::dangling_mut::<std::os::raw::c_void>();
+fn required_symbol_resolution_names_the_missing_symbol() {
+    let symbol = std::ptr::dangling_mut::<std::os::raw::c_void>();
 
     assert!(
-        required_rlimits_symbol_presence_for_test(Some(set_rlimits_symbol))
+        required_symbol_presence_for_test("krun_init_builder_rlimits", Some(symbol))
             .expect("present rlimits symbol should be accepted")
     );
 
-    let err = required_rlimits_symbol_presence_for_test(None)
+    let err = required_symbol_presence_for_test("krun_init_builder_rlimits", None)
         .expect_err("missing rlimits symbol should fail");
-    assert!(format!("{err:#}").contains("krun_set_rlimits"));
+    assert!(format!("{err:#}").contains("krun_init_builder_rlimits"));
 }
 
 #[test]
-fn fake_api_records_direct_libkrun_v1_call_order() {
+fn fake_api_records_direct_libkrun_v2_call_order() {
     let calls = Rc::new(RefCell::new(Vec::new()));
+    let expected = config();
+    let mut expected_env = expected.env.clone();
+    expected_env.extend(expected.guest_config_env.iter().cloned());
     DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
-        .start_enter_with_host_nofile_hard_limit(&config(), 1_048_576)
+        .start_enter_with_host_nofile_hard_limit(&expected, 1_048_576)
         .expect("launch should succeed");
 
     let calls = calls.borrow();
-    assert_eq!(calls[0], Call::InitLog(4));
-    assert_eq!(calls[1], Call::CreateCtx);
-    assert_eq!(calls[2], Call::SetVmConfig(7, 2, 4096));
-    assert_eq!(calls[3], Call::CheckNestedVirt);
-    assert_eq!(calls[4], Call::SetNestedVirt(7, true));
-    assert_eq!(calls[5], Call::SetRoot(7, "/rootfs".to_owned()));
     assert_eq!(
-        calls[6],
-        Call::AddDisk(
-            7,
-            "cang-nix".to_owned(),
-            "/state/cang-nix.raw".to_owned(),
-            false,
-        )
+        *calls,
+        vec![
+            Call::InitLog(4),
+            Call::VmmBuilderNew,
+            Call::VmmBuilderVcpus(VMM_BUILDER, 2),
+            Call::VmmBuilderRamMib(VMM_BUILDER + 1, 4096),
+            Call::MmioDeviceManagerNew,
+            Call::CheckNestedVirt,
+            Call::VmmBuilderNestedVirt(VMM_BUILDER + 2, true),
+            Call::ConsoleDeviceBuilder,
+            Call::ConsoleBuilderAddDefaultConsole(CONSOLE_BUILDER_BASE, 0, 1, 2),
+            Call::ConsoleBuilderBuild(CONSOLE_BUILDER_BASE),
+            Call::MmioDeviceManagerAdd(DEVICES, CONSOLE_DEVICE_BASE),
+            Call::FsOverlayNew,
+            Call::PayloadLoadKrunfw,
+            Call::InitConfigBuilder,
+            Call::InitBuilderArgs(
+                INIT_BUILDER,
+                vec![
+                    "/nix/store/hash-cang/bin/cang-guest-init".to_owned(),
+                    "enter".to_owned(),
+                    "fish".to_owned(),
+                    "-l".to_owned(),
+                ]
+            ),
+            Call::InitBuilderEnv(INIT_BUILDER, expected_env),
+            Call::InitBuilderWorkdir(INIT_BUILDER, "/workspace".to_owned()),
+            Call::InitBuilderRlimits(
+                INIT_BUILDER,
+                vec![format!("{}=1048576:1048576", libc::RLIMIT_NOFILE)]
+            ),
+            Call::InitBuilderBuild(INIT_BUILDER),
+            Call::InitConfigApplyIn(INIT_CONFIG, OVERLAY, PAYLOAD),
+            Call::FsDeviceNew("/dev/root".to_owned(), "/rootfs".to_owned(), false),
+            Call::FsDeviceSetOverlay(ROOTFS, OVERLAY),
+            Call::MmioDeviceManagerAdd(DEVICES, ROOTFS),
+            Call::BlockDeviceNew(
+                BLOCK_DEVICE_BASE,
+                "cang-nix".to_owned(),
+                "/state/cang-nix.raw".to_owned(),
+                false,
+            ),
+            Call::MmioDeviceManagerAdd(DEVICES, BLOCK_DEVICE_BASE),
+            Call::BlockDeviceNew(
+                BLOCK_DEVICE_BASE + 1,
+                "cang-containers".to_owned(),
+                "/state/cang-containers.raw".to_owned(),
+                false,
+            ),
+            Call::MmioDeviceManagerAdd(DEVICES, BLOCK_DEVICE_BASE + 1),
+            Call::VsockDeviceNew(3, 1),
+            Call::MmioDeviceManagerAdd(DEVICES, VSOCK),
+            Call::VmmBuilderPayload(VMM_BUILDER + 3, PAYLOAD),
+            Call::VmmBuilderDevices(VMM_BUILDER + 4, DEVICES),
+            Call::VmmBuilderBuild(VMM_BUILDER + 5),
+            Call::VmmRun(VMM),
+        ],
+        "the launcher must build payload/devices/init and then run, with no port map and no per-bind virtiofs device"
     );
+}
+
+#[test]
+fn init_config_carries_the_entrypoint_argv_env_workdir_and_rlimits() {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let expected = config();
+    DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
+        .start_enter_with_host_nofile_hard_limit(&expected, 2_097_152)
+        .expect("launch should succeed");
+
+    let calls = calls.borrow();
+    let args = calls
+        .iter()
+        .find_map(|call| match call {
+            Call::InitBuilderArgs(_, args) => Some(args.clone()),
+            _ => None,
+        })
+        .expect("init config should carry argv");
     assert_eq!(
-        calls[7],
-        Call::AddDisk(
-            7,
-            "cang-containers".to_owned(),
-            "/state/cang-containers.raw".to_owned(),
-            false,
-        )
-    );
-    assert_eq!(calls[8], Call::DisableImplicitConsole(7));
-    assert_eq!(calls[9], Call::AddVirtioConsoleDefault(7, 0, 1, 2));
-    assert_eq!(calls[10], Call::SetWorkdir(7, "/workspace".to_owned()));
-    assert_eq!(
-        calls[11],
-        Call::SetExec(
-            7,
+        args,
+        vec![
             "/nix/store/hash-cang/bin/cang-guest-init".to_owned(),
-            vec!["enter".to_owned(), "fish".to_owned(), "-l".to_owned()],
-            vec![("KRUN_CONFIG".to_owned(), "/.cang_config.json".to_owned())]
-        )
+            "enter".to_owned(),
+            "fish".to_owned(),
+            "-l".to_owned(),
+        ],
+        "the guest init execs argv[0], so argv[0] must be the entrypoint"
     );
+
+    let env = calls
+        .iter()
+        .find_map(|call| match call {
+            Call::InitBuilderEnv(_, env) => Some(env.clone()),
+            _ => None,
+        })
+        .expect("init config should carry env");
+    let mut expected_env = expected.env.clone();
+    expected_env.extend(expected.guest_config_env.iter().cloned());
     assert_eq!(
-        calls[12],
-        Call::SetRlimits(7, vec![format!("{}=1048576:1048576", libc::RLIMIT_NOFILE)])
+        env, expected_env,
+        "the init config must carry the cang config pointer plus every guest env var"
     );
-    assert_eq!(calls[13], Call::StartEnter(7));
+    assert!(
+        env.iter().any(|(key, _)| key == "CANG_HOST_UID"),
+        "the entrypoint needs the guest identity env: {env:?}"
+    );
+
     assert_eq!(
-        calls.len(),
-        14,
-        "TSI default must not call krun_set_env, passt APIs, profile cmdline, or per-bind virtiofs devices"
+        calls
+            .iter()
+            .find_map(|call| match call {
+                Call::InitBuilderWorkdir(_, workdir) => Some(workdir.clone()),
+                _ => None,
+            })
+            .as_deref(),
+        Some("/workspace")
+    );
+    let rlimits = calls
+        .iter()
+        .find_map(|call| match call {
+            Call::InitBuilderRlimits(_, rlimits) => Some(rlimits.clone()),
+            _ => None,
+        })
+        .expect("init config should carry rlimits");
+    assert_eq!(
+        rlimits,
+        vec![guest_nofile_rlimit_entry(2_097_152)],
+        "the guest nofile floor must reach the init config"
     );
 }
 
@@ -581,12 +819,12 @@ fn drm_gpu_mode_enables_venus_render_server_flags_before_start() {
     unsafe { std::env::set_var("CANG_RENDER_SERVER_FD", "9") };
 
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let config = LaunchConfig {
+    let gpu_config = LaunchConfig {
         gpu_mode: GpuMode::Drm,
         ..config()
     };
     let result = DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
-        .start_enter(&config)
+        .start_enter(&gpu_config)
         .map_err(|_| ());
 
     // SAFETY: restore the env var for other tests.
@@ -601,17 +839,16 @@ fn drm_gpu_mode_enables_venus_render_server_flags_before_start() {
     let calls = calls.borrow();
     let gpu_index = calls
         .iter()
-        .position(|call| matches!(call, Call::SetGpuOptions3(..)))
-        .expect("drm GPU mode should configure GPU options");
+        .position(|call| matches!(call, Call::GpuDeviceNew(..)))
+        .expect("drm GPU mode should create a GPU device");
     let start_index = calls
         .iter()
-        .position(|call| matches!(call, Call::StartEnter(..)))
+        .position(|call| matches!(call, Call::VmmRun(..)))
         .expect("launch should start");
 
     assert_eq!(
         calls[gpu_index],
-        Call::SetGpuOptions3(
-            7,
+        Call::GpuDeviceNew(
             VIRGLRENDERER_USE_EGL
                 | VIRGLRENDERER_THREAD_SYNC
                 | VIRGLRENDERER_VENUS
@@ -623,6 +860,12 @@ fn drm_gpu_mode_enables_venus_render_server_flags_before_start() {
         )
     );
     assert!(gpu_index < start_index);
+    assert!(
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::MmioDeviceManagerAdd(DEVICES, 10))),
+        "the GPU device must be attached to the device manager"
+    );
 }
 
 #[test]
@@ -638,26 +881,35 @@ fn nested_virt_setup_failure_is_setup_failure_and_frees_context() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let err = DirectLibkrunLauncher::new(FakeLibkrunApi::failing(
         calls.clone(),
-        "krun_set_nested_virt",
+        "krun_vmm_builder_nested_virt",
     ))
     .start_enter(&config())
     .expect_err("nested virt setup failure should fail");
 
-    assert!(format!("{err:#}").contains("libkrun setup failed: krun_set_nested_virt"));
+    assert!(
+        format!("{err:#}").contains("libkrun setup failed: krun_vmm_builder_nested_virt"),
+        "unexpected error: {err:#}"
+    );
     let calls = calls.borrow();
-    assert!(calls.contains(&Call::FreeCtx(7)));
-    assert!(!calls.contains(&Call::StartEnter(7)));
+    assert!(
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::VmmBuilderDestroy(..)))
+    );
+    assert!(!calls.iter().any(|call| matches!(call, Call::VmmRun(..))));
 }
 
 #[test]
-fn nested_virt_check_unsupported_failure_or_absent_still_sets_nested_virt() {
-    for check_result in [Some(0), Some(-5), None] {
+fn nested_virt_check_unsupported_or_failing_still_sets_nested_virt() {
+    for nested_check in [
+        NestedCheck::Unsupported,
+        NestedCheck::Failing,
+        NestedCheck::Supported,
+    ] {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        DirectLibkrunLauncher::new(
-            FakeLibkrunApi::new(calls.clone()).nested_check_result(check_result),
-        )
-        .start_enter(&config())
-        .expect("launch should continue after non-fatal nested check diagnostic");
+        DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()).nested_check(nested_check))
+            .start_enter(&config())
+            .expect("launch should continue after a non-fatal nested check diagnostic");
 
         let calls = calls.borrow();
         let check_index = calls
@@ -666,11 +918,11 @@ fn nested_virt_check_unsupported_failure_or_absent_still_sets_nested_virt() {
             .expect("nested support check should be attempted");
         let set_index = calls
             .iter()
-            .position(|call| matches!(call, Call::SetNestedVirt(7, true)))
+            .position(|call| matches!(call, Call::VmmBuilderNestedVirt(_, true)))
             .expect("nested virt should still be requested");
         let start_index = calls
             .iter()
-            .position(|call| matches!(call, Call::StartEnter(7)))
+            .position(|call| matches!(call, Call::VmmRun(..)))
             .expect("launch should start");
 
         assert!(check_index < set_index);
@@ -683,19 +935,19 @@ fn pulse_bridge_adds_guest_to_host_vsock_connector() {
     let dir = tempfile::tempdir().expect("tempdir should be created");
     let socket = dir.path().join("pulse.sock");
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let mut config = config();
-    config.pulse_bridge = Some(PulseBridgeConfig {
+    let mut pulse_config = config();
+    pulse_config.pulse_bridge = Some(PulseBridgeConfig {
         socket: socket.clone(),
         guest_port: 50_429,
         host_port: 4714,
     });
 
     DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
-        .start_enter(&config)
+        .start_enter(&pulse_config)
         .expect("Pulse bridge launch should succeed");
 
-    assert!(calls.borrow().contains(&Call::AddVsockPort(
-        7,
+    assert!(calls.borrow().contains(&Call::VsockDeviceAddUnixPort(
+        VSOCK,
         50_429,
         socket.display().to_string(),
         false,
@@ -713,8 +965,8 @@ fn waypipe_adds_guest_to_host_vsock_connector() {
         .expect("waypipe launch should succeed");
 
     let calls = calls.borrow();
-    assert!(calls.contains(&Call::AddVsockPort(
-        7,
+    assert!(calls.contains(&Call::VsockDeviceAddUnixPort(
+        VSOCK,
         50_427,
         socket.display().to_string(),
         false,
@@ -733,14 +985,14 @@ fn waypipe_and_managed_session_register_independent_vsock_channels() {
         .expect("combined launch should succeed");
 
     let calls = calls.borrow();
-    assert!(calls.contains(&Call::AddVsockPort(
-        7,
+    assert!(calls.contains(&Call::VsockDeviceAddUnixPort(
+        VSOCK,
         50_427,
         waypipe_socket.display().to_string(),
         false,
     )));
-    assert!(calls.contains(&Call::AddVsockPort(
-        7,
+    assert!(calls.contains(&Call::VsockDeviceAddUnixPort(
+        VSOCK,
         50_426,
         attach_socket.display().to_string(),
         true,
@@ -748,7 +1000,7 @@ fn waypipe_and_managed_session_register_independent_vsock_channels() {
     assert_eq!(
         calls
             .iter()
-            .filter(|call| matches!(call, Call::AddVsockPort(..)))
+            .filter(|call| matches!(call, Call::VsockDeviceAddUnixPort(..)))
             .count(),
         2
     );
@@ -762,22 +1014,23 @@ fn waypipe_vsock_registration_failure_is_setup_failure_and_frees_context() {
 
     let err = DirectLibkrunLauncher::new(FakeLibkrunApi::failing(
         calls.clone(),
-        "krun_add_vsock_port2",
+        "krun_vsock_device_add_unix_port",
     ))
     .start_enter(&waypipe_config(&socket))
     .expect_err("waypipe launch should fail when libkrun rejects vsock registration");
 
     assert!(
-        format!("{err:#}").contains("libkrun setup failed: krun_add_vsock_port2 Waypipe"),
+        format!("{err:#}")
+            .contains("libkrun setup failed: krun_vsock_device_add_unix_port Waypipe"),
         "unexpected error: {err:#}"
     );
     let calls = calls.borrow();
-    assert!(calls.contains(&Call::FreeCtx(7)));
     assert!(
-        !calls
+        calls
             .iter()
-            .any(|call| matches!(call, Call::StartEnter(..)))
+            .any(|call| matches!(call, Call::VmmBuilderDestroy(..)))
     );
+    assert!(!calls.iter().any(|call| matches!(call, Call::VmmRun(..))));
 }
 
 #[test]
@@ -793,51 +1046,84 @@ fn managed_session_adds_vsock_listener_and_starts_before_host_socket_exists() {
         "launcher must not require libkrun-managed host socket before start"
     );
     let calls = calls.borrow();
-    let managed = managed_config(&socket);
-    let console_path = managed
-        .managed_session
-        .as_ref()
-        .expect("managed session")
-        .guest_kernel_console_log
-        .display()
-        .to_string();
-    assert!(
-        calls.contains(&Call::SetConsoleOutput(7, console_path)),
-        "managed launch should route the guest kernel console to a file: {calls:?}"
-    );
-    assert!(
-        !calls
-            .iter()
-            .any(|call| matches!(call, Call::DisableImplicitConsole(..))),
-        "a managed launch must keep the implicit console it captures"
-    );
     let vsock_index = calls
         .iter()
-        .position(|call| matches!(call, Call::AddVsockPort(..)))
+        .position(|call| matches!(call, Call::VsockDeviceAddUnixPort(..)))
         .expect("managed launch should add vsock port");
     let console_index = calls
         .iter()
-        .position(|call| matches!(call, Call::AddVirtioConsoleDefault(..)))
+        .position(|call| matches!(call, Call::ConsoleBuilderAddDefaultConsole(..)))
         .expect("console should be configured");
     let start_index = calls
         .iter()
-        .position(|call| matches!(call, Call::StartEnter(..)))
+        .position(|call| matches!(call, Call::VmmRun(..)))
         .expect("launch should start");
 
     assert_eq!(
         calls[vsock_index],
-        Call::AddVsockPort(7, 50_426, socket.display().to_string(), true)
+        Call::VsockDeviceAddUnixPort(VSOCK, 50_426, socket.display().to_string(), true)
     );
     assert_eq!(
         calls
             .iter()
-            .filter(|call| matches!(call, Call::AddVsockPort(..)))
+            .filter(|call| matches!(call, Call::VsockDeviceAddUnixPort(..)))
             .count(),
         1
     );
-    assert!(vsock_index < console_index);
+    // ABI 2 builds the console while the init config is still being assembled and
+    // the vsock device with the rest of the host channels; both precede the run.
+    assert!(console_index < vsock_index);
     assert!(console_index < start_index);
     assert!(vsock_index < start_index);
+}
+
+#[test]
+fn managed_session_routes_the_kernel_console_to_a_file() {
+    let (_dir, socket) = managed_attach_socket_path();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
+        .start_enter(&managed_config(&socket))
+        .expect("managed launch should succeed");
+
+    let console_log = managed_console_log_path(&socket);
+    let calls = calls.borrow();
+    let kernel_console = calls
+        .iter()
+        .find_map(|call| match call {
+            Call::ConsoleBuilderAddInoutPort(_, name, input, output) => {
+                Some((name.clone(), *input, *output))
+            }
+            _ => None,
+        })
+        .expect("a managed launch should build the leading kernel console device");
+    assert_eq!(kernel_console.0, "", "port 0 is the kernel console (hvc0)");
+    assert_eq!(
+        kernel_console.1, None,
+        "the kernel console has no host input"
+    );
+    let output_fd = kernel_console
+        .2
+        .expect("the kernel console writes to the captured file");
+    assert!(output_fd >= 0, "the console file must be open");
+    assert!(
+        console_log.exists(),
+        "the launcher must create the managed kernel console log at {}",
+        console_log.display()
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::ConsoleBuilderAddDefaultConsole(_, 0, 1, 2))),
+        "the worker stdio console must still be present"
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call, Call::ConsoleBuilderAddInoutPort(..)))
+            .count(),
+        1,
+        "exactly one extra console device is the kernel console"
+    );
 }
 
 #[test]
@@ -846,29 +1132,29 @@ fn managed_session_vsock_registration_failure_is_setup_failure_and_frees_context
     let calls = Rc::new(RefCell::new(Vec::new()));
     let err = DirectLibkrunLauncher::new(FakeLibkrunApi::failing(
         calls.clone(),
-        "krun_add_vsock_port2",
+        "krun_vsock_device_add_unix_port",
     ))
     .start_enter(&managed_config(&socket))
     .expect_err("managed launch should fail when libkrun rejects vsock registration");
 
     assert!(
-        format!("{err:#}").contains("libkrun setup failed: krun_add_vsock_port2"),
+        format!("{err:#}").contains("libkrun setup failed: krun_vsock_device_add_unix_port"),
         "unexpected error: {err:#}"
     );
     let calls = calls.borrow();
     assert!(
         calls
             .iter()
-            .any(|call| matches!(call, Call::AddVsockPort(..)))
+            .any(|call| matches!(call, Call::VsockDeviceAddUnixPort(..)))
     );
     assert!(
-        calls.contains(&Call::FreeCtx(7)),
-        "managed vsock registration setup failure should free the libkrun context"
-    );
-    assert!(
-        !calls
+        calls
             .iter()
-            .any(|call| matches!(call, Call::StartEnter(..))),
+            .any(|call| matches!(call, Call::VmmBuilderDestroy(..))),
+        "managed vsock registration setup failure should free the vmm builder"
+    );
+    assert!(
+        !calls.iter().any(|call| matches!(call, Call::VmmRun(..))),
         "VM must not start if libkrun rejects managed vsock registration"
     );
 }
@@ -883,66 +1169,101 @@ fn passt_mode_adds_unixstream_before_start() {
     let calls = calls.borrow();
     let net_index = calls
         .iter()
-        .position(|call| matches!(call, Call::AddNetUnixstream(..)))
-        .expect("passt mode should add net unixstream");
+        .position(|call| matches!(call, Call::NetDeviceNewUnixstreamFd(..)))
+        .expect("passt mode should add a net unixstream device");
     let start_index = calls
         .iter()
-        .position(|call| matches!(call, Call::StartEnter(..)))
+        .position(|call| matches!(call, Call::VmmRun(..)))
         .expect("launch should start");
 
-    assert_eq!(calls[net_index], Call::AddNetUnixstream(7, 42, 2));
-    assert!(net_index < start_index);
-}
-
-#[test]
-fn passt_mode_retries_without_dhcp_client_flag_when_libkrun_rejects_it() {
-    let calls = Rc::new(RefCell::new(Vec::new()));
-    DirectLibkrunLauncher::new(FakeLibkrunApi::net_dhcp_flag_unsupported(calls.clone()))
-        .start_enter(&passt_config())
-        .expect("launch should succeed");
-
-    let calls = calls.borrow();
-    let net_calls = calls
-        .iter()
-        .filter(|call| matches!(call, Call::AddNetUnixstream(..)))
-        .cloned()
-        .collect::<Vec<_>>();
-
     assert_eq!(
-        net_calls,
-        vec![
-            Call::AddNetUnixstream(7, 42, 2),
-            Call::AddNetUnixstream(7, 42, 0)
-        ]
+        calls[net_index],
+        Call::NetDeviceNewUnixstreamFd(42, CANG_LIBKRUN_COMPAT_NET_FEATURES, 0,)
+    );
+    assert!(net_index < start_index);
+    assert!(
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::MmioDeviceManagerAdd(DEVICES, NET_DEVICE))),
+        "the net device must be attached"
     );
 }
 
 #[test]
-fn tsi_publish_calls_set_port_map_before_start() {
+fn passt_mode_requests_dhcp_through_the_init_config() {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
+        .start_enter(&passt_config())
+        .expect("launch should succeed");
+
+    let calls = calls.borrow();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call, Call::InitBuilderDhcp(_, true)))
+            .count(),
+        1,
+        "ABI 2's net device ignores the old DHCP flag, so the init config must ask for DHCP: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| matches!(call, Call::InitBuilderDhcp(_, false))),
+        "a TSI-mode launch must not request DHCP"
+    );
+}
+
+#[test]
+fn tsi_mode_does_not_request_dhcp() {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
+        .start_enter(&config())
+        .expect("launch should succeed");
+
+    assert!(
+        !calls
+            .borrow()
+            .iter()
+            .any(|call| matches!(call, Call::InitBuilderDhcp(..)))
+    );
+}
+
+#[test]
+fn tsi_publish_adds_vsock_port_forwards_before_start() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
         .start_enter(&tsi_publish_config())
         .expect("launch should succeed");
 
     let calls = calls.borrow();
-    let port_map_index = calls
+    let forwards = calls
         .iter()
-        .position(|call| matches!(call, Call::SetPortMap(..)))
-        .expect("TSI publish should set port map");
+        .filter_map(|call| match call {
+            Call::VsockDeviceAddPortForward(device, mapping) => Some((*device, mapping.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        forwards,
+        vec![
+            (VSOCK, "80:8080".to_owned()),
+            (VSOCK, "443:8443".to_owned()),
+        ],
+        "ABI 2 spells a port forward guest:host, the reverse of the v1 port map"
+    );
+    let last_forward = calls
+        .iter()
+        .rposition(|call| matches!(call, Call::VsockDeviceAddPortForward(..)))
+        .expect("TSI publish should add port forwards");
     let start_index = calls
         .iter()
-        .position(|call| matches!(call, Call::StartEnter(..)))
+        .position(|call| matches!(call, Call::VmmRun(..)))
         .expect("launch should start");
-
-    assert_eq!(
-        calls[port_map_index],
-        Call::SetPortMap(7, vec!["8080:80".to_owned(), "8443:443".to_owned()])
-    );
-    assert!(port_map_index < start_index);
+    assert!(last_forward < start_index);
 }
 
 #[test]
-fn passt_publish_does_not_call_set_port_map() {
+fn passt_publish_does_not_add_port_forwards() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
         .start_enter(&passt_publish_config())
@@ -952,12 +1273,12 @@ fn passt_publish_does_not_call_set_port_map() {
     assert!(
         calls
             .iter()
-            .any(|call| matches!(call, Call::AddNetUnixstream(..)))
+            .any(|call| matches!(call, Call::NetDeviceNewUnixstreamFd(..)))
     );
     assert!(
         !calls
             .iter()
-            .any(|call| matches!(call, Call::SetPortMap(..)))
+            .any(|call| matches!(call, Call::VsockDeviceAddPortForward(..)))
     );
 }
 
@@ -967,33 +1288,33 @@ fn pre_enter_hook_runs_after_setup_and_before_start() {
     DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
         .start_enter_with_pre_enter_hook(&config(), || {
             let calls = calls.borrow();
-            assert!(calls.iter().any(|call| matches!(call, Call::SetExec(..))));
             assert!(
-                !calls
+                calls
                     .iter()
-                    .any(|call| matches!(call, Call::StartEnter(..)))
+                    .any(|call| matches!(call, Call::InitBuilderArgs(..)))
             );
+            assert!(!calls.iter().any(|call| matches!(call, Call::VmmRun(..))));
             Ok(())
         })
         .expect("launch should succeed");
 
     let calls = calls.borrow();
-    let set_exec_index = calls
+    let init_index = calls
         .iter()
-        .position(|call| matches!(call, Call::SetExec(..)))
-        .expect("setup should configure exec before hook");
+        .position(|call| matches!(call, Call::InitBuilderArgs(..)))
+        .expect("setup should configure the init config before the hook");
     let start_index = calls
         .iter()
-        .position(|call| matches!(call, Call::StartEnter(..)))
-        .expect("launch should start after hook");
-    assert!(set_exec_index < start_index);
+        .position(|call| matches!(call, Call::VmmRun(..)))
+        .expect("launch should start after the hook");
+    assert!(init_index < start_index);
 }
 
 #[test]
-fn audit_start_marker_runs_immediately_before_start_enter() {
+fn audit_start_marker_runs_immediately_before_vmm_build() {
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let mut config = config();
-    config.seccomp = SeccompMode::Audit(AuditMode::Full {
+    let mut audit_config = config();
+    audit_config.seccomp = SeccompMode::Audit(AuditMode::Full {
         trace_path: PathBuf::from("/tmp/cang-seccomp-audit.jsonl"),
     });
 
@@ -1005,7 +1326,7 @@ fn audit_start_marker_runs_immediately_before_start_enter() {
         },
         || {
             DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
-                .start_enter_with_pre_enter_hook(&config, || {
+                .start_enter_with_pre_enter_hook(&audit_config, || {
                     calls.borrow_mut().push(Call::PreEnterHook);
                     Ok(())
                 })
@@ -1014,10 +1335,10 @@ fn audit_start_marker_runs_immediately_before_start_enter() {
     .expect("launch should succeed");
 
     let calls = calls.borrow();
-    let set_exec_index = calls
+    let init_index = calls
         .iter()
-        .position(|call| matches!(call, Call::SetExec(..)))
-        .expect("setup should configure exec");
+        .position(|call| matches!(call, Call::InitBuilderArgs(..)))
+        .expect("setup should configure the init config");
     let pre_enter_index = calls
         .iter()
         .position(|call| matches!(call, Call::PreEnterHook))
@@ -1026,13 +1347,17 @@ fn audit_start_marker_runs_immediately_before_start_enter() {
         .iter()
         .position(|call| matches!(call, Call::AuditStartMarker))
         .expect("audit start marker should run");
-    let start_index = calls
+    let build_index = calls
         .iter()
-        .position(|call| matches!(call, Call::StartEnter(..)))
-        .expect("launch should start");
-    assert!(set_exec_index < pre_enter_index);
+        .position(|call| matches!(call, Call::VmmBuilderBuild(..)))
+        .expect("vmm builder should build");
+    assert!(init_index < pre_enter_index);
     assert!(pre_enter_index < marker_index);
-    assert_eq!(marker_index + 1, start_index);
+    assert_eq!(
+        marker_index + 1,
+        build_index,
+        "the marker must precede all VMM construction, as it preceded krun_start_enter"
+    );
 }
 
 #[test]
@@ -1058,7 +1383,7 @@ fn audit_markers_are_not_emitted_outside_audit_mode() {
 }
 
 #[test]
-fn profile_setup_runs_after_exec_and_before_pre_enter_hook() {
+fn profile_setup_runs_after_init_config_and_before_pre_enter_hook() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
         .start_enter_profiled_with_pre_enter_hook(
@@ -1066,11 +1391,15 @@ fn profile_setup_runs_after_exec_and_before_pre_enter_hook() {
             Some(Path::new("/tmp/vm-worker-host-profile.tsv")),
             || {
                 let calls = calls.borrow();
-                assert!(calls.iter().any(|call| matches!(call, Call::SetExec(..))));
                 assert!(
                     calls
                         .iter()
-                        .any(|call| matches!(call, Call::SetNestedVirt(7, true)))
+                        .any(|call| matches!(call, Call::InitBuilderArgs(..)))
+                );
+                assert!(
+                    calls
+                        .iter()
+                        .any(|call| matches!(call, Call::VmmBuilderNestedVirt(_, true)))
                 );
                 assert!(
                     calls
@@ -1080,13 +1409,9 @@ fn profile_setup_runs_after_exec_and_before_pre_enter_hook() {
                 assert!(
                     calls
                         .iter()
-                        .any(|call| matches!(call, Call::SetKernelCmdlineAppend(..)))
+                        .any(|call| matches!(call, Call::PayloadAppendCmdline(..)))
                 );
-                assert!(
-                    !calls
-                        .iter()
-                        .any(|call| matches!(call, Call::StartEnter(..)))
-                );
+                assert!(!calls.iter().any(|call| matches!(call, Call::VmmRun(..))));
                 Ok(())
             },
         )
@@ -1095,98 +1420,99 @@ fn profile_setup_runs_after_exec_and_before_pre_enter_hook() {
     let calls = calls.borrow();
     let nested_set_index = calls
         .iter()
-        .position(|call| matches!(call, Call::SetNestedVirt(7, true)))
+        .position(|call| matches!(call, Call::VmmBuilderNestedVirt(_, true)))
         .expect("nested virt should be configured");
-    let set_exec_index = calls
+    let init_index = calls
         .iter()
-        .position(|call| matches!(call, Call::SetExec(..)))
-        .expect("setup should configure exec");
+        .position(|call| matches!(call, Call::InitBuilderArgs(..)))
+        .expect("setup should configure the init config");
     let set_profile_index = calls
         .iter()
         .position(|call| matches!(call, Call::SetProfilePath(..)))
         .expect("profile path should be configured");
     let set_cmdline_index = calls
         .iter()
-        .position(|call| matches!(call, Call::SetKernelCmdlineAppend(..)))
+        .position(|call| matches!(call, Call::PayloadAppendCmdline(..)))
         .expect("profile cmdline diagnostics should be configured");
     let start_index = calls
         .iter()
-        .position(|call| matches!(call, Call::StartEnter(..)))
+        .position(|call| matches!(call, Call::VmmRun(..)))
         .expect("launch should start");
 
     assert_eq!(
         calls[set_profile_index],
-        Call::SetProfilePath(7, "/tmp/vm-worker-host-profile.tsv".to_owned())
+        Call::SetProfilePath(
+            VMM_BUILDER + 3,
+            "/tmp/vm-worker-host-profile.tsv".to_owned()
+        )
     );
     assert_eq!(
         calls[set_cmdline_index],
-        Call::SetKernelCmdlineAppend(7, PROFILE_KERNEL_CMDLINE_APPEND.to_owned())
+        Call::PayloadAppendCmdline(PAYLOAD, PROFILE_KERNEL_CMDLINE_APPEND.to_owned())
     );
-    assert!(nested_set_index < set_exec_index);
-    assert!(set_exec_index < set_profile_index);
+    assert!(nested_set_index < init_index);
+    assert!(init_index < set_profile_index);
     assert!(set_profile_index < set_cmdline_index);
     assert!(set_cmdline_index < start_index);
 }
 
 #[test]
 fn passt_mode_requires_prepared_socket_fd() {
-    let mut config = config();
-    config.network_mode = NetworkMode::Passt;
+    let mut missing_fd = config();
+    missing_fd.network_mode = NetworkMode::Passt;
     let calls = Rc::new(RefCell::new(Vec::new()));
     let err = DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
-        .start_enter(&config)
+        .start_enter(&missing_fd)
         .expect_err("missing fd should fail setup");
 
     assert!(format!("{err:#}").contains("prepared passt socket fd"));
-    assert!(calls.borrow().contains(&Call::FreeCtx(7)));
+    assert!(
+        calls
+            .borrow()
+            .iter()
+            .any(|call| matches!(call, Call::VmmBuilderDestroy(..)))
+    );
 }
 
 #[test]
 fn setup_failure_is_classified_and_frees_context_before_start() {
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let err = DirectLibkrunLauncher::new(FakeLibkrunApi::failing(calls.clone(), "krun_set_root"))
-        .start_enter(&config())
-        .expect_err("setup failure should fail");
+    let err =
+        DirectLibkrunLauncher::new(FakeLibkrunApi::failing(calls.clone(), "krun_fs_device_new"))
+            .start_enter(&config())
+            .expect_err("setup failure should fail");
 
     assert!(format!("{err:#}").contains("libkrun setup failed"));
     let calls = calls.borrow();
-    assert!(calls.contains(&Call::FreeCtx(7)));
-    assert!(!calls.contains(&Call::StartEnter(7)));
+    assert!(
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::VmmBuilderDestroy(..)))
+    );
+    assert!(!calls.iter().any(|call| matches!(call, Call::VmmRun(..))));
 }
 
 #[test]
-fn set_port_map_failure_is_setup_failure_and_frees_context() {
+fn port_forward_failure_is_setup_failure_and_frees_context() {
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let err =
-        DirectLibkrunLauncher::new(FakeLibkrunApi::failing(calls.clone(), "krun_set_port_map"))
-            .start_enter(&tsi_publish_config())
-            .expect_err("port-map setup failure should fail");
-
-    assert!(format!("{err:#}").contains("libkrun setup failed: krun_set_port_map"));
-    let calls = calls.borrow();
-    assert!(calls.contains(&Call::FreeCtx(7)));
-    assert!(!calls.contains(&Call::StartEnter(7)));
-}
-
-#[test]
-fn rlimit_setup_failure_is_setup_failure_and_frees_context_before_start() {
-    let calls = Rc::new(RefCell::new(Vec::new()));
-    let err =
-        DirectLibkrunLauncher::new(FakeLibkrunApi::failing(calls.clone(), "krun_set_rlimits"))
-            .start_enter_with_host_nofile_hard_limit(&config(), 1_048_576)
-            .expect_err("rlimit setup failure should fail");
+    let err = DirectLibkrunLauncher::new(FakeLibkrunApi::failing(
+        calls.clone(),
+        "krun_vsock_device_add_port_forward",
+    ))
+    .start_enter(&tsi_publish_config())
+    .expect_err("port-forward setup failure should fail");
 
     assert!(
-        format!("{err:#}").contains("libkrun setup failed: krun_set_rlimits"),
+        format!("{err:#}").contains("libkrun setup failed: krun_vsock_device_add_port_forward"),
         "unexpected error: {err:#}"
     );
     let calls = calls.borrow();
-    assert!(calls.contains(&Call::SetRlimits(
-        7,
-        vec![format!("{}=1048576:1048576", libc::RLIMIT_NOFILE)]
-    )));
-    assert!(calls.contains(&Call::FreeCtx(7)));
-    assert!(!calls.contains(&Call::StartEnter(7)));
+    assert!(
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::VmmBuilderDestroy(..)))
+    );
+    assert!(!calls.iter().any(|call| matches!(call, Call::VmmRun(..))));
 }
 
 #[test]
@@ -1202,8 +1528,12 @@ fn tsi_invalid_publish_fails_before_start() {
 
     assert!(format!("{err:#}").contains("TSI publish"));
     let calls = calls.borrow();
-    assert!(calls.contains(&Call::FreeCtx(7)));
-    assert!(!calls.contains(&Call::StartEnter(7)));
+    assert!(
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::VmmBuilderDestroy(..)))
+    );
+    assert!(!calls.iter().any(|call| matches!(call, Call::VmmRun(..))));
 }
 
 #[test]
@@ -1211,35 +1541,47 @@ fn console_registration_failure_frees_context_before_exec() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let err = DirectLibkrunLauncher::new(FakeLibkrunApi::failing(
         calls.clone(),
-        "krun_add_virtio_console_default",
+        "krun_console_builder_add_default_console",
     ))
     .start_enter(&config())
     .expect_err("console setup failure should fail");
 
     assert!(format!("{err:#}").contains("libkrun setup failed"));
     let calls = calls.borrow();
-    assert!(calls.contains(&Call::FreeCtx(7)));
-    assert!(!calls.iter().any(|call| matches!(call, Call::SetExec(..))));
-    assert!(!calls.contains(&Call::StartEnter(7)));
+    assert!(
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::VmmBuilderDestroy(..)))
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| matches!(call, Call::InitBuilderArgs(..)))
+    );
+    assert!(!calls.iter().any(|call| matches!(call, Call::VmmRun(..))));
 }
 
 #[test]
-fn start_failure_is_classified() {
+fn vmm_run_return_is_classified_as_start_failure() {
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let err =
-        DirectLibkrunLauncher::new(FakeLibkrunApi::failing(calls.clone(), "krun_start_enter"))
-            .start_enter(&config())
-            .expect_err("start failure should fail");
+    let err = DirectLibkrunLauncher::new(FakeLibkrunApi::failing(calls.clone(), "krun_vmm_run"))
+        .start_enter(&config())
+        .expect_err("a returning vmm run should fail");
 
     assert!(format!("{err:#}").contains("libkrun start failed"));
-    assert!(calls.borrow().contains(&Call::StartEnter(7)));
+    assert!(
+        calls
+            .borrow()
+            .iter()
+            .any(|call| matches!(call, Call::VmmRun(..)))
+    );
 }
 
 #[test]
-fn audit_start_marker_runs_before_nonzero_start_result_is_classified() {
+fn audit_start_marker_runs_before_a_returning_vmm_run_is_classified() {
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let mut config = config();
-    config.seccomp = SeccompMode::Audit(AuditMode::Full {
+    let mut audit_config = config();
+    audit_config.seccomp = SeccompMode::Audit(AuditMode::Full {
         trace_path: PathBuf::from("/tmp/cang-seccomp-audit.jsonl"),
     });
 
@@ -1250,21 +1592,21 @@ fn audit_start_marker_runs_before_nonzero_start_result_is_classified() {
             Ok(())
         },
         || {
-            DirectLibkrunLauncher::new(FakeLibkrunApi::failing(calls.clone(), "krun_start_enter"))
-                .start_enter(&config)
+            DirectLibkrunLauncher::new(FakeLibkrunApi::failing(calls.clone(), "krun_vmm_run"))
+                .start_enter(&audit_config)
         },
     )
-    .expect_err("nonzero start rc should fail after start marker");
+    .expect_err("a returning vmm run should fail after the start marker");
 
     assert!(format!("{err:#}").contains("libkrun start failed"));
     let calls = calls.borrow();
-    let start_marker_index = calls
+    let marker_index = calls
         .iter()
         .position(|call| matches!(call, Call::AuditStartMarker))
         .expect("audit start marker should run");
     let start_index = calls
         .iter()
-        .position(|call| matches!(call, Call::StartEnter(..)))
+        .position(|call| matches!(call, Call::VmmRun(..)))
         .expect("launch should start");
-    assert_eq!(start_marker_index + 1, start_index);
+    assert!(marker_index < start_index);
 }

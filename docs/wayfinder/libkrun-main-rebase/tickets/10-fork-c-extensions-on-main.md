@@ -54,3 +54,19 @@ From `notes/04-fork-commit-triage.md`:
 The fork's feature set restored on main's code, with the file-level mapping
 (old entry point -> new implementation) recorded in `notes/`, plus a build of
 the fork proving the symbols exist in the produced `libkrun.so.2`.
+
+## Prerequisite found while porting (ticket 09, 2026-09-28)
+
+The fork's release pipeline builds the host library without the `ffi` feature
+(`make BLK=1 NET=1 GPU=1 INPUT=1 TIMESYNC=1`), so neither `v2.0.0-cang.1` nor
+`nix/dev`'s local build produced a `libkrun.so.2` that exports *any* `krun_*`
+symbol. Any "the symbol exists in the produced `libkrun.so.2`" verification here
+has to build with `FFI=1` and check the symbol table, not just the file. The
+cang-side port already calls the two extension entry points by name when present:
+
+- `krun_gpu_device_set_render_server_fd(KrunGpuDevice*, int, KrunError*) -> KrunResult`
+- `krun_vmm_builder_set_profile_path(KrunVmmBuilder*, KrunStr, KrunError*) -> KrunResult`
+
+`crates/cang/src/runtime/vm/libkrun/dynamic.rs` binds both as optional symbols, so
+re-adding them under those names needs no further cang change. The fork's release
+workflow fix and the re-pin are ticket 13.

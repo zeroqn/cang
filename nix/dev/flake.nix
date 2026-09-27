@@ -94,6 +94,11 @@
                 version = "2.0.0-cang";
                 src = libkrunSrc;
                 cargoDeps = libkrunCargoDeps;
+                # ABI 2 put the C entry points behind the `ffi` feature, and the
+                # Makefile only enables it for FFI=1 (the init blob always gets
+                # it). Without this the built libkrun.so.2 exports no `krun_*`
+                # symbol, so cang cannot bind it.
+                makeFlags = old.makeFlags ++ [ "FFI=1" ];
                 # ffier's binding generator shells out to rustfmt.
                 nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.rustfmt ];
                 env = (old.env or { }) // {

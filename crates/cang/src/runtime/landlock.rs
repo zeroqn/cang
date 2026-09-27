@@ -2,7 +2,7 @@
 //!
 //! This module owns the kernel-independent effective-policy model and the thin
 //! adapter that translates that model to the rust-landlock crate immediately
-//! before `krun_start_enter`.
+//! before the VMM is built.
 
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
@@ -611,7 +611,7 @@ fn retained_fd_report(mode: LandlockMode, passt_fd: Option<i32>) -> Result<Retai
             };
             if mode.requires_full_enforcement() {
                 bail!(
-                    "cang Landlock {} mode refuses unexpected retained fd {} -> {}; close or categorize the descriptor before krun_start_enter",
+                    "cang Landlock {} mode refuses unexpected retained fd {} -> {}; close or categorize the descriptor before the VMM starts",
                     mode.as_config_value(),
                     retained.fd,
                     retained.target,

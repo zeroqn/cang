@@ -13,15 +13,19 @@ published as the permanent fork release **`v2.0.0-cang.1`**, pinned in
 ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
-**Status (2026-09-27): tickets 01, 02, 03, 04, 06, 07, 11 and 12 resolved.** The
-fork's `cang` branch is pushed (tip `d578e4e2`) and the permanent release
-**`v2.0.0-cang.1`** is published and pinned. cang's runtime is *not* runnable
-against that pin until ticket 09 lands, and the fork's own C extensions return in
-ticket 10. The fork is
-rebased (main + CI/docs + PRs 865/840) and `nix build ./nix/dev#cang-dev` is
-green on it. The next work is the cang-side port (ticket 09) and the fork's own
-C extensions (ticket 10); the release (ticket 06) needs bob's push and a
-workflow dispatch.
+**Status (2026-09-28): tickets 01, 02, 03, 04, 06, 07, 09, 11 and 12 resolved.**
+The fork's `cang` branch is pushed (tip `d578e4e2`) and the permanent release
+**`v2.0.0-cang.1`** is published and pinned. cang is ported to the ABI-2 object
+API (ticket 09) and live-boots a guest - but **only against a locally built
+libkrun**: the published asset is hollow. Its `libkrun.so.2.0.0` exports zero
+`krun_*` symbols because the release workflow builds without `FFI=1` (ABI 2 put
+the C entry points behind that feature) and only checks that the files exist;
+`nix/dev` had the same gap and is fixed. That fix, the re-published asset and the
+re-pin are ticket **13**, and it needs bob's push/dispatch. The fork's own C
+extensions (the render-server fd cang's `--gpu=drm` still lacks, and the profile
+path) are ticket **10**; both are best folded into one `v2.0.0-cang.2`. The fork
+is rebased (main + CI/docs + PRs 865/840) and `nix build ./nix/dev#cang-dev` is
+green on it.
 Upstream `main` is a **ground-up C-ABI rewrite** (`a3d31822`, 2026-09-11;
 `ABI_VERSION=2`, `libkrun.so.2`): 20 of cang's 22 bound `krun_*` symbols are
 gone, init injection is caller-supplied via `libkrun_init.so`, and
@@ -30,8 +34,9 @@ builder/object API** (tickets 09/10). PR **822 is out of this map** (bob,
 2026-09-27): it is inert on the pinned kernel, its own commit would collide with
 our `VIRTIO_GPU_F_FENCE_PASSING = 5`, and carrying it as intended would mean
 vendoring a patched `rutabaga_gfx` for a capability nothing can exercise.
-Frontier: ticket **04** (the rebase), with ticket **11** (cherry-pick matrix for
-865/840) running as research.
+Frontier: ticket **13** (rebuild the release with the C ABI, re-pin) is what
+unblocks everything downstream; ticket **10** (the fork's own C extensions) is
+the other half of that release and runs alongside it.
 
 ## Notes
 
@@ -81,6 +86,16 @@ Frontier: ticket **04** (the rebase), with ticket **11** (cherry-pick matrix for
 
 ## Decisions so far
 
+- [Port cang's launcher to libkrun's v2 API](tickets/09-port-cang-to-v2-api.md):
+  the ABI-2 object model in `api.rs`/`dynamic.rs`/`launcher.rs` (`krun_init_config_apply_in`
+  supplies the init from the shipped `libkrun_init.so`, DHCP moved into the init
+  config, the managed kernel console became the leading console device, TSI
+  forwards are `guest:host`, a headless display backend is passed to
+  `krun_gpu_device_new`), the v2 call-shape fixtures, and a live boot. Finding:
+  the pinned release exports no C ABI (see ticket 13).
+- [Rebuild the v2 release with the C ABI and re-pin](tickets/13-release-c-abi-repin.md):
+  `FFI=1` in the release workflow plus a symbol-table assertion, one
+  `v2.0.0-cang.2` carrying ticket 10, then re-pin.
 - [Pin v2.0.0-cang.1 and adapt cang](tickets/07-pin-and-adapt-cang.md): pin `v2.0.0-cang.1` with both asset hashes; the submodule pointer moves to the tag's commit `d578e4e2`; `DEFAULT_LIBKRUN_NAMES` gains `libkrun.so.2`; both packagers ship `libkrun_init.so*`; `libkrun.nix` gives the init blob `$ORIGIN` and drops the now-dead pipewire edge. Expected window: cang launches fail until ticket 09 ports the binding.
 - [Publish the permanent v2.0.0-cang.1 fork release](tickets/06-publish-v2-release.md): pushed the rebased branch to the fork's `cang` (force-with-lease) and pushed the `v2.0.0-cang.1` tag with plain `git` - the workflow triggers on tags, so no `workflow_dispatch` auth was needed; CI published both assets with the init blob, pc files and headers included.
 - [Make nix/dev build main's libkrun (musl guest init)](tickets/12-nix-dev-build-main-libkrun.md): split the build - `pkgsStatic`'s rust builds `init/init-binary` for musl (with `timesync`), and `KRUN_INIT_BINARY_PATH` makes the ordinary Makefile flow embed it, so no Makefile patching; plus `withTimesync`, no `withSound`, `version = 2.0.0-cang`, and `rustfmt` for ffier. `nix build ./nix/dev#cang-dev` is green.

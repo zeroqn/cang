@@ -1,7 +1,7 @@
 ---
 label: wayfinder:task
 title: Port cang's launcher to libkrun's v2 API
-status: open
+status: closed
 blocked_by: ["04-rebase-cang-onto-main"]
 claimed_by: pi session (2026-09-27)
 ---
@@ -59,3 +59,43 @@ trivial guest command (`cang --mem 4 --seccomp=off --landlock=off -- ...` under
 cang builds and boots on the rebased fork: `cargo test`, `nix build .#cang
 .#cang-musl`, fmt/clippy/deny clean, plus the recorded live boot. Report anything
 that genuinely has no v2 equivalent (as a finding, not as a shim).
+
+
+## Resolution (2026-09-28, pi session)
+
+Ported, tested and live-booted. `notes/09-v2-api-port.md` has the call-by-call
+mapping, the ordering constraints the ABI imposed on the launcher, and the
+findings handed to ticket 10.
+
+**Code.** `api.rs`'s `LibkrunApi` is now the ABI-2 object model
+(`Handle = usize`; the `KrunX**` builder methods return the possibly-reboxed
+handle). `dynamic.rs` loads `libkrun.so.2` **and** `libkrun_init.so`
+(`libkrun_init` absence is a named early error), binds the reduced v2 symbol set,
+adopts the `(KrunResult, KrunError*)` model with a `KrunPushStr` vtable that
+formats the error object, drops the unconditional `krun_set_log_level`, and binds
+the two ticket-10 fork symbols as optional. `launcher.rs` builds
+overlay → payload → init config → devices → vmm and runs;
+`krun_vmm_builder_build` + `krun_vmm_run` replace `krun_start_enter`.
+`publish.rs` emits ABI 2's `guest:host` port-forward order.
+
+**Decisions.** libkrun's own `libkrun_init.so` blob is the init (cang supplies
+only the config, so `krun_init_config_apply_in` is what supplies exec/env/workdir/
+rlimits, and the entrypoint argv is `[exec_path, ...argv]`). DHCP moved from the
+net-device flag (ignored by ABI 2) to `krun_init_builder_dhcp`. The managed
+kernel console is the leading console device (hvc0 → the console-log file) with
+the default console as hvc1. `--gpu=drm` passes a headless display backend and
+fails loudly until the fork re-adds the render-server fd setter (ticket 10).
+
+**Verified.** `cargo test --workspace` green (597 `cang` lib tests, including the
+rewritten v2 call-shape fixtures), `cargo clippy --all-targets --all-features --
+-D warnings` clean, `cargo deny check` clean, `cargo fmt --check` clean. Live
+boot on a btrfs-backed graphroot: the guest ran `bash -lc`, printed
+`6.12.109-hardened1` for `uname -r`, saw `/dev/hvc*` and `/dev/vsock`, and came up
+as `uid=1000(dev) gid=993(dev) groups=…,video,render`.
+
+**Blocker found (own ticket):** the live boot ran against a **locally built**
+libkrun, because the published `v2.0.0-cang.1` `libkrun.so.2.0.0` exports **zero**
+`krun_*` symbols - the fork's release workflow builds without `FFI=1` and only
+checks that the files exist. `nix/dev`'s local build had the same gap and is
+fixed here; the release-side fix and re-pin are
+[Rebuild the v2 release with the C ABI and re-pin](13-release-c-abi-repin.md).
