@@ -14,7 +14,10 @@ use crate::{
     virtio_gpu::bindings::{
         VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE, VIRTGPU_BLOB_FLAG_USE_MAPPABLE,
         VIRTGPU_BLOB_FLAG_USE_SHAREABLE, VIRTGPU_BLOB_MEM_GUEST, VIRTGPU_BLOB_MEM_HOST3D,
-        VIRTGPU_BLOB_MEM_HOST3D_GUEST, VIRTGPU_DRM_CAPSET_CROSS_DOMAIN, drm_virtgpu_context_init,
+        VIRTGPU_BLOB_MEM_HOST3D_GUEST, VIRTGPU_DRM_CAPSET_CROSS_DOMAIN, VIRTGPU_PARAM_3D_FEATURES,
+        VIRTGPU_PARAM_BLOB_ALIGNMENT, VIRTGPU_PARAM_CAPSET_QUERY_FIX, VIRTGPU_PARAM_CONTEXT_INIT,
+        VIRTGPU_PARAM_CROSS_DEVICE, VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME, VIRTGPU_PARAM_HOST_VISIBLE,
+        VIRTGPU_PARAM_RESOURCE_BLOB, VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs, drm_virtgpu_context_init,
         drm_virtgpu_context_set_param, drm_virtgpu_map,
     },
 };
@@ -31,14 +34,26 @@ pub struct ResourceInfo {
 #[repr(u64)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Param {
-    _3dFeatures = 1,        /* do we have 3D features in the hw */
-    CapsetQueryFix = 2,     /* do we have the capset fix */
-    ResourceBlob = 3,       /* DRM_VIRTGPU_RESOURCE_CREATE_BLOB */
-    HostVisible = 4,        /* Host blob resources are mappable */
-    CrossDevice = 5,        /* Cross virtio-device resource sharing  */
-    ContextInit = 6,        /* DRM_VIRTGPU_CONTEXT_INIT */
-    SupportedCapsetIds = 7, /* Bitmask of supported capability set ids */
-    ExplicitDebugName = 8,  /* Ability to set debug name from userspace */
+    /// "do we have 3D features in the hw" (NOTE: not *actually* 3D specific)
+    _3dFeatures = VIRTGPU_PARAM_3D_FEATURES as _,
+    /// do we have the capset fix
+    CapsetQueryFix = VIRTGPU_PARAM_CAPSET_QUERY_FIX as _,
+    /// DRM_VIRTGPU_RESOURCE_CREATE_BLOB
+    ResourceBlob = VIRTGPU_PARAM_RESOURCE_BLOB as _,
+    /// Host blob resources are mappable
+    HostVisible = VIRTGPU_PARAM_HOST_VISIBLE as _,
+    /// Cross virtio-device resource sharing (UUID)
+    CrossDevice = VIRTGPU_PARAM_CROSS_DEVICE as _,
+    /// DRM_VIRTGPU_CONTEXT_INIT
+    ContextInit = VIRTGPU_PARAM_CONTEXT_INIT as _,
+    /// Bitmask of supported capability set ids
+    SupportedCapsetIds = VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs as _,
+    /// Ability to set debug name from userspace
+    ExplicitDebugName = VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME as _,
+    /// Device alignment requirements for blobs
+    BlobAlignment = VIRTGPU_PARAM_BLOB_ALIGNMENT as _,
+    /// (XXX: NOT UPSTREAM YET) Host handles for guest blob resources
+    CreateGuestHandle = 10,
 }
 
 pub unsafe trait Capset: Default + Sized {
@@ -63,6 +78,7 @@ bitflags! {
         const USE_MAPPABLE = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
         const USE_SHARABLE = VIRTGPU_BLOB_FLAG_USE_SHAREABLE;
         const USE_CROSS_DEVICE = VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE;
+        const CREATE_GUEST_HANDLE = 8; // XXX: NOT UPSTREAM YET
     }
 }
 
@@ -72,6 +88,14 @@ pub struct Blob {
 }
 
 pub trait VirtioDevice: drm::control::Device {
+    fn ensure_feature(&self, param: Param) -> Result<()> {
+        if self.get_param(param)? == 0 {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        } else {
+            Ok(())
+        }
+    }
+
     fn get_param(&self, param: Param) -> Result<u64> {
         let mut value = 0u64;
 

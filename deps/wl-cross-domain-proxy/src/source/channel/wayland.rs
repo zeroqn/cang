@@ -2,17 +2,16 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     io,
     num::NonZero,
-    os::{
-        fd::{AsFd, AsRawFd, OwnedFd},
-        raw::c_void,
-    },
+    os::fd::{AsFd, OwnedFd},
     ptr,
 };
 
+use anyhow::Context;
 use drm::{CLOEXEC, RDWR, buffer::Handle, control::RawResourceHandle, node::DrmNode};
 use drm_fourcc::DrmFourcc;
-use libc::{MAP_SHARED, PROT_READ, PROT_WRITE};
+use libc::{PROT_READ, PROT_WRITE};
 use log::{debug, error, warn};
+use rustix::{fs::{FallocateFlags, SealFlags}, param::page_size};
 use smallvec::smallvec;
 use wayland_server::backend::protocol::{Argument, Message};
 
@@ -20,6 +19,8 @@ use crate::{
     cross_domain::{CROSS_DOMAIN_ID_TYPE_READ_PIPE, CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB},
     sigbus::SIGBUS_WATCHER,
     source::channel::{ImageDesc, Ring, query_image},
+    udmabuf::Udmabuf,
+    util::MmapGuard,
     virtio_gpu::{BlobFlags, BlobMem, VirtioDevice},
     wl_proto::{Data, Object, TryClone},
 };
@@ -35,6 +36,10 @@ struct ImageReqs {
     drm_format: u32,
 }
 
+pub struct HostFeatures {
+    pub has_create_guest_handle: bool,
+}
+
 pub struct ProtocolState {
     image_cache: HashMap<ImageReqs, ImageDesc>,
     pipe_id: u32,
@@ -44,30 +49,81 @@ pub struct ProtocolState {
     shm_buffers: HashMap<u32, WlShmBuffer>,
     surfaces: HashMap<u32, WlSurface>,
 
+    host_features: HostFeatures,
+    udmabuf: Option<Udmabuf>,
+    page_size: usize,
+
     destructions_to_skip: HashMap<u32, usize>,
+}
+
+enum ShmPoolHandler {
+    Copy {
+        fd: OwnedFd,
+        guest_mmap: MmapGuard,
+
+        res_handle: RawResourceHandle,
+        blob_fd: OwnedFd,
+        host_mmap: MmapGuard,
+    },
+    ZeroCopy {
+        fd: OwnedFd,
+    },
+}
+
+impl ShmPoolHandler {
+    fn new_copy(
+        guest_fd: OwnedFd,
+        host_fd: OwnedFd,
+        res_handle: NonZero<u32>,
+        size: usize,
+    ) -> io::Result<Self> {
+        let guest_mmap = MmapGuard::map_fd(&guest_fd, size, PROT_READ | PROT_WRITE)
+            .inspect_err(|_| error!("Failed to mmap guest shm pool."))?;
+        let host_mmap = MmapGuard::map_fd(&host_fd, size, PROT_READ | PROT_WRITE)
+            .inspect_err(|_| error!("Failed to mmap host shm pool."))?;
+        Ok(ShmPoolHandler::Copy {
+            fd: guest_fd,
+            guest_mmap,
+
+            res_handle,
+            blob_fd: host_fd,
+            host_mmap,
+        })
+    }
+
+    fn handle_commit(&self, total_size: usize, shm_buffer: &WlShmBuffer) -> io::Result<()> {
+        // TODO (optimization): Use (buffer)damage
+        let ShmPoolHandler::Copy {
+            guest_mmap,
+            host_mmap,
+            ..
+        } = self
+        else {
+            return Ok(());
+        };
+
+        let guard = SIGBUS_WATCHER.watch(guest_mmap.ptr(), total_size);
+
+        unsafe {
+            ptr::copy_nonoverlapping(
+                guest_mmap.ptr().byte_add(shm_buffer.offset),
+                host_mmap.ptr().byte_add(shm_buffer.offset),
+                shm_buffer.stride * shm_buffer.height,
+            );
+        }
+
+        if guard.has_faulted() {
+            warn!("faulted when accessing guest shm buffer");
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        Ok(())
+    }
 }
 
 pub struct WlShmPool {
     size: usize,
-
-    fd: OwnedFd,
-    guest_mmap: *mut c_void,
-
-    res_handle: RawResourceHandle,
-    blob_fd: OwnedFd,
-    host_mmap: *mut c_void,
-
+    handler: Option<ShmPoolHandler>,
     destroyed: bool,
-}
-
-impl Drop for WlShmPool {
-    fn drop(&mut self) {
-        // SAFETY: we do not create WlShmPool with any pointers other than successful mmap results
-        unsafe {
-            libc::munmap(self.guest_mmap, self.size);
-            libc::munmap(self.host_mmap, self.size);
-        }
-    }
 }
 
 pub struct WlShmBuffer {
@@ -163,7 +219,11 @@ impl std::fmt::Display for TransformError {
 impl std::error::Error for TransformError {}
 
 impl ProtocolState {
-    pub fn new() -> Self {
+    pub fn new(host_features: HostFeatures) -> Self {
+        let udmabuf = Udmabuf::open()
+            .inspect_err(|e| debug!("Could not open udmabuf device: {e:?}"))
+            .ok();
+
         ProtocolState {
             image_cache: HashMap::new(),
             pipe_id: 0x80000001,
@@ -171,42 +231,26 @@ impl ProtocolState {
             shm_pools: HashMap::new(),
             shm_buffers: HashMap::new(),
             surfaces: HashMap::new(),
+            host_features,
+            udmabuf,
+            page_size: page_size(),
             destructions_to_skip: HashMap::new(),
         }
     }
 
-    fn handle_shm_create_pool(
-        &mut self,
+    fn create_sharable_blob(
+        image_cache: &mut HashMap<ImageReqs, ImageDesc>,
         drm: &impl VirtioDevice,
         query_ring: &Ring,
-        mut message: Message<u32, OwnedFd>,
-    ) -> io::Result<Message<u32, Identifier>> {
-        self.wl_shm = Some(message.sender_id);
-
-        let [
-            Argument::NewId(new_pool),
-            Argument::Fd(orig_fd),
-            Argument::Int(size),
-        ] = ({
-            let mut args = message.args.drain(0..3);
-            [
-                args.next().ok_or(io::ErrorKind::InvalidData)?,
-                args.next().ok_or(io::ErrorKind::InvalidData)?,
-                args.next().ok_or(io::ErrorKind::InvalidData)?,
-            ]
-        })
-        else {
-            error!("Invalid args for wl_shm::create_pool");
-            return Err(io::ErrorKind::InvalidData.into());
-        };
-
+        size: u32,
+    ) -> io::Result<(OwnedFd, Identifier)> {
         let reqs = ImageReqs {
             width: size as u32,
             height: 1,
             drm_format: DrmFourcc::R8 as u32,
         };
 
-        let desc = match self.image_cache.entry(reqs) {
+        let desc = match image_cache.entry(reqs) {
             Entry::Occupied(e) => *e.get(),
             Entry::Vacant(e) => {
                 let desc = query_image(
@@ -242,47 +286,111 @@ impl ProtocolState {
             .buffer_to_prime_fd(blob.bo_handle, CLOEXEC | RDWR)
             .inspect_err(|err| error!("Unable to get fd from bo handle: {}", err))?;
 
-        let guest_mmap = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size as usize,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                orig_fd.as_raw_fd(),
-                0,
-            )
+        Ok((fd, identifier))
+    }
+
+    fn import_memfd_via_udmabuf(
+        drm: &impl VirtioDevice,
+        udmabuf: &Option<Udmabuf>,
+        memfd: &OwnedFd,
+        mut size: usize,
+        page_size: usize,
+    ) -> anyhow::Result<Identifier> {
+        let Some(udmabuf) = udmabuf else {
+            return Err(anyhow::anyhow!("udmabuf device absent"));
         };
-        if guest_mmap.is_null() {
-            error!("Failed to mmap guest shm pool.");
-            return Err(io::ErrorKind::InvalidData.into());
+
+        let seals = rustix::fs::fcntl_get_seals(memfd)
+            .context("Could not get memfd seals (shm pool probably not backed by memfd)")?;
+
+        if seals.contains(SealFlags::WRITE) || seals.contains(SealFlags::FUTURE_WRITE) {
+            return Err(anyhow::anyhow!(
+                "memfd sealed against writing, cannot use udmabuf"
+            ));
         }
-        let host_mmap = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size as usize,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                fd.as_raw_fd(),
-                0,
-            )
+
+        if !seals.contains(SealFlags::SHRINK) {
+            // TODO: conditional flag
+            rustix::fs::fcntl_add_seals(memfd, SealFlags::SHRINK)
+                .context("Could not seal memfd against shrinkage, created w/o MFD_ALLOW_SEALING?")?;
+        }
+
+        if size % page_size != 0 {
+            if seals.contains(SealFlags::GROW) {
+                return Err(anyhow::anyhow!(
+                    "memfd sealed against growing and size not page aligned, cannot use udmabuf"
+                ));
+            }
+            let len = page_size - (size % page_size);
+            rustix::fs::fallocate(memfd, FallocateFlags::empty(), size as u64, len as u64)
+                .context("Could not grow memfd for alignment")?;
+            size += len;
+        }
+
+        let dma_fd = udmabuf
+            .create(memfd, 0, size as u64)
+            .context("Could not create udmabuf")?;
+
+        let bo = drm
+            .prime_fd_to_buffer(dma_fd.as_fd())
+            .context("Could not import udmabuf")?;
+        let info = drm
+            .get_resource_info(bo)
+            .context("Could not inspect udmabuf")?;
+
+        let identifier = Identifier {
+            type_: CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB,
+            size: info.size,
+            identifier: info.res_handle,
+            bo: Some(bo),
         };
-        if host_mmap.is_null() {
-            error!("Failed to mmap host shm pool.");
+        Ok(identifier)
+    }
+
+    fn handle_shm_create_pool(
+        &mut self,
+        drm: &impl VirtioDevice,
+        query_ring: &Ring,
+        mut message: Message<u32, OwnedFd>,
+    ) -> io::Result<Message<u32, Identifier>> {
+        self.wl_shm = Some(message.sender_id);
+
+        let [
+            Argument::NewId(new_pool),
+            Argument::Fd(orig_fd),
+            Argument::Int(size),
+        ] = ({
+            let mut args = message.args.drain(0..3);
+            [
+                args.next().ok_or(io::ErrorKind::InvalidData)?,
+                args.next().ok_or(io::ErrorKind::InvalidData)?,
+                args.next().ok_or(io::ErrorKind::InvalidData)?,
+            ]
+        })
+        else {
+            error!("Invalid args for wl_shm::create_pool");
             return Err(io::ErrorKind::InvalidData.into());
-        }
+        };
+
+        let (handler, identifier) = if self.host_features.has_create_guest_handle
+            && let Ok(identifier) =
+                Self::import_memfd_via_udmabuf(drm, &self.udmabuf, &orig_fd, size as usize, self.page_size)
+                    .inspect_err(|e| debug!("udmabuf fast path did not work: {e:?}"))
+        {
+            (ShmPoolHandler::ZeroCopy { fd: orig_fd }, identifier)
+        } else {
+            let (fd, identifier) =
+                Self::create_sharable_blob(&mut self.image_cache, drm, query_ring, size as u32)?;
+            let handler =
+                ShmPoolHandler::new_copy(orig_fd, fd, identifier.identifier, size as usize)?;
+            (handler, identifier)
+        };
 
         if let Some(_old) = self.shm_pools.insert(
             new_pool,
             WlShmPool {
                 size: size as usize,
-
-                fd: orig_fd,
-                guest_mmap,
-
-                res_handle: blob.res_handle,
-                blob_fd: fd,
-                host_mmap,
-
+                handler: Some(handler),
                 destroyed: false,
             },
         ) {
@@ -345,81 +453,37 @@ impl ProtocolState {
 
         // first lets worry about creating the new buffer and copying.
 
-        let reqs = ImageReqs {
-            width: size as u32,
-            height: 1,
-            drm_format: DrmFourcc::R8 as u32,
-        };
-
-        let desc = match self.image_cache.entry(reqs) {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(e) => {
-                let desc = query_image(
-                    drm,
-                    query_ring,
-                    size as u32,
-                    1,
-                    DrmFourcc::R8 as u32,
-                    SCANOUT | LINEAR,
-                )
-                .inspect_err(|err| error!("Unable to query host blob parameters: {}", err))?;
-                *e.insert(desc)
+        let (orig_fd, orig_host_mmap) = match pool.handler.take() {
+            Some(ShmPoolHandler::Copy { fd, host_mmap, .. }) => (fd, Some(host_mmap)),
+            Some(ShmPoolHandler::ZeroCopy { fd }) => (fd, None),
+            None => {
+                error!("shm pool resize with pool handler gone");
+                return Err(io::ErrorKind::InvalidData.into());
             }
         };
 
-        let blob = drm
-            .resource_create_blob(
-                desc.host_size as usize,
-                BlobMem::Host3d,
-                BlobFlags::USE_MAPPABLE | BlobFlags::USE_SHARABLE,
-                Some(desc.blob_id as u64),
-            )
-            .inspect_err(|err| error!("Unable to create host blob: {}", err))?;
+        let (handler, identifier) = if self.host_features.has_create_guest_handle
+            && let Ok(identifier) =
+                Self::import_memfd_via_udmabuf(drm, &self.udmabuf, &orig_fd, size as usize, self.page_size)
+                    .inspect_err(|e| debug!("udmabuf fast path did not work: {e:?}"))
+        {
+            (ShmPoolHandler::ZeroCopy { fd: orig_fd }, identifier)
+        } else {
+            let (fd, identifier) =
+                Self::create_sharable_blob(&mut self.image_cache, drm, query_ring, size as u32)?;
+            let handler =
+                ShmPoolHandler::new_copy(orig_fd, fd, identifier.identifier, size as usize)?;
+            if let Some(orig_map) = orig_host_mmap {
+                let ShmPoolHandler::Copy { ref host_mmap, .. } = handler else {
+                    unreachable!();
+                };
+                unsafe {
+                    ptr::copy_nonoverlapping(orig_map.ptr(), host_mmap.ptr(), pool.size);
+                }
+            }
 
-        let identifier = Identifier {
-            type_: CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB,
-            size: size as u32,
-            identifier: blob.res_handle,
-            bo: Some(blob.bo_handle),
+            (handler, identifier)
         };
-
-        let fd = drm
-            .buffer_to_prime_fd(blob.bo_handle, CLOEXEC | RDWR)
-            .inspect_err(|err| error!("Unable to get fd from bo handle: {}", err))?;
-
-        let guest_mmap = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size as usize,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                pool.fd.as_raw_fd(),
-                0,
-            )
-        };
-        if guest_mmap.is_null() {
-            error!("Failed to mmap guest shm pool.");
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-
-        let host_mmap = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size as usize,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                fd.as_raw_fd(),
-                0,
-            )
-        };
-        if host_mmap.is_null() {
-            error!("Failed to mmap host shm pool.");
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-
-        unsafe {
-            ptr::copy_nonoverlapping(pool.host_mmap, host_mmap, pool.size);
-        }
 
         // now lets construct all the messages
 
@@ -490,17 +554,8 @@ impl ProtocolState {
         }
 
         // lastly update our pool data
-
-        unsafe {
-            libc::munmap(pool.guest_mmap, pool.size);
-            libc::munmap(pool.host_mmap, pool.size);
-        }
-        pool.res_handle = blob.res_handle;
-        pool.blob_fd = fd;
-        pool.guest_mmap = guest_mmap;
-        pool.host_mmap = host_mmap;
+        pool.handler = Some(handler);
         pool.size = size as usize;
-
         Ok(messages)
     }
 
@@ -598,37 +653,26 @@ impl ProtocolState {
         &mut self,
         message: Message<u32, OwnedFd>,
     ) -> Result<Message<u32, Identifier>, TransformError> {
-        if let Some(surface) = self.surfaces.get_mut(&message.sender_id) {
-            if let Some(buffer_id) = surface.pending_buffer.take() {
-                if let Some(shm_buffer) = self.shm_buffers.get(&buffer_id) {
-                    if let Some(pool) = self.shm_pools.get(&shm_buffer.pool) {
-                        // TODO (optimization): Use (buffer)damage
+        if let Some(surface) = self.surfaces.get_mut(&message.sender_id)
+            && let Some(buffer_id) = surface.pending_buffer.take()
+            && let Some(shm_buffer) = self.shm_buffers.get(&buffer_id)
+        {
+            let Some(pool) = self.shm_pools.get(&shm_buffer.pool) else {
+                panic!("Commit of shm_buffer without pool?");
+            };
 
-                        let guard = SIGBUS_WATCHER.watch(pool.guest_mmap, pool.size);
+            let Some(ref handler) = pool.handler else {
+                panic!("Commit of shm_buffer without pool handler?");
+            };
 
-                        unsafe {
-                            ptr::copy_nonoverlapping(
-                                pool.guest_mmap.byte_add(shm_buffer.offset),
-                                pool.host_mmap.byte_add(shm_buffer.offset),
-                                shm_buffer.stride * shm_buffer.height,
-                            );
-                        }
-
-                        if guard.has_faulted() {
-                            warn!("faulted when accessing guest shm buffer");
-                            return Err(TransformError::Protocol {
-                                object_id: buffer_id,
-                                code: 2,
-                                message: c"error accessing SHM buffer",
-                            });
-                        }
-
-                        // TODO (optimization): We can send release to the client now and hide the host one later
-                    } else {
-                        panic!("Commit of shm_buffer without pool?");
-                    }
-                }
+            if handler.handle_commit(pool.size, shm_buffer).is_err() {
+                return Err(TransformError::Protocol {
+                    object_id: buffer_id,
+                    code: 2,
+                    message: c"error accessing SHM buffer",
+                });
             }
+            // TODO (optimization): We can send release to the client now and hide the host one later
         }
 
         Ok(message.map_fd(|_| unreachable!("wl_surface::commit with fd?")))

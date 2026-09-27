@@ -29,6 +29,8 @@ mod args;
 mod cross_domain;
 mod sigbus;
 mod source;
+mod udmabuf;
+mod util;
 #[allow(unused)]
 mod virtio_gpu;
 mod wl_proto;
