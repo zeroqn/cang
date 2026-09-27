@@ -2,34 +2,34 @@
 label: wayfinder:research
 title: Does the pinned libkrunfw boot libkrun 2.0.0?
 status: open
-blocked_by: []
+blocked_by: ["09-port-cang-to-v2-api"]
 claimed_by: unclaimed
 ---
 
 ## Question
 
-This effort rebases libkrun to `main` but **not** libkrunfw (out of scope). The
-pin is `libkrunfwRelease.tag = v5.6.2-cang.1` (kernel 6.12.109-hardened1), and
-upstream `main` crossed ~369 commits, including virtio, boot/init and display
-work.
+**The ABI half is answered by ticket 01** (`notes/01-upstream-main-delta.md`,
+section 4): main's firmware contract is unchanged - `krunfw_get_kernel(u64*,
+u64*, usize*) -> *mut c_char`, soname `libkrunfw.so.5`, `KernelBundle` and
+`DEFAULT_KERNEL_CMDLINE` byte-identical, virtio-mmio + MP tables still the
+default (ACPI opt-in), no new `ACCESS_PLATFORM` or packed-ring requirement. So
+the pinned `libkrunfwRelease.tag = v5.6.2-cang.1` (kernel 6.12.109-hardened1)
+should still be the right fw.
 
-Determine what `main`'s libkrun *expects of its kernel/firmware side* and
-whether our pinned libkrunfw still satisfies it:
+What remains is the **live leg**, which cannot run until cang boots again
+(ticket 09):
 
-1. `libkrun_init.so` / `KRUN_INIT_FULL_VERSION` and any init protocol or blob
-   contract between the VMM and the firmware, and whether main changed it.
-2. The kernel command line and boot contract (`krun` builds the cmdline from the
-   context config) - did main add or require any new kernel parameter, ACPI or
-   device that 6.12.109 provides?
-3. Virtio device/feature expectations that need kernel support the pinned
-   config may lack (this repo's fork config deltas: landlock, nftables TPROXY,
-   zram LZO, PSI, virtio-pci, nested-virt host KVM).
-4. Whether upstream publishes a known-good libkrun/libkrunfw pairing statement
-   (release notes, CI matrix) that pins the answer.
+1. Boot a guest on the rebased libkrun + the pinned fw and confirm it reaches
+   userspace: the kernel unpacks, the fw hand-off works, and the guest's PID 1
+   is the injected init blob (ticket 09's `krun_init_config_apply_in`).
+2. Confirm the guest's own assumptions still hold: `uname -r` is 6.12.109-hardened1,
+   the console/status path works (`cang-guest-init` writes its status), and the
+   virtio devices cang configures (block, net-unixstream, vsock, console, gpu)
+   all appear.
+3. Say explicitly what was *not* verified if any leg cannot be run here.
 
 ## Deliverable
 
-`notes/05-libkrunfw-compat.md`: verdict - *boots on the pinned fw*, *needs a fw
-rebase* (which redraws the destination and is its own effort), or *unknown until
-booted* (say which probe would settle it). Cite upstream files at the frozen
-SHA.
+`notes/05-libkrunfw-compat.md`: the live-boot evidence (kernel version, device
+list, PID 1, guest status output) and a verdict - *pinned fw is fine* or *needs a
+fw rebase* (which redraws the destination and is its own effort).

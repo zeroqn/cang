@@ -1,0 +1,384 @@
+# Raw git evidence: fb988873 (fork base = upstream/stable-1.19.x tip, v1.19.5) .. a980e779 (upstream/main, FULL_VERSION=2.0.0)
+# repo: /home/dev/cang/cang/deps/libkrun
+# date: 2026-09-27
+
+## count: git rev-list --count fb988873..a980e779
+369
+
+## rev-parse
+fork base (stable-1.19.x) : fb988873026120e0e81b31295aaa4a05d27921f2
+upstream main             : a980e7795b86c8151e867b32a43af4cb984364fa
+fork branch cang (tip)    : 28e796241eb5c8aa43d3d074d369a59e3ada5300
+submodule pin HEAD        : 237ceac0f7fa17486dcfa0a33a7791558b892c88
+tag v1.19.5-cang.1        : 237ceac0f7fa17486dcfa0a33a7791558b892c88
+
+## full commit log fb988873..a980e779 (oldest first)
+7975175a Remove EFI feature, bundled edk2 and documentation mentioning it
+e12b9b37 Bump libspa to v0.9
+4380b32b vsock/tsi_dgram: Make sendto_addr bind to correct socket adress structs
+2473c6df epoll: change Epoll::wait to take &mut self
+26046927 utils/macos/epoll: Reuse kevent buffer across wait calls
+f948cfb9 devices: Hoist epoll event buffer allocation out of event loops
+4b5b451e virtio/vsock: use device's peer_buf_alloc
+ccbee901 utils: add Windows epoll implementation backed by I/O Completion Ports
+b5f6d932 utils: add Windows eventfd implementation backed by manual-reset Event
+cb8e2a59 utils: fix Windows compilation issues in utils
+e7416f2c polly: fix Windows compilation issues in polly
+c9c92e3d add musl cfg flag musl_v1_2_3 to enable statx
+536360aa init: Mount a tmpfs if requested
+ef83728d libkrun/vmm: Add vhost-user infrastructure and API
+3246e2fe vmm: Implement file-backed memory using memfd for vhost-user
+0439bb9e devices/vhost: Add core VhostUserDevice implementation
+cfef3c64 vmm: Implement attaching vhost-user devices
+1a612881 examples: Add vhost-user RNG support to chroot_vm
+e23751db devices/vhost: Add config space support for vhost-user devices
+888d11ce libkrun: Add vhost-user sound device constants and support
+4bac857b examples: Add vhost-user sound device support to chroot_vm
+a21e9296 libkrun: Add API constants and example for vhost-user vsock
+609d5c9c libkrun: Add API constants and example for vhost-user CAN
+263f36e9 libkrun: Add API constants and example for vhost-user console
+559d03b5 devices/vhost: Implement write_config for dynamic config
+64c487de libkrun: Add API constants and example for vhost-user input
+6ecf6138 libkrun: Add API constants and example for vhost-user rtc
+1b5132f4 tests: introduce pjdfstest POSIX filesystem conformance tests
+0083b64b tests: pass TestSetup to check() for host-side verification
+391409d0 tests: add virtiofs-misc test for fallocate operations
+2067038c init: fix FreeBSD build by guarding tmpfs mount with __linux__
+5835d529 rutabaga_gfx/cross_domain: handle CMD_WRITE on Eventfd items
+2593accd init: Set up a dummy network interface with TSI
+7e5c6c4b Remove builtin virtio-snd device
+fb9bc66d whp: implement safe wrappers for VM, vCPU, and instruction emulation
+d9041439 rutabaga_gfx/cross_domain: fix audio glitches by dropping write lock
+f5d8b9f4 Add contribution guidelines
+a5cd412c README.md: link to CONTRIBUTING.md
+af5e31f5 README: add security email section
+60fe4f67 init: fix unescape_string() not advancing past escape characters
+0ecf4d5f devices/vsock: support multi-descriptor TX chains
+e67e5bb7 init/aws-nitro: Continue if module already loaded
+6d03f90e Add AGENTS.md and .claude
+7b983c8b virtio/fs: extract init binary blob into its own crate
+9cc30b49 virtio/fs: introduce InodeAllocator for shared inode numbering
+b6c9d201 virtio/fs: introduce generic AugmentFs overlay for files like init.krun
+e431312f lib: add krun_disable_implicit_init()
+fc51d7d2 lib: add krun_fs_add_overlay_file(), krun_fs_add_overlay_dir() APIs
+b049d50a lib: add krun_get_default_init()
+f5a2854f libkrun.h: document that implicit resource creation will become opt-in
+935afbe6 virtio/fs: add NullFs, a minimal empty-root FileSystem
+15c40070 lib: rewrite krun_set_root_disk_remount to use NullFs
+cd8b2be0 virtio/fs: remove REMOVE_ROOT_DIR ioctl and allow_root_dir_delete
+31728d75 virtio/fs: move EXIT_CODE ioctl to AugmentFs
+10c5c89c tests: add augmentfs integration test
+f8af97a0 tests: add root-disk-remount integration test
+d0c8dbed CI: enable BLK=1 and install e2fsprogs in integration tests
+331440ef virtio/fs: inline do_lookup() into lookup()
+c880b4c3 init: replace dummy IP address
+c490abbb CONTRIBUTING.md: Update Assisted-by/Generated-by guidlines
+d9057285 CI: Check for improper AI atribution
+dc2d320a arch/vmm: add PVH boot protocol support for FreeBSD x86_64
+d53632bc tests: add FreeBSD guest support
+f9c8b4ab update `integration_tests.yml` to run FreeBSD tests
+07a3f409 tests: consistently use `get_krun_add_net_unixgram`, don't duplicate the definition
+7c88ea4b arch_gen,utils,smbios,polly: migrate to Rust 2024 edition
+46ad2ae3 cpuid: migrate to Rust 2024 edition
+141d929b arch: migrate to Rust 2024 edition
+7505ac2a kernel: migrate to Rust 2024 edition
+497acc6c hvf: migrate to Rust 2024 edition
+cda44fc1 rutabaga_gfx: migrate to Rust 2024 edition
+1c8eca35 devices: migrate to Rust 2024 edition
+fd17bcc6 rutabaga_gfx: fix virgl_renderer unsafe issues missed in 2024 migration
+3e0dd9b9 vmm: migrate to Rust 2024 edition
+cd0bb605 aws_nitro,whp: migrate to Rust 2024 edition
+aefbef3d libkrun: migrate to Rust 2024 edition
+658d6ba4 krun-sys: migrate to Rust 2024 edition, bump rust-version to 1.85
+82551b48 tests: migrate to Rust 2024 edition
+c5492d0e style: apply cargo fmt after 2024 edition migration
+3231515b virtio/fs: report actual bytes written in used ring len
+f9e5944d arch/x86_64: abstract segment handling
+828186d9 arch/x86_64: decouple register computation
+840b8d6e arch/x86_64: infrastructure for Windows/WHP
+b4aeed84 arch: implement x86_64 Windows/WHP backend
+378e5249 init/dhcp: only overwrite resolv.conf with DNS
+4034fe78 balloon: use MADV_FREE to reclaim memory on macOS
+eea223b7 tests/virtiofs-misc: run subtests with catch_unwind
+dfed2393 tests/virtiofs-misc: add DirStream cache coherence subtests
+65f0ed7d tests/virtiofs-misc: add mid-iteration duplicate detection subtest
+4af6a732 whp: add Hyper-V enlightenment support and invariant TSC
+f55d618c virtio/net: fix ENAMETOOLONG on long gvproxy socket paths
+6f197320 devices: refactor IOAPIC to support multiple hypervisor backends
+085a6534 devices: add WHP IOAPIC backend for Windows x86_64
+64e7c7f6 init: loosen perms on /dev/kvm if it exists
+d96c120e fs/macos: preserve the inode a rename overwrites
+39ea6c36 tests/virtiofs-misc: add rename-overwrite fchmod subtest
+3d2080e8 fs/macos: on readdir, refresh directory on rewind
+47ab3668 init_blob: align crate with the workspace
+1b011b75 libkrun: add "init-blob" cargo feature to gate bundled init binary
+4f633d20 Makefile: support INIT_BLOB=0 to disable bundled init binary
+47403e39 libkrun: expose init-blob in krun_has_feature()
+5ffaeab4 deps: cfg-gate unix-only crates and fix vm-memory for Windows
+e4b31d71 virtio/console: add Windows support
+79e5add5 virtio/console: split port_io into platform-specific modules
+3d1ce6e9 virtio/balloon: add Windows support for free-page reporting
+4b02ee1d AGENTS.md: fix agent attribution format
+ca70dad1 ci: trust libkrun/krun tap before installing formulae on macOS
+9e106636 init: scaffold Rust krun-init crate and wire into build system
+90fd1c02 init: implement filesystem mounting
+794a8b0e init: implement KRUN_BLOCK_ROOT_DEVICE pivot and shared root mount
+1b9d57cc init: implement DHCP client
+0fbcab74 init: implement JSON config parsing
+6fae4a79 init: implement network interface setup
+788777a5 init: implement environment and resource setup
+a665bb63 init: implement I/O redirects and workload launch
+790b719b init: wire main.rs with full boot sequence
+b0c564d7 init: add FreeBSD platform helpers
+f5bfc95d init: wire FreeBSD platform support
+b5579cdd ci: fix FreeBSD cross-compilation
+af6985c4 init: port timesync clock_worker to Rust
+c4192a45 init: remove C sources and tee/ attestation code
+d888a129 init: remove KRUN_REMOVE_ROOT_DIR_IOCTL
+83a351e2 init: set up a dummy network interface with TSI
+70e44a6c init: bring up loopback interface on FreeBSD
+778841ac init: add Entrypoint field and Docker-format config key aliases
+78f0cbc2 init: accept colon-separated rlimits and strip outer quotes
+5939c289 init: document argv fallback divergence from C init
+4a901728 init: fork timesync child process instead of spawning a thread
+0c82cbae init: exit 125 when setup_redirects cannot open virtio-ports
+fc0a0659 init: match KRUN_INIT_PID1 by prefix rather than exact equality
+e5bc2749 init/dhcp: only overwrite resolv.conf with DNS
+9222cb18 init: loosen perms on /dev/kvm if it exists
+6ed74fac init: remove init.c
+734f3cec examples: replace deprecated krun_set_root_disk/krun_set_data_disk with krun_add_disk
+7032bca1 lib: remove deprecated krun_set_root_disk and krun_set_data_disk
+decdbca8 lib: remove deprecated krun_set_passt_fd, krun_set_gvproxy_path, krun_set_net_mac
+d57d5565 tests+examples: replace krun_set_log_level with krun_init_log
+85991bdd lib: propagate KRUN_NITRO_DEBUG flag in krun_init_log
+df19d2a0 lib: remove deprecated krun_set_log_level
+a33d4b16 lib: remove unsupported krun_set_mapped_volumes
+d8f27f41 tests+examples: use explicit krun_add_virtio_console_default everywhere
+ce4146d1 lib: remove krun_disable_implicit_console, krun_set_console_output, and implicit console
+cc7c52ae tests+examples: use explicit krun_add_vsock everywhere
+de84d014 lib: remove krun_disable_implicit_vsock and implicit vsock creation
+e6827663 include: remove stale implicit resource creation comment
+46b73ecb tests+examples: replace krun_set_root with krun_add_virtiofs3
+d83aed5e lib: remove deprecated krun_set_root
+4c9c185c virtio-fs: restore the original thread credentials, not euid/egid 0
+e878ca7f virtio-fs: add a regression test for scoped_cred restore
+d4bb6e04 vmm: fix riscv64 non-TEE memory region setup
+e8b48bb6 .claude: fix path to AGENTS.md file
+0c9d4e86 AGENTS.md: be explicit about incorrect Agent Attribution format
+1306f4fd cpuid: advertise the TSC-deadline timer on AMD hosts
+1091c1cc virtio-fs: map host process UID/GID to root in guest on macOS
+f3dd4255 ci: switch to ubuntu-26.04 runners
+89aaaa82 virtio/console: fix TX data loss race on shutdown
+c7cc806a virtio/fs: add cross-platform type adjustments for Windows
+7996b1a7 virtio/fs: add Windows fs module
+7c5ae23c virtio/fs: use fs_utils and linux_errno in read_only and augment_fs
+a6fa28ab virtio/fs: implement core passthrough methods and directory operations
+87e841f5 virtio/fs: implement file I/O and link operations
+361e8e20 virtio/fs: implement xattr, fallocate, lseek, and DAX mapping
+6c63d1df init: tolerate closed stdio when the console is not yet ready
+5a669b9e tests/runner: set KRUN_NO_UNSHARE when buildah is unavailable
+1aaa899b tests/virtiofs-misc: add UID/GID mapping subtests
+0f02abdf AGENTS.md: Remove mention of legacy SND feature
+861c4dd5 virtio/blk: add Windows support for block device
+3b417279 Bump version to 2.0.0-dev
+e3f65bf0 README: add libkrun 2.0 development notice
+8ce3309c CONTRIBUTING: add branch targeting guidance for PRs
+93c046a3 Makefile: replace CC_LINUX with CARGO_TARGET musl linker vars
+83a63142 init_blob: clear inherited CARGO_ENCODED_RUSTFLAGS for musl build
+d4cb379c tests/run.sh: drop hardcoded musl cross-linker config
+980f5ed3 Makefile, tests/run.sh: remove Linux sysroot download machinery
+427413b0 AGENTS.md: update init binary and cross-linker docs
+bbad3efd init_blob: derive musl triple from TARGET, not HOST
+7175a64c Revert "virtio/console: fix TX data loss race on shutdown"
+636c20b8 Revert "virtio-fs: map host process UID/GID to root in guest on macOS"
+f9fb39c2 virtio/fs/macos: propagate context to stat_common
+b63d6841 virtio/fs/macos: support different perm semantics
+d33afa59 virtio/fs: support disabling allow_idmap
+c0c812f9 virtio/fs: if simplified disable attribute caching
+e3a887a2 virtio/fs/macos: use O_NONBLOCK grab_unlinked_fd
+eb4a2a00 AGENTS.md: ask agents to add fewer comments
+d6e38a7d virtio/fs: fix typo in PermissionSemantics
+736e5490 virtio/fs/macos: fix rename whiteout case
+0db3bebb devices: declare the vm-memory rawfd feature it relies on
+2c6b1757 hvf: fix various UBs
+e5d277cd virtio/fs/macos: secctx must succeed with 0444
+137f84bd utils/eventfd: honor EFD_NONBLOCK as a bitflag on macOS
+8b202e6e vmm,hvf,libkrun: add krun_vm_pause/resume
+29285662 tests: add vm-pause integration test
+4d1487bf rutabaga_gfx: fix clippy byte_char_slices in DRM format constants
+8b14044f virtio/input: fix clippy redundant_reference in debug! arg
+b9f33aec vmm/builder: fix clippy byte_char_slices in bz2 magic check
+47104450 devices: consolidate display/EDID code into shared module
+79c5a02c vhost-user: add GPU device support
+e807dccb libkrun: expose vhost-user GPU via public API and example
+e7ffed30 include: fix const-correctness for `krun_add_net_tap`
+1cfc3aa1 display/input: add ABS_MT_TRACKING_ID for multitouch
+d7e04f60 devices/rng: fix AsRawFd import for Windows compilation
+ccc68b0b fs/macos: strip com.apple.* xattrs invalid in Linux guests
+3899a785 lib: preserve libkrunfw loading errors
+df85b8b7 virtio-blk: surface krun_add_disk2 block_id as device ID/serial
+e3072c5c CI: match Assisted-by/Generated-by case-insensitively
+574cc39b CI: ban Cursor Co-authored-by trailer
+1c6208e6 CI: add clippy check for aws-nitro+net features
+4e6c7e50 libkrun: exclude aws-nitro from FsDeviceConfig import
+ec5a3caa libkrun: fix NitroEnclave rootfs Option handling
+b034fe8e aws_nitro: remove needless return with ? operator
+5e3e476e CI: remove gemini bot configuration
+c43eb9b1 display: accumulate damage regions across updates
+a7bfb4d0 virtio/gpu: reject out-of-range and wrapping blob map offsets
+8a0dc11a Upgrade to rand 0.10
+b0429184 init: enforce static linking
+3eec4357 CI: add musl target for static linking krun-init
+0225a9f3 tests/run.sh: fix argument quoting
+60e89910 tests/runner: support glob patterns with negation in --test-case
+ff1f16f3 Makefile: add LIBKRUNFW_SRC= option to build libkrunfw for tests
+7dd02fc4 tests/runner+Makefile: remove "all" special case, use "*" instead
+c652b56c Add Milan Zamazal (@mz-pdm) to CODEOWNERS
+454157ae init: move PID-1 binary and init-blob crates under init/
+7f7bc099 init-blob: add ffier-based init config library
+36b32ea4 tests: port to init-blob Config::apply() API
+e3deaba5 examples: port to init-blob Config::apply() API
+f1af8597 libkrun: add krun_append_kernel_cmdline
+3328d7c3 init: load config before block root pivot
+502116e7 libkrun: remove implicit init injection
+4d2201e7 libkrun: remove exec/env/workdir/rlimits support from non-nitro builds
+07fd40dc CI: verify init-blob bindings are up to date
+ae1dd558 vmm: bump tdx crate to 0.1.1
+e216bcbe vmm: add VmResources storage for TD-Shim
+9ff3c7d8 libkrun: add krun_set_tee_firmware() API for TD-Shim
+2f063d7f vmm: add attributes field to MeasuredRegion for per-section TDX measurement
+47ad73b0 vmm/tee: add tdshim module with TDVF parsing and section loading
+d0c45259 vmm/tee: add HOB chain generation to tdshim module
+4a01d232 arch: accept dynamic firmware hole in TEE arch_memory_regions
+e24d6be1 vmm: wire TD-Shim into TDX build path with HOB address support
+8b9cbe09 examples/launch-tee: add TD-Shim support and console configuration
+b999a92e vmm/tee: write cmdline to guest memory for TD-Shim; add serial console to example
+00f5594f vmm/tee: write initrd trampoline before setup_vm for TD-Shim boot
+bc618e88 display/edid: limit standard timings to configured resolution
+766da0c7 display/edid: fix aspect ratio and refresh rate encoding
+cbfac4a5 init: replace chunks_exact with as_chunks
+6c9d2656 tests: replace deprecated tempdir with successor tempfile
+b7b573a6 vhost-user: upgrade vhost crate from 0.15 to 0.17
+4633cfd7 vhost-user: add SHMEM region and BACKEND_REQ support
+0cfe3c89 libkrun: expose vhost-user media device type
+e980d8be examples/launch-tee: catch up with rlimits/workdir/init removal
+bec52f62 arch/x86_64: fix off-by-one in E820 RAM region sizes
+d465e143 lib: create shutdown eventfd on demand
+a120ce15 input: add configurable device name for touchscreen
+0d75eb4b virtio/gpu: add configurable EDID manufacturer and display name
+451bea82 ci: Build virglrenderer 1.3.0 from source
+7faeae43 gpu: Migrate to new rutabaga_gfx API with capset_mask
+9008901e rutabaga_gfx: Remove local rutabaga_gfx copy
+db9abe3c arch/x86_64: keep initrd below the MMIO gap
+19823c81 vmm/tee: size TDX qboot measured RAM from guest mapping
+8ec759c3 Upgrade to vm-memory 0.18, vmm-sys-util 0.15
+8e376d82 virtio/blk: use imago's new fully sync API instead of sync-wrappers
+c5d974cd virtio/gpu: set num_capsets to the count of capsets passed to rutabaga, fix #565
+6a11683f virtio/blk: use the correct new imago API name
+fe3bec59 libkrun: merge VMM crate into libkrun
+413a0117 vmm: resolve dead code warnings
+5ae260eb ci: install git for virglrenderer source build
+aac11b58 virtio-fs: Add FILE_READ_ATTRIBUTES to O_WRONLY flag mapping
+05fa2ae3 virtio-fs: Short-circuit . and .. directory lookups in memory
+ff541a0b virtio-fs: Add WSL/LX symlink parsing and optimize getattr
+d84f9118 virtio-fs: support different perm semantics
+25da339d virtio-fs: Zero-copy borrowing of active guest file handles during read
+8f106a3d utils/win: secure FFI boundaries for native NT and time functions
+40046b6d utils: extend Windows Epoll backend to support WinSock sockets
+6fd9b78d vsock: refactor TSI proxy variants into multi-platform structures
+3355b293 vsock: implement Windows backend for TSI socket proxies
+4af703fc libkrun: add WHP MMIO device manager
+1845571f include: fix a "/*" within a comment in libkrun.h
+6e4e339e vhost-user: add software scanout display for GPU devices
+d0f98a92 virtio/vsock: drop the proxy_map guard before removing a proxy
+9d596325 virtio/vsock: remove refused connections without waiting for the reaper
+9b756598 tests: add regression test for refused host-initiated vsock connect
+731e712f vmm: aarch64: expose SVE to the guest when the host supports it
+6254f5e2 virtio/fs/macos: handle absent capability xattrs correctly
+a3d31822 lib: remove old C API
+751ce4ed lib: add API skeleton, error types, logging, and Payload
+af062ccc lib: port NitroConfig to v2 builder-pattern API
+4d5906a9 lib: add FsDevice and FsOverlay
+619b92b4 lib: add ConsoleDevice
+bc2ad16c lib: add VmmBuilder and Vmm
+8a4d2a68 init-blob: add direct-linked Config::apply()
+bd50f46a tests: port test framework and first tests
+57fae483 tests: port FS tests to v2 API
+c0fbb15d lib: add BalloonDevice
+1f2f306a lib: add RngDevice
+a7a1e27f tests: port multiport_console to v2 API
+43ec161e lib: add VsockDevice
+4c38768e tests: port vsock and TSI tests to v2 API
+58c0fbc5 lib: add BlockDevice
+fd955ed6 tests: port root_disk_remount to v2 API
+a6ef9abf lib: add NetDevice
+ef1a6a78 init-blob: add dhcp() builder method
+9f3b3a92 tests: port network tests to v2 API
+db9a5f2e lib: add DisplayInfoBuilder + DisplayBackend
+b5e00cc9 lib: add GpuDevice
+6a15d82f lib: add InputDevice
+fdeca27b lib: add VhostUserDevice
+65fc0f98 tests: port FreeBSD tests to v2 API
+a92e9b21 lib: add VmmHandle with pause/resume/shutdown
+ecf6184c tests: port vm-pause test to v2 API
+911aa81b lib: add ffier bridge and generate bindings
+6351f591 init-blob: upgrade ffier to 0.2.0rc1
+d4119f12 init-blob: add ffi-client apply, regen bindings
+f827cf34 tests: add dynamic-linking feature for linking libkrun via ffier
+37c3a029 examples: port gui_vm to v2 API
+1604d97f examples: port chroot_vm to v2 API
+daa5dcc9 examples: port consoles to v2 API
+9e6e09b5 examples: port external_kernel to v2 API
+5ef68d89 examples: port boot_efi to v2 API
+bed637ad examples: port launch-tee to v2 API
+b86b015d lib: export Payload::nitro_enclave via ffier
+24d714b5 examples: port nitro to v2 API
+7c5b6901 CI: Use setup-homebrew@main instead of legacy master
+b4319e09 CI: Remove `libkrun/krun` tap usage
+62ac1481 arch/x86_64: add ACPI table generation
+ad8eb897 vmm: measure the ACPI table window for SNP guests
+f5fc9f25 arch/x86_64: raise IRQ_MAX to 23 for expanded IOAPIC range
+0b5aac02 devices: implement IOAPIC EOI handling on non-Windows backends
+f4f2283f vmm/mmio: add virtio_mmio_devices() accessor
+c98080a8 vmm: add opt-in ACPI via VmmBuilder
+afa1a92b tests: add acpi-smp integration test
+8c91d431 Makefile, CI: move verify-libkrun-bindings check into CI
+c4df4ae2 bindings: move autogenerated bindings to a new bindings/ dir
+2b00080d cpuid: expose x2APIC to TDX guests
+125dd836 vmm/tdx: include high RAM in TD initialization
+fc508c44 docs: clarify qboot and TD-Shim limits
+96eb6406 arch/x86_64: fix FADT 8042 flag and boot protocol version
+2479350a virtio/net: add Windows AF_UNIX stream support
+471ec786 utils/windows: prevent stale level-triggered notifications
+a5a7945c Makefile: update FreeBSD test image to 14.5
+5b324ce2 ci: adopt new libkrunfw tarball distribution
+229025fb kvm: disable missed PIT tick reinjection
+1c219453 virtio/vsock: release proxies after clean shutdown
+857876df virtio: add Windows volatile file I/O
+716b13a5 devices/legacy: support serial input on Windows
+80d41cce virtio/fs: fix Windows compilation
+3f36a50a virtio/vsock: fix Windows socket proxy compilation
+867d1af3 devices/legacy: Add RTC clock support to x86 CMOS emulation
+9470ebea init: move compiler flags from Makefile to build.rs
+e6cdb553 macos: support VMs with more than 64GB of RAM
+96c1eef3 whp: tighten unsafe scopes
+1fadecb3 whp: negotiate supported Hyper-V enlightenments
+934323de utils/eventfd: add non-consuming Windows signal query
+597aef40 arch/x86_64: rely on WHP startup-suspended APs
+e8769c48 cpuid: restrict KVM CPUID helpers to Linux
+b33ed013 vmm/whp: add Windows VM and vCPU backend
+0be866e2 vmm/win: boot x86_64 guests
+56a49b33 api: add Windows support
+7f80b3d0 init-blob: enable clang cross-linker for x86_64-unknown-linux-musl on Windows hosts
+e4552eda whp: enforce 16-byte stack alignment for register value buffers
+a926cee4 build(deps): conditionally restrict linux-loader and external kernel support to non-Windows targets
+85bed715 virtio/fs: return ENOTTY for unsupported ioctl commands
+d126d484 CODEOWNERS: Add Luca Stocchi (@lstocchi)
+a31a0364 aws-nitro: turn vsock into a linux dependency
+7f303067 hvf: hide crate behind a build-time conditional
+a147f3ac input: avoid building the crate on Windows
+7d9fa257 cdylibs: disable them on Windows
+8f4dda25 Remove init-binary from workspace members
+5be8aa18 windows: clean up imports
+369ba8f4 windows: apply a round of clippy fixes
+a980e779 ci/code-quality: add a Windows cross-build

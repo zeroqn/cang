@@ -1,0 +1,214 @@
+# Raw evidence: every symbol main's libkrun.so.2 exports (ffier ffi_name list)
+# source: git show a980e779:bindings/libkrun-via-cdylib-weak/ffier-krun.json
+
+krun_balloon_device_new
+krun_block_device_new
+krun_block_device_set_direct_io
+krun_block_device_set_read_only
+krun_block_device_set_sync_mode
+krun_check_nested_virt
+krun_console_builder_add_default_console
+krun_console_builder_add_inout_port
+krun_console_builder_add_tty_port
+krun_console_builder_build
+krun_console_device_builder
+krun_display_backend_add_display
+krun_display_backend_new
+krun_display_info_builder_dpi
+krun_display_info_builder_edid
+krun_display_info_builder_new
+krun_display_info_builder_physical_size
+krun_display_info_builder_refresh_rate
+krun_error_code
+krun_error_message
+krun_error_result
+krun_fs_device_new
+krun_fs_device_new_null
+krun_fs_device_new_read_only
+krun_fs_device_set_dax_window_size
+krun_fs_device_set_overlay
+krun_fs_overlay_add_dir
+krun_fs_overlay_add_file
+krun_fs_overlay_new
+krun_gpu_device_new
+krun_gpu_device_shm_size
+krun_init_log
+krun_input_device_new
+krun_input_device_new_from_fd
+krun_mmio_device_manager_add
+krun_mmio_device_manager_new
+krun_net_device_new_tap
+krun_net_device_new_unixgram_fd
+krun_net_device_new_unixgram_path
+krun_net_device_new_unixstream_fd
+krun_net_device_new_unixstream_path
+krun_nitro_config_args
+krun_nitro_config_console_output
+krun_nitro_config_debug
+krun_nitro_config_env
+krun_nitro_config_exec_path
+krun_nitro_config_net_fd
+krun_nitro_config_new
+krun_nitro_config_rlimits
+krun_nitro_config_rootfs
+krun_nitro_config_workdir
+krun_payload_append_cmdline
+krun_payload_cmdline
+krun_payload_load_external
+krun_payload_load_firmware
+krun_payload_load_krunfw
+krun_payload_load_krunfw_tee
+krun_payload_nitro_enclave
+krun_push_str_push
+krun_rng_device_new
+krun_vhost_user_device_new
+krun_vhost_user_device_set_display_backend
+krun_vmm_builder_acpi
+krun_vmm_builder_add_serial_console
+krun_vmm_builder_add_smbios_oem_string
+krun_vmm_builder_build
+krun_vmm_builder_devices
+krun_vmm_builder_nested_virt
+krun_vmm_builder_new
+krun_vmm_builder_payload
+krun_vmm_builder_ram_mib
+krun_vmm_builder_set_kernel_console
+krun_vmm_builder_shutdown_support
+krun_vmm_builder_split_irqchip
+krun_vmm_builder_vcpus
+krun_vmm_error_code
+krun_vmm_error_message
+krun_vmm_handle
+krun_vmm_handle_pause
+krun_vmm_handle_resume
+krun_vmm_handle_shutdown
+krun_vmm_run
+krun_vsock_device_add_port_forward
+krun_vsock_device_add_unix_port
+krun_vsock_device_new
+
+## count:
+85
+
+## C declarations in main include/libkrun.h (generated) for the functions cang needs equivalents of:
+112:void krun_str_free(KrunStr s);
+116:void krun_free_object_array(KrunObjectArray a);
+192:KrunMmioDeviceManager krun_mmio_device_manager_new();
+201:void krun_mmio_device_manager_add(KrunMmioDeviceManager handle, KrunAttachDevice device);
+203:void krun_mmio_device_manager_destroy(KrunMmioDeviceManager handle);
+216:KrunFsDevice krun_fs_device_new(KrunStr tag, KrunStr host_path, KrunError* err_out);
+219:KrunFsDevice krun_fs_device_new_read_only(KrunStr tag, KrunStr host_path, KrunError* err_out);
+228:KrunFsDevice krun_fs_device_new_null(KrunStr tag, KrunError* err_out);
+236:void krun_fs_device_set_overlay(KrunFsDevice handle, KrunFsOverlay overlay);
+245:void krun_fs_device_set_dax_window_size(KrunFsDevice handle, uint64_t bytes);
+247:void krun_fs_device_destroy(KrunFsDevice handle);
+253:KrunConsoleBuilder krun_console_device_builder();
+255:void krun_console_device_destroy(KrunConsoleDevice handle);
+276:KrunResult krun_console_builder_add_tty_port(KrunConsoleBuilder handle, KrunStr name, int tty_fd, uint32_t* result, KrunError* err_out);
+283:KrunResult krun_console_builder_add_inout_port(KrunConsoleBuilder handle, KrunStr name, int input_fd, int output_fd, uint32_t* result, KrunError* err_out);
+286:KrunConsoleDevice krun_console_builder_build(KrunConsoleBuilder handle, KrunError* err_out);
+303:KrunResult krun_console_builder_add_default_console(KrunConsoleBuilder handle, int stdin, int stdout, int stderr, KrunError* err_out);
+305:void krun_console_builder_destroy(KrunConsoleBuilder handle);
+334:KrunPayload krun_payload_load_krunfw(KrunError* err_out);
+336:KrunPayload krun_payload_load_krunfw_tee(KrunStr tee_config_path, KrunStr firmware_path, KrunError* err_out);
+338:KrunPayload krun_payload_load_external(KrunStr kernel_path, uint32_t format, KrunStr initrd_path, KrunStr cmdline, KrunError* err_out);
+340:KrunPayload krun_payload_load_firmware(KrunStr path, KrunStr cmdline, KrunError* err_out);
+342:KrunStr krun_payload_cmdline(KrunPayload handle);
+344:void krun_payload_append_cmdline(KrunPayload handle, KrunStr extra);
+346:KrunPayload krun_payload_nitro_enclave(KrunNitroConfig config, KrunError* err_out);
+348:void krun_payload_destroy(KrunPayload handle);
+353:KrunNitroConfig krun_nitro_config_new();
+355:void krun_nitro_config_rootfs(KrunNitroConfig* handle, KrunStr path);
+357:void krun_nitro_config_exec_path(KrunNitroConfig* handle, KrunStr path);
+359:void krun_nitro_config_args(KrunNitroConfig* handle, KrunStr args);
+361:void krun_nitro_config_env(KrunNitroConfig* handle, KrunStr env);
+363:void krun_nitro_config_workdir(KrunNitroConfig* handle, KrunStr path);
+365:void krun_nitro_config_rlimits(KrunNitroConfig* handle, KrunStr rlimits);
+367:void krun_nitro_config_console_output(KrunNitroConfig* handle, KrunStr path);
+369:void krun_nitro_config_net_fd(KrunNitroConfig* handle, int32_t fd);
+371:void krun_nitro_config_debug(KrunNitroConfig* handle, bool enable);
+373:void krun_nitro_config_destroy(KrunNitroConfig handle);
+378:KrunVmmBuilder krun_vmm_builder_new();
+380:KrunResult krun_vmm_builder_vcpus(KrunVmmBuilder* handle, uint8_t count, KrunError* err_out);
+382:KrunResult krun_vmm_builder_ram_mib(KrunVmmBuilder* handle, uint32_t mib, KrunError* err_out);
+384:void krun_vmm_builder_payload(KrunVmmBuilder* handle, KrunPayload payload);
+386:void krun_vmm_builder_devices(KrunVmmBuilder* handle, KrunMmioDeviceManager devices);
+388:void krun_vmm_builder_set_kernel_console(KrunVmmBuilder* handle, KrunStr console);
+400:KrunResult krun_vmm_builder_add_serial_console(KrunVmmBuilder* handle, int input_fd, int output_fd, KrunError* err_out);
+402:void krun_vmm_builder_nested_virt(KrunVmmBuilder* handle, bool enabled);
+404:KrunResult krun_vmm_builder_split_irqchip(KrunVmmBuilder* handle, bool enabled, KrunError* err_out);
+413:KrunResult krun_vmm_builder_acpi(KrunVmmBuilder* handle, bool enabled, KrunError* err_out);
+415:void krun_vmm_builder_add_smbios_oem_string(KrunVmmBuilder* handle, KrunStr s);
+424:void krun_vmm_builder_shutdown_support(KrunVmmBuilder* handle, bool enabled);
+426:KrunVmm krun_vmm_builder_build(KrunVmmBuilder* handle, KrunError* err_out);
+428:void krun_vmm_builder_destroy(KrunVmmBuilder handle);
+439:KrunVmmHandle krun_vmm_handle(KrunVmm handle, KrunError* err_out);
+441:void krun_vmm_run(KrunVmm handle);
+443:void krun_vmm_destroy(KrunVmm handle);
+448:KrunResult krun_vmm_handle_pause(KrunVmmHandle handle, KrunError* err_out);
+450:KrunResult krun_vmm_handle_resume(KrunVmmHandle handle, KrunError* err_out);
+461:KrunResult krun_vmm_handle_shutdown(KrunVmmHandle handle, KrunError* err_out);
+463:void krun_vmm_handle_destroy(KrunVmmHandle handle);
+468:KrunBalloonDevice krun_balloon_device_new(KrunError* err_out);
+470:void krun_balloon_device_destroy(KrunBalloonDevice handle);
+475:KrunRngDevice krun_rng_device_new(KrunError* err_out);
+477:void krun_rng_device_destroy(KrunRngDevice handle);
+487:KrunVsockDevice krun_vsock_device_new(uint64_t cid, uint32_t tsi_features, KrunError* err_out);
+490:KrunResult krun_vsock_device_add_port_forward(KrunVsockDevice handle, KrunStr mapping, KrunError* err_out);
+493:void krun_vsock_device_add_unix_port(KrunVsockDevice handle, uint32_t port, KrunStr path, bool listen);
+495:void krun_vsock_device_destroy(KrunVsockDevice handle);
+506:KrunBlockDevice krun_block_device_new(KrunStr id, KrunStr disk_image_path, uint32_t format, KrunError* err_out);
+509:void krun_block_device_set_read_only(KrunBlockDevice handle, bool read_only);
+512:void krun_block_device_set_direct_io(KrunBlockDevice handle, bool direct_io);
+520:void krun_block_device_set_sync_mode(KrunBlockDevice handle, uint32_t sync_mode);
+522:void krun_block_device_destroy(KrunBlockDevice handle);
+528:KrunNetDevice krun_net_device_new_unixgram_path(KrunStr id, KrunStr path, KrunBytes mac, uint32_t features, uint32_t flags, KrunError* err_out);
+535:KrunNetDevice krun_net_device_new_unixgram_fd(KrunStr id, int fd, KrunBytes mac, uint32_t features, uint32_t flags, KrunError* err_out);
+538:KrunNetDevice krun_net_device_new_unixstream_path(KrunStr id, KrunStr path, KrunBytes mac, uint32_t features, uint32_t flags, KrunError* err_out);
+545:KrunNetDevice krun_net_device_new_unixstream_fd(KrunStr id, int fd, KrunBytes mac, uint32_t features, uint32_t flags, KrunError* err_out);
+547:KrunNetDevice krun_net_device_new_tap(KrunStr id, KrunStr tap_name, KrunBytes mac, uint32_t features, KrunError* err_out);
+549:void krun_net_device_destroy(KrunNetDevice handle);
+581:KrunVhostUserDevice krun_vhost_user_device_new(uint32_t device_type, KrunStr socket_path, KrunStr name, uint16_t num_queues, const uint16_t* queue_sizes, size_t queue_sizes_len, KrunError* err_out);
+584:void krun_vhost_user_device_set_display_backend(KrunVhostUserDevice handle, KrunDisplayBackend backend);
+586:void krun_vhost_user_device_destroy(KrunVhostUserDevice handle);
+600:KrunDisplayBackend krun_display_backend_new(const void* vtable, size_t vtable_size, KrunError* err_out);
+602:void krun_display_backend_add_display(KrunDisplayBackend handle, KrunDisplayInfoBuilder display);
+604:void krun_display_backend_destroy(KrunDisplayBackend handle);
+609:KrunGpuDevice krun_gpu_device_new(uint32_t virgl_flags, KrunDisplayBackend backend);
+611:void krun_gpu_device_shm_size(KrunGpuDevice* handle, size_t size);
+613:void krun_gpu_device_destroy(KrunGpuDevice handle);
+629:KrunInputDevice krun_input_device_new(const void* config_backend, size_t config_backend_size, const void* event_provider_backend, size_t event_provider_backend_size, KrunError* err_out);
+637:KrunInputDevice krun_input_device_new_from_fd(int input_fd, KrunError* err_out);
+639:void krun_input_device_destroy(KrunInputDevice handle);
+671:uint32_t krun_error_code(KrunError handle);
+673:void krun_error_message(KrunError handle, KrunPushStr writer);
+675:uint64_t krun_error_result(KrunError handle);
+677:void krun_error_destroy(KrunError handle);
+679:uint32_t krun_vmm_error_code(KrunVmmError handle);
+681:void krun_vmm_error_message(KrunVmmError handle, KrunPushStr writer);
+690:KrunStr krun_result_name(KrunResult r);
+692:const char* krun_result_name_cstr(KrunResult r);
+
+## cang's 22 bound symbols: presence in main include/libkrun.h
+krun_create_ctx main_header_hits=0
+krun_free_ctx main_header_hits=0
+krun_init_log main_header_hits=1
+krun_set_log_level main_header_hits=0
+krun_set_vm_config main_header_hits=0
+krun_set_gpu_options3 main_header_hits=0
+krun_check_nested_virt main_header_hits=1
+krun_set_nested_virt main_header_hits=0
+krun_set_root main_header_hits=0
+krun_add_disk main_header_hits=0
+krun_disable_implicit_console main_header_hits=0
+krun_set_console_output main_header_hits=0
+krun_add_virtio_console_default main_header_hits=1
+krun_add_net_unixstream main_header_hits=0
+krun_add_vsock_port2 main_header_hits=0
+krun_set_port_map main_header_hits=0
+krun_set_workdir main_header_hits=0
+krun_set_exec main_header_hits=0
+krun_set_rlimits main_header_hits=0
+krun_set_profile_path main_header_hits=0
+krun_set_kernel_cmdline_append main_header_hits=0
+krun_start_enter main_header_hits=0

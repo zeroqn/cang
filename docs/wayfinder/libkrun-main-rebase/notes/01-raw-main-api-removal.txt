@@ -1,0 +1,427 @@
+# Raw evidence: the v1 C API removal and the ffier v2 replacement
+
+===================== commit a3d31822
+a3d3182215a00e30fa511b864b88359a8cc12950
+2026-07-23
+lib: remove old C API
+
+Delete the old C API surface (~2800 lines of krun_* extern C functions)
+and the krun-sys bindgen crate. Replace include/libkrun.h with a 4-line
+stub until a later commit regenerates the v2 header via ffier. Keep the
+display and input headers (symlinks into src/). Remove all attach_*
+device helpers from builder.rs and slim build_microvm (no device
+attachment until DeviceManager is added). Slim VmResources by removing
+device config fields (fs, vsock, block, net, gpu, input, vhost-user,
+virtio_consoles).
+
+Comment out all integration test modules — the test runner now exits 0
+with 0 tests. Cargo.lock refreshed (removes krun-sys/bindgen deps,
+gains transitive deps from updated crates).
+
+Assisted-by: OpenCode:claude-opus-4.6
+Assisted-by: Cursor: grok-4.5
+Signed-off-by: Matej Hrica <mhrica@redhat.com>
+
+--- files touched:
+ include/libkrun.h                               | 1416 ----------
+ krun-sys/Cargo.toml                             |   19 -
+ krun-sys/LICENSE                                |  202 --
+ krun-sys/build.rs                               |   26 -
+ krun-sys/src/lib.rs                             |    5 -
+ krun-sys/wrapper.h                              |    1 -
+ src/libkrun/src/lib.rs                          | 3220 +----------------------
+ src/libkrun/src/vmm/builder.rs                  |  984 +------
+ src/libkrun/src/vmm/linux/vstate.rs             |   21 +-
+ src/libkrun/src/vmm/resources.rs                |  221 +-
+ src/libkrun/src/vmm/signal_handler.rs           |   26 +-
+ src/libkrun/src/vmm/vmm_config/block.rs         |   70 -
+ src/libkrun/src/vmm/vmm_config/fs.rs            |   16 -
+ src/libkrun/src/vmm/vmm_config/kernel_bundle.rs |   22 +-
+ src/libkrun/src/vmm/vmm_config/mod.rs           |   25 +-
+ src/libkrun/src/vmm/vmm_config/net.rs           |   60 -
+ src/libkrun/src/vmm/vmm_config/vsock.rs         |  153 --
+ tests/Cargo.lock                                |  356 +--
+ tests/guest-agent/src/main.rs                   |    2 +
+ tests/test_cases/Cargo.toml                     |    3 +-
+ tests/test_cases/src/common_freebsd.rs          |    2 +
+ tests/test_cases/src/krun.rs                    |   25 -
+ tests/test_cases/src/lib.rs                     |   92 +-
+ 23 files changed, 276 insertions(+), 6691 deletions(-)
+
+===================== commit 911aa81b
+911aa81b06b86ee7cf876fe4b4fc85a8199eba53
+2026-07-31
+lib: add ffier bridge and generate bindings
+
+Add ffier and ffier-builtins as optional deps to libkrun, gated
+behind the "ffi" feature. Annotate all public API types with
+cfg_attr-guarded #[ffier::export], #[ffier(skip)],
+and generate_bridge! behind cfg(feature = "ffi").
+
+Create src/libkrun-via-cdylib-weak/ — weak (dlsym) Rust client for
+libkrun.so, generated from the committed ffier-krun.json schema.
+
+Add gen-libkrun-bindings and verify-libkrun-bindings Makefile targets.
+Regenerate include/libkrun.h via ffier-gen-c-header.
+
+Assisted-by: OpenCode:gemini-3.7-flash
+Signed-off-by: Matej Hrica <mhrica@redhat.com>
+
+--- files touched:
+ Cargo.lock                                        |   24 +-
+ Cargo.toml                                        |    1 +
+ Makefile                                          |   20 +-
+ include/libkrun.h                                 |  684 ++++-
+ init/init-blob-via-cdylib/Cargo.toml              |    1 +
+ src/libkrun-via-cdylib-weak/Cargo.toml            |   15 +
+ src/libkrun-via-cdylib-weak/build.rs              |   17 +
+ src/libkrun-via-cdylib-weak/ffier-krun.json       | 2988 +++++++++++++++++++++
+ src/libkrun-via-cdylib-weak/src/lib.rs            |   10 +
+ src/libkrun/Cargo.toml                            |    4 +-
+ src/libkrun/src/api/device_builders.rs            |  122 +-
+ src/libkrun/src/api/error.rs                      |   10 +
+ src/libkrun/src/api/logging.rs                    |   14 +-
+ src/libkrun/src/api/mod.rs                        |   84 +-
+ src/libkrun/src/api/payload.rs                    |    1 +
+ src/libkrun/src/api/vmm_builder.rs                |    4 +
+ src/libkrun/src/lib.rs                            |   11 +-
+ src/libkrun/src/vmm/vmm_config/external_kernel.rs |    1 +
+ 18 files changed, 3977 insertions(+), 34 deletions(-)
+
+===================== commit 4d2201e7
+4d2201e74f38b5056caae1deecd0d0feaf2f57de
+2026-06-30
+libkrun: remove exec/env/workdir/rlimits support from non-nitro builds
+
+These APIs are no longer needed outside aws-nitro -- non-nitro callers
+now configure workloads via Config::apply() with .krun_config.json,
+introduced in earlier init-blob commits.
+
+Keep the real implementations behind cfg(feature = "aws-nitro") and
+export -ENOTSUP stubs for non-nitro builds so libkrun.so.2 retains the
+symbols. Move exec_path, args, env, workdir, rlimits and
+console_output out of ContextConfig into a NitroConfig struct gated
+the same way.
+
+With these fields gone from the default path, krun_start_enter() no
+longer injects them into the kernel command line -- it now only passes
+DEFAULT_KERNEL_CMDLINE, block root, and any extra_kernel_cmdline
+arguments.
+
+Assisted-by: OpenCode:claude-opus-4.6
+Assisted-by: Cursor: grok-4.5
+Signed-off-by: Matej Hrica <mhrica@redhat.com>
+
+--- files touched:
+ include/libkrun.h      |  54 +++++++++-----
+ src/libkrun/src/lib.rs | 195 ++++++++++++++++++++++++++++++-------------------
+ 2 files changed, 156 insertions(+), 93 deletions(-)
+
+===================== commit 502116e7
+502116e7071e2b82410ef570293ae6f050a60e31
+2026-06-11
+libkrun: remove implicit init injection
+
+Stop injecting the default init binary into the root filesystem.
+Callers must install init and config explicitly via Config::apply().
+
+- Remove init_virtual_entry() and DEFAULT_INIT_PAYLOAD
+- Remove disable_implicit_init field from ContextConfig
+- krun_add_virtiofs3 / krun_set_root_disk_remount no longer inject
+  init.krun
+- Keep krun_disable_implicit_init / krun_get_default_init as
+  -ENOTSUP stubs so existing libkrun.so.2 consumers still resolve
+  the symbols
+- Remove test_disable_implicit_init unit test
+- Remove krun_disable_implicit_init call from test_root_disk_remount
+
+Assisted-by: OpenCode:claude-opus-4.6
+Assisted-by: Cursor: grok-4.5
+Signed-off-by: Matej Hrica <mhrica@redhat.com>
+
+--- files touched:
+ include/libkrun.h                              |  43 +++------
+ src/libkrun/src/lib.rs                         | 121 ++++---------------------
+ tests/test_cases/src/test_root_disk_remount.rs |   3 -
+ 3 files changed, 34 insertions(+), 133 deletions(-)
+
+===================== commit 7f7bc099
+7f7bc099357794480fb5e426d06962eca493a247
+2026-06-04
+init-blob: add ffier-based init config library
+
+Add two crates that together produce libkrun-init — a standalone
+shared library for building init configurations with a C FFI:
+
+- init-blob: Config/Builder types with #[ffier::export] (gated behind
+  an "ffi" Cargo feature). Uses ffier v0.2 library_definition! and
+  generate_bridge!(local=...) to emit extern "C" symbols inline.
+  Serializes to an internal JSON format matching what the Rust init
+  binary parses. Supports parsing OCI runtime-spec config.json via
+  Builder::from_oci_json(). ConfigError/ApplyError with FfiError
+  derive for proper error handling across FFI.
+  crate-type = ["lib", "cdylib"] so it produces both libkrun_init.rlib
+  and libkrun_init.so.
+
+- init-blob-via-cdylib: Rust client for the libkrun_init.so C ABI.
+  Commits the ffier JSON schema and generates the Rust bindings at
+  compile time via ffier-gen-rust-client in build.rs. Used by tests,
+  examples, and downstream Rust consumers.
+
+All crates live under init/ alongside the PID-1 binary.
+
+Uses library_tag = 2 (reserving 1 for libkrun) and
+primitives_prefix = "krun" so KrunStr/KrunBytes are shared.
+
+Makefile: gen-init-blob-bindings regenerates the JSON schema and
+committed C header (SONAME 0 install + pkg-config) using
+ffier-gen-c-header. Rust client bindings are not checked in. Build
+targets explicitly pass --features ffi to krun-init-blob.
+
+Assisted-by: OpenCode:claude-opus-4.6
+Assisted-by: Cursor: grok-4.5
+Signed-off-by: Matej Hrica <mhrica@redhat.com>
+
+--- files touched:
+ .gitignore                                     |   2 +-
+ Cargo.lock                                     |  72 ++-
+ Cargo.toml                                     |   1 +
+ Makefile                                       |  49 +-
+ examples/Cargo.lock                            | 141 ++++-
+ include/libkrun.h                              |   1 -
+ include/libkrun_init.h                         | 220 ++++++++
+ init/init-blob-via-cdylib/Cargo.toml           |  22 +
+ init/init-blob-via-cdylib/build.rs             |  30 ++
+ init/init-blob-via-cdylib/ffier-krun_init.json | 679 +++++++++++++++++++++++++
+ init/init-blob-via-cdylib/src/lib.rs           |   8 +
+ init/init-blob/Cargo.toml                      |  10 +
+ init/init-blob/src/config.rs                   | 341 +++++++++++++
+ init/init-blob/src/init_schema.rs              |  43 ++
+ init/init-blob/src/lib.rs                      |  26 +
+ init/init-blob/src/oci_schema.rs               |  62 +++
+ libkrun_init.pc.in                             |  24 +
+ src/libkrun/Cargo.toml                         |   9 +-
+ src/libkrun/src/lib.rs                         |  25 -
+ 19 files changed, 1701 insertions(+), 64 deletions(-)
+
+===================== commit 1b011b75
+1b011b75069c7de34af7d92286b3dc94a13c4d74
+2026-06-09
+libkrun: add "init-blob" cargo feature to gate bundled init binary
+
+Assisted-by: OpenCode:claude-opus-4.6
+Signed-off-by: Matej Hrica <mhrica@redhat.com>
+
+--- files touched:
+ include/libkrun.h      |  6 +++++-
+ src/libkrun/Cargo.toml |  4 +++-
+ src/libkrun/src/lib.rs | 54 ++++++++++++++++++++++++++++++++++++++++++++------
+ 3 files changed, 56 insertions(+), 8 deletions(-)
+
+===================== commit c98080a8
+c98080a817f58635117eb8b8c753b5ca88febc39
+2026-09-11
+vmm: add opt-in ACPI via VmmBuilder
+
+Expose krun_vmm_builder_acpi(). When disabled (the default), guests
+keep MP tables and virtio-mmio cmdline discovery. When enabled, ACPI
+tables are published and devices are described in the DSDT.
+
+Assisted-by: Cursor: grok-4.6
+Signed-off-by: Jake Correnti <jakecorrenti+github@proton.me>
+
+--- files touched:
+ examples/chroot_vm.c                           |  3 +
+ include/libkrun.h                              |  9 +++
+ src/arch/src/x86_64/acpi.rs                    |  3 +-
+ src/arch/src/x86_64/mod.rs                     | 84 +++++++++++++++++++++-----
+ src/libkrun-via-cdylib-weak/ffier-krun.json    | 27 +++++++++
+ src/libkrun/src/api/vmm_builder.rs             | 15 +++++
+ src/libkrun/src/vmm/builder.rs                 | 43 ++++++++++---
+ src/libkrun/src/vmm/device_manager/kvm/mmio.rs |  2 +-
+ src/libkrun/src/vmm/mod.rs                     |  5 ++
+ src/libkrun/src/vmm/resources.rs               |  4 ++
+ 10 files changed, 169 insertions(+), 26 deletions(-)
+
+===================== commit 7e5c6c4b
+7e5c6c4bebc1060ad8f9dd7e5989bb4098387dc1
+2026-04-28
+Remove builtin virtio-snd device
+
+The builtin virtio-snd device is not actively maintained or tested and
+has been superseded by vhost-user-snd. Remove it as part of the libkrun
+2.0 breaking changes.
+
+This removes:
+- The virtio-snd device implementation (src/devices/src/virtio/snd/)
+- The 'snd' feature flag from all crates
+- The pipewire (pw) dependency from devices
+- The krun_set_snd_device() C API and KRUN_FEATURE_SND constant
+- CI references to the snd feature and libpipewire-0.3-dev
+
+Signed-off-by: Matej Hrica <mhrica@redhat.com>
+
+--- files touched:
+ .github/actions/setup-build-env/action.yml         |   1 -
+ .github/workflows/code-quality.yml                 |   8 +-
+ Cargo.lock                                         | 201 +------
+ Makefile                                           |   3 -
+ README.md                                          |   4 +-
+ include/libkrun.h                                  |  13 -
+ src/devices/Cargo.toml                             |   2 -
+ src/devices/src/virtio/mod.rs                      |   4 -
+ src/devices/src/virtio/snd/audio_backends.rs       |  81 ---
+ .../src/virtio/snd/audio_backends/pipewire.rs      | 650 ---------------------
+ .../snd/audio_backends/pipewire/test_utils.rs      | 134 -----
+ src/devices/src/virtio/snd/device.rs               | 149 -----
+ src/devices/src/virtio/snd/mod.rs                  | 312 ----------
+ src/devices/src/virtio/snd/stream.rs               | 624 --------------------
+ src/devices/src/virtio/snd/virtio_sound.rs         | 512 ----------------
+ src/devices/src/virtio/snd/worker.rs               | 648 --------------------
+ src/libkrun/Cargo.toml                             |   1 -
+ src/libkrun/src/lib.rs                             |  20 -
+ src/vmm/Cargo.toml                                 |   1 -
+ src/vmm/src/builder.rs                             |  28 -
+ src/vmm/src/resources.rs                           |  10 -
+ 21 files changed, 7 insertions(+), 3399 deletions(-)
+
+===================== main src/libkrun/src/lib.rs size + no_mangle count
+lines: 112
+no_mangle occurrences: 0
+extern C occurrences: 0
+
+===================== main src/libkrun/src/api/mod.rs (export list source)
+pub mod device_builders;
+pub mod error;
+pub mod logging;
+pub mod payload;
+pub mod vmm_builder;
+
+#[cfg(feature = "ffi")]
+pub(crate) use ffier::export_bitflags;
+
+#[cfg(not(feature = "ffi"))]
+#[allow(unused_macros)]
+macro_rules! export_bitflags {
+    ($(#[cfg($($cfg:tt)*)])? bitflags::bitflags! { $($body:tt)* }) => {
+        $(#[cfg($($cfg)*)])?
+        bitflags::bitflags! { $($body)* }
+    };
+}
+#[cfg(not(feature = "ffi"))]
+pub(crate) use export_bitflags;
+
+#[cfg(feature = "aws-nitro")]
+pub use crate::NitroConfig;
+#[cfg(not(feature = "tee"))]
+pub use device_builders::BalloonDevice;
+#[cfg(feature = "blk")]
+pub use device_builders::BlockDevice;
+#[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+pub use device_builders::FsDevice;
+#[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+pub use device_builders::FsOverlay;
+#[cfg(feature = "input")]
+pub use device_builders::InputDevice;
+#[cfg(feature = "net")]
+pub use device_builders::NetDevice;
+#[cfg(feature = "net")]
+pub use device_builders::NetFlags;
+#[cfg(not(feature = "tee"))]
+pub use device_builders::RngDevice;
+#[cfg(all(feature = "vhost-user", target_os = "linux"))]
+pub use device_builders::VhostUserDevice;
+pub use device_builders::{
+    AttachContext, AttachDevice, DeviceManager, DeviceRequirements, MmioDeviceManager,
+    ResolvedShmRegion, TsiFlags, VsockDevice,
+};
+pub use device_builders::{ConsoleBuilder, ConsoleDevice};
+#[cfg(any(feature = "gpu", feature = "vhost-user"))]
+pub use device_builders::{DisplayBackend, DisplayInfoBuilder};
+#[cfg(feature = "gpu")]
+pub use device_builders::{GpuDevice, VirglRendererFlags};
+#[cfg(feature = "blk")]
+pub use devices::virtio::block::{DiskFormat, SyncMode};
+pub use error::VmmError;
+pub use logging::{LogLevel, LogOptions, LogStyle, init_log};
+pub use payload::{KernelFormat, Payload};
+pub use vmm_builder::{Vmm, VmmBuilder, VmmHandle, check_nested_virt};
+
+#[cfg(feature = "net")]
+pub use devices::virtio::net::device::VirtioNetBackend;
+pub use devices::virtio::port_io;
+
+#[cfg(feature = "ffi")]
+ffier::library_definition!("krun", library_tag = 1,
+    primitives_prefix = "krun",
+    crate::api::error::VmmError = 1,
+    crate::api::device_builders::MmioDeviceManager<'_> = 2,
+    #[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+    crate::api::device_builders::FsDevice<'_> = 3,
+    crate::api::device_builders::ConsoleDevice<'_> = 4,
+    crate::api::device_builders::ConsoleBuilder<'_> = 5,
+    #[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+    crate::api::device_builders::FsOverlay<'_> = 6,
+    crate::api::payload::Payload = 8,
+    #[cfg(feature = "aws-nitro")]
+    crate::NitroConfig = 9,
+    crate::api::vmm_builder::VmmBuilder<'_> = 10,
+    crate::api::vmm_builder::Vmm<'_> = 11,
+    crate::api::vmm_builder::VmmHandle = 21,
+    #[cfg(not(feature = "tee"))]
+    crate::api::device_builders::BalloonDevice = 14,
+    #[cfg(not(feature = "tee"))]
+    crate::api::device_builders::RngDevice = 15,
+    #[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+    crate::api::device_builders::AttachDevice for crate::api::device_builders::FsDevice,
+    crate::api::device_builders::AttachDevice for crate::api::device_builders::ConsoleDevice,
+    crate::api::device_builders::VsockDevice = 16,
+    #[cfg(feature = "blk")]
+    crate::api::device_builders::BlockDevice = 17,
+    #[cfg(feature = "blk")]
+    crate::api::device_builders::AttachDevice for crate::api::device_builders::BlockDevice,
+    #[cfg(feature = "net")]
+    crate::api::device_builders::NetDevice = 18,
+    #[cfg(feature = "net")]
+    crate::api::device_builders::AttachDevice for crate::api::device_builders::NetDevice,
+    #[cfg(any(feature = "gpu", feature = "vhost-user"))]
+    crate::api::device_builders::DisplayInfoBuilder = 19,
+    #[cfg(all(feature = "vhost-user", target_os = "linux"))]
+    crate::api::device_builders::VhostUserDevice = 20,
+    #[cfg(any(feature = "gpu", feature = "vhost-user"))]
+    crate::api::device_builders::DisplayBackend = 22,
+    #[cfg(feature = "gpu")]
+    crate::api::device_builders::GpuDevice = 23,
+    #[cfg(feature = "gpu")]
+    crate::api::device_builders::AttachDevice for crate::api::device_builders::GpuDevice,
+    #[cfg(feature = "input")]
+    crate::api::device_builders::InputDevice<'_> = 24,
+    #[cfg(feature = "input")]
+    crate::api::device_builders::AttachDevice
+        for crate::api::device_builders::InputDevice<'_>,
+    #[cfg(all(feature = "vhost-user", target_os = "linux"))]
+    crate::api::device_builders::AttachDevice for crate::api::device_builders::VhostUserDevice,
+    #[cfg(not(feature = "tee"))]
+    crate::api::device_builders::AttachDevice for crate::api::device_builders::BalloonDevice,
+    #[cfg(not(feature = "tee"))]
+    crate::api::device_builders::AttachDevice for crate::api::device_builders::RngDevice,
+    crate::api::device_builders::AttachDevice for crate::api::device_builders::VsockDevice,
+    trait ffier_builtins::PushStr = 12,
+    trait ffier_builtins::Error = 13,
+    Error for crate::api::error::VmmError,
+    enum crate::vmm::vmm_config::external_kernel::KernelFormat,
+    #[cfg(feature = "blk")]
+    enum devices::virtio::block::DiskFormat,
+    #[cfg(feature = "blk")]
+    enum devices::virtio::block::SyncMode,
+    enum crate::api::logging::LogLevel,
+    enum crate::api::logging::LogStyle,
+    fn crate::api::logging::init_log,
+    fn crate::api::vmm_builder::check_nested_virt,
+    bitflags crate::api::logging::LogOptions,
+    bitflags crate::api::device_builders::TsiFlags,
+    #[cfg(feature = "gpu")]
+    bitflags crate::api::device_builders::VirglRendererFlags,
+    #[cfg(feature = "net")]
+    bitflags crate::api::device_builders::NetFlags,
+);

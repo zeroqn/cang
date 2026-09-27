@@ -1,0 +1,419 @@
+# Raw evidence: init / kernel / firmware protocol (ticket 05 input)
+
+## main DEFAULT_KERNEL_CMDLINE (src/libkrun/src/vmm/vmm_config/kernel_cmdline.rs:1-16)
+// Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#[cfg(target_os = "linux")]
+pub const DEFAULT_KERNEL_CMDLINE: &str = "reboot=k panic=-1 panic_print=0 nomodule console=hvc0 \
+                                          rootfstype=virtiofs rw quiet no-kvmapf";
+#[cfg(target_os = "macos")]
+pub const DEFAULT_KERNEL_CMDLINE: &str = "reboot=k panic=-1 panic_print=0 nomodule console=hvc0 \
+                                          rootfstype=virtiofs rw quiet no-kvmapf";
+// WHP (Windows Hypervisor Platform) differs from KVM in that it provides
+// no in-kernel PIT, PIC, or IOAPIC emulation. All three are emulated in
+// userspace. This makes interrupt delivery inherently less precise than KVM,
+// so we add the no_timer_check flag to skip the timer check to avoid panics.
+#[cfg(target_os = "windows")]
+pub const DEFAULT_KERNEL_CMDLINE: &str = "reboot=k panic=-1 panic_print=0 nomodule console=hvc0 \
+                                          rootfstype=virtiofs rw quiet no_timer_check";
+
+## stable DEFAULT_KERNEL_CMDLINE (src/vmm/src/vmm_config/kernel_cmdline.rs)
+// Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use std::fmt::{Display, Formatter, Result};
+
+#[cfg(target_os = "linux")]
+pub const DEFAULT_KERNEL_CMDLINE: &str = "reboot=k panic=-1 panic_print=0 nomodule console=hvc0 \
+                                          rootfstype=virtiofs rw quiet no-kvmapf";
+#[cfg(target_os = "macos")]
+pub const DEFAULT_KERNEL_CMDLINE: &str = "reboot=k panic=-1 panic_print=0 nomodule console=hvc0 \
+                                          rootfstype=virtiofs rw quiet no-kvmapf";
+
+/// Strongly typed data structure used to configure the boot source of the
+/// microvm.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub struct KernelCmdlineConfig {
+
+## stable: implicit init injection (src/libkrun/src/lib.rs)
+91:const INIT_PATH: &str = "/init.krun";
+2923:        prolog: Some(format!("{DEFAULT_KERNEL_CMDLINE} init={INIT_PATH}")),
+
+## main: init-blob constants (init/init-blob/src/config.rs)
+5://! A [`Builder`] can be constructed from scratch or from an OCI runtime-spec
+50:pub const INIT_PATH: &str = "/init.krun";
+53:pub const KERNEL_INIT_ARG: &str = "init=/init.krun";
+57:pub(crate) struct GuestFile {
+50:pub const INIT_PATH: &str = "/init.krun";
+53:pub const KERNEL_INIT_ARG: &str = "init=/init.krun";
+132:        payload.append_cmdline(KERNEL_INIT_ARG);
+152:        payload.append_cmdline(KERNEL_INIT_ARG);
+299:                    path: INIT_PATH,
+305:                    path: "/.krun_config.json",
+361:        assert_eq!(cfg.files[0].path, INIT_PATH);
+363:        assert_eq!(cfg.files[1].path, "/.krun_config.json");
+
+## main: Config::apply / apply_in (init/init-blob/src/config.rs:85-140)
+    /// The caller must keep this `Config` (or `KrunInitConfig`) alive for the
+    /// entire lifetime of the VM; `apply` borrows data pointers that remain
+    /// referenced until the VM exits.
+    ///
+    /// Symbols are loaded from the global namespace (`RTLD_DEFAULT`).
+    #[cfg(feature = "ffi-client")]
+    pub fn apply<'a>(
+        &'a self,
+        #[cfg_attr(feature = "ffi", ffier(foreign = krun_via_cdylib_weak, c_name = "KrunFsOverlay"))]
+        overlay: &mut krun_via_cdylib_weak::FsOverlay<'a>,
+        #[cfg_attr(feature = "ffi", ffier(foreign = krun_via_cdylib_weak, c_name = "KrunPayload"))]
+        payload: &mut krun_via_cdylib_weak::Payload,
+    ) -> Result<(), ApplyError> {
+        self.apply_in(core::ptr::null_mut(), overlay, payload)
+    }
+
+    /// Like [`apply`](Self::apply), but loads symbols from a specific library
+    /// handle (e.g. from `dlopen`). Pass null for `RTLD_DEFAULT`.
+    ///
+    /// - If `lib_handle` is non-null it must be a valid handle returned by
+    ///   `dlopen` (or equivalent) that remains open for the duration of
+    ///   this call.
+    /// - The caller must keep this `Config` (or `KrunInitConfig`) alive for the
+    ///   entire lifetime of the VM.
+    #[cfg(feature = "ffi-client")]
+    pub fn apply_in<'a>(
+        &'a self,
+        lib_handle: *mut core::ffi::c_void,
+        #[cfg_attr(feature = "ffi", ffier(foreign = krun_via_cdylib_weak, c_name = "KrunFsOverlay"))]
+        overlay: &mut krun_via_cdylib_weak::FsOverlay<'a>,
+        #[cfg_attr(feature = "ffi", ffier(foreign = krun_via_cdylib_weak, c_name = "KrunPayload"))]
+        payload: &mut krun_via_cdylib_weak::Payload,
+    ) -> Result<(), ApplyError> {
+        krun_via_cdylib_weak::require(
+            core::ptr::NonNull::new(lib_handle),
+            &[
+                krun_via_cdylib_weak::Symbol::KrunFsOverlayAddFile,
+                krun_via_cdylib_weak::Symbol::KrunPayloadAppendCmdline,
+            ],
+        )
+        .map_err(|e| ApplyError::SymbolNotFound(e.to_string().into()))?;
+
+        for file in &self.files {
+            overlay
+                .add_file(file.path, &file.data, file.mode, file.one_shot)
+                .map_err(ApplyError::OverlayError)?;
+        }
+        payload.append_cmdline(KERNEL_INIT_ARG);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "direct")]
+impl Config {
+    /// Apply this init configuration using statically-linked libkrun types.
+    ///
+
+## main: builder arg/env/workdir/rlimit/mount/dhcp (init/init-blob/src/config.rs)
+76:    pub fn builder() -> Builder {
+171:    pub fn from_oci_json(json: &str) -> Result<Self, ConfigError> {
+181:    pub fn arg(mut self, arg: &str) -> Self {
+187:    pub fn args(mut self, argv: &[&str]) -> Self {
+196:    pub fn env_var(mut self, var: &str) -> Self {
+202:    pub fn env(mut self, vars: &[&str]) -> Self {
+211:    pub fn workdir(mut self, dir: &str) -> Self {
+217:    pub fn mount(mut self, destination: &str, fs_type: &str, source: &str) -> Self {
+227:    pub fn rlimit(mut self, limit: &str) -> Self {
+233:    pub fn rlimits(mut self, limits: &[&str]) -> Self {
+239:    pub fn dhcp(mut self, enable: bool) -> Self {
+251:    pub fn set_root_disk_remount(
+282:    pub fn build(mut self) -> Config {
+
+## main krunfw ABI: load_kernel_bundle (src/libkrun/src/api/payload.rs:172-200)
+    lib: &libloading::Library,
+) -> Result<crate::vmm::vmm_config::kernel_bundle::KernelBundle, VmmError> {
+    let get_kernel: libloading::Symbol<
+        unsafe extern "C" fn(*mut u64, *mut u64, *mut usize) -> *mut libc::c_char,
+    > = unsafe {
+        lib.get(b"krunfw_get_kernel")
+            .map_err(|e| VmmError::Internal(format!("krunfw symbol: {e}")))?
+    };
+
+    let mut guest_addr: u64 = 0;
+    let mut entry_addr: u64 = 0;
+    let mut size: usize = 0;
+    let host_addr = unsafe { get_kernel(&mut guest_addr, &mut entry_addr, &mut size) };
+    if host_addr.is_null() {
+        return Err(VmmError::BootError(
+            "krunfw_get_kernel returned null".into(),
+        ));
+    }
+
+    Ok(crate::vmm::vmm_config::kernel_bundle::KernelBundle {
+        host_addr: host_addr as u64,
+        guest_addr,
+        entry_addr,
+        size,
+    })
+}
+
+#[cfg(feature = "tee")]
+fn load_tee_bundles(
+
+## stable krunfw ABI (src/libkrun/src/lib.rs)
+134-            None => return Err(libloading::Error::DlOpenUnknown),
+135-        };
+136-        Ok(unsafe {
+137-            KrunfwBindings {
+138:                get_kernel: krunfw.get(b"krunfw_get_kernel")?,
+139-                #[cfg(feature = "tee")]
+140-                get_initrd: krunfw.get(b"krunfw_get_initrd")?,
+141-                #[cfg(feature = "tee")]
+142-                get_qboot: krunfw.get(b"krunfw_get_qboot")?,
+143-            }
+144-        })
+145-    }
+146-
+147-    pub fn new() -> Option<Self> {
+148-        Self::load_bindings().ok()
+149-    }
+150-}
+
+## main KRUNFW_NAME (src/libkrun/src/api/payload.rs:270-286)
+}
+
+#[cfg(all(target_os = "linux", not(feature = "tee")))]
+const KRUNFW_NAME: &str = "libkrunfw.so.5";
+#[cfg(all(target_os = "linux", feature = "amd-sev"))]
+const KRUNFW_NAME: &str = "libkrunfw-sev.so.5";
+#[cfg(all(target_os = "linux", feature = "tdx"))]
+const KRUNFW_NAME: &str = "libkrunfw-tdx.so.5";
+#[cfg(target_os = "macos")]
+const KRUNFW_NAME: &str = "libkrunfw.5.dylib";
+#[cfg(target_os = "windows")]
+const KRUNFW_NAME: &str = "libkrunfw.dll";
+
+static KRUNFW: std::sync::LazyLock<Option<libloading::Library>> =
+    std::sync::LazyLock::new(|| unsafe { libloading::Library::new(KRUNFW_NAME).ok() });
+
+## main include/libkrun_init.h (new host-side init installer library)
+
+/* ApplyError -------------------------------------------------------- */
+
+#define KRUN_INIT_ERROR_APPLY_SYMBOL_NOT_FOUND ((uint64_t)33554438 << 32 | 1)
+#define KRUN_INIT_ERROR_APPLY_OVERLAY_ERROR ((uint64_t)33554438 << 32 | 2)
+
+/* Config ------------------------------------------------------------ */
+
+/** Start building a new init configuration. */
+KrunInitBuilder krun_init_config_builder();
+typedef KrunInitBuilder (*krun_init_config_builder_fn)();
+/**
+ * Apply this init configuration to a VM's filesystem overlay and payload.
+ *
+ * Adds the init binary and associated configuration file(s) as overlay
+ * files, and appends the init kernel command line argument to the payload.
+ *
+ * The caller must keep this `Config` (or `KrunInitConfig`) alive for the
+ * entire lifetime of the VM; `apply` borrows data pointers that remain
+ * referenced until the VM exits.
+ *
+ * Symbols are loaded from the global namespace (`RTLD_DEFAULT`).
+ */
+KrunResult krun_init_config_apply(KrunInitConfig handle, KrunFsOverlay overlay, KrunPayload payload, KrunInitError* err_out);
+typedef KrunResult (*krun_init_config_apply_fn)(KrunInitConfig handle, KrunFsOverlay overlay, KrunPayload payload, KrunInitError* err_out);
+/**
+ * Like [`apply`](Self::apply), but loads symbols from a specific library
+ * handle (e.g. from `dlopen`). Pass null for `RTLD_DEFAULT`.
+ *
+ * - If `lib_handle` is non-null it must be a valid handle returned by
+ *   `dlopen` (or equivalent) that remains open for the duration of
+ *   this call.
+ * - The caller must keep this `Config` (or `KrunInitConfig`) alive for the
+ *   entire lifetime of the VM.
+ */
+KrunResult krun_init_config_apply_in(KrunInitConfig handle, void* lib_handle, KrunFsOverlay overlay, KrunPayload payload, KrunInitError* err_out);
+typedef KrunResult (*krun_init_config_apply_in_fn)(KrunInitConfig handle, void* lib_handle, KrunFsOverlay overlay, KrunPayload payload, KrunInitError* err_out);
+void krun_init_config_destroy(KrunInitConfig handle);
+typedef void (*krun_init_config_destroy_fn)(KrunInitConfig handle);
+
+/* Builder ----------------------------------------------------------- */
+
+/**
+ * Parse an OCI runtime-spec config.json string into a builder.
+ *
+ * Unknown fields are silently ignored. The caller can further
+ * modify the builder (e.g. add rlimits, mounts) before calling
+ * [`build()`](Self::build).
+ */
+KrunInitBuilder krun_init_builder_from_oci_json(KrunStr json, KrunInitError* err_out);
+typedef KrunInitBuilder (*krun_init_builder_from_oci_json_fn)(KrunStr json, KrunInitError* err_out);
+/** Append a single argument to argv. */
+void krun_init_builder_arg(KrunInitBuilder* handle, KrunStr arg);
+typedef void (*krun_init_builder_arg_fn)(KrunInitBuilder* handle, KrunStr arg);
+/** Append multiple arguments to argv. */
+void krun_init_builder_args(KrunInitBuilder* handle, const KrunStr* argv, size_t argv_len);
+typedef void (*krun_init_builder_args_fn)(KrunInitBuilder* handle, const KrunStr* argv, size_t argv_len);
+/** Append a single environment variable (`"KEY=value"`). */
+void krun_init_builder_env_var(KrunInitBuilder* handle, KrunStr var);
+typedef void (*krun_init_builder_env_var_fn)(KrunInitBuilder* handle, KrunStr var);
+/** Append multiple environment variables. */
+void krun_init_builder_env(KrunInitBuilder* handle, const KrunStr* vars, size_t vars_len);
+typedef void (*krun_init_builder_env_fn)(KrunInitBuilder* handle, const KrunStr* vars, size_t vars_len);
+/** Set the guest working directory. */
+void krun_init_builder_workdir(KrunInitBuilder* handle, KrunStr dir);
+typedef void (*krun_init_builder_workdir_fn)(KrunInitBuilder* handle, KrunStr dir);
+/** Add a mount specification. */
+void krun_init_builder_mount(KrunInitBuilder* handle, KrunStr destination, KrunStr fs_type, KrunStr source);
+typedef void (*krun_init_builder_mount_fn)(KrunInitBuilder* handle, KrunStr destination, KrunStr fs_type, KrunStr source);
+/** Append a single resource limit (`"id=cur:max"`, e.g. `"7=0:0"`). */
+void krun_init_builder_rlimit(KrunInitBuilder* handle, KrunStr limit);
+typedef void (*krun_init_builder_rlimit_fn)(KrunInitBuilder* handle, KrunStr limit);
+/** Append multiple resource limits. */
+void krun_init_builder_rlimits(KrunInitBuilder* handle, const KrunStr* limits, size_t limits_len);
+typedef void (*krun_init_builder_rlimits_fn)(KrunInitBuilder* handle, const KrunStr* limits, size_t limits_len);
+/** Enable DHCP client in the guest. */
+void krun_init_builder_dhcp(KrunInitBuilder* handle, bool enable);
+typedef void (*krun_init_builder_dhcp_fn)(KrunInitBuilder* handle, bool enable);
+/** Set the root disk to remount on boot. */
+void krun_init_builder_set_root_disk_remount(KrunInitBuilder* handle, KrunStr device, KrunStr fstype, KrunStr options);
+typedef void (*krun_init_builder_set_root_disk_remount_fn)(KrunInitBuilder* handle, KrunStr device, KrunStr fstype, KrunStr options);
+/**
+ * Consume the builder, serialize the config, and return the
+ * finished [`Config`].
+ */
+KrunInitConfig krun_init_builder_build(KrunInitBuilder* handle);
+typedef KrunInitConfig (*krun_init_builder_build_fn)(KrunInitBuilder* handle);
+void krun_init_builder_destroy(KrunInitBuilder handle);
+typedef void (*krun_init_builder_destroy_fn)(KrunInitBuilder handle);
+
+/* KrunInitPushStrVtable --------------------------------------------- */
+
+#define KRUN_INIT_PUSH_STR_TYPE_TAG 33554433
+
+typedef struct {
+    void (*drop)(void* self_data);
+    bool (*push)(void* self_data, KrunStr s);
+} KrunInitPushStrVtable;
+
+/* PushStr (dispatch) ------------------------------------------------ */
+
+bool krun_init_push_str_push(KrunInitPushStr handle, KrunStr s);
+typedef bool (*krun_init_push_str_push_fn)(KrunInitPushStr handle, KrunStr s);
+void krun_init_push_str_destroy(KrunInitPushStr handle);
+typedef void (*krun_init_push_str_destroy_fn)(KrunInitPushStr handle);
+
+/* KrunInitErrorVtable ----------------------------------------------- */
+
+#define KRUN_INIT_ERROR_TYPE_TAG 33554434
+
+typedef struct {
+
+## main GpuDevice: no render-server fd parameter (src/libkrun/src/api/device_builders.rs:1624-1646)
+/// A virtio GPU device with virgl 3D acceleration.
+#[cfg(feature = "gpu")]
+pub struct GpuDevice {
+    virgl_flags: u32,
+    backend: DisplayBackend,
+    shm_size: usize,
+}
+
+#[cfg_attr(feature = "ffi", ffier::export(cfg = "feature = \"gpu\""))]
+#[cfg_attr(not(feature = "ffi"), cfg(feature = "gpu"))]
+impl GpuDevice {
+    const DEFAULT_SHM_SIZE: usize = 1 << 33;
+
+    pub fn new(virgl_flags: VirglRendererFlags, backend: DisplayBackend) -> Self {
+        Self {
+            virgl_flags: virgl_flags.bits(),
+            backend,
+            shm_size: Self::DEFAULT_SHM_SIZE,
+        }
+    }
+
+    pub fn shm_size(mut self, size: usize) -> Self {
+        self.shm_size = size;
+
+## fork-only C API additions on the cang branch (include/libkrun.h diff vs fb988873)
+diff --git a/include/libkrun.h b/include/libkrun.h
+index 779761a9..5999d64b 100644
+--- a/include/libkrun.h
++++ b/include/libkrun.h
+@@ -644,6 +644,24 @@ int32_t krun_set_gpu_options2(uint32_t ctx_id,
+                               uint32_t virgl_flags,
+                               uint64_t shm_size);
+ 
++/**
++ * Enables and configures a virtio-gpu device. This variant allows passing a
++ * render-server socketpair fd to virglrenderer.
++ *
++ * Arguments:
++ *  "ctx_id"           - the configuration context ID.
++ *  "virgl_flags"      - flags to pass to virglrenderer.
++ *  "shm_size"         - size of the SHM host window in bytes.
++ *  "render_server_fd" - fd of the render server, or a negative value if none.
++ *
++ * Returns:
++ *  Zero on success or a negative error number on failure.
++ */
++int32_t krun_set_gpu_options3(uint32_t ctx_id,
++                              uint32_t virgl_flags,
++                              uint64_t shm_size,
++                              int32_t render_server_fd);
++
+ /* Maximum number of displays. Same as VIRTIO_GPU_MAX_SCANOUTS defined in the virtio-gpu spec */
+ #define KRUN_MAX_DISPLAYS 16
+ 
+@@ -1226,6 +1244,18 @@ int32_t krun_disable_implicit_vsock(uint32_t ctx_id);
+  */
+ int32_t krun_set_kernel_console(uint32_t ctx_id, const char *console_id);
+ 
++/*
++ * Append extra tokens to the generated kernel commandline.
++ *
++ * Arguments:
++ *  "ctx_id" - the configuration context ID.
++ *  "fragment" - space-separated kernel commandline tokens.
++ *
++ * Returns
++ *  Zero on success or a negative error number on failure.
++ */
++int32_t krun_set_kernel_cmdline_append(uint32_t ctx_id, const char *fragment);
++
+ /*
+  * Adds a virtio-console device to the guest.
+  *
+
+## the fork's 16 commits on top of fb988873 (what a rebase carries)
+28e79624 ci: scope the release concurrency group per ref
+237ceac0 ci: trigger permanent releases from version tags
+975363ba ci: publish permanent versioned releases and attest prebuilts
+8390691d docs: rename LOFTD.md to CANG.md
+b7680460 ci: publish cang-prefixed libkrun prebuilts
+7c20aa6f gpu: fix blob-map overflow, gate DRM render-node open, reclaim cookie on init failure, idle poll
+2a583f8a gpu: harden render-server fd handling and fix poll/fence/lock issues
+7f77a0ac virtio/gpu: fence-retirement fix — poll with 10ms timeout + event_poll
+394802e3 rustfmt: reorder imports in virtio_gpu.rs and builder.rs
+f0e2028d vaapi: open DRM render node O_RDWR for libva video
+1c68255f vaapi: add get_drm_fd renderer callback + video diagnostics
+dacdbac4 gpu: add krun_set_gpu_options3 render-server fd plumbing
+b7d37564 ci: let sccache see real C compilers
+28aaf0d6 ci: make loftd libkrun prebuilts reusable
+329f14db feat(loftd): allow profile-only kernel diagnostics
+ac615be3 feat(loftd): add opt-in libkrun profiling
+
+## fork diffstat vs base (files the rebase must reconcile)
+ .github/actions/setup-build-env/action.yml |   6 +
+ .github/workflows/publish-cang-release.yml | 224 +++++++++++++++++
+ CANG.md                                    |  17 ++
+ include/libkrun.h                          |  30 +++
+ src/devices/src/virtio/gpu/device.rs       |   5 +
+ src/devices/src/virtio/gpu/virtio_gpu.rs   |  57 ++++-
+ src/devices/src/virtio/gpu/worker.rs       |  82 ++++++-
+ src/libkrun/src/lib.rs                     | 378 ++++++++++++++++++++++-------
+ src/rutabaga_gfx/src/renderer_utils.rs     |   1 +
+ src/rutabaga_gfx/src/rutabaga_utils.rs     |   6 +
+ src/rutabaga_gfx/src/virgl_renderer.rs     |  74 +++++-
+ src/vmm/src/builder.rs                     |  61 +++--
+ src/vmm/src/lib.rs                         |   2 +
+ src/vmm/src/profile.rs                     |  48 ++++
+ src/vmm/src/resources.rs                   |   8 +-
+ 15 files changed, 876 insertions(+), 123 deletions(-)

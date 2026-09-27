@@ -2,7 +2,7 @@
 label: wayfinder:task
 title: Rebase cang onto main and fold in the three PRs
 status: open
-blocked_by: ["01-upstream-main-delta-for-cang", "03-pr-822-gating-decision"]
+blocked_by: ["03-pr-822-gating-decision"]
 claimed_by: unclaimed
 ---
 
@@ -20,7 +20,13 @@ Perform the rebase in `deps/libkrun` and leave the result buildable:
    wholesale. Expect conflicts in the GPU files, `src/libkrun/src/lib.rs`,
    `src/vmm/src/builder.rs`, `src/vmm/src/lib.rs`.
 3. Cherry-pick 822 / 865 / 840 in the order ticket 03 decided, preserving
-   authorship and upstream commit messages (plus the drop-me trailer).
+   authorship and upstream commit messages (plus the drop-me trailer). Mind that
+   **822 (2026-08-27) and 840 (2026-09-05) predate main's 2026-09-11 ABI
+   rewrite**, so their content may need adaptation to the v2 tree; 865
+   (2026-09-17) postdates it. Record the adaptation for each.
+3b. Re-establish the fork's own C extensions on main's structure - that is
+   ticket 10, which runs alongside this one; do not leave the rebase "green but
+   missing `krun_set_gpu_options3`" without saying so.
 4. Verify: `git merge-base --is-ancestor <frozen-main> cang`; `git log --oneline
    <frozen-main>..cang` shows only fork + PR commits; `nix build ./nix/dev#cang-dev`
    (the submodule-aware dev flake) is green.

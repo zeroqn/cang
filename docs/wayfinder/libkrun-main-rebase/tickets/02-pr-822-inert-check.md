@@ -34,6 +34,11 @@ Answer, from the PR's diff and this repo's pinned kernel:
    prerequisite rather than a guess?
 4. What is the **conflict surface** for cherry-picking it onto a rebased `main`
    (`mergeable=false`)? Which files and which upstream changes does it expect?
+   Note the dates: the PR was created **2026-08-27** and last updated
+   2026-08-27, i.e. *before* main's 2026-09-11 ABI rewrite (`a3d31822`), so
+   establish whether its diff targets the pre-rewrite device code and what of it
+   still applies to main's current `src/libkrun`/`src/devices` layout (see
+   `notes/01-upstream-main-delta.md`).
 
 ## Deliverable
 
