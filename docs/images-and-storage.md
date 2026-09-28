@@ -123,6 +123,18 @@ memory rounded down to whole GiB, matching the libkrun VM memory policy. Pass
 `SCCACHE_DIR=/home/dev/.cache/sccache`, backed by cang's shared state
 `sccache` bind mount.
 
+cang also attaches the virtio-balloon device. libkrun implements only the
+balloon's free-page-reporting queue - the inflate/deflate queues are stubs that
+log and drop - so this does not make `--mem` elastic: the guest still sees the
+memory it was configured with, and the guest kernel's virtio-mem is off. What it
+buys is host-side reclamation. When the guest reports pages it has freed, the
+VMM `madvise`s that part of the guest RAM mapping, so the host gets those
+physical pages back instead of holding every page the guest has ever touched
+until the VM exits. This is visible on the host as the VM worker's RSS dropping
+while the guest runs on, and in the guest as a bound driver under
+`/sys/bus/virtio/drivers/virtio_balloon/` (the pinned kernel builds the driver
+in).
+
 Guest RAM is fixed for the life of the microVM, so the guest also gets zram
 swap: during `enter`, before the shell or any background preparation starts,
 `cang-guest-init` sets the device capacity in `/sys/block/zram0/disksize`,

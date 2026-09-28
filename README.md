@@ -318,7 +318,8 @@ live in the topic docs:
   published ports, and nested virtualization.
 - [Images and storage](docs/images-and-storage.md) — image selection and
   cache management, task-rootfs backends, the `/nix` host overlay, the
-  container-store disk, guest memory and zram swap, and launch config keys.
+  container-store disk, guest memory, host memory reclamation through the
+  virtio-balloon, zram swap, and launch config keys.
 - [Diagnostics](docs/diagnostics.md) — log levels, fd-pressure reports,
   profiling, terminal tracing, the PTY benchmark, and troubleshooting.
 - [Internals](docs/internals.md) — libkrun and host-tool lookup, the prepared

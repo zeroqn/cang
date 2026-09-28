@@ -1,8 +1,10 @@
 //! Guest swap on a zram device.
 //!
 //! Guest RAM is fixed for the life of the VM: libkrun has no balloon inflate
-//! and the pinned guest kernel has no virtio-mem, so a workload that outgrows
-//! `--mem` can only be relieved by putting cold anonymous pages somewhere else.
+//! (the attached balloon only lets the host reclaim pages the guest has already
+//! freed) and the pinned guest kernel has no virtio-mem, so a workload that
+//! outgrows `--mem` can only be relieved by putting cold anonymous pages
+//! somewhere else.
 //! Without swap the guest OOM killer is the first responder, and because the
 //! image entrypoint is a child of libkrun's init rather than PID 1, losing it
 //! reboots the microVM. A zram device gives the kernel a RAM-backed device that

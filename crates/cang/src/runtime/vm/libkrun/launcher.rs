@@ -262,6 +262,7 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
 
         self.configure_vsock(devices, config)?;
         self.configure_network(devices, config)?;
+        self.configure_balloon(devices)?;
 
         if let Some(profile_path) = profile_path {
             tracing::debug!(profile_path = %profile_path.display(), "krun_vmm_builder_set_profile_path: begin");
@@ -587,6 +588,28 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
         // ABI 2's device manager takes ownership of the device, so every port has
         // to be registered on it first.
         add_device(&mut self.api, devices, vsock)?;
+        Ok(())
+    }
+
+    /// Attach the virtio-balloon so the host can reclaim guest memory the guest
+    /// has finished with.
+    ///
+    /// This does not make `ram_mib` growable: libkrun implements only the
+    /// balloon's free-page-reporting queue, and the inflate/deflate queues it
+    /// would need are stubs, as is the guest kernel's virtio-mem. What it does
+    /// buy is that the VMM `madvise`s the guest RAM mapping where the guest
+    /// reported freed pages, instead of holding every page the guest has ever
+    /// touched until the VM exits.
+    ///
+    /// It is attached last on purpose: the MMIO device manager numbers devices
+    /// (and their IRQs) in registration order, and the guest's boot contract
+    /// already depends on that order - `console=hvc0` and the tagged root
+    /// filesystem. Appending the balloon leaves those indices where they are.
+    fn configure_balloon(&mut self, devices: Handle) -> Result<()> {
+        tracing::debug!("krun_balloon_device_new: begin");
+        let device = setup("krun_balloon_device_new", self.api.balloon_device_new())?;
+        add_device(&mut self.api, devices, device)?;
+        tracing::debug!(device, "krun_balloon_device_new: complete");
         Ok(())
     }
 

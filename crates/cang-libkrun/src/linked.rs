@@ -24,9 +24,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 use krun::{
-    BlockDevice, ConsoleBuilder, ConsoleDevice, DiskFormat, FsDevice, FsOverlay, GpuDevice,
-    LogLevel, LogOptions, LogStyle, MmioDeviceManager, NetDevice, NetFlags, Payload, TsiFlags,
-    VirglRendererFlags, Vmm, VmmBuilder, VsockDevice,
+    BalloonDevice, BlockDevice, ConsoleBuilder, ConsoleDevice, DiskFormat, FsDevice, FsOverlay,
+    GpuDevice, LogLevel, LogOptions, LogStyle, MmioDeviceManager, NetDevice, NetFlags, Payload,
+    TsiFlags, VirglRendererFlags, Vmm, VmmBuilder, VsockDevice,
 };
 use krun_init::{Builder as InitBuilder, Config as InitConfig};
 
@@ -46,6 +46,7 @@ enum Slot {
     ConsoleBuilder(ConsoleBuilder<'static>),
     ConsoleDevice(ConsoleDevice<'static>),
     GpuDevice(GpuDevice),
+    BalloonDevice(BalloonDevice),
     Devices(MmioDeviceManager<'static>),
     VmmBuilder(VmmBuilder<'static>),
     Vmm(Vmm<'static>),
@@ -158,6 +159,9 @@ fn attach_device(manager: &mut MmioDeviceManager<'static>, slot: Slot) -> Result
             manager.add(device);
         }
         Slot::GpuDevice(device) => {
+            manager.add(device);
+        }
+        Slot::BalloonDevice(device) => {
             manager.add(device);
         }
         _ => bail!("libkrun device manager add was given a non-device object"),
@@ -452,6 +456,10 @@ impl LibkrunApi for LinkedLibkrunApi {
             device = device.set_render_server_fd(render_server_fd)?;
         }
         Ok(self.push(Slot::GpuDevice(device)))
+    }
+
+    fn balloon_device_new(&mut self) -> Result<Handle> {
+        Ok(self.push(Slot::BalloonDevice(BalloonDevice::new()?)))
     }
 
     fn vmm_builder_new(&mut self) -> Result<Handle> {

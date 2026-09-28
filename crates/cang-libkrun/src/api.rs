@@ -89,6 +89,10 @@ pub trait LibkrunApi {
         shm_size: u64,
         render_server_fd: i32,
     ) -> Result<Handle>;
+    /// `krun_balloon_device_new`: virtio-balloon. libkrun implements only the
+    /// free-page-reporting queue, so this lets the guest hand freed pages back
+    /// to the host; it never changes the VM's configured RAM size.
+    fn balloon_device_new(&mut self) -> Result<Handle>;
 
     // VMM builder and run.
     fn vmm_builder_new(&mut self) -> Result<Handle>;

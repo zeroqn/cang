@@ -31,6 +31,7 @@ const INIT_CONFIG: usize = 6;
 const VSOCK: usize = 7;
 const ROOTFS: usize = 8;
 const NET_DEVICE: usize = 9;
+const BALLOON_DEVICE: usize = 11;
 const VMM: usize = 50;
 const CONSOLE_BUILDER_BASE: usize = 20;
 const CONSOLE_DEVICE_BASE: usize = 30;
@@ -57,6 +58,7 @@ enum Call {
     FsDeviceSetOverlay(usize, usize),
     BlockDeviceNew(usize, String, String, bool),
     NetDeviceNewUnixstreamFd(i32, u32, u32),
+    BalloonDeviceNew,
     VsockDeviceNew(u64, u32),
     VsockDeviceAddUnixPort(usize, u32, String, bool),
     VsockDeviceAddPortForward(usize, String),
@@ -314,6 +316,12 @@ impl LibkrunApi for FakeLibkrunApi {
     fn vsock_device_add_port_forward(&mut self, device: usize, mapping: &str) -> Result<()> {
         self.record(Call::VsockDeviceAddPortForward(device, mapping.to_owned()));
         self.checked("krun_vsock_device_add_port_forward")
+    }
+
+    fn balloon_device_new(&mut self) -> Result<usize> {
+        self.record(Call::BalloonDeviceNew);
+        self.checked("krun_balloon_device_new")?;
+        Ok(BALLOON_DEVICE)
     }
 
     fn console_device_builder(&mut self) -> Result<usize> {
@@ -657,12 +665,48 @@ fn fake_api_records_direct_libkrun_v2_call_order() {
             Call::MmioDeviceManagerAdd(DEVICES, BLOCK_DEVICE_BASE + 1),
             Call::VsockDeviceNew(3, 1),
             Call::MmioDeviceManagerAdd(DEVICES, VSOCK),
+            Call::BalloonDeviceNew,
+            Call::MmioDeviceManagerAdd(DEVICES, BALLOON_DEVICE),
             Call::VmmBuilderPayload(VMM_BUILDER + 3, PAYLOAD),
             Call::VmmBuilderDevices(VMM_BUILDER + 4, DEVICES),
             Call::VmmBuilderBuild(VMM_BUILDER + 5),
             Call::VmmRun(VMM),
         ],
         "the launcher must build payload/devices/init and then run, with no port map and no per-bind virtiofs device"
+    );
+}
+
+/// The balloon is host-side reclamation, not part of the guest boot contract:
+/// the MMIO device manager numbers devices and their IRQs in registration
+/// order, and `console=hvc0` plus the tagged root filesystem depend on that
+/// order, so the balloon has to be registered after every other device.
+#[test]
+fn balloon_is_attached_after_every_other_device() {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
+        .start_enter(&config())
+        .expect("launch should succeed");
+
+    let calls = calls.borrow();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call, Call::BalloonDeviceNew))
+            .count(),
+        1,
+        "the launch should attach exactly one balloon device: {calls:?}"
+    );
+    let attached: Vec<usize> = calls
+        .iter()
+        .filter_map(|call| match call {
+            Call::MmioDeviceManagerAdd(_, device) => Some(*device),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        attached.last(),
+        Some(&BALLOON_DEVICE),
+        "the balloon must be the last device registered: {calls:?}"
     );
 }
 
