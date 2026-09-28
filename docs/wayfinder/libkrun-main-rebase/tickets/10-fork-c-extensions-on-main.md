@@ -1,9 +1,9 @@
 ---
 label: wayfinder:task
 title: Re-add the fork's C extensions on main's device code
-status: open
+status: closed
 blocked_by: ["04-rebase-cang-onto-main"]
-claimed_by: unclaimed
+claimed_by: pi session (2026-09-28)
 ---
 
 ## Question
@@ -70,3 +70,47 @@ cang-side port already calls the two extension entry points by name when present
 `crates/cang/src/runtime/vm/libkrun/dynamic.rs` binds both as optional symbols, so
 re-adding them under those names needs no further cang change. The fork's release
 workflow fix and the re-pin are ticket 13.
+
+
+## Resolution (2026-09-28, pi session)
+
+Re-added on main's device/builder code, plus the release-pipeline fix that the
+ticket's own verification depends on. `notes/10-fork-extensions-on-main.md` has
+the file-level mapping.
+
+**C surface re-added (regenerated from the Rust API, so the names are
+`krun_<object>_<method>`):**
+
+- `krun_gpu_device_set_render_server_fd(GpuDevice*, int, KrunError*)` - validates
+  the fd, owns it as `Option<OwnedFd>`, threads it through
+  `Gpu` -> `Worker` -> `VirtioGpu`, and sets
+  `RutabagaBuilder::set_server_descriptor`. cang's `--gpu=drm`/`--wayland` bind it
+  by name and fail loudly without it, so the missing entry point is what blocked
+  GPU mode.
+- `krun_vmm_builder_set_profile_path(VmmBuilder*, KrunStr, KrunError*)` +
+  `vmm::profile::KrunProfiler` + per-phase measurements in `build_microvm`
+  (payload, guest memory, device attach, vCPU start, event subscriber) and the
+  API layer (event-manager creation). The v1
+  `krun_set_kernel_cmdline_append` half is **not** re-added: ABI 2 exposes it as
+  `krun_payload_append_cmdline`, which cang already uses.
+- The virtio-gpu device fixes came with the fd work: fence retirement
+  (`event_poll` + `poll_descriptor` polled alongside the control queue, on a
+  timeout only while a fence is pending), the fence descriptor kept alive for the
+  worker's lifetime, and poison-safe fence-handler locks. The blob-map/render-node/
+  cookie fixes are not re-added - crates.io `rutabaga_gfx` 0.1.85 carries them.
+
+**CI/packaging:** the release workflow now builds with `FFI=1` and asserts the
+exported symbols (without it, the published `libkrun.so.2` exported *nothing*),
+and `binutils` joined the Linux build packages. `CANG.md` documents the FFI=1
+requirement.
+
+**Verified:** `make gen-libkrun-bindings` (header + schema match cang's bindings),
+a local `FFI=1` build of the fork exporting 101 `krun_*` symbols including both new
+entry points, `cargo clippy --locked --features net,blk,gpu,input -- -D warnings`
+and `cargo fmt --all -- --check` clean, a `--gpu=drm` live boot (guest gets
+`/dev/dri/card0`, `renderD128` and the venus virtio ICD), and a `--profile` run
+whose artifact carries the new `libkrun_build_*` rows.
+
+**Published:** the branch and the permanent tag `v2.0.0-cang.2` were pushed, so
+the corrected asset exists; the re-pin is
+[Rebuild the v2 release with the C ABI and re-pin](13-release-c-abi-repin.md).

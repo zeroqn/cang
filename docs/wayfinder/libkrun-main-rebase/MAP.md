@@ -13,7 +13,8 @@ published as the permanent fork release **`v2.0.0-cang.1`**, pinned in
 ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
-**Status (2026-09-28): tickets 01, 02, 03, 04, 06, 07, 09, 11 and 12 resolved.**
+**Status (2026-09-28): tickets 01, 02, 03, 04, 06, 07, 09, 10, 11 and 12
+resolved.**
 The fork's `cang` branch is pushed (tip `d578e4e2`) and the permanent release
 **`v2.0.0-cang.1`** is published and pinned. cang is ported to the ABI-2 object
 API (ticket 09) and live-boots a guest - but **only against a locally built
@@ -21,11 +22,14 @@ libkrun**: the published asset is hollow. Its `libkrun.so.2.0.0` exports zero
 `krun_*` symbols because the release workflow builds without `FFI=1` (ABI 2 put
 the C entry points behind that feature) and only checks that the files exist;
 `nix/dev` had the same gap and is fixed. That fix, the re-published asset and the
-re-pin are ticket **13**, and it needs bob's push/dispatch. The fork's own C
-extensions (the render-server fd cang's `--gpu=drm` still lacks, and the profile
-path) are ticket **10**; both are best folded into one `v2.0.0-cang.2`. The fork
-is rebased (main + CI/docs + PRs 865/840) and `nix build ./nix/dev#cang-dev` is
-green on it.
+re-pin are ticket **13**, and it needs bob's push/dispatch. Ticket 10 re-added the
+fork's own C extensions on the ABI-2 device/builder (`krun_gpu_device_set_render_server_fd`,
+`krun_vmm_builder_set_profile_path`, the fence-retirement/poll fixes) and folded
+the `FFI=1` fix into the release workflow, which now asserts the exported symbols
+before packaging. The branch and the tag **`v2.0.0-cang.2`** are pushed and CI is
+publishing; the re-pin and the live boot against the pinned asset are ticket
+**13**. The fork is rebased (main + CI/docs + PRs 865/840 + four fork commits) and
+`nix build ./nix/dev#cang-dev` is green on it.
 Upstream `main` is a **ground-up C-ABI rewrite** (`a3d31822`, 2026-09-11;
 `ABI_VERSION=2`, `libkrun.so.2`): 20 of cang's 22 bound `krun_*` symbols are
 gone, init injection is caller-supplied via `libkrun_init.so`, and
@@ -34,9 +38,9 @@ builder/object API** (tickets 09/10). PR **822 is out of this map** (bob,
 2026-09-27): it is inert on the pinned kernel, its own commit would collide with
 our `VIRTIO_GPU_F_FENCE_PASSING = 5`, and carrying it as intended would mean
 vendoring a patched `rutabaga_gfx` for a capability nothing can exercise.
-Frontier: ticket **13** (rebuild the release with the C ABI, re-pin) is what
-unblocks everything downstream; ticket **10** (the fork's own C extensions) is
-the other half of that release and runs alongside it.
+Frontier: ticket **13** (re-pin the published `v2.0.0-cang.2` and live-boot the
+pinned asset), which also unblocks ticket **08** (the GPU smoke) and ticket
+**05** (the libkrunfw live check, whose boot can be the same run).
 
 ## Notes
 
@@ -86,6 +90,13 @@ the other half of that release and runs alongside it.
 
 ## Decisions so far
 
+- [Re-add the fork's C extensions on main's device code](tickets/10-fork-c-extensions-on-main.md):
+  `krun_gpu_device_set_render_server_fd` (owned fd -> `RutabagaBuilder::set_server_descriptor`),
+  `krun_vmm_builder_set_profile_path` + `vmm::profile::KrunProfiler`, the
+  fence-retirement/poison-safe-lock/two-tier-poll device fixes, the regenerated
+  header + schema, and the release workflow's `FFI=1` build with a symbol
+  assertion. Verified with a local `FFI=1` build (101 `krun_*` symbols), clippy on
+  the CI feature set, a `--gpu=drm` boot and a `--profile` artifact.
 - [Port cang's launcher to libkrun's v2 API](tickets/09-port-cang-to-v2-api.md):
   the ABI-2 object model in `api.rs`/`dynamic.rs`/`launcher.rs` (`krun_init_config_apply_in`
   supplies the init from the shipped `libkrun_init.so`, DHCP moved into the init
