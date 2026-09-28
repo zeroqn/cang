@@ -93,6 +93,7 @@ matrix, primary sources).
    `deps/libkrunfw/config-libkrunfw_*`.
 
 No stable or mainline line has param 10 or blob flag `0x8` as of 2026-09-28
-(mainline HEAD tops out at bit 5 `BLOB_ALIGNMENT` / param 9; `6.12.y` HEAD ==
-`v6.12.109` at param 8 / mask `0x7`), so there is nothing to cherry-pick from a
+(mainline HEAD tops out at bit 5 `BLOB_ALIGNMENT` / param 9; `6.12.y` is at
+`v6.12.111` and is equally empty - param 8 / mask `0x7`; corrected 2026-09-28, the
+child's note said `6.12.y` HEAD == `v6.12.109`), so there is nothing to cherry-pick from a
 release - the whole guest side is fork-carried.
