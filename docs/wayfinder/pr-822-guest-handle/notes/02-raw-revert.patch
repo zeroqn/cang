@@ -1,0 +1,94 @@
+From: Dmitry Osipenko <dmitry.osipenko@collabora.com>
+To: David Airlie <airlied@redhat.com>,
+	Gerd Hoffmann <kraxel@redhat.com>,
+	Gurchetan Singh <gurchetansingh@chromium.org>,
+	Chia-I Wu <olvaffe@gmail.com>,
+	Val Packett <val@invisiblethingslab.com>
+Cc: [dri-devel@lists.freedesktop.org](../../dri-devel/?t=20260911144222), virtualization@lists.linux.dev,
+	[linux-kernel@vger.kernel.org](../../lkml/?t=20260911144222), Yiwei Zhang <zzyiwei@gmail.com>
+Subject: [\[PATCH v1\] Revert "drm/virtio: Allow importing prime buffers when 3D is enabled"](#r)
+Date: Fri, 11 Sep 2026 17:42:03 +0300	[\[thread overview\]](#r)
+Message-ID: <20260911144204.2089401-1-dmitry.osipenko@collabora.com> ([raw](raw))
+
+Guest userspace may import udmabuf to vrend. Vrend doesn't support guest
+blobs, and thus, further 3d operations with the imported blob are failing.
+Typical scenario of the problem shown with mouse cursor RGBA image imported
+into virtio-gpu, which previously was rejected by virtio-gpu driver.
+Revert enabling guest blobs importing into vrend to fix the regression.
+
+Link: [https://gitlab.freedesktop.org/virgl/virglrenderer/-/work\_items/674](https://gitlab.freedesktop.org/virgl/virglrenderer/-/work_items/674)
+Fixes: df4dc947c46b ("drm/virtio: Allow importing prime buffers when 3D is enabled")
+Signed-off-by: Dmitry Osipenko <dmitry.osipenko@collabora.com>
+---
+ [drivers/gpu/drm/virtio/virtgpu\_prime.c](#Z31drivers:gpu:drm:virtio:virtgpu_prime.c) | 2 +-
+ 1 file [changed](#related), 1 insertion(+), 1 deletion(-)
+
+[diff](#iZ31drivers:gpu:drm:virtio:virtgpu_prime.c) --git a/drivers/gpu/drm/virtio/virtgpu\_prime.c b/drivers/gpu/drm/virtio/virtgpu\_prime.c
+index 149e6bcb5878..ebf471044d06 100644
+--- a/drivers/gpu/drm/virtio/virtgpu\_prime.c
++++ b/drivers/gpu/drm/virtio/virtgpu\_prime.c
+@@ -349,7 +349,7 @@ struct drm\_gem\_object \*virtgpu\_gem\_prime\_import(struct drm\_device \*dev,
+ 		}
+ 	}
+ 
+\-	if (!vgdev->has\_resource\_blob)
++	if (!vgdev->has\_resource\_blob || vgdev->has\_virgl\_3d)
+ 		return drm\_gem\_prime\_import(dev, buf);
+ 
+ 	bo = kzalloc\_obj(\*bo);
+-- 
+2.55.0
+
+* * *
+
+[next](../20260911145539.B23C51F00899@smtp.kernel.org/)             [reply](#R)	other threads:\[[~2026-09-11 14:42 UTC](../?t=20260911144222)|[newest](../)\]
+
+**Thread overview:** 5+ messages / expand\[[flat](T/#u)|[nested](t/#u)\]  [mbox.gz](t.mbox.gz)  [Atom feed](t.atom)  [top](#b)
+**2026-09-11 14:42 [Dmitry Osipenko \[this message\]](#t)**
+2026-09-11 14:55 \` [\[PATCH v1\] Revert "drm/virtio: Allow importing prime buffers when 3D is enabled"](../20260911145539.B23C51F00899@smtp.kernel.org/) sashiko-bot
+2026-09-11 15:32 \` [Yiwei Zhang](../CAJ+hS_j5w1sfpLS91HC_dSDgdK-=0z3PemY51hUbJVLW-wyF1g@mail.gmail.com/)
+2026-09-15 21:15 \` [Val Packett](../579d804b-d548-4c8d-8350-e1e181a612ae@invisiblethingslab.com/)
+2026-09-20 18:20 \` [Dmitry Osipenko](../1803e07b-63d9-45f7-80d7-f52980c3b321@collabora.com/)
+
+* * *
+
+**Reply instructions:**
+
+You may reply publicly to [this message](#t) via plain-text email
+using any one of the following methods:
+
+\* Save the following mbox file, import it into your mail client,
+  and reply-to-all from there: [mbox](raw)
+
+  Avoid top-posting and favor interleaved quoting:
+  [https://en.wikipedia.org/wiki/Posting\_style#Interleaved\_style](https://en.wikipedia.org/wiki/Posting_style#Interleaved_style)
+
+\* Reply using the **\--to**, **\--cc**, and **\--in-reply-to**
+  switches of git-send-email(1):
+
+  git send-email \\
+    --in-reply-to=20260911144204.2089401-1-dmitry.osipenko@collabora.com \\
+    --to=dmitry.osipenko@collabora.com \\
+    --cc=airlied@redhat.com \\
+    --cc=dri-devel@lists.freedesktop.org \\
+    --cc=gurchetansingh@chromium.org \\
+    --cc=kraxel@redhat.com \\
+    --cc=linux-kernel@vger.kernel.org \\
+    --cc=olvaffe@gmail.com \\
+    --cc=val@invisiblethingslab.com \\
+    --cc=virtualization@lists.linux.dev \\
+    --cc=zzyiwei@gmail.com \\
+    /path/to/YOUR\_REPLY
+
+  [https://kernel.org/pub/software/scm/git/docs/git-send-email.html](https://kernel.org/pub/software/scm/git/docs/git-send-email.html)
+
+\* If your mail client supports setting the **In-Reply-To** header
+  via mailto: links, try the [mailto: link](mailto:dmitry.osipenko@collabora.com?In-Reply-To=%3C20260911144204.2089401-1-dmitry.osipenko@collabora.com%3E&Cc=airlied%40redhat.com%2Cdri-devel%40lists.freedesktop.org%2Cgurchetansingh%40chromium.org%2Ckraxel%40redhat.com%2Clinux-kernel%40vger.kernel.org%2Colvaffe%40gmail.com%2Cval%40invisiblethingslab.com%2Cvirtualization%40lists.linux.dev%2Czzyiwei%40gmail.com&Subject=Re%3A%20%5BPATCH%20v1%5D%20Revert%20%22drm%2Fvirtio%3A%20Allow%20importing%20prime%20buffers%20when%203D%20is%20enabled%22)
+
+Be sure your reply has a **Subject:** header at the top and a blank line before the message body.
+
+* * *
+
+This is a public inbox, see [mirroring instructions](../_/text/mirror/)
+for how to clone and mirror all data and code used for this inbox;
+as well as URLs for NNTP newsgroup(s).

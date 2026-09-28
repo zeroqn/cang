@@ -1,0 +1,30 @@
+From 2a41d37ca1d07b718e2e80b702fb9bdc8a47d5c6 Mon Sep 17 00:00:00 2001
+From: Val Packett <val@invisiblethingslab.com>
+Date: Thu, 27 Aug 2026 06:48:20 -0300
+Subject: [PATCH] drm/virtio: attach imported DMA-BUFs to current 3D context if
+ exists
+
+To use imported resources in a cross-domain context, they need to be
+attached to said context, as that's what the host side expects.
+
+Use the virtio_gpu_gem_object_open/close hooks to accomplish that, like
+how other kinds of resources do.
+
+Signed-off-by: Val Packett <val@invisiblethingslab.com>
+---
+ drivers/gpu/drm/virtio/virtgpu_prime.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/gpu/drm/virtio/virtgpu_prime.c b/drivers/gpu/drm/virtio/virtgpu_prime.c
+index cf8454a47353..e5d662ac9644 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_prime.c
++++ b/drivers/gpu/drm/virtio/virtgpu_prime.c
+@@ -319,6 +319,8 @@ int virtgpu_dma_buf_obj_resubmit(struct virtio_gpu_device *vgdev,
+ 
+ static const struct drm_gem_object_funcs virtgpu_gem_dma_buf_funcs = {
+ 	.free = virtgpu_dma_buf_free_obj,
++	.open = virtio_gpu_gem_object_open,
++	.close = virtio_gpu_gem_object_close,
+ };
+ 
+ static void virtgpu_dma_buf_move_notify(struct dma_buf_attachment *attach)

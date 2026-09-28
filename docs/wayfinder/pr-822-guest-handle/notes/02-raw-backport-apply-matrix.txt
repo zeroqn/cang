@@ -1,0 +1,114 @@
+### BASE: minimal tree of v6.12.109 files touched by the two series
+    (10 files fetched from git.kernel.org stable/linux.git?h=v6.12.109)
+
+### STRICT sequential 'git apply' (no fuzz, real tree order)
+ORDER: prereq 1..5 (20241126 v5 series: detach-backing, map-helper, init-free-helpers, import-guest-blobs, prepare-cleanup)
+       then Val branch commits 1..6 (create-guest-handle, use-cgh, attach-to-ctx, param10, blob-ctx-id-fix, prime-fd-to-handle)
+
+CLEAN   02-raw-prereq-02-detach-backing.patch
+CLEAN   02-raw-prereq-03-map-helper.patch
+CLEAN   02-raw-prereq-04-init-free-helpers.patch
+CLEAN   02-raw-prereq-05-import-guest-blobs.patch
+FAILED  02-raw-prereq-06-prepare-cleanup.patch
+          error: patch failed: drivers/gpu/drm/virtio/virtgpu_plane.c:27
+          error: drivers/gpu/drm/virtio/virtgpu_plane.c: patch does not apply
+
+### Same, with 'patch -p1 --fuzz=2' (hunks that need context re-authoring only)
+--- 02-raw-prereq-02-detach-backing.patch
+--- 02-raw-prereq-03-map-helper.patch
+--- 02-raw-prereq-04-init-free-helpers.patch
+--- 02-raw-prereq-05-import-guest-blobs.patch
+--- 02-raw-prereq-06-prepare-cleanup.patch
+1 out of 6 hunks FAILED -- saving rejects to file drivers/gpu/drm/virtio/virtgpu_plane.c.rej
+    REJECTS: ./drivers/gpu/drm/virtio/virtgpu_plane.c.rej
+--- 02-raw-val-01-create-guest-handle.patch
+1 out of 1 hunk FAILED -- saving rejects to file drivers/gpu/drm/virtio/virtgpu_drv.c.rej
+1 out of 1 hunk FAILED -- saving rejects to file drivers/gpu/drm/virtio/virtgpu_drv.h.rej
+1 out of 2 hunks FAILED -- saving rejects to file drivers/gpu/drm/virtio/virtgpu_kms.c.rej
+1 out of 1 hunk FAILED -- saving rejects to file include/uapi/linux/virtio_gpu.h.rej
+    REJECTS: ./include/uapi/linux/virtio_gpu.h.rej
+./drivers/gpu/drm/virtio/virtgpu_kms.c.rej
+./drivers/gpu/drm/virtio/virtgpu_drv.c.rej
+./drivers/gpu/drm/virtio/virtgpu_drv.h.rej
+--- 02-raw-val-02-use-cgh-for-imported.patch
+--- 02-raw-val-03-attach-imported-to-ctx.patch
+--- 02-raw-val-04-param-create-guest-handle.patch
+1 out of 1 hunk FAILED -- saving rejects to file include/uapi/drm/virtgpu_drm.h.rej
+    REJECTS: ./include/uapi/drm/virtgpu_drm.h.rej
+--- 02-raw-val-05-blob-ctx-id-fix.patch
+1 out of 1 hunk FAILED -- saving rejects to file drivers/gpu/drm/virtio/virtgpu_drv.c.rej
+1 out of 1 hunk FAILED -- saving rejects to file drivers/gpu/drm/virtio/virtgpu_drv.h.rej
+1 out of 2 hunks FAILED -- saving rejects to file drivers/gpu/drm/virtio/virtgpu_kms.c.rej
+1 out of 1 hunk FAILED -- saving rejects to file include/uapi/linux/virtio_gpu.h.rej
+    REJECTS: ./include/uapi/linux/virtio_gpu.h.rej
+./drivers/gpu/drm/virtio/virtgpu_kms.c.rej
+./drivers/gpu/drm/virtio/virtgpu_drv.c.rej
+./drivers/gpu/drm/virtio/virtgpu_drv.h.rej
+--- 02-raw-val-06-prime-fd-to-handle-ctx.patch
+
+### BASE v6.12.109 feature bits / prime import (git.kernel.org extracts)
+-- include/uapi/linux/virtio_gpu.h (v6.12.109)
+47:#define VIRTIO_GPU_F_VIRGL               0
+52:#define VIRTIO_GPU_F_EDID                1
+56:#define VIRTIO_GPU_F_RESOURCE_UUID       2
+61:#define VIRTIO_GPU_F_RESOURCE_BLOB       3
+66:#define VIRTIO_GPU_F_CONTEXT_INIT        4
+-- include/uapi/linux/virtio_gpu.h (mainline HEAD)
+47:#define VIRTIO_GPU_F_VIRGL               0
+52:#define VIRTIO_GPU_F_EDID                1
+56:#define VIRTIO_GPU_F_RESOURCE_UUID       2
+61:#define VIRTIO_GPU_F_RESOURCE_BLOB       3
+66:#define VIRTIO_GPU_F_CONTEXT_INIT        4
+74:#define VIRTIO_GPU_F_BLOB_ALIGNMENT      5
+-- include/uapi/drm/virtgpu_drm.h (v6.12.109)
+93:#define VIRTGPU_PARAM_3D_FEATURES 1 /* do we have 3D features in the hw */
+94:#define VIRTGPU_PARAM_CAPSET_QUERY_FIX 2 /* do we have the capset fix */
+95:#define VIRTGPU_PARAM_RESOURCE_BLOB 3 /* DRM_VIRTGPU_RESOURCE_CREATE_BLOB */
+96:#define VIRTGPU_PARAM_HOST_VISIBLE 4 /* Host blob resources are mappable */
+97:#define VIRTGPU_PARAM_CROSS_DEVICE 5 /* Cross virtio-device resource sharing  */
+98:#define VIRTGPU_PARAM_CONTEXT_INIT 6 /* DRM_VIRTGPU_CONTEXT_INIT */
+99:#define VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs 7 /* Bitmask of supported capability set ids */
+100:#define VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME 8 /* Ability to set debug name from userspace */
+179:#define VIRTGPU_BLOB_FLAG_USE_MAPPABLE     0x0001
+180:#define VIRTGPU_BLOB_FLAG_USE_SHAREABLE    0x0002
+181:#define VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE 0x0004
+-- include/uapi/drm/virtgpu_drm.h (mainline HEAD)
+93:#define VIRTGPU_PARAM_3D_FEATURES 1 /* do we have 3D features in the hw */
+94:#define VIRTGPU_PARAM_CAPSET_QUERY_FIX 2 /* do we have the capset fix */
+95:#define VIRTGPU_PARAM_RESOURCE_BLOB 3 /* DRM_VIRTGPU_RESOURCE_CREATE_BLOB */
+96:#define VIRTGPU_PARAM_HOST_VISIBLE 4 /* Host blob resources are mappable */
+97:#define VIRTGPU_PARAM_CROSS_DEVICE 5 /* Cross virtio-device resource sharing  */
+98:#define VIRTGPU_PARAM_CONTEXT_INIT 6 /* DRM_VIRTGPU_CONTEXT_INIT */
+99:#define VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs 7 /* Bitmask of supported capability set ids */
+100:#define VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME 8 /* Ability to set debug name from userspace */
+101:#define VIRTGPU_PARAM_BLOB_ALIGNMENT 9 /* Device alignment requirements for blobs */
+186:#define VIRTGPU_BLOB_FLAG_USE_MAPPABLE     0x0001
+187:#define VIRTGPU_BLOB_FLAG_USE_SHAREABLE    0x0002
+188:#define VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE 0x0004
+
+-- drivers/gpu/drm/virtio/virtgpu_prime.c (v6.12.109): import function
+struct drm_gem_object *virtgpu_gem_prime_import(struct drm_device *dev,
+						struct dma_buf *buf)
+{
+	struct drm_gem_object *obj;
+
+	if (buf->ops == &virtgpu_dmabuf_ops.ops) {
+		obj = buf->priv;
+		if (obj->dev == dev) {
+			/*
+			 * Importing dmabuf exported from our own gem increases
+			 * refcount on gem itself instead of f_count of dmabuf.
+			 */
+			drm_gem_object_get(obj);
+			return obj;
+		}
+	}
+
+	return drm_gem_prime_import(dev, buf);
+}
+-- v6.13 prime.c: virtgpu_dma_buf_init_obj present?
+0
+-- v6.14 prime.c: virtgpu_dma_buf_init_obj present?
+2
+
+[stderr]

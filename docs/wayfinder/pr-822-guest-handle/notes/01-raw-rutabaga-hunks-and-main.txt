@@ -1,0 +1,653 @@
+# Raw evidence for ticket 01 (rutabaga delta)
+# collected 2026-09-28, read-only; primary sources only
+
+## S1. magma-gpu/rutabaga_gfx main rev
+$ git fetch --depth=1 origin main   # https://github.com/magma-gpu/rutabaga_gfx
+ec60ee117687414880590207067934d6aea24c35   refs/heads/main  ("rutabaga_gfx: Replace minigbm with upstream Mesa GBM")
+tags: v0.1.85 (2026-08-06), v0.1.80, v0.1.75, v0.1.71   releases: same four, latest v0.1.85 2026-08-06T14:16:04Z
+
+## S2. crates.io versions (api/v1/crates/rutabaga_gfx/versions, 28 versions)
+0.1.76-libkrun.1 2026-02-26
+0.1.80 2026-07-21
+0.1.80-alpha.0 2026-07-21
+0.1.80-chromeos 2026-07-21
+0.1.85 2026-08-06   <-- latest, and no 0.1.86-* of any kind (checked all 28 entries; none > 0.1.85)
+
+## S3. open PRs / issues in magma-gpu/rutabaga_gfx (api, 2026-09-28)
+open PRs: 89 "Improve magma status" (2026-09-09), 88 "Add option to bypass gbm and virglrenderer pkg-config probes" (2026-09-07)
+open issues: 66 RutabagaIovec/ownership/shareable guest buffers (2026-07-24), 45, 41, 40, 24
+release-titled history: PR 69 (0.1.85, 2026-08-05), 64 (0.1.80), 39 (0.1.76), 10 (0.1.71) -- all closed/merged; NOTHING open about releasing main.
+
+## S4. PR 822's four rutabaga commits, verbatim diffs
+$ git -C deps/libkrun show <sha> -- src/rutabaga_gfx/
+(git show output pasted below; paths are libkrun's vendored copy at src/rutabaga_gfx/)
+
+===== commit a8fd2784 =====
+a8fd278474a8f9602bf429d900ac67d8be3a82eb rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+
+diff --git a/src/rutabaga_gfx/src/cross_domain/mod.rs b/src/rutabaga_gfx/src/cross_domain/mod.rs
+index c1ffbd7d..16fba2f8 100644
+--- a/src/rutabaga_gfx/src/cross_domain/mod.rs
++++ b/src/rutabaga_gfx/src/cross_domain/mod.rs
+@@ -1307,23 +1307,13 @@ impl RutabagaContext for CrossDomainContext {
+     }
+ 
+     fn attach(&mut self, resource: &mut RutabagaResource) {
+-        if resource.blob_mem == RUTABAGA_BLOB_MEM_GUEST {
+-            self.context_resources.lock().unwrap().insert(
+-                resource.resource_id,
+-                CrossDomainResource {
+-                    handle: None,
+-                    backing_iovecs: resource.backing_iovecs.take(),
+-                },
+-            );
+-        } else if let Some(ref handle) = resource.handle {
+-            self.context_resources.lock().unwrap().insert(
+-                resource.resource_id,
+-                CrossDomainResource {
+-                    handle: Some(handle.clone()),
+-                    backing_iovecs: None,
+-                },
+-            );
+-        }
++        self.context_resources.lock().unwrap().insert(
++            resource.resource_id,
++            CrossDomainResource {
++                handle: resource.handle.clone(),
++                backing_iovecs: resource.backing_iovecs.take(),
++            },
++        );
+     }
+ 
+     fn detach(&mut self, resource: &RutabagaResource) {
+
+===== commit ec9e5562 =====
+ec9e5562f9001c67ae4c6ae1126304c2b1e3f5cc rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+
+diff --git a/src/rutabaga_gfx/src/rutabaga_utils.rs b/src/rutabaga_gfx/src/rutabaga_utils.rs
+index 912200a7..9bd84674 100644
+--- a/src/rutabaga_gfx/src/rutabaga_utils.rs
++++ b/src/rutabaga_gfx/src/rutabaga_utils.rs
+@@ -75,6 +75,7 @@ pub const RUTABAGA_BLOB_MEM_HOST3D_GUEST: u32 = 0x0003;
+ pub const RUTABAGA_BLOB_FLAG_USE_MAPPABLE: u32 = 0x0001;
+ pub const RUTABAGA_BLOB_FLAG_USE_SHAREABLE: u32 = 0x0002;
+ pub const RUTABAGA_BLOB_FLAG_USE_CROSS_DEVICE: u32 = 0x0004;
++pub const RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE: u32 = 0x0008;
+ #[repr(C)]
+ #[derive(Copy, Clone, Debug)]
+ pub struct ResourceCreateBlob {
+
+===== commit 3391f3c5 =====
+3391f3c5e87b4f45e64b0931e9036aaa8ec3c3e3 rutabaga_gfx: cross_domain: support creating guest resources with handles
+
+diff --git a/src/rutabaga_gfx/src/cross_domain/mod.rs b/src/rutabaga_gfx/src/cross_domain/mod.rs
+index 16fba2f8..d2208453 100644
+--- a/src/rutabaga_gfx/src/cross_domain/mod.rs
++++ b/src/rutabaga_gfx/src/cross_domain/mod.rs
+@@ -1374,19 +1374,31 @@ impl RutabagaComponent for CrossDomain {
+         resource_id: u32,
+         resource_create_blob: ResourceCreateBlob,
+         iovec_opt: Option<Vec<RutabagaIovec>>,
+-        _handle_opt: Option<RutabagaHandle>,
++        handle_opt: Option<RutabagaHandle>,
+     ) -> RutabagaResult<RutabagaResource> {
+-        if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST
+-            && resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE
+-        {
++        if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST {
+             return Err(RutabagaError::SpecViolation(
+                 "expected only guest memory blobs",
+             ));
+         }
+ 
++        if resource_create_blob.blob_flags & RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++            == RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++        {
++            if handle_opt.is_none() {
++                return Err(RutabagaError::SpecViolation(
++                    "expected a handle when using CREATE_GUEST_HANDLE",
++                ));
++            }
++        } else if resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE {
++            return Err(RutabagaError::SpecViolation(
++                "expected only create-handle or mappable guest memory blobs",
++            ));
++        }
++
+         Ok(RutabagaResource {
+             resource_id,
+-            handle: None,
++            handle: handle_opt.map(Arc::new),
+             blob: true,
+             blob_mem: resource_create_blob.blob_mem,
+             blob_flags: resource_create_blob.blob_flags,
+
+===== commit 16e116ae =====
+16e116ae443f875a9608948e29033d423791a9f1 rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+
+diff --git a/src/rutabaga_gfx/src/rutabaga_core.rs b/src/rutabaga_gfx/src/rutabaga_core.rs
+index f5b349a9..19e95114 100644
+--- a/src/rutabaga_gfx/src/rutabaga_core.rs
++++ b/src/rutabaga_gfx/src/rutabaga_core.rs
+@@ -733,9 +733,21 @@ impl Rutabaga {
+             return Err(RutabagaError::InvalidResourceId);
+         }
+ 
++        // Imported guest resources (from udmabuf or a passed-through real GPU) with host handles
++        // cannot have a `ctx_id` set, we need to pass them to the cross-domain *component* to
++        // make a RutabagaResource that simply wraps the handle.
++        let component_type = if ctx_id == 0
++            && resource_create_blob.blob_flags & RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++                == RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++        {
++            &RutabagaComponentType::CrossDomain
++        } else {
++            &self.default_component
++        };
++
+         let component = self
+             .components
+-            .get_mut(&self.default_component)
++            .get_mut(component_type)
+             .ok_or(RutabagaError::InvalidComponent)?;
+ 
+         let mut context = None;
+
+
+===== crates.io rutabaga_gfx 0.1.85 (local registry cache) =====
+----- 0.1.85 src/cross_domain/context.rs attach -----
+    fn attach(&mut self, resource: &mut RutabagaResource) {
+        if resource.blob_mem == RUTABAGA_BLOB_MEM_GUEST {
+            self.context_resources.lock().unwrap().insert(
+                resource.resource_id,
+                ContextResource {
+                    handle: None,
+                    backing_iovecs: resource.backing_iovecs.take(),
+                },
+            );
+        } else if let Some(ref handle) = resource.handle {
+            self.context_resources.lock().unwrap().insert(
+                resource.resource_id,
+                ContextResource {
+                    handle: Some(handle.clone()),
+                    backing_iovecs: None,
+                },
+            );
+        }
+    }
+
+----- 0.1.85 src/cross_domain/component.rs create_blob -----
+    fn create_blob(
+        &mut self,
+        _ctx_id: u32,
+        resource_id: u32,
+        resource_create_blob: ResourceCreateBlob,
+        iovec_opt: Option<Vec<RutabagaIovec>>,
+        _handle_opt: Option<RutabagaHandle>,
+    ) -> RutabagaResult<RutabagaResource> {
+        if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST
+            && resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE
+        {
+            return Err(MagmaGpuError::WithContext("expected only guest memory blobs").into());
+        }
+
+        Ok(RutabagaResource {
+            resource_id,
+            handle: None,
+            blob: true,
+            blob_mem: resource_create_blob.blob_mem,
+            blob_flags: resource_create_blob.blob_flags,
+            map_info: None,
+            info_2d: None,
+            info_3d: None,
+            vulkan_info: None,
+            backing_iovecs: iovec_opt,
+            component_mask: 1 << (RutabagaComponentType::CrossDomain as u8),
+            size: resource_create_blob.size,
+            mapping: None,
+        })
+    }
+
+    fn create_context(
+        &self,
+        _ctx_id: u32,
+        _context_init: u32,
+----- 0.1.85 src/lib.rs re-exports -----
+pub use magma_gpu::util::Error::Unsupported as RutabagaUnsupported;
+pub use magma_gpu::util::FromRawDescriptor as RutabagaFromRawDescriptor;
+pub use magma_gpu::util::Handle as RutabagaMagmaHandle;
+pub use magma_gpu::util::IntoRawDescriptor as RutabagaIntoRawDescriptor;
+pub use magma_gpu::util::MappedRegion as RutabagaMappedRegion;
+pub use magma_gpu::util::OwnedDescriptor as RutabagaDescriptor;
+pub use magma_gpu::util::RawDescriptor as RutabagaRawDescriptor;
+pub use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_DMABUF as RUTABAGA_HANDLE_TYPE_MEM_DMABUF;
+pub use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD as RUTABAGA_HANDLE_TYPE_MEM_OPAQUE_FD;
+
+pub use crate::handle::AhbInfo;
+pub use crate::handle::RutabagaHandle;
+pub use crate::rutabaga_core::calculate_capset_mask;
+pub use crate::rutabaga_core::calculate_capset_names;
+pub use crate::rutabaga_core::Rutabaga;
+pub use crate::rutabaga_core::RutabagaBuilder;
+pub use crate::rutabaga_core::VirtioFsLookup;
+pub use crate::rutabaga_gralloc::DrmFormat;
+pub use crate::rutabaga_gralloc::ImageAllocationInfo;
+pub use crate::rutabaga_gralloc::ImageMemoryRequirements;
+pub use crate::rutabaga_gralloc::RutabagaGralloc;
+pub use crate::rutabaga_gralloc::RutabagaGrallocBackendFlags;
+pub use crate::rutabaga_gralloc::RutabagaGrallocFlags;
+pub use crate::rutabaga_utils::*;
+
+
+===== main ec60ee11 cross_domain =====
+----- main src/cross_domain/component.rs create_blob (92-121) -----
+    fn create_blob(
+        &mut self,
+        _ctx_id: u32,
+        resource_id: u32,
+        resource_create_blob: ResourceCreateBlob,
+        iovec_opt: Option<Vec<RutabagaIovec>>,
+        _handle_opt: Option<RutabagaHandle>,
+    ) -> RutabagaResult<RutabagaResource> {
+        if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST
+            && resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE
+        {
+            return Err(MagmaGpuError::WithContext("expected only guest memory blobs").into());
+        }
+
+        Ok(RutabagaResource {
+            resource_id,
+            handle: None,
+            blob: true,
+            blob_mem: resource_create_blob.blob_mem,
+            blob_flags: resource_create_blob.blob_flags,
+            map_info: None,
+            info_2d: None,
+            info_3d: None,
+            vulkan_info: None,
+            backing_iovecs: iovec_opt,
+            component_mask: 1 << (RutabagaComponentType::CrossDomain as u8),
+            size: resource_create_blob.size,
+            mapping: None,
+        })
+    }
+----- main src/cross_domain/context.rs 546-700 -----
+    fn create_blob_from_iovecs(
+        resource_id: u32,
+        resource_create_blob: ResourceCreateBlob,
+        iovecs: Vec<RutabagaIovec>,
+    ) -> RutabagaResource {
+        RutabagaResource {
+            resource_id,
+            handle: None,
+            blob: true,
+            blob_mem: resource_create_blob.blob_mem,
+            blob_flags: resource_create_blob.blob_flags,
+            map_info: None,
+            info_2d: None,
+            info_3d: None,
+            vulkan_info: None,
+            backing_iovecs: Some(iovecs),
+            component_mask: 1 << (RutabagaComponentType::CrossDomain as u8),
+            size: resource_create_blob.size,
+            mapping: None,
+        }
+    }
+
+    fn create_blob_from_handle(
+        &self,
+        resource_id: u32,
+        resource_create_blob: ResourceCreateBlob,
+        handle: MagmaGpuHandle,
+    ) -> RutabagaResult<RutabagaResource> {
+        let map_access = handle
+            .os_handle
+            .determine_map_access_mode()
+            .map_err(|e| RutabagaError::MagmaGpuError(e.into()))?;
+        let map_info = Some(RUTABAGA_MAP_CACHE_CACHED | map_access);
+
+        Ok(RutabagaResource {
+            resource_id,
+            handle: Some(Arc::new(handle.into())),
+            blob: true,
+            blob_mem: resource_create_blob.blob_mem,
+            blob_flags: resource_create_blob.blob_flags,
+            map_info,
+            info_2d: None,
+            info_3d: None,
+            vulkan_info: None,
+            backing_iovecs: None,
+            component_mask: 1 << (RutabagaComponentType::CrossDomain as u8),
+            size: resource_create_blob.size,
+            mapping: None,
+        })
+    }
+
+    fn create_blob_with_requirements(
+        &self,
+        resource_id: u32,
+        resource_create_blob: ResourceCreateBlob,
+        handle_opt: Option<RutabagaHandle>,
+        reqs: &ImageMemoryRequirements,
+    ) -> RutabagaResult<RutabagaResource> {
+        if reqs.size != resource_create_blob.size {
+            return Err(MagmaGpuError::WithContext("blob size mismatch").into());
+        }
+
+        // Strictly speaking, it's against the virtio-gpu spec to allocate memory in the context
+        // create blob function, which says "the actual allocation is done via
+        // VIRTIO_GPU_CMD_SUBMIT_3D."  However, atomic resource creation is easiest for the
+        // cross-domain use case, so whatever.
+        let hnd = match handle_opt {
+            Some(handle) => handle,
+            None => self.gralloc.lock().unwrap().allocate_memory(*reqs)?.into(),
+        };
+
+        let info_3d = Resource3DInfo {
+            width: reqs.info.width,
+            height: reqs.info.height,
+            drm_fourcc: reqs.info.drm_format.into(),
+            strides: reqs.strides,
+            offsets: reqs.offsets,
+            modifier: reqs.modifier,
+        };
+
+        Ok(RutabagaResource {
+            resource_id,
+            handle: Some(Arc::new(hnd)),
+            blob: true,
+            blob_mem: resource_create_blob.blob_mem,
+            blob_flags: resource_create_blob.blob_flags,
+            map_info: Some(reqs.map_info | RUTABAGA_MAP_ACCESS_RW),
+            info_2d: None,
+            info_3d: Some(info_3d),
+            vulkan_info: reqs.vulkan_info,
+            backing_iovecs: None,
+            component_mask: 1 << (RutabagaComponentType::CrossDomain as u8),
+            size: resource_create_blob.size,
+            mapping: None,
+        })
+    }
+}
+
+impl RutabagaContext for CrossDomainContext {
+    fn context_create_blob(
+        &mut self,
+        resource_id: u32,
+        resource_create_blob: ResourceCreateBlob,
+        iovec_opt: Option<Vec<RutabagaIovec>>,
+        handle_opt: Option<RutabagaHandle>,
+    ) -> RutabagaResult<RutabagaResource> {
+        // This single interface is responsible for some rather different operations,
+        // all of which result in the creation of a blob resource.
+        match (
+            resource_create_blob.blob_id,
+            resource_create_blob.blob_mem,
+            handle_opt,
+        ) {
+            // Case 1: Guest memory with iovecs (only available to this process)
+            //  This is used for the socket ring buffers.
+            (0, RUTABAGA_BLOB_MEM_GUEST, None) => Ok(Self::create_blob_from_iovecs(
+                resource_id,
+                resource_create_blob,
+                iovec_opt.ok_or({
+                    MagmaGpuError::WithContext("tried to create guest memory w/o iovecs")
+                })?,
+            )),
+            // Case 2: Guest memory with imported handle (CREATE_GUEST_HANDLE / PRIME import)
+            //  It is the caller's responsibility to create such handles in response to
+            //  the CREATE_GUEST_HANDLE flag being set by the guest, because the handle
+            //  creation is a hypervisor-specific operation (e.g. udmabuf vs gntdev-dmabuf).
+            (0, RUTABAGA_BLOB_MEM_GUEST, Some(handle)) => {
+                self.create_blob_from_handle(resource_id, resource_create_blob, handle.try_into()?)
+            }
+            // Cases 3 & 4: Item-backed blobs
+            (item_id, _, handle_opt) => {
+                let mut items = self.item_state.lock().unwrap();
+                let Entry::Occupied(entry) = items.table.entry(item_id as u32) else {
+                    return Err(RutabagaError::InvalidCrossDomainItemId);
+                };
+                match entry.get() {
+                    // Case 3: Memory allocated with requirements (by rutabaga or by the caller)
+                    //  The requirements blob's lifetime is managed by the guest,
+                    //  and one requirements blob can be reused multiple times.
+                    CrossDomainItem::ImageRequirements(reqs) => self.create_blob_with_requirements(
+                        resource_id,
+                        resource_create_blob,
+                        handle_opt,
+                        reqs,
+                    ),
+                    // Case 4: Handles received over the socket (e.g. Wayland keymaps)
+                    CrossDomainItem::Blob(_) => {
+                        let CrossDomainItem::Blob(handle) = entry.remove() else {
+                            unreachable!()
+                        };
+                        self.create_blob_from_handle(resource_id, resource_create_blob, handle)
+                    }
+                    _ => Err(RutabagaError::InvalidCrossDomainItemType),
+                }
+            }
+----- main src/cross_domain/context.rs attach (809-817) -----
+    fn attach(&mut self, resource: &mut RutabagaResource) {
+        self.context_resources.lock().unwrap().insert(
+            resource.resource_id,
+            ContextResource {
+                handle: resource.handle.clone(),
+                backing_iovecs: resource.backing_iovecs.take(),
+            },
+        );
+    }
+
+
+===== main ec60ee11 core/utils/lib/handle =====
+----- main src/rutabaga_core.rs resource_create_blob (841-885) -----
+    pub fn resource_create_blob(
+        &mut self,
+        ctx_id: u32,
+        resource_id: u32,
+        resource_create_blob: ResourceCreateBlob,
+        iovecs: Option<Vec<RutabagaIovec>>,
+        handle: Option<RutabagaHandle>,
+    ) -> RutabagaResult<()> {
+        if self.resources.contains_key(&resource_id) {
+            return Err(RutabagaError::InvalidResourceId);
+        }
+
+        let component = self
+            .components
+            .get_mut(&self.default_component)
+            .ok_or(RutabagaError::InvalidComponent)?;
+
+        let mut context = None;
+        // For the cross-domain context, we'll need to create the blob resource via a home-grown
+        // rutabaga context rather than one from an external C/C++ component.  Use `ctx_id` and
+        // the component type if it happens to be a cross-domain context.
+        if ctx_id > 0 {
+            let ctx = self
+                .contexts
+                .get_mut(&ctx_id)
+                .ok_or(RutabagaError::InvalidContextId)?;
+
+            if ctx.component_type() == RutabagaComponentType::CrossDomain {
+                context = Some(ctx);
+            }
+        }
+
+        let resource = match context {
+            Some(ctx) => {
+                ctx.context_create_blob(resource_id, resource_create_blob, iovecs, handle)?
+            }
+            None => {
+                component.create_blob(ctx_id, resource_id, resource_create_blob, iovecs, handle)?
+            }
+        };
+
+        self.resources.insert(resource_id, resource);
+        Ok(())
+    }
+
+----- main src/rutabaga_utils.rs 70-80 -----
+}
+
+/// Blob resource creation parameters.
+pub const RUTABAGA_BLOB_MEM_GUEST: u32 = 0x0001;
+pub const RUTABAGA_BLOB_MEM_HOST3D: u32 = 0x0002;
+pub const RUTABAGA_BLOB_MEM_HOST3D_GUEST: u32 = 0x0003;
+
+pub const RUTABAGA_BLOB_FLAG_USE_MAPPABLE: u32 = 0x0001;
+pub const RUTABAGA_BLOB_FLAG_USE_SHAREABLE: u32 = 0x0002;
+pub const RUTABAGA_BLOB_FLAG_USE_CROSS_DEVICE: u32 = 0x0004;
+#[repr(C)]
+----- main src/lib.rs 26-49 -----
+pub use magma_gpu::util::Error::Unsupported as RutabagaUnsupported;
+pub use magma_gpu::util::FromRawDescriptor as RutabagaFromRawDescriptor;
+pub use magma_gpu::util::Handle as RutabagaMagmaHandle;
+pub use magma_gpu::util::IntoRawDescriptor as RutabagaIntoRawDescriptor;
+pub use magma_gpu::util::MappedRegion as RutabagaMappedRegion;
+pub use magma_gpu::util::OwnedDescriptor as RutabagaDescriptor;
+pub use magma_gpu::util::RawDescriptor as RutabagaRawDescriptor;
+pub use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_DMABUF as RUTABAGA_HANDLE_TYPE_MEM_DMABUF;
+pub use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD as RUTABAGA_HANDLE_TYPE_MEM_OPAQUE_FD;
+
+pub use crate::handle::AhbInfo;
+pub use crate::handle::RutabagaHandle;
+pub use crate::rutabaga_core::calculate_capset_mask;
+pub use crate::rutabaga_core::calculate_capset_names;
+pub use crate::rutabaga_core::Rutabaga;
+pub use crate::rutabaga_core::RutabagaBuilder;
+pub use crate::rutabaga_core::VirtioFsLookup;
+pub use crate::rutabaga_gralloc::DrmFormat;
+pub use crate::rutabaga_gralloc::ImageAllocationInfo;
+pub use crate::rutabaga_gralloc::ImageMemoryRequirements;
+pub use crate::rutabaga_gralloc::RutabagaGralloc;
+pub use crate::rutabaga_gralloc::RutabagaGrallocBackendFlags;
+pub use crate::rutabaga_gralloc::RutabagaGrallocFlags;
+pub use crate::rutabaga_utils::*;
+----- main src/handle.rs 31-40 -----
+pub enum RutabagaHandle {
+    MagmaGpuHandle(MagmaGpuHandle),
+    AhbInfo(AhbInfo),
+}
+
+impl From<MagmaGpuHandle> for RutabagaHandle {
+    fn from(value: MagmaGpuHandle) -> Self {
+        RutabagaHandle::MagmaGpuHandle(value)
+    }
+}
+
+
+===== magma-gpu util =====
+----- magma-gpu Handle + handle types (third_party/mesa3d .../util/defines.rs) -----
+/// Handle types (memory and sync in same namespace)
+pub const MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD: u32 = 0x0001;
+pub const MAGMA_GPU_HANDLE_TYPE_MEM_DMABUF: u32 = 0x0002;
+pub const MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_WIN32: u32 = 0x0003;
+pub const MAGMA_GPU_HANDLE_TYPE_MEM_SHM: u32 = 0x0004;
+pub const MAGMA_GPU_HANDLE_TYPE_MEM_ZIRCON: u32 = 0x0005;
+
+pub const MAGMA_GPU_HANDLE_TYPE_SIGNAL_OPAQUE_FD: u32 = 0x0010;
+pub const MAGMA_GPU_HANDLE_TYPE_SIGNAL_SYNC_FD: u32 = 0x0020;
+pub const MAGMA_GPU_HANDLE_TYPE_SIGNAL_OPAQUE_WIN32: u32 = 0x0030;
+pub const MAGMA_GPU_HANDLE_TYPE_SIGNAL_ZIRCON: u32 = 0x0040;
+pub const MAGMA_GPU_HANDLE_TYPE_SIGNAL_EVENT_FD: u32 = 0x0050;
+
+/// Handle to OS-specific memory or synchronization objects.
+pub struct Handle {
+    pub os_handle: OwnedDescriptor,
+    pub handle_type: u32,
+}
+
+impl Handle {
+    /// Clones an existing handle, by using OS specific mechanisms.
+    pub fn try_clone(&self) -> Result<Handle> {
+        let clone = self
+            .os_handle
+            .try_clone()
+            .map_err(|_| Error::InvalidMagmaHandle)?;
+        Ok(Handle {
+            os_handle: clone,
+            handle_type: self.handle_type,
+        })
+    }
+}
+
+----- git ls-tree third_party (plain tree, no .gitmodules) -----
+040000 tree 6d2d29f3a1fcba43e319a2ccc008e2ace070b677	third_party/mesa3d
+100644 blob 83c3d7b1c09bb51ab5e21c7356b0c944c36b1fdb	third_party/meson.build
+fatal: path '.gitmodules' does not exist in 'FETCH_HEAD'
+
+
+===== delivery: dep sites and locks =====
+----- Cargo.toml dep sites (fork HEAD 3d7af2c2) -----
+17:gpu = ["rutabaga_gfx", "thiserror", "zerocopy", "krun_display"]
+45:rutabaga_gfx = { version = "0.1.85", features = ["virgl_renderer"], optional = true }
+57:rutabaga_gfx = { version = "0.1.85", features = ["virgl_renderer"], optional = true }
+
+----- Cargo.lock -----
+1415:name = "rutabaga_gfx"
+1416-version = "0.1.85"
+1417-source = "registry+https://github.com/rust-lang/crates.io-index"
+1418-checksum = "52e4747a81e5e40e8f4b0d74bab0cadf675c9a470a3d75bad5989cd7c3a64fbe"
+1419-dependencies = [
+1036:name = "magma-gpu"
+1037-version = "0.1.85"
+1038-source = "registry+https://github.com/rust-lang/crates.io-index"
+1039-checksum = "c19b363d05adbb8ca246d50b7d8dcac70003f7f429b52beebe7ce0d51cb39fd7"
+1040-dependencies = [
+
+----- cang root lock -----
+1171:name = "rutabaga_gfx"
+1172-version = "0.1.85"
+1173-source = "registry+https://github.com/rust-lang/crates.io-index"
+1174-checksum = "52e4747a81e5e40e8f4b0d74bab0cadf675c9a470a3d75bad5989cd7c3a64fbe"
+906:name = "magma-gpu"
+907-version = "0.1.85"
+908-source = "registry+https://github.com/rust-lang/crates.io-index"
+909-checksum = "c19b363d05adbb8ca246d50b7d8dcac70003f7f429b52beebe7ce0d51cb39fd7"
+
+===== PR #81 (merged 2026-09-02) discussion, quoted verbatim (api.github.com) =====
+valpackett, PR body:
+  "Re: #66... I now have a zero-copy-SHM/guest-handle implementation I'm satisfied with in
+   https://github.com/libkrun/libkrun/pull/822 ... I guess I still hate the fact that
+   \"context-less\" blob creation just goes to the default component (so right now the
+   cross-domain socket rings are technically owned by virglrenderer, ugh) but I can't think
+   of a good way to *not* make it go there so..."
+valpackett, 2026-08-28 (final comment before undraft):
+  "I have it all working now without going through the component-level `create_blob`. I do
+   like the new rutabaga diff, and it doesn't rely on any new constants anymore (hence the
+   undrafting)..."
+
+===== virtio-comment v2 series (lore.kernel.org/all/20260903021442.423274-1-val@invisiblethingslab.com/) =====
+Cover letter, "This requires adding two new virtio-gpu feature flags", Backend links:
+  magma-gpu/rutabaga_gfx#81  +  libkrun#822 ; Guest: wl-cross-domain-proxy#24 ;
+  Kernel: https://github.com/valpackett/linux-qclaptops/commits/guest-handle
+  "v2: added F_BLOB_CTX_ID_FIX"
+PATCH v2 2/2 description.tex:
+  \item[VIRTIO_GPU_F_CREATE_GUEST_HANDLE (6)] guest-only blob resources may be created with
+    the VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE flag. Requires VIRTIO_GPU_F_RESOURCE_BLOB.
+  \item[VIRTIO_GPU_F_BLOB_CTX_ID_FIX (7)] it is always safe to pass the current context ID to
+    VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB, including for guest-only blobs.
+Cover-letter rationale for bit 7:
+  "For guest-only resources however, existing software (both the Linux kernel and the
+   rutabaga-gfx library used by device backends to implement virtio-gpu) allocates those with
+   ctx_id == 0, which might be a different \"default\" context type from the one the resource
+   is intended to be used with... Additionally we would like to support PRIME imported
+   resources (udmabufs or dGPU passthrough dma-bufs) being passed over cross-domain with the
+   CREATE_GUEST_HANDLE feature, which due to API constraints must also perform the creation of
+   a guest-only blob resource with ctx_id but without blob_id."
+
+===== nixpkgs fetchCargoVendor: does it vendor git deps? =====
+pkgs/build-support/rust/fetch-cargo-vendor.nix (nixpkgs rev d3498f786f97ac0bded21b34bae0bf3809b45aa3):
+  fetchCargoVendor = runCommand over `fetch-cargo-vendor-util create-vendor <staging> $out`;
+  staging derivation runs `fetch-cargo-vendor-util create-vendor-staging ./Cargo.lock $out`.
+pkgs/build-support/rust/fetch-cargo-vendor-util.py:
+  for pkg in Cargo.lock: source startswith "git+" -> git_packages; "registry+" -> tarballs
+  download_git_tree: `nix-prefetch-git --builder --quiet --fetch-submodules --url URL --rev SHA --out <staging>/git/<sha>`
+  copy_and_patch_git_crate_subtree(git_tree, name, out): find_crate_manifest_in_tree() scans every
+    Cargo.toml in the git tree with `cargo metadata --no-deps` and copies crate_manifest_path.parent
+    into <out>/source-<ind>/<name>-<version>/ ; git crates get `{"files": {}}` .cargo-checksum.json
+  so: YES, git deps (and their nested path/workspace deps) are vendored; a change of git rev changes the hash.
+
+Existing proof in-repo: ffier is a git dep whose crates are path/workspace members of the same repo
+(ffier/Cargo.toml: `ffier-rt = { path = "../ffier-rt" }` etc), Cargo.lock records them all as
+`git+https://github.com/mtjhrc/ffier.git?tag=...#<sha>`, and the current `nix build` succeeds.

@@ -75,6 +75,12 @@ taking the fast path** - evidence, not "it builds".
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link -->
 
+- [Which Linux guest-side patch set gives 6.12.109 CREATE_GUEST_HANDLE?](tickets/02-kernel-patch-set.md):
+  no single series - backport Vivek's v5 PRIME-import base (first in v6.14),
+  port Val's un-posted `guest-handle` branch (`3e6a365d2ac9`), author the
+  conditional PRIME-import unlock the revert left behind, set `CONFIG_UDMABUF=y`
+  in all six configs; keep 5 = FENCE_PASSING and add 6/7; the proxy needs no
+  change.
 - [What does PR 822's payload look like on the current ABI-2 fork tip?](tickets/03-port-matrix-on-abi2.md):
   not a cherry-pick - five of ten apply, the four rutabaga commits have no file
   to patch, `6c51645c` conflicts in `virtio_gpu.rs`'s imports, `4ef22a14`'s
@@ -84,6 +90,12 @@ taking the fast path** - evidence, not "it builds".
 
 ## Not yet specified
 
+- **The latent bit-5 collision on a future libkrunfw rebase.** Upstream mainline
+  assigned `VIRTIO_GPU_F_BLOB_ALIGNMENT = 5` while cang's fork kernel uses bit 5
+  for `VIRTIO_GPU_F_FENCE_PASSING` (`patches/0018`). Today that only forces
+  re-authored hunks (ticket 02); if `deps/libkrunfw` ever rebases past v6.13 the
+  two must be reconciled deliberately, and the fork's 0018 may have to move.
+  Sharpens when a libkrunfw kernel bump happens.
 - **Architecture coverage for the first libkrunfw release.** The kernel patch
   touches virtio-gpu and udmabuf, which are per-arch configs and CI jobs;
   x86_64 (`kvm-lto`) is the cang default but aarch64/riscv64 ship too. Sharpens

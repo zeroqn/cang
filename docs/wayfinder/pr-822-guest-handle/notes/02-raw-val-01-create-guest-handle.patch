@@ -1,0 +1,129 @@
+From a412cc915ec7d85a0912c2d8f59cb24dff6bc085 Mon Sep 17 00:00:00 2001
+From: Val Packett <val@invisiblethingslab.com>
+Date: Tue, 11 Aug 2026 04:50:34 -0300
+Subject: [PATCH] drm/virtio: support VIRTIO_GPU_F_CREATE_GUEST_HANDLE
+
+Add support for VIRTIO_GPU_F_CREATE_GUEST_HANDLE, a feature that allows
+guest-only blob resources to be created with corresponding host-side
+shareable OS handles (through facilities like udmabuf or gntdev-dmabuf)
+using the VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE flag for the
+VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB command.
+
+Signed-off-by: Val Packett <val@invisiblethingslab.com>
+---
+ drivers/gpu/drm/virtio/virtgpu_drv.c   | 1 +
+ drivers/gpu/drm/virtio/virtgpu_drv.h   | 1 +
+ drivers/gpu/drm/virtio/virtgpu_ioctl.c | 8 +++++++-
+ drivers/gpu/drm/virtio/virtgpu_kms.c   | 6 ++++++
+ include/uapi/drm/virtgpu_drm.h         | 7 ++++---
+ include/uapi/linux/virtio_gpu.h        | 5 +++++
+ 6 files changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.c b/drivers/gpu/drm/virtio/virtgpu_drv.c
+index 2aaa7cb08085..1fc3ef330af5 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_drv.c
++++ b/drivers/gpu/drm/virtio/virtgpu_drv.c
+@@ -182,6 +182,7 @@ static unsigned int features[] = {
+ 	VIRTIO_GPU_F_RESOURCE_BLOB,
+ 	VIRTIO_GPU_F_CONTEXT_INIT,
+ 	VIRTIO_GPU_F_BLOB_ALIGNMENT,
++	VIRTIO_GPU_F_CREATE_GUEST_HANDLE,
+ };
+ 
+ #ifdef CONFIG_PM_SLEEP
+diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.h b/drivers/gpu/drm/virtio/virtgpu_drv.h
+index 9df4c7117341..fdabb59a0e3d 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_drv.h
++++ b/drivers/gpu/drm/virtio/virtgpu_drv.h
+@@ -284,6 +284,7 @@ struct virtio_gpu_device {
+ 	bool has_host_visible;
+ 	bool has_context_init;
+ 	bool has_blob_alignment;
++	bool has_create_guest_handle;
+ 	bool hibernated;
+ 	struct virtio_shm_region host_visible_region;
+ 	struct drm_mm host_visible_mm;
+diff --git a/drivers/gpu/drm/virtio/virtgpu_ioctl.c b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
+index 3d8e4ccdb7c1..c5619a8fc6a5 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_ioctl.c
++++ b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
+@@ -36,7 +36,8 @@
+ 
+ #define VIRTGPU_BLOB_FLAG_USE_MASK (VIRTGPU_BLOB_FLAG_USE_MAPPABLE | \
+ 				    VIRTGPU_BLOB_FLAG_USE_SHAREABLE | \
+-				    VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE)
++				    VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE | \
++				    VIRTGPU_BLOB_FLAG_CREATE_GUEST_HANDLE)
+ 
+ /* Must be called with &virtio_gpu_fpriv.struct_mutex held. */
+ static void virtio_gpu_create_context_locked(struct virtio_gpu_device *vgdev,
+@@ -458,6 +459,11 @@ static int verify_blob(struct virtio_gpu_device *vgdev,
+ 			return -EINVAL;
+ 	}
+ 
++	if (rc_blob->blob_flags & VIRTGPU_BLOB_FLAG_CREATE_GUEST_HANDLE) {
++		if (!vgdev->has_create_guest_handle)
++			return -EINVAL;
++	}
++
+ 	switch (rc_blob->blob_mem) {
+ 	case VIRTGPU_BLOB_MEM_GUEST:
+ 		*guest_blob = true;
+diff --git a/drivers/gpu/drm/virtio/virtgpu_kms.c b/drivers/gpu/drm/virtio/virtgpu_kms.c
+index 1d4d3bf46a20..c0ea1b82e147 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_kms.c
++++ b/drivers/gpu/drm/virtio/virtgpu_kms.c
+@@ -249,6 +249,9 @@ int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev)
+ 		vgdev->blob_alignment = blob_alignment;
+ 	}
+ 
++	if (virtio_has_feature(vgdev->vdev, VIRTIO_GPU_F_CREATE_GUEST_HANDLE))
++		vgdev->has_create_guest_handle = true;
++
+ 	DRM_INFO("features: %cvirgl %cedid %cresource_blob %chost_visible",
+ 		 vgdev->has_virgl_3d    ? '+' : '-',
+ 		 vgdev->has_edid        ? '+' : '-',
+@@ -259,6 +262,9 @@ int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev)
+ 		 vgdev->has_context_init ? '+' : '-',
+ 		 vgdev->has_blob_alignment ? '+' : '-');
+ 
++	DRM_INFO("features: %ccreate_guest_handle\n",
++		 vgdev->has_create_guest_handle ? '+' : '-');
++
+ 	ret = virtio_gpu_find_vqs(vgdev);
+ 	if (ret) {
+ 		DRM_ERROR("failed to find virt queues\n");
+diff --git a/include/uapi/drm/virtgpu_drm.h b/include/uapi/drm/virtgpu_drm.h
+index 95587e12aed5..467dc271cbdb 100644
+--- a/include/uapi/drm/virtgpu_drm.h
++++ b/include/uapi/drm/virtgpu_drm.h
+@@ -183,9 +183,10 @@ struct drm_virtgpu_resource_create_blob {
+ #define VIRTGPU_BLOB_MEM_HOST3D            0x0002
+ #define VIRTGPU_BLOB_MEM_HOST3D_GUEST      0x0003
+ 
+-#define VIRTGPU_BLOB_FLAG_USE_MAPPABLE     0x0001
+-#define VIRTGPU_BLOB_FLAG_USE_SHAREABLE    0x0002
+-#define VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE 0x0004
++#define VIRTGPU_BLOB_FLAG_USE_MAPPABLE        0x0001
++#define VIRTGPU_BLOB_FLAG_USE_SHAREABLE       0x0002
++#define VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE    0x0004
++#define VIRTGPU_BLOB_FLAG_CREATE_GUEST_HANDLE 0x0008
+ 	/* zero is invalid blob_mem */
+ 	__u32 blob_mem;
+ 	__u32 blob_flags;
+diff --git a/include/uapi/linux/virtio_gpu.h b/include/uapi/linux/virtio_gpu.h
+index 4f530d90058c..a75fc86774d6 100644
+--- a/include/uapi/linux/virtio_gpu.h
++++ b/include/uapi/linux/virtio_gpu.h
+@@ -72,6 +72,11 @@
+  * must be aligned to that value.
+  */
+ #define VIRTIO_GPU_F_BLOB_ALIGNMENT      5
++/*
++ * VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB with
++ * VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE
++ */
++#define VIRTIO_GPU_F_CREATE_GUEST_HANDLE 6
+ 
+ enum virtio_gpu_ctrl_type {
+ 	VIRTIO_GPU_UNDEFINED = 0,

@@ -1,0 +1,91 @@
+02 — kernel patch set: primary-source extracts (fetched 2026-09-28)
+
+== df4dc947c46b commit page (torvalds/linux.git/commit/?id=df4dc947c46b...)
+author   Val Packett <val@invisiblethingslab.com>   2025-12-10 12:39:23 -0300
+committer Dmitry Osipenko <dmitry.osipenko@collabora.com> 2026-02-12 02:30:03 +0300
+parent   40c1ccc1a3b86259e455a9a5082d5c8e0f944d62
+drm/virtio: Allow importing prime buffers when 3D is enabled
+Fixes: ca77f27a2665 ("drm/virtio: Import prime buffers from other devices as guest blobs")
+Link: https://patch.msgid.link/20251210154755.1119861-2-val@invisiblethingslab.com
+diff (virtgpu_prime.c):
+-	if (!vgdev->has_resource_blob || vgdev->has_virgl_3d)
++	if (!vgdev->has_resource_blob)
+ 		return drm_gem_prime_import(dev, buf);
+
+== stable backports (lore, Greg KH 2026-05-20)
+[PATCH 6.18 187/957] drm/virtio: Allow importing prime buffers when 3D is enabled
+[PATCH 7.0 0230/1146] drm/virtio: Allow importing prime buffers when 3D is enabled
+(no 6.12.y posting; 6.12.y and v6.12.109 uapi max = VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME 8)
+
+== revert merged commit 1e3b08de63274d0b009e99ef51cd6a9c0c6bf08c
+author   2026-09-11 17:42:03 +0300
+committer 2026-09-20 20:48:52 +0300
+Revert "drm/virtio: Allow importing prime buffers when 3D is enabled"
+Fixes: df4dc947c46b
+Link: https://patch.msgid.link/20260911144204.2089401-1-dmitry.osipenko@collabora.com
+diff:
+-	if (!vgdev->has_resource_blob)
++	if (!vgdev->has_resource_blob || vgdev->has_virgl_3d)
+ 		return drm_gem_prime_import(dev, buf);
+
+== virtio-comment v2 cover (2026-09-03 02:14 UTC)
+Subject: [PATCH v2 0/2] virtio_gpu: add F_CREATE_GUEST_HANDLE and F_BLOB_CTX_ID_FIX
+Message-ID: 20260903021442.423274-1-val@invisiblethingslab.com
+v1 (lost to moderation): 20260827092120.97295-1-val@invisiblethingslab.com
+Kernel implementation (never posted to lkml): https://github.com/valpackett/linux-qclaptops/commits/guest-handle
+2/2 tex hunk:
+  \item[VIRTIO_GPU_F_CREATE_GUEST_HANDLE (6)] guest-only blob resources may be
+    created with the VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE flag. Requires
+    VIRTIO_GPU_F_RESOURCE_BLOB.
+  \item[VIRTIO_GPU_F_BLOB_CTX_ID_FIX (7)] it is always safe to pass the current
+    context ID to VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB, including for guest-only
+    blobs.
+Demi Marie 2026-09-04 15:35: "Should VIRTIO_GPU_F_CREATE_GUEST_HANDLE require
+  VIRTIO_GPU_F_BLOB_CTX_ID_FIX?"  Val 2026-09-04 20:17: "Yeah, you're right...
+  I'll write this in explicitly in v3, and add a check for it in the driver."
+  -> no v3 posted as of 2026-09-28 (lore newest-first has 5 results, all v2/09-04).
+
+== Val's kernel branch (GitHub API)
+branch guest-handle @ 3e6a365d2ac9988058faef27629817908961422a (2026-08-28)
+first-parent series (oldest first):
+  a412cc915ec7 2026-08-11 drm/virtio: support VIRTIO_GPU_F_CREATE_GUEST_HANDLE
+  828df4d292f2 2026-08-27 drm/virtio: use CREATE_GUEST_HANDLE for imported DMA-BUFs
+  2a41d37ca1d0 2026-08-27 drm/virtio: attach imported DMA-BUFs to current 3D context if exists
+  953b78600d13 2026-08-27 drm/virtio: add VIRTGPU_PARAM_CREATE_GUEST_HANDLE to params
+  1c148608fe3a 2026-08-27 drm/virtio: support VIRTIO_GPU_F_BLOB_CTX_ID_FIX
+  3e6a365d2ac9 2026-08-28 drm/virtio: pass the current ctx_id during PRIME import
+branch tip virtgpu_prime.c:
+  int virtgpu_prime_fd_to_handle(...) { ... vgdev->prime_import_file_priv = file_priv;
+        return drm_gem_prime_fd_to_handle(dev, file_priv, fd, handle); }
+  virtgpu_gem_prime_import(): "if (!vgdev->has_resource_blob) return drm_gem_prime_import(...)"
+        (NO has_virgl_3d check -> base is pre-revert linux-next 20260901)
+  virtgpu_dma_buf_init_obj(): params.ctx_id = vfpriv->ctx_id;
+        params.blob_flags = VIRTGPU_BLOB_FLAG_USE_SHAREABLE;
+        if (vgdev->has_create_guest_handle)
+                params.blob_flags |= VIRTGPU_BLOB_FLAG_CREATE_GUEST_HANDLE;
+
+== 2024-11-26 prerequisite series (lore)
+[PATCH v5 0/5] drm/virtio: Import scanout buffers from other devices
+  1/5 drm/virtio: Implement VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING cmd
+  2/5 drm/virtio: Add a helper to map and note the dma addrs and lengths
+  3/5 drm/virtio: Add helpers to initialize and free the imported object
+  4/5 drm/virtio: Import prime buffers from other devices as guest blobs
+  5/5 drm/virtio: Add prepare and cleanup routines for imported dmabuf obj
+merged: 25c3fd1183c0, 2885e575abc7, ca77f27a2665 (in v6.14; absent from v6.12/v6.13)
+
+== deps/libkrunfw (pinned)
+HEAD 9616ca0  tag v5.6.2-cang.1
+patches/0018: "#define VIRTIO_GPU_F_FENCE_PASSING       5" (line 427)
+config-libkrunfw_{x86_64,x86_64-kvm,x86_64-kvm-lto,x86_64-lto,aarch64,riscv64}:
+  # CONFIG_UDMABUF is not set
+
+== deps/wl-cross-domain-proxy (cc64c65)
+src/virtio_gpu/mod.rs:56   CreateGuestHandle = 10,
+src/virtio_gpu/mod.rs:81   const CREATE_GUEST_HANDLE = 8; // XXX: NOT UPSTREAM YET
+src/source/channel/mod.rs:93-96  drm.ensure_feature(Param::CreateGuestHandle)
+                                 -> has_create_guest_handle
+src/source/channel/wayland.rs:223  let udmabuf = Udmabuf::open()...
+src/source/channel/wayland.rs:330  let dma_fd = udmabuf.create(memfd,0,size)
+src/source/channel/wayland.rs:336  let bo = drm.prime_fd_to_buffer(dma_fd.as_fd())
+                                   // -> DRM PRIME import -> kernel stamps the blob flag
+src/udmabuf.rs:50  const UDMABUF_PATH: &str = "/dev/udmabuf"

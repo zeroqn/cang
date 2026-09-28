@@ -1,0 +1,42 @@
+From 953b78600d13b1672fc63a5fff0f4608ba73a1d6 Mon Sep 17 00:00:00 2001
+From: Val Packett <val@invisiblethingslab.com>
+Date: Thu, 27 Aug 2026 06:51:59 -0300
+Subject: [PATCH] drm/virtio: add VIRTGPU_PARAM_CREATE_GUEST_HANDLE to params
+
+Add VIRTGPU_PARAM_CREATE_GUEST_HANDLE as a param to be used with
+VIRTGPU_GETPARAM by userspace applications like Wayland cross-domain
+bridges to check whether it is possible to create host-side handles
+for guest-only blob resources.
+
+Signed-off-by: Val Packett <val@invisiblethingslab.com>
+---
+ drivers/gpu/drm/virtio/virtgpu_ioctl.c | 3 +++
+ include/uapi/drm/virtgpu_drm.h         | 1 +
+ 2 files changed, 4 insertions(+)
+
+diff --git a/drivers/gpu/drm/virtio/virtgpu_ioctl.c b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
+index c5619a8fc6a5..9ef0c82f99c5 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_ioctl.c
++++ b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
+@@ -123,6 +123,9 @@ static int virtio_gpu_getparam_ioctl(struct drm_device *dev, void *data,
+ 			return -ENOENT;
+ 		value = vgdev->blob_alignment;
+ 		break;
++	case VIRTGPU_PARAM_CREATE_GUEST_HANDLE:
++		value = vgdev->has_create_guest_handle ? 1 : 0;
++		break;
+ 	default:
+ 		return -EINVAL;
+ 	}
+diff --git a/include/uapi/drm/virtgpu_drm.h b/include/uapi/drm/virtgpu_drm.h
+index 467dc271cbdb..fc4fe0362a8b 100644
+--- a/include/uapi/drm/virtgpu_drm.h
++++ b/include/uapi/drm/virtgpu_drm.h
+@@ -99,6 +99,7 @@ struct drm_virtgpu_execbuffer {
+ #define VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs 7 /* Bitmask of supported capability set ids */
+ #define VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME 8 /* Ability to set debug name from userspace */
+ #define VIRTGPU_PARAM_BLOB_ALIGNMENT 9 /* Device alignment requirements for blobs */
++#define VIRTGPU_PARAM_CREATE_GUEST_HANDLE 10 /* Host handles for guest blob resources */
+ 
+ struct drm_virtgpu_getparam {
+ 	__u64 param;
