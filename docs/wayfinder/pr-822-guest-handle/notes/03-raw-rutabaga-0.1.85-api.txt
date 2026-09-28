@@ -1,0 +1,68 @@
+# rutabaga_gfx 0.1.85 API surface relevant to PR 822 (registry crate used by ABI-2 fork tip)
+# source: /home/dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rutabaga_gfx-0.1.85
+# Cargo.lock at 3d7af2c2: rutabaga_gfx 0.1.85, registry+https://github.com/rust-lang/crates.io-index,
+#   checksum 52e4747a81e5e40e8f4b0d74bab0cadf675c9a470a3d75bad5989cd7c3a64fbe
+
+== lib.rs re-exports (handle/descriptor types) ==
+pub use magma_gpu::util::Error::Unsupported as RutabagaUnsupported;
+pub use magma_gpu::util::FromRawDescriptor as RutabagaFromRawDescriptor;
+pub use magma_gpu::util::Handle as RutabagaMagmaHandle;
+pub use magma_gpu::util::IntoRawDescriptor as RutabagaIntoRawDescriptor;
+pub use magma_gpu::util::MappedRegion as RutabagaMappedRegion;
+pub use magma_gpu::util::OwnedDescriptor as RutabagaDescriptor;
+pub use magma_gpu::util::RawDescriptor as RutabagaRawDescriptor;
+pub use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_DMABUF as RUTABAGA_HANDLE_TYPE_MEM_DMABUF;
+pub use magma_gpu::util::MAGMA_GPU_HANDLE_TYPE_MEM_OPAQUE_FD as RUTABAGA_HANDLE_TYPE_MEM_OPAQUE_FD;
+pub use crate::handle::RutabagaHandle;
+pub use crate::rutabaga_core::Rutabaga;
+pub use crate::rutabaga_core::RutabagaBuilder;
+...
+pub use crate::rutabaga_utils::*;
+
+== Rutabaga::resource_create_blob (src/rutabaga_core.rs:950) ==
+pub fn resource_create_blob(
+    &mut self,
+    ctx_id: u32,
+    resource_id: u32,
+    resource_create_blob: ResourceCreateBlob,
+    iovecs: Option<Vec<RutabagaIovec>>,
+    handle: Option<RutabagaHandle>,
+) -> RutabagaResult<()> {
+    if self.resources.contains_key(&resource_id) { return Err(RutabagaError::InvalidResourceId); }
+    let component = self.components.get_mut(&self.default_component).ok_or(RutabagaError::InvalidComponent)?;
+    let mut context = None;
+    // For the cross-domain context ... Use `ctx_id` and the component type
+    if ctx_id > 0 {
+        let ctx = self.contexts.get_mut(&ctx_id).ok_or(RutabagaError::InvalidContextId)?;
+        if ctx.component_type() == RutabagaComponentType::CrossDomain { context = Some(ctx); }
+    }
+    let resource = match context {
+        Some(ctx) => ctx.context_create_blob(resource_id, resource_create_blob, handle)?,
+        None => component.create_blob(ctx_id, resource_id, resource_create_blob, iovecs, handle)?,
+    };
+    self.resources.insert(resource_id, resource);
+    Ok(())
+}
+# => 0.1.85 routes ctx_id > 0 -> cross-domain CONTEXT; ctx_id == 0 -> default COMPONENT.
+#    PR 822 commit 16e116ae instead routes ctx_id == 0 + CREATE_GUEST_HANDLE -> CrossDomain component.
+#    (PR #81 merged upstream 2026-09-02 takes the ctx_id > 0 / context route; 0.1.85 predates it.)
+
+== cross-domain component create_blob signature (src/cross_domain/component.rs:94) ==
+        _handle_opt: Option<RutabagaHandle>,     # <-- handle IGNORED in 0.1.85
+    if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST
+            && resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE
+        { return Err(SpecViolation("expected only guest memory blobs")); }
+# => 0.1.85 component cannot return a resource that retains a handle.
+
+== context create_blob signature (src/cross_domain/context.rs:550) ==
+        handle_opt: Option<RutabagaHandle>,
+
+== blob flag constants present in 0.1.85 (src/rutabaga_utils.rs:77-79) ==
+pub const RUTABAGA_BLOB_FLAG_USE_MAPPABLE: u32 = 0x0001;
+pub const RUTABAGA_BLOB_FLAG_USE_SHAREABLE: u32 = 0x0002;
+pub const RUTABAGA_BLOB_FLAG_USE_CROSS_DEVICE: u32 = 0x0004;
+# 0x0008 is ABSENT in rutabaga's namespace (0x0008 exists only as
+# VIRGL_RENDERER_BLOB_FLAG_USE_DUMB_BUFFER in src/generated/virgl_renderer_bindings.rs).
+
+== set_server_descriptor (src/rutabaga_core.rs:1413) ==
+    pub fn set_server_descriptor(...)      # present; used by the fork's 29312733

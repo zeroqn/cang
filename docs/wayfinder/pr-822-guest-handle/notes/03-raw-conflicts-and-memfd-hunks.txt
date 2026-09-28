@@ -1,0 +1,123 @@
+########## conflicted virtio_gpu.rs (forced-base merge-tree tree 2fa4246a) ##########
+6:<<<<<<< 3d7af2c2
+8:=======
+10:>>>>>>> 55210a654fb05f4a9a5f9076e9c18e2a88c94089
+26:<<<<<<< 3d7af2c2
+32:=======
+37:>>>>>>> 55210a654fb05f4a9a5f9076e9c18e2a88c94089
+44:<<<<<<< 3d7af2c2
+48:=======
+52:>>>>>>> 55210a654fb05f4a9a5f9076e9c18e2a88c94089
+--- conflict blocks:
+6: <<<<<<< 3d7af2c2
+7: use std::os::unix::io::{AsFd, AsRawFd};
+8: =======
+9: use std::os::fd::{AsRawFd, IntoRawFd};
+10: >>>>>>> 55210a654fb05f4a9a5f9076e9c18e2a88c94089
+26: <<<<<<< 3d7af2c2
+27: #[cfg(any(
+28:     all(target_os = "linux", feature = "virgl_resource_map2"),
+29:     target_os = "macos"
+30: ))]
+31: use rutabaga_gfx::RUTABAGA_HANDLE_TYPE_MEM_DMABUF;
+32: =======
+33: #[cfg(target_os = "macos")]
+34: use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_APPLE;
+35: #[cfg(target_os = "linux")]
+36: use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_DMABUF;
+37: >>>>>>> 55210a654fb05f4a9a5f9076e9c18e2a88c94089
+44: <<<<<<< 3d7af2c2
+45:     RUTABAGA_MAP_ACCESS_MASK, RUTABAGA_MAP_ACCESS_READ, RUTABAGA_MAP_ACCESS_RW,
+46:     RUTABAGA_MAP_ACCESS_WRITE, RUTABAGA_PATH_TYPE_GPU, RUTABAGA_PATH_TYPE_PIPEWIRE,
+47:     RUTABAGA_PATH_TYPE_X11,
+48: =======
+49:     RUTABAGA_CHANNEL_TYPE_PW, RUTABAGA_CHANNEL_TYPE_X11, RUTABAGA_MAP_ACCESS_MASK,
+50:     RUTABAGA_MAP_ACCESS_READ, RUTABAGA_MAP_ACCESS_RW, RUTABAGA_MAP_ACCESS_WRITE,
+51:     RutabagaDescriptor, RutabagaFromRawDescriptor, RutabagaHandle,
+52: >>>>>>> 55210a654fb05f4a9a5f9076e9c18e2a88c94089
+
+########## 4ef22a14 full ##########
+commit 4ef22a14fe9a3474edeab4f4870a92a2ecf50de4
+Author: Val Packett <val@invisiblethingslab.com>
+Date:   Thu Aug 27 00:18:16 2026 -0300
+
+    vmm/builder: create file-backed memory for gpu udmabuf as well
+    
+    As CREATE_GUEST_HANDLE in virtio-gpu also requires memfd-backed guest
+    memory regions, create them when a GPU device is present as well.
+    
+    Signed-off-by: Val Packett <val@invisiblethingslab.com>
+
+diff --git a/src/vmm/src/builder.rs b/src/vmm/src/builder.rs
+index 30b99eeb..907e89d6 100644
+--- a/src/vmm/src/builder.rs
++++ b/src/vmm/src/builder.rs
+@@ -1900,14 +1900,19 @@ pub fn create_guest_memory(
+     #[cfg(not(all(feature = "vhost-user", target_os = "linux")))]
+     let use_vhost_user = false;
+ 
++    #[cfg(all(feature = "gpu", target_os = "linux"))]
++    let use_gpu_udmabuf = vm_resources.gpu_virgl_flags.is_some();
++    #[cfg(not(all(feature = "gpu", target_os = "linux")))]
++    let use_gpu_udmabuf = false;
++
+     // Add SHM regions before creating guest memory
+     arch_mem_regions.extend(shm_manager.regions());
+ 
+-    let guest_mem = if use_vhost_user {
+-        #[cfg(all(feature = "vhost-user", target_os = "linux"))]
++    let guest_mem = if use_vhost_user || use_gpu_udmabuf {
++        #[cfg(all(any(feature = "gpu", feature = "vhost-user"), target_os = "linux"))]
+         {
+             debug!(
+-                "Creating file-backed memory for vhost-user (regions: {})",
++                "Creating file-backed memory for gpu or vhost-user (regions: {})",
+                 arch_mem_regions.len()
+             );
+             // Create file-backed memory regions using memfd
+
+########## a3962256 full ##########
+commit a3962256836bb1b0079ecfdf901caf2116e0cdef
+Author: Val Packett <val@invisiblethingslab.com>
+Date:   Thu Aug 27 00:20:07 2026 -0300
+
+    vmm/builder: seal file-backed memory against size changes
+    
+    F_SEAL_SHRINK is a requirement for udmabuf; F_SEAL_GROW makes sense
+    as well since no grow operations are currently performed on these.
+    
+    Signed-off-by: Val Packett <val@invisiblethingslab.com>
+
+diff --git a/src/vmm/src/builder.rs b/src/vmm/src/builder.rs
+index 907e89d6..a70cc94a 100644
+--- a/src/vmm/src/builder.rs
++++ b/src/vmm/src/builder.rs
+@@ -1926,7 +1926,10 @@ pub fn create_guest_memory(
+                     // SAFETY: memfd_create is called with a valid null-terminated C string and valid flags.
+                     // File descriptor ownership is transferred to File::from_raw_fd below.
+                     let memfd = unsafe {
+-                        let fd = libc::memfd_create(c"guest_mem".as_ptr(), libc::MFD_CLOEXEC);
++                        let fd = libc::memfd_create(
++                            c"guest_mem".as_ptr(),
++                            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
++                        );
+                         if fd < 0 {
+                             error!("Failed to create memfd: {:?}", io::Error::last_os_error());
+                             return Err(io::Error::last_os_error());
+@@ -1939,6 +1942,16 @@ pub fn create_guest_memory(
+                             libc::close(fd);
+                             return Err(io::Error::last_os_error());
+                         }
++                        if libc::fcntl(
++                            fd,
++                            libc::F_ADD_SEALS,
++                            libc::F_SEAL_GROW | libc::F_SEAL_SHRINK,
++                        ) < 0
++                        {
++                            error!("Failed to seal memfd: {:?}", io::Error::last_os_error());
++                            libc::close(fd);
++                            return Err(io::Error::last_os_error());
++                        }
+                         debug!("Created memfd with fd={}", fd);
+                         File::from_raw_fd(fd)
+                     };

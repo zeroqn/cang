@@ -2,7 +2,7 @@
 label: wayfinder:grilling
 title: Decide the design, the gate and the feature-bit map the fork carries
 status: open
-blocked_by: ["01-rutabaga-delta", "02-kernel-patch-set", "03-port-matrix-on-abi2"]
+blocked_by: ["01-rutabaga-delta", "02-kernel-patch-set", "03-port-matrix-on-abi2", "10-udmabuf-ram-backing"]
 ---
 
 ## Question
@@ -26,6 +26,11 @@ With tickets 01-03 in hand, decide the shape ticket 07 implements:
   values the fork advertises and how they are kept from colliding, both in
   libkrun's `src/devices/src/virtio/gpu/mod.rs` and in
   `deps/libkrunfw/patches/0018`.
+- **What happens to the balloon.** Ticket 03 showed 822's memfd-backed RAM
+  turns every guest region `MAP_SHARED` whenever a GPU is present, which costs
+  cang's `MADV_DONTNEED` host-memory reclaim. Take ticket 10's answer: carry it
+  as-is, narrow the file-backing, or gate the whole fast path behind an opt-in
+  so a plain `--gpu` run keeps anonymous RAM.
 - **The evidence design for ticket 09.** How the map will *prove* the guest took
   the fast path rather than the copy path (proxy log line, udmabuf counter,
   tracepoint, timing delta), and where that instrumentation goes.

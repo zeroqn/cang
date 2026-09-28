@@ -1,0 +1,180 @@
+##################### a8fd2784 rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+commit a8fd278474a8f9602bf429d900ac67d8be3a82eb
+Author: Val Packett <val@invisiblethingslab.com>
+Date:   Mon Aug 17 02:50:02 2026 -0300
+
+    rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+    
+    Simplify the attach implementation, removing the conditional on blob type
+    and instead just always handling both fields of ContextResource.
+    
+    There is no functional change for existing kinds of resources, but
+    guest resources with handles (CREATE_GUEST_HANDLE) won't have their
+    handles thrown away anymore.
+    
+    Signed-off-by: Val Packett <val@invisiblethingslab.com>
+
+diff --git a/src/rutabaga_gfx/src/cross_domain/mod.rs b/src/rutabaga_gfx/src/cross_domain/mod.rs
+index c1ffbd7d..16fba2f8 100644
+--- a/src/rutabaga_gfx/src/cross_domain/mod.rs
++++ b/src/rutabaga_gfx/src/cross_domain/mod.rs
+@@ -1307,23 +1307,13 @@ impl RutabagaContext for CrossDomainContext {
+     }
+ 
+     fn attach(&mut self, resource: &mut RutabagaResource) {
+-        if resource.blob_mem == RUTABAGA_BLOB_MEM_GUEST {
+-            self.context_resources.lock().unwrap().insert(
+-                resource.resource_id,
+-                CrossDomainResource {
+-                    handle: None,
+-                    backing_iovecs: resource.backing_iovecs.take(),
+-                },
+-            );
+-        } else if let Some(ref handle) = resource.handle {
+-            self.context_resources.lock().unwrap().insert(
+-                resource.resource_id,
+-                CrossDomainResource {
+-                    handle: Some(handle.clone()),
+-                    backing_iovecs: None,
+-                },
+-            );
+-        }
++        self.context_resources.lock().unwrap().insert(
++            resource.resource_id,
++            CrossDomainResource {
++                handle: resource.handle.clone(),
++                backing_iovecs: resource.backing_iovecs.take(),
++            },
++        );
+     }
+ 
+     fn detach(&mut self, resource: &RutabagaResource) {
+
+##################### ec9e5562 rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+commit ec9e5562f9001c67ae4c6ae1126304c2b1e3f5cc
+Author: Val Packett <val@invisiblethingslab.com>
+Date:   Thu Aug 27 00:07:55 2026 -0300
+
+    rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+    
+    Not upstream yet!!
+    
+    Signed-off-by: Val Packett <val@invisiblethingslab.com>
+
+diff --git a/src/rutabaga_gfx/src/rutabaga_utils.rs b/src/rutabaga_gfx/src/rutabaga_utils.rs
+index 912200a7..9bd84674 100644
+--- a/src/rutabaga_gfx/src/rutabaga_utils.rs
++++ b/src/rutabaga_gfx/src/rutabaga_utils.rs
+@@ -75,6 +75,7 @@ pub const RUTABAGA_BLOB_MEM_HOST3D_GUEST: u32 = 0x0003;
+ pub const RUTABAGA_BLOB_FLAG_USE_MAPPABLE: u32 = 0x0001;
+ pub const RUTABAGA_BLOB_FLAG_USE_SHAREABLE: u32 = 0x0002;
+ pub const RUTABAGA_BLOB_FLAG_USE_CROSS_DEVICE: u32 = 0x0004;
++pub const RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE: u32 = 0x0008;
+ #[repr(C)]
+ #[derive(Copy, Clone, Debug)]
+ pub struct ResourceCreateBlob {
+
+##################### 3391f3c5 rutabaga_gfx: cross_domain: support creating guest resources with handles
+commit 3391f3c5e87b4f45e64b0931e9036aaa8ec3c3e3
+Author: Val Packett <val@invisiblethingslab.com>
+Date:   Thu Aug 27 00:08:31 2026 -0300
+
+    rutabaga_gfx: cross_domain: support creating guest resources with handles
+    
+    With CREATE_GUEST_HANDLE, supporting VMMs/vhosts can share guest memory
+    between processes as OS handles (DMA-BUF on Linux). cross-domain's
+    context_create_blob already supports guest blobs with handles, but that
+    path is only taken for resources created from scratch by a virtio-gpu
+    client such as a Wayland proxy. That can be useful as an alternative
+    to HOST_VISIBLE virtio SHM, but is not the most exciting use case.
+    
+    The guest can also *import* DMA-BUFs from other devices, whether udmabuf
+    (for zero-copy sharing of memfds) or PCIe-passed-through physical GPUs.
+    In that case, the guest userspace has no way of passing in a requirements
+    item ID, and the guest kernel does not pass a context ID either. So we
+    have to process those resources in the cross-domain *component*.
+    
+    Signed-off-by: Val Packett <val@invisiblethingslab.com>
+
+diff --git a/src/rutabaga_gfx/src/cross_domain/mod.rs b/src/rutabaga_gfx/src/cross_domain/mod.rs
+index 16fba2f8..d2208453 100644
+--- a/src/rutabaga_gfx/src/cross_domain/mod.rs
++++ b/src/rutabaga_gfx/src/cross_domain/mod.rs
+@@ -1374,19 +1374,31 @@ impl RutabagaComponent for CrossDomain {
+         resource_id: u32,
+         resource_create_blob: ResourceCreateBlob,
+         iovec_opt: Option<Vec<RutabagaIovec>>,
+-        _handle_opt: Option<RutabagaHandle>,
++        handle_opt: Option<RutabagaHandle>,
+     ) -> RutabagaResult<RutabagaResource> {
+-        if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST
+-            && resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE
+-        {
++        if resource_create_blob.blob_mem != RUTABAGA_BLOB_MEM_GUEST {
+             return Err(RutabagaError::SpecViolation(
+                 "expected only guest memory blobs",
+             ));
+         }
+ 
++        if resource_create_blob.blob_flags & RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++            == RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++        {
++            if handle_opt.is_none() {
++                return Err(RutabagaError::SpecViolation(
++                    "expected a handle when using CREATE_GUEST_HANDLE",
++                ));
++            }
++        } else if resource_create_blob.blob_flags != RUTABAGA_BLOB_FLAG_USE_MAPPABLE {
++            return Err(RutabagaError::SpecViolation(
++                "expected only create-handle or mappable guest memory blobs",
++            ));
++        }
++
+         Ok(RutabagaResource {
+             resource_id,
+-            handle: None,
++            handle: handle_opt.map(Arc::new),
+             blob: true,
+             blob_mem: resource_create_blob.blob_mem,
+             blob_flags: resource_create_blob.blob_flags,
+
+##################### 16e116ae rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+commit 16e116ae443f875a9608948e29033d423791a9f1
+Author: Val Packett <val@invisiblethingslab.com>
+Date:   Thu Aug 27 00:08:54 2026 -0300
+
+    rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+    
+    As described in the previous commit, these resources should be created
+    using the cross-domain *component* (not a particular context).
+    
+    Signed-off-by: Val Packett <val@invisiblethingslab.com>
+
+diff --git a/src/rutabaga_gfx/src/rutabaga_core.rs b/src/rutabaga_gfx/src/rutabaga_core.rs
+index f5b349a9..19e95114 100644
+--- a/src/rutabaga_gfx/src/rutabaga_core.rs
++++ b/src/rutabaga_gfx/src/rutabaga_core.rs
+@@ -733,9 +733,21 @@ impl Rutabaga {
+             return Err(RutabagaError::InvalidResourceId);
+         }
+ 
++        // Imported guest resources (from udmabuf or a passed-through real GPU) with host handles
++        // cannot have a `ctx_id` set, we need to pass them to the cross-domain *component* to
++        // make a RutabagaResource that simply wraps the handle.
++        let component_type = if ctx_id == 0
++            && resource_create_blob.blob_flags & RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++                == RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
++        {
++            &RutabagaComponentType::CrossDomain
++        } else {
++            &self.default_component
++        };
++
+         let component = self
+             .components
+-            .get_mut(&self.default_component)
++            .get_mut(component_type)
+             .ok_or(RutabagaError::InvalidComponent)?;
+ 
+         let mut context = None;
+

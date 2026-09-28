@@ -1,0 +1,345 @@
+########## where did VIRTIO_GPU_F_CREATE_GUEST_HANDLE=6 come from on abi2? ##########
+5aef4073 devices/gpu: import virtio-gpu from crosvm
+--- blame lines 20-32 of mod.rs at abi2
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 18) 
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 19)         pub const VIRTIO_F_VERSION_1: u32 = 32;
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 20)         pub const VIRTIO_ID_GPU: u32 = 16;
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 21) 
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 22)         pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 23)         pub const VIRTIO_GPU_F_EDID: u32 = 1;
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 24)         pub const VIRTIO_GPU_F_RESOURCE_UUID: u32 = 2;
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 25)         pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 26)         pub const VIRTIO_GPU_F_CONTEXT_INIT: u32 = 4;
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 27)         /* The following capabilities are not upstreamed. */
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 28)         pub const VIRTIO_GPU_F_RESOURCE_SYNC: u32 = 5;
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 29)         pub const VIRTIO_GPU_F_CREATE_GUEST_HANDLE: u32 = 6;
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 30) 
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 31)         #[derive(Copy, Clone, Debug, Default)]
+5aef4073f (Sergio Lopez 2023-08-23 11:35:11 +0200 32)         #[repr(C)]
+
+########## VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE existence ##########
+3d7af2c2:src/devices/src/virtio/gpu/protocol.rs:86:pub const VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE: u32 = 0x0008;
+3d7af2c2:src/devices/src/virtio/gpu/virtio_gpu.rs:13:    GpuResponse, GpuResponsePlaneInfo, VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE,
+3d7af2c2:src/devices/src/virtio/gpu/virtio_gpu.rs:876:        if resource_create_blob.blob_flags & VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE != 0 {
+5849c08d:src/devices/src/virtio/gpu/protocol.rs:86:pub const VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE: u32 = 0x0008;
+5849c08d:src/devices/src/virtio/gpu/virtio_gpu.rs:12:    GpuResponse, GpuResponsePlaneInfo, VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE,
+5849c08d:src/devices/src/virtio/gpu/virtio_gpu.rs:731:        if resource_create_blob.blob_flags & VIRTIO_GPU_BLOB_FLAG_CREATE_GUEST_HANDLE != 0 {
+
+########## 29312733 full diff ##########
+commit 29312733bebe9aa0d130581cfb6ebaa446038d97
+Author: zeroqn <zeroqn@pm.me>
+Date:   Mon Sep 28 09:36:52 2026 +0800
+
+    feat(gpu): re-add the render-server fd entry point and fence retirement on ABI 2
+    
+    ABI 2 replaced the v1 `krun_set_gpu_options3` with an object-model GPU device that
+    only takes virgl renderer flags and a display backend, so cang's `--gpu=drm`
+    venus render-server path had no way to hand virglrenderer the socketpair. Re-add
+    it on the device:
+    
+    - `GpuDevice::set_render_server_fd(fd)` validates the fd, takes ownership of it,
+      and stores it so `attach` can pass it to `Gpu::new`;
+      `VirtioGpu::create_rutabaga` then sets it as rutabaga's server descriptor,
+      which is what reaches virglrenderer's render-server callback.
+    - Thread the descriptor as `Option<OwnedFd>` through Gpu -> Worker -> VirtioGpu,
+      so libkrun owns it and closes it on every error path.
+    
+    Bring the virtio-gpu device fixes with it, because they were what made that path
+    work at all:
+    
+    - The gpu worker polled only the control queue eventfd, so
+      `vrend_renderer_check_fences` was never called and the guest hung on
+      `DRM_IOCTL_VIRTGPU_WAIT` for fenced execbufs. It now polls the control event
+      and the virgl fence-retirement descriptor together, and calls `event_poll` on
+      timeout while a fence is pending (video-decode fences land in vrend's
+      fence_list, not fence_wait_list, so the eventfd is not signalled for them).
+    - The fence descriptor is kept alive for the worker's lifetime; mapping it to a
+      raw fd dropped and closed it on the first loop iteration.
+    - The fence handler recovers poisoned queue/fence-state locks instead of
+      panicking: it runs inside virglrenderer's C callbacks, which abort the process
+      on unwind.
+    - An idle VM blocks indefinitely instead of waking every 10ms: the short poll
+      timeout is only used while a fenced descriptor is outstanding.
+    
+    Regenerated bindings follow in their own commit.
+
+diff --git a/src/devices/src/virtio/gpu/device.rs b/src/devices/src/virtio/gpu/device.rs
+index c0626a5a..381a6890 100644
+--- a/src/devices/src/virtio/gpu/device.rs
++++ b/src/devices/src/virtio/gpu/device.rs
+@@ -1,4 +1,5 @@
+ use std::io::Write;
++use std::os::fd::OwnedFd;
+ 
+ #[cfg(target_os = "macos")]
+ use crossbeam_channel::Sender;
+@@ -37,6 +38,7 @@ pub struct Gpu {
+     pub(crate) device_state: DeviceState,
+     shm_region: Option<VirtioShmRegion>,
+     virgl_flags: u32,
++    render_server_fd: Option<OwnedFd>,
+     #[cfg(target_os = "macos")]
+     map_sender: Sender<WorkerMessage>,
+     export_table: Option<ExportTable>,
+@@ -47,6 +49,7 @@ pub struct Gpu {
+ impl Gpu {
+     pub fn new(
+         virgl_flags: u32,
++        render_server_fd: Option<OwnedFd>,
+         displays: Box<[DisplayInfo]>,
+         display_backend: DisplayBackend<'static>,
+         #[cfg(target_os = "macos")] map_sender: Sender<WorkerMessage>,
+@@ -57,6 +60,7 @@ impl Gpu {
+             device_state: DeviceState::Inactive,
+             shm_region: None,
+             virgl_flags,
++            render_server_fd,
+             #[cfg(target_os = "macos")]
+             map_sender,
+             export_table: None,
+@@ -214,6 +218,7 @@ impl VirtioDevice for Gpu {
+             interrupt.clone(),
+             shm_region,
+             self.virgl_flags,
++            self.render_server_fd.take(),
+             #[cfg(target_os = "macos")]
+             self.map_sender.clone(),
+             self.export_table.take(),
+diff --git a/src/devices/src/virtio/gpu/virtio_gpu.rs b/src/devices/src/virtio/gpu/virtio_gpu.rs
+index fa09f59b..f86f54e6 100644
+--- a/src/devices/src/virtio/gpu/virtio_gpu.rs
++++ b/src/devices/src/virtio/gpu/virtio_gpu.rs
+@@ -1,6 +1,7 @@
+ use std::collections::BTreeMap;
+ use std::env;
+ use std::io::IoSliceMut;
++use std::os::fd::{IntoRawFd, OwnedFd};
+ #[cfg(target_os = "linux")]
+ use std::os::unix::io::{AsFd, AsRawFd};
+ use std::path::PathBuf;
+@@ -35,7 +36,8 @@ use rutabaga_gfx::{
+ use rutabaga_gfx::{
+     RUTABAGA_MAP_CACHE_MASK, RUTABAGA_PATH_TYPE_WAYLAND, ResourceCreate3D, ResourceCreateBlob,
+     Rutabaga, RutabagaBuilder, RutabagaDescriptor, RutabagaFence, RutabagaFenceHandler,
+-    RutabagaIovec, RutabagaPath, RutabagaResult, Transfer3D, VirtioFsLookup,
++    RutabagaFromRawDescriptor, RutabagaIovec, RutabagaPath, RutabagaResult, Transfer3D,
++    VirtioFsLookup,
+ };
+ #[cfg(target_os = "macos")]
+ use utils::worker_message::WorkerMessage;
+@@ -207,8 +209,11 @@ impl VirtioGpu {
+                 completed_fence.fence_id, completed_fence.ring_idx
+             );
+ 
+-            let mut queue = queue_ctl.lock().unwrap();
+-            let mut fence_state = fence_state.lock().unwrap();
++            // This runs inside virglrenderer's C callbacks, which are wrapped in
++            // catch_unwind(...).unwrap_or_else(|_| abort()): a poisoned mutex would
++            // panic there and abort the whole VM process, so recover the lock.
++            let mut queue = queue_ctl.lock().unwrap_or_else(|e| e.into_inner());
++            let mut fence_state = fence_state.lock().unwrap_or_else(|e| e.into_inner());
+             let mut i = 0;
+ 
+             let ring = match completed_fence.flags & VIRTIO_GPU_FLAG_INFO_RING_IDX {
+@@ -257,6 +262,7 @@ impl VirtioGpu {
+         interrupt: InterruptTransport,
+         fence_state: Arc<Mutex<FenceState>>,
+         virgl_flags: u32,
++        render_server_fd: Option<OwnedFd>,
+         export_table: Option<ExportTable>,
+     ) -> Option<Rutabaga> {
+         let xdg_runtime_dir = match env::var("XDG_RUNTIME_DIR") {
+@@ -320,6 +326,15 @@ impl VirtioGpu {
+             builder = builder.set_virtiofs_lookup(lookup);
+         }
+ 
++        if let Some(render_server_fd) = render_server_fd {
++            // SAFETY: we own the fd (moved in from the
++            // `krun_gpu_device_set_render_server_fd` ABI); virglrenderer takes
++            // ownership of the descriptor on a successful build.
++            let descriptor =
++                unsafe { RutabagaDescriptor::from_raw_descriptor(render_server_fd.into_raw_fd()) };
++            builder = builder.set_server_descriptor(Some(descriptor));
++        }
++
+         builder.build().ok()
+     }
+ 
+@@ -347,6 +362,7 @@ impl VirtioGpu {
+         queue_ctl: Arc<Mutex<VirtQueue>>,
+         interrupt: InterruptTransport,
+         virgl_flags: u32,
++        render_server_fd: Option<OwnedFd>,
+         #[cfg(target_os = "macos")] map_sender: Sender<WorkerMessage>,
+         export_table: Option<ExportTable>,
+         displays: Box<[DisplayInfo]>,
+@@ -360,6 +376,7 @@ impl VirtioGpu {
+             interrupt.clone(),
+             fence_state.clone(),
+             virgl_flags,
++            render_server_fd,
+             export_table.clone(),
+         ) {
+             Some(rutabaga) => rutabaga,
+@@ -735,6 +752,31 @@ impl VirtioGpu {
+         Ok(OkNoData)
+     }
+ 
++    /// Retires completed fences through the rutabaga component (virglrenderer)
++    /// and signals the guest. Must be called whenever `poll_descriptor()` is
++    /// signaled and on every fence-poll timeout while a fence is pending.
++    pub fn event_poll(&mut self) {
++        self.rutabaga.event_poll();
++    }
++
++    /// A pollable descriptor that is signaled when there are fences to retire.
++    /// `None` when the component cannot poll (e.g. no virglrenderer).
++    pub fn poll_descriptor(&self) -> Option<RutabagaDescriptor> {
++        self.rutabaga.poll_descriptor()
++    }
++
++    /// True while at least one fenced descriptor still awaits retirement. When
++    /// false the worker may block indefinitely on the poll eventfd instead of
++    /// waking every 10ms on an idle VM.
++    pub fn has_pending_fence(&self) -> bool {
++        !self
++            .fence_state
++            .lock()
++            .unwrap_or_else(|e| e.into_inner())
++            .descs
++            .is_empty()
++    }
++
+     pub fn process_fence(
+         &mut self,
+         ring: VirtioGpuRing,
+diff --git a/src/devices/src/virtio/gpu/worker.rs b/src/devices/src/virtio/gpu/worker.rs
+index 9d19c103..b8e75638 100644
+--- a/src/devices/src/virtio/gpu/worker.rs
++++ b/src/devices/src/virtio/gpu/worker.rs
+@@ -1,5 +1,5 @@
+ use std::io::Read;
+-use std::os::fd::{AsRawFd, BorrowedFd};
++use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+ use std::sync::{Arc, Mutex};
+ use std::thread;
+ 
+@@ -37,6 +37,7 @@ pub struct Worker {
+     interrupt: InterruptTransport,
+     shm_region: VirtioShmRegion,
+     virgl_flags: u32,
++    render_server_fd: Option<OwnedFd>,
+     #[cfg(target_os = "macos")]
+     map_sender: Sender<WorkerMessage>,
+     export_table: Option<ExportTable>,
+@@ -52,6 +53,7 @@ impl Worker {
+         interrupt: InterruptTransport,
+         shm_region: VirtioShmRegion,
+         virgl_flags: u32,
++        render_server_fd: Option<OwnedFd>,
+         #[cfg(target_os = "macos")] map_sender: Sender<WorkerMessage>,
+         export_table: Option<ExportTable>,
+         displays: Box<[DisplayInfo]>,
+@@ -72,6 +74,7 @@ impl Worker {
+             interrupt,
+             shm_region,
+             virgl_flags,
++            render_server_fd,
+             #[cfg(target_os = "macos")]
+             map_sender,
+             export_table,
+@@ -93,6 +96,7 @@ impl Worker {
+             self.control_queue.clone(),
+             self.interrupt.clone(),
+             self.virgl_flags,
++            self.render_server_fd.take(),
+             #[cfg(target_os = "macos")]
+             self.map_sender.clone(),
+             self.export_table.take(),
+@@ -100,15 +104,80 @@ impl Worker {
+             self.display_backend,
+         );
+ 
++        // Keep the virgl fence-retirement descriptor alive for the worker's
++        // lifetime: it owns the fd this loop polls on, and dropping it would
++        // close that descriptor.
++        let fence_poll = virtio_gpu.poll_descriptor();
++
+         loop {
+-            if let Err(e) = self.control_evt.read() {
+-                error!("Failed to read control_evt: {e:?}");
++            // Poll both the control queue event and the virgl fence-retirement
++            // eventfd. The virgl eventfd is written once a signaled GL fence is
++            // ready to retire; without polling it, `vrend_renderer_check_fences`
++            // is never called and the guest's fenced execbuf descriptors are
++            // never marked used, hanging it on `DRM_IOCTL_VIRTGPU_WAIT`.
++            let mut pfds = [
++                libc::pollfd {
++                    fd: self.control_evt.as_raw_fd(),
++                    events: libc::POLLIN,
++                    revents: 0,
++                },
++                libc::pollfd {
++                    fd: -1,
++                    events: 0,
++                    revents: 0,
++                },
++            ];
++            let mut nfds = 1;
++            if let Some(descriptor) = &fence_poll {
++                pfds[1] = libc::pollfd {
++                    fd: descriptor.as_fd().as_raw_fd(),
++                    events: libc::POLLIN,
++                    revents: 0,
++                };
++                nfds = 2;
++            }
++
++            // Poll with a short timeout while a fence is outstanding so ongoing
++            // fence retirement (via event_poll) runs promptly even when the virgl
++            // eventfd is not signaled (video-decode fences land in vrend's
++            // fence_list rather than fence_wait_list in this configuration). When
++            // nothing is pending there is nothing to retire, so block indefinitely
++            // instead of waking ~100 times a second per idle VM.
++            let timeout = if virtio_gpu.has_pending_fence() {
++                10
++            } else {
++                -1
++            };
++            // SAFETY: pfds is a valid pollfd array of nfds entries.
++            let ret = unsafe { libc::poll(pfds.as_mut_ptr(), nfds as libc::nfds_t, timeout) };
++            if ret < 0 {
++                error!(
++                    "gpu worker poll failed: {}",
++                    std::io::Error::last_os_error()
++                );
+                 continue;
+             }
+-            if self.process_queue(&mut virtio_gpu, &self.control_queue.clone())
+-                && let Err(e) = self.interrupt.try_signal_used_queue()
+-            {
+-                error!("Error signaling queue: {e:?}");
++
++            // On poll timeout (only reachable with a pending fence), retire any
++            // completed fences sitting in fence_list.
++            if ret == 0 {
++                virtio_gpu.event_poll();
++            }
++
++            if pfds[0].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
++                if let Err(e) = self.control_evt.read() {
++                    error!("Failed to read control_evt: {e:?}");
++                    continue;
++                }
++                if self.process_queue(&mut virtio_gpu, &self.control_queue.clone())
++                    && let Err(e) = self.interrupt.try_signal_used_queue()
++                {
++                    error!("Error signaling queue: {e:?}");
++                }
++            }
++
++            if nfds > 1 && pfds[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
++                virtio_gpu.event_poll();
+             }
+         }
+     }

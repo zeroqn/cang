@@ -1,0 +1,155 @@
+# per-commit 3-way cherry-pick of PR-822 payload onto ABI-2 fork tip 3d7af2c2 (v2.0.0-cang.3, cang-main-rebase)
+# base branch abi2 = 3d7af2c2
+
+=== 4ef22a14 vmm/builder: create file-backed memory for gpu udmabuf as well
+rc=0
+  Auto-merging src/libkrun/src/vmm/builder.rs
+  [t 2ee8e7bc] vmm/builder: create file-backed memory for gpu udmabuf as well
+   Author: Val Packett <val@invisiblethingslab.com>
+   Date: Thu Aug 27 00:18:16 2026 -0300
+   1 file changed, 8 insertions(+), 3 deletions(-)
+--- git status --porcelain
+--- unmerged (diff-filter=U):
+--- staged/created files (diff-index --cached vs HEAD):
+
+=== a3962256 vmm/builder: seal file-backed memory against size changes
+rc=0
+  Auto-merging src/libkrun/src/vmm/builder.rs
+  [t 7d3e6bed] vmm/builder: seal file-backed memory against size changes
+   Author: Val Packett <val@invisiblethingslab.com>
+   Date: Thu Aug 27 00:20:07 2026 -0300
+   1 file changed, 14 insertions(+), 1 deletion(-)
+--- git status --porcelain
+--- unmerged (diff-filter=U):
+--- staged/created files (diff-index --cached vs HEAD):
+
+=== a8fd2784 rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+rc=1
+  CONFLICT (modify/delete): src/rutabaga_gfx/src/cross_domain/mod.rs deleted in HEAD and modified in a8fd2784 (rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles).  Version a8fd2784 (rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles) of src/rutabaga_gfx/src/cross_domain/mod.rs left in tree.
+  error: could not apply a8fd2784... rutabaga_gfx: cross_domain: allow attach() of guest blobs with handles
+  hint: After resolving the conflicts, mark them with
+  hint: "git add/rm <pathspec>", then run
+  hint: "git cherry-pick --continue".
+  hint: You can instead skip this commit with "git cherry-pick --skip".
+  hint: To abort and get back to the state before "git cherry-pick",
+  hint: run "git cherry-pick --abort".
+  hint: Disable this message with "git config set advice.mergeConflict false"
+--- git status --porcelain
+  DU src/rutabaga_gfx/src/cross_domain/mod.rs
+--- unmerged (diff-filter=U):
+  src/rutabaga_gfx/src/cross_domain/mod.rs
+--- staged/created files (diff-index --cached vs HEAD):
+  U	src/rutabaga_gfx/src/cross_domain/mod.rs
+
+=== ec9e5562 rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+rc=1
+  CONFLICT (modify/delete): src/rutabaga_gfx/src/rutabaga_utils.rs deleted in HEAD and modified in ec9e5562 (rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE).  Version ec9e5562 (rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE) of src/rutabaga_gfx/src/rutabaga_utils.rs left in tree.
+  error: could not apply ec9e5562... rutabaga_gfx: [XXX] rutabaga_utils: add RUTABAGA_BLOB_FLAG_CREATE_GUEST_HANDLE
+  hint: After resolving the conflicts, mark them with
+  hint: "git add/rm <pathspec>", then run
+  hint: "git cherry-pick --continue".
+  hint: You can instead skip this commit with "git cherry-pick --skip".
+  hint: To abort and get back to the state before "git cherry-pick",
+  hint: run "git cherry-pick --abort".
+  hint: Disable this message with "git config set advice.mergeConflict false"
+--- git status --porcelain
+  DU src/rutabaga_gfx/src/rutabaga_utils.rs
+--- unmerged (diff-filter=U):
+  src/rutabaga_gfx/src/rutabaga_utils.rs
+--- staged/created files (diff-index --cached vs HEAD):
+  U	src/rutabaga_gfx/src/rutabaga_utils.rs
+
+=== 3391f3c5 rutabaga_gfx: cross_domain: support creating guest resources with handles
+rc=1
+  CONFLICT (modify/delete): src/rutabaga_gfx/src/cross_domain/mod.rs deleted in HEAD and modified in 3391f3c5 (rutabaga_gfx: cross_domain: support creating guest resources with handles).  Version 3391f3c5 (rutabaga_gfx: cross_domain: support creating guest resources with handles) of src/rutabaga_gfx/src/cross_domain/mod.rs left in tree.
+  error: could not apply 3391f3c5... rutabaga_gfx: cross_domain: support creating guest resources with handles
+  hint: After resolving the conflicts, mark them with
+  hint: "git add/rm <pathspec>", then run
+  hint: "git cherry-pick --continue".
+  hint: You can instead skip this commit with "git cherry-pick --skip".
+  hint: To abort and get back to the state before "git cherry-pick",
+  hint: run "git cherry-pick --abort".
+  hint: Disable this message with "git config set advice.mergeConflict false"
+--- git status --porcelain
+  DU src/rutabaga_gfx/src/cross_domain/mod.rs
+--- unmerged (diff-filter=U):
+  src/rutabaga_gfx/src/cross_domain/mod.rs
+--- staged/created files (diff-index --cached vs HEAD):
+  U	src/rutabaga_gfx/src/cross_domain/mod.rs
+
+=== 16e116ae rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+rc=1
+  CONFLICT (modify/delete): src/rutabaga_gfx/src/rutabaga_core.rs deleted in HEAD and modified in 16e116ae (rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain).  Version 16e116ae (rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain) of src/rutabaga_gfx/src/rutabaga_core.rs left in tree.
+  error: could not apply 16e116ae... rutabaga_gfx: direct context-less CREATE_GUEST_HANDLE resources to cross-domain
+  hint: After resolving the conflicts, mark them with
+  hint: "git add/rm <pathspec>", then run
+  hint: "git cherry-pick --continue".
+  hint: You can instead skip this commit with "git cherry-pick --skip".
+  hint: To abort and get back to the state before "git cherry-pick",
+  hint: run "git cherry-pick --abort".
+  hint: Disable this message with "git config set advice.mergeConflict false"
+--- git status --porcelain
+  DU src/rutabaga_gfx/src/rutabaga_core.rs
+--- unmerged (diff-filter=U):
+  src/rutabaga_gfx/src/rutabaga_core.rs
+--- staged/created files (diff-index --cached vs HEAD):
+  U	src/rutabaga_gfx/src/rutabaga_core.rs
+
+=== b3f9c114 utils/linux: Add udmabuf driver wrapper
+rc=0
+  Auto-merging src/utils/Cargo.toml
+  [t 49b5bce8] utils/linux: Add udmabuf driver wrapper
+   Author: Val Packett <val@invisiblethingslab.com>
+   Date: Thu Aug 27 00:09:18 2026 -0300
+   3 files changed, 154 insertions(+)
+   create mode 100644 src/utils/src/linux/udmabuf.rs
+--- git status --porcelain
+--- unmerged (diff-filter=U):
+--- staged/created files (diff-index --cached vs HEAD):
+
+=== 230f2c55 [XXX] virtio/gpu: update VIRTIO_GPU_F_CREATE_GUEST_HANDLE constant
+rc=0
+  [t ac14d19b] [XXX] virtio/gpu: update VIRTIO_GPU_F_CREATE_GUEST_HANDLE constant
+   Author: Val Packett <val@invisiblethingslab.com>
+   Date: Thu Aug 27 00:11:59 2026 -0300
+   1 file changed, 2 insertions(+), 2 deletions(-)
+--- git status --porcelain
+--- unmerged (diff-filter=U):
+--- staged/created files (diff-index --cached vs HEAD):
+
+=== 6c51645c virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker
+rc=1
+  Auto-merging src/devices/src/virtio/gpu/device.rs
+  Auto-merging src/devices/src/virtio/gpu/virtio_gpu.rs
+  CONFLICT (content): Merge conflict in src/devices/src/virtio/gpu/virtio_gpu.rs
+  Auto-merging src/devices/src/virtio/gpu/worker.rs
+  error: could not apply 6c51645c... virtio/gpu: if udmabuf is present, set F_GUEST_CREATE_HANDLE and pass driver to worker
+  hint: After resolving the conflicts, mark them with
+  hint: "git add/rm <pathspec>", then run
+  hint: "git cherry-pick --continue".
+  hint: You can instead skip this commit with "git cherry-pick --skip".
+  hint: To abort and get back to the state before "git cherry-pick",
+  hint: run "git cherry-pick --abort".
+  hint: Disable this message with "git config set advice.mergeConflict false"
+--- git status --porcelain
+  M  src/devices/src/virtio/gpu/device.rs
+  UU src/devices/src/virtio/gpu/virtio_gpu.rs
+  M  src/devices/src/virtio/gpu/worker.rs
+--- unmerged (diff-filter=U):
+  src/devices/src/virtio/gpu/virtio_gpu.rs
+--- staged/created files (diff-index --cached vs HEAD):
+  M	src/devices/src/virtio/gpu/device.rs
+  U	src/devices/src/virtio/gpu/virtio_gpu.rs
+  M	src/devices/src/virtio/gpu/worker.rs
+
+=== 3819ce5f virtio/gpu: use the udmabuf driver to implement CREATE_GUEST_HANDLE
+rc=0
+  Auto-merging src/devices/src/virtio/gpu/virtio_gpu.rs
+  [t c7745514] virtio/gpu: use the udmabuf driver to implement CREATE_GUEST_HANDLE
+   Author: Val Packett <val@invisiblethingslab.com>
+   Date: Thu Aug 27 00:16:50 2026 -0300
+   1 file changed, 19 insertions(+), 2 deletions(-)
+--- git status --porcelain
+--- unmerged (diff-filter=U):
+--- staged/created files (diff-index --cached vs HEAD):
+

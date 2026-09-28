@@ -75,6 +75,13 @@ taking the fast path** - evidence, not "it builds".
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link -->
 
+- [What does PR 822's payload look like on the current ABI-2 fork tip?](tickets/03-port-matrix-on-abi2.md):
+  not a cherry-pick - five of ten apply, the four rutabaga commits have no file
+  to patch, `6c51645c` conflicts in `virtio_gpu.rs`'s imports, `4ef22a14`'s
+  condition is dead on ABI 2 (`gpu_shm_size.is_some()` is the right one), the
+  constant stays 6, and the new file-backed RAM costs the balloon's host-memory
+  reclaim (ticket 10).
+
 ## Not yet specified
 
 - **Architecture coverage for the first libkrunfw release.** The kernel patch

@@ -1,0 +1,101 @@
+########## does vm_resources / gpu_virgl_flags exist on ABI-2? ##########
+(above: grep of gpu_virgl_flags across abi2 tree; empty == absent)
+5849c08d:src/vmm/src/builder.rs:1261:    if let Some(virgl_flags) = vm_resources.gpu_virgl_flags {
+5849c08d:src/vmm/src/builder.rs:1881:    if vm_resources.gpu_virgl_flags.is_some() {
+5849c08d:src/vmm/src/resources.rs:216:    pub gpu_virgl_flags: Option<u32>,
+5849c08d:src/vmm/src/resources.rs:392:    pub fn set_gpu_virgl_flags(&mut self, virgl_flags: u32) {
+5849c08d:src/vmm/src/resources.rs:393:        self.gpu_virgl_flags = Some(virgl_flags);
+5849c08d:src/vmm/src/resources.rs:466:            gpu_virgl_flags: None,
+
+########## cherry-picked 4ef22a14 on abi2: the inserted lines ##########
+  1938	    let _ = use_vhost_user;
+  1939	
+  1940	    #[cfg(all(feature = "gpu", target_os = "linux"))]
+  1941	    let use_gpu_udmabuf = vm_resources.gpu_virgl_flags.is_some();
+  1942	    #[cfg(not(all(feature = "gpu", target_os = "linux")))]
+  1943	    let use_gpu_udmabuf = false;
+  1944	
+  1945	    // Add SHM regions before creating guest memory
+  1946	    arch_mem_regions.extend(shm_manager.regions());
+  1947	
+  1948	    let guest_mem = if use_vhost_user || use_gpu_udmabuf {
+  1949	        #[cfg(all(any(feature = "gpu", feature = "vhost-user"), target_os = "linux"))]
+  1950	        {
+  1951	            debug!(
+  1952	                "Creating file-backed memory for gpu or vhost-user (regions: {})",
+--- grep for vm_resources in create_guest_memory region
+    let use_gpu_udmabuf = vm_resources.gpu_virgl_flags.is_some();
+
+########## GpuDevice::new shm_size default (device_builders.rs) ##########
+1635-
+1636-/// A virtio GPU device with virgl 3D acceleration.
+1637-#[cfg(feature = "gpu")]
+1638:pub struct GpuDevice {
+1639-    virgl_flags: u32,
+1640-    render_server_fd: Option<OwnedFd>,
+1641-    backend: DisplayBackend,
+1642-    shm_size: usize,
+1643-}
+1644-
+1645-#[cfg_attr(feature = "ffi", ffier::export(cfg = "feature = \"gpu\""))]
+1646-#[cfg_attr(not(feature = "ffi"), cfg(feature = "gpu"))]
+1647-impl GpuDevice {
+1648-    const DEFAULT_SHM_SIZE: usize = 1 << 33;
+1649-
+1650-    pub fn new(virgl_flags: VirglRendererFlags, backend: DisplayBackend) -> Self {
+1651-        Self {
+1652-            virgl_flags: virgl_flags.bits(),
+1653-            render_server_fd: None,
+1654-            backend,
+1655-            shm_size: Self::DEFAULT_SHM_SIZE,
+1656-        }
+1657-    }
+1658-
+1659-    /// Hand the device the caller's end of the render-server socketpair.
+1660-    ///
+1661-    /// virglrenderer receives it as its server descriptor, which is what enables
+1662-    /// the sandboxed venus render-server path (`VIRGLRENDERER_RENDER_SERVER`).
+1663-    /// A negative fd means "no render server" and is rejected, because the fd can
+1647:impl GpuDevice {
+1648-    const DEFAULT_SHM_SIZE: usize = 1 << 33;
+1649-
+1650-    pub fn new(virgl_flags: VirglRendererFlags, backend: DisplayBackend) -> Self {
+1651-        Self {
+1652-            virgl_flags: virgl_flags.bits(),
+1653-            render_server_fd: None,
+1654-            backend,
+1655-            shm_size: Self::DEFAULT_SHM_SIZE,
+1656-        }
+1657-    }
+1658-
+1659-    /// Hand the device the caller's end of the render-server socketpair.
+1660-    ///
+1661-    /// virglrenderer receives it as its server descriptor, which is what enables
+1662-    /// the sandboxed venus render-server path (`VIRGLRENDERER_RENDER_SERVER`).
+1663-    /// A negative fd means "no render server" and is rejected, because the fd can
+1664-    /// only be a real descriptor here.
+1665-    pub fn set_render_server_fd(mut self, render_server_fd: RawFd) -> Result<Self, VmmError> {
+1666-        if render_server_fd < 0 {
+1667-            return Err(VmmError::BadFd());
+--
+1683:impl<'a> AttachDevice<'a> for GpuDevice {
+1684-    #[cfg_attr(feature = "ffi", ffier(skip))]
+1685-    fn requirements(&self) -> DeviceRequirements {
+1686-        DeviceRequirements {
+1687-            gpu_shm: Some(self.shm_size),
+1688-            ..Default::default()
+1689-        }
+1690-    }
+1691-
+1692-    #[cfg_attr(feature = "ffi", ffier(skip))]
+1693-    fn attach(self: Box<Self>, ctx: &mut AttachContext) -> Result<(), VmmError> {
+1694-        let displays: Box<[DisplayInfo]> = self.backend.displays.into_boxed_slice();
+1695-
+1696-        let gpu = devices::virtio::Gpu::new(
+1697-            self.virgl_flags,
+1698-            self.render_server_fd,
+1699-            displays,
+1700-            self.backend.inner,
+1701-            #[cfg(target_os = "macos")]
+1702-            ctx.map_sender().expect("macOS requires map_sender for GPU"),
+1703-        )

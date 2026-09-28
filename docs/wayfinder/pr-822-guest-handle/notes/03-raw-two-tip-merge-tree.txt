@@ -1,0 +1,138 @@
+# composite git merge-tree --write-tree abi2=3d7af2c2 <- pr822=3819ce5f
+# merge-base: 0d75eb4b9d7f742e9b290b7372e4be491e68b173
+
+86e7d9547fb178e8ee6b9482af1b69f0657de27b
+100644 f1a69f7226a4dca83745e1114d7a18a9bbf64075 1	Cargo.lock
+100644 6cd75dacdc9978dec4b3deb85ed13b10f414fb39 2	Cargo.lock
+100644 635a21f33131d0db62455605c1dbe3befc301837 3	Cargo.lock
+100644 77d5fe18ccacaf92b59e927afb85c4e298f465c6 1	src/devices/Cargo.toml
+100644 309720de6d8d49e15ae3b7d63b9bb3f5c28e7397 2	src/devices/Cargo.toml
+100644 879366aff273a8998b5bd488aa2dc448e0ff6a65 3	src/devices/Cargo.toml
+100644 7f65a2083e94492d1cb46aaf7b282cea8abfb9ca 1	src/devices/src/virtio/block/device.rs
+100644 9ad259809168af7401b427bf1544381a7816be4d 2	src/devices/src/virtio/block/device.rs
+100644 51b7b187d89c473f2e9fdca99593575c7f77181d 3	src/devices/src/virtio/block/device.rs
+100644 c4a65bed3d1b29eff669a4df43dd166b73362404 1	src/devices/src/virtio/gpu/virtio_gpu.rs
+100644 258e8199efb84cadf9978e10447f56b1e2ece234 2	src/devices/src/virtio/gpu/virtio_gpu.rs
+100644 eb57e6f2197e18e3c76ff32dc75dcf9a2d972068 3	src/devices/src/virtio/gpu/virtio_gpu.rs
+100644 d88dbcc61008d8b85a527e6e646c418bd8667e0b 1	src/devices/src/virtio/vhost_user/device.rs
+100644 3e72b2904893c8957bcf1e582b16537daf15ebd0 2	src/devices/src/virtio/vhost_user/device.rs
+100644 18f6b1627bc868469a80a9a968f19f50e4252c81 3	src/devices/src/virtio/vhost_user/device.rs
+100644 f2b7a0ebe96bff22efec0f9abbee435e57e1a45d 1	src/libkrun/Cargo.toml
+100644 7d523624170287625387f5750ba35d9d14ee96b5 2	src/libkrun/Cargo.toml
+100644 0299dd5a6cda2ee97baa580b01c74cf5d6759b2b 3	src/libkrun/Cargo.toml
+100644 a0d4c6f2337376c2076d62901e99ebd1e8023315 1	src/libkrun/src/vmm/builder.rs
+100644 b635be24715750af2cd14b69f3d9c1a3ebf27be0 2	src/libkrun/src/vmm/builder.rs
+100644 a70cc94aedb6759ce0330bc289435855ede62a69 3	src/libkrun/src/vmm/builder.rs
+100644 0f1e25ba6a86142919214a53a1954cb4465aa378 1	src/libkrun/src/vmm/linux/vstate.rs
+100644 c7f363abba817b402c37886ebed2f9adfe657258 2	src/libkrun/src/vmm/linux/vstate.rs
+100644 ad91edab5ef32ce386dd714f2d16611f882c5c97 3	src/libkrun/src/vmm/linux/vstate.rs
+100644 c1ffbd7d2395d7b2d28f63fb48bda7376be9326e 1	src/rutabaga_gfx/src/cross_domain/mod.rs
+100644 d2208453a35e77e774c47aa4d565df7d3683c2c1 3	src/rutabaga_gfx/src/cross_domain/mod.rs
+100644 f5b349a937c0d745aa66770cd5d45d2ae904f767 1	src/rutabaga_gfx/src/rutabaga_core.rs
+100644 19e95114fad547d4f72dffc79dbc68281d2f8a29 3	src/rutabaga_gfx/src/rutabaga_core.rs
+100644 912200a7aa0b319b1adc094c27081e9facd80014 1	src/rutabaga_gfx/src/rutabaga_utils.rs
+100644 9bd846740ee5002a918a01f4b61484439591f4b5 3	src/rutabaga_gfx/src/rutabaga_utils.rs
+100644 765b6e76947912b2ced374b02b8cbb119c101aaa 1	src/utils/Cargo.toml
+100644 347c4c08c0e1e6114a1cbc80637d8cf78fa53745 2	src/utils/Cargo.toml
+100644 340824c74cbb3b26a147937ffda9645d41b58c20 3	src/utils/Cargo.toml
+100644 1c51dce94c7f3003cfe8892f36d447fa9a781244 1	src/vmm/Cargo.toml
+100644 7f74138a922574a45e6fd8a735f0498f0d7b3917 3	src/vmm/Cargo.toml
+
+Auto-merging Cargo.lock
+CONFLICT (content): Merge conflict in Cargo.lock
+Auto-merging src/arch/Cargo.toml
+Auto-merging src/arch/src/riscv64/mod.rs
+Auto-merging src/arch/src/x86_64/windows/regs.rs
+Auto-merging src/devices/Cargo.toml
+CONFLICT (content): Merge conflict in src/devices/Cargo.toml
+Auto-merging src/devices/src/virtio/balloon/device.rs
+Auto-merging src/devices/src/virtio/block/device.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/block/device.rs
+Auto-merging src/devices/src/virtio/gpu/device.rs
+Auto-merging src/devices/src/virtio/gpu/virtio_gpu.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/gpu/virtio_gpu.rs
+Auto-merging src/devices/src/virtio/gpu/worker.rs
+Auto-merging src/devices/src/virtio/vhost_user/device.rs
+CONFLICT (content): Merge conflict in src/devices/src/virtio/vhost_user/device.rs
+Auto-merging src/devices/src/virtio/vsock/packet.rs
+Auto-merging src/libkrun/Cargo.toml
+CONFLICT (content): Merge conflict in src/libkrun/Cargo.toml
+Auto-merging src/libkrun/src/vmm/builder.rs
+CONFLICT (content): Merge conflict in src/libkrun/src/vmm/builder.rs
+Auto-merging src/libkrun/src/vmm/linux/tee/amdsnp/mod.rs
+Auto-merging src/libkrun/src/vmm/linux/vstate.rs
+CONFLICT (content): Merge conflict in src/libkrun/src/vmm/linux/vstate.rs
+Auto-merging src/libkrun/src/vmm/macos/vstate.rs
+Auto-merging src/libkrun/src/vmm/worker.rs
+CONFLICT (modify/delete): src/rutabaga_gfx/src/cross_domain/mod.rs deleted in 3d7af2c2 and modified in 3819ce5f.  Version 3819ce5f of src/rutabaga_gfx/src/cross_domain/mod.rs left in tree.
+CONFLICT (modify/delete): src/rutabaga_gfx/src/rutabaga_core.rs deleted in 3d7af2c2 and modified in 3819ce5f.  Version 3819ce5f of src/rutabaga_gfx/src/rutabaga_core.rs left in tree.
+CONFLICT (modify/delete): src/rutabaga_gfx/src/rutabaga_utils.rs deleted in 3d7af2c2 and modified in 3819ce5f.  Version 3819ce5f of src/rutabaga_gfx/src/rutabaga_utils.rs left in tree.
+Auto-merging src/utils/Cargo.toml
+CONFLICT (content): Merge conflict in src/utils/Cargo.toml
+CONFLICT (modify/delete): src/vmm/Cargo.toml deleted in 3d7af2c2 and modified in 3819ce5f.  Version 3819ce5f of src/vmm/Cargo.toml left in tree.
+
+rc=0
+
+# ---- 2-dot diffstat (tip vs pr head, what merge-tree sees as both sides)
+ tests/runner/Cargo.toml                            |    7 +-
+ tests/test_cases/Cargo.toml                        |   11 +-
+ tests/test_cases/src/common.rs                     |  261 +-
+ tests/test_cases/src/common_freebsd.rs             |  220 +-
+ tests/test_cases/src/krun.rs                       |   25 +
+ tests/test_cases/src/lib.rs                        |   39 +-
+ tests/test_cases/src/test_acpi_smp.rs              |   89 -
+ tests/test_cases/src/test_augmentfs.rs             |  183 +-
+ tests/test_cases/src/test_freebsd_boot.rs          |   26 +-
+ .../src/test_freebsd_gvproxy_tcp_guest_connect.rs  |   46 +-
+ .../src/test_freebsd_gvproxy_tcp_guest_listen.rs   |   72 +-
+ tests/test_cases/src/test_multiport_console.rs     |  141 +-
+ tests/test_cases/src/test_net/gvproxy.rs           |   41 +-
+ tests/test_cases/src/test_net/mod.rs               |  113 +-
+ tests/test_cases/src/test_net/passt.rs             |   50 +-
+ tests/test_cases/src/test_net/tap.rs               |   44 +-
+ tests/test_cases/src/test_net/vmnet_helper.rs      |   44 +-
+ tests/test_cases/src/test_net_perf.rs              |   75 +-
+ tests/test_cases/src/test_pjdfstest.rs             |   19 +-
+ tests/test_cases/src/test_root_disk_remount.rs     |  160 +-
+ tests/test_cases/src/test_tsi_tcp_guest_connect.rs |   75 +-
+ tests/test_cases/src/test_tsi_tcp_guest_listen.rs  |   88 +-
+ tests/test_cases/src/test_virtiofs_misc.rs         |   45 +-
+ tests/test_cases/src/test_virtiofs_root_ro.rs      |   73 +-
+ tests/test_cases/src/test_vm_config.rs             |   34 +-
+ tests/test_cases/src/test_vm_pause.rs              |  174 +-
+ tests/test_cases/src/test_vsock_guest_connect.rs   |   90 +-
+ tests/test_cases/src/test_vsock_guest_reconnect.rs |  157 -
+ .../src/test_vsock_host_connect_refused.rs         |  213 --
+ 278 files changed, 25038 insertions(+), 21390 deletions(-)
+
+# ---- 3-dot diffstat (pr822 vs merge-base, the real payload)
+ src/devices/Cargo.toml                       |   8 +-
+ src/devices/src/virtio/balloon/device.rs     |   2 +-
+ src/devices/src/virtio/block/device.rs       |  32 +++---
+ src/devices/src/virtio/console/process_rx.rs |   2 +-
+ src/devices/src/virtio/console/process_tx.rs |   2 +-
+ src/devices/src/virtio/descriptor_utils.rs   |   5 +-
+ src/devices/src/virtio/gpu/device.rs         |  27 ++++-
+ src/devices/src/virtio/gpu/mod.rs            |   4 +-
+ src/devices/src/virtio/gpu/virtio_gpu.rs     |  35 ++++++-
+ src/devices/src/virtio/gpu/worker.rs         |   9 ++
+ src/devices/src/virtio/queue.rs              |   4 +-
+ src/devices/src/virtio/vhost_user/device.rs  |   2 +-
+ src/devices/src/virtio/vsock/packet.rs       |   4 +-
+ src/kernel/Cargo.toml                        |   2 +-
+ src/kernel/src/loader/mod.rs                 |   2 +-
+ src/libkrun/Cargo.toml                       |   6 +-
+ src/rutabaga_gfx/src/cross_domain/mod.rs     |  46 ++++----
+ src/rutabaga_gfx/src/rutabaga_core.rs        |  14 ++-
+ src/rutabaga_gfx/src/rutabaga_utils.rs       |   1 +
+ src/smbios/Cargo.toml                        |   2 +-
+ src/utils/Cargo.toml                         |   5 +-
+ src/utils/src/linux/mod.rs                   |   1 +
+ src/utils/src/linux/udmabuf.rs               | 150 +++++++++++++++++++++++++++
+ src/vmm/Cargo.toml                           |  10 +-
+ src/vmm/src/builder.rs                       |  30 ++++--
+ src/vmm/src/linux/tee/amdsnp/mod.rs          |   2 +-
+ src/vmm/src/linux/vstate.rs                  |   4 +-
+ src/vmm/src/macos/vstate.rs                  |   2 +-
+ src/vmm/src/worker.rs                        |   2 +-
+ 36 files changed, 372 insertions(+), 148 deletions(-)
