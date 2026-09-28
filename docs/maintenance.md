@@ -20,20 +20,9 @@ nix develop --command ./scripts/update-cang-prebuilt.sh
 nix develop --command ./scripts/update-cang-prebuilt.sh --tag v0.8.0
 ```
 
-Releasing a new cang version has to happen in this order, because the tag is what
-`nix build .#cang-prebuilt` resolves the pin against:
-
-1. bump the workspace version (`Cargo.toml` + `Cargo.lock`) and commit it;
-2. compute the asset SRI from a local `nix build .#cang-ci-sccache` normalized
-   with the release workflow's `patchelf --set-interpreter
-   /lib64/ld-linux-x86-64.so.2 --set-rpath ""` step, whose result is
-   byte-reproducible because the neutral asset embeds no `/nix/store` paths;
-3. commit that pin (`tag`, versioned `asset` name, `hash`);
-4. tag **the pin commit** and push the branch and the tag, which is what makes
-   the release workflow publish `cang-v<version>-<arch>-unknown-linux-gnu`.
-
-Tagging an earlier commit leaves the pinned hash behind the tag, so a
-`v<version>` checkout of cang would still pin the previous release.
+This updater only re-pins an artifact that is *already published* (it downloads
+from GitHub Releases). Cutting a new cang release records the pin before the asset
+exists, so follow the [cang release scheme](#cang-release-scheme) below instead.
 
 Refresh pinned RTK prebuilt release metadata in `nix/pins.nix`:
 
@@ -139,6 +128,71 @@ Each `update-libkrunfw.sh` run rewrites one system, so pass the same `--tag` for
 all three. The `.github/workflows/publish_release.yml` job for a cang version tag
 refuses to run while `libkrunRelease.tag` or `libkrunfwRelease.tag` is still a
 rolling `cang-<sha>` tag.
+
+### cang release scheme
+
+`zeroqn/cang` publishes itself from git tags: `publish_release.yml` runs on
+`tags: "*"` (and on every `main` push, for the rolling alpha), so releasing needs
+no `gh` authentication and no `workflow_dispatch`. A **tag push** publishes
+
+- the permanent `v<version>` release, carrying the neutral asset
+  `cang-v<version>-<arch>-unknown-linux-gnu` and its `.sha256`;
+- the same asset on the immutable `sha-<short-sha>` prerelease of that revision;
+- a build-provenance attestation
+  (`gh attestation verify <asset> --repo zeroqn/cang`);
+- and, from `publish_image.yml`, the image `ghcr.io/zeroqn/cang:<tag>`.
+
+A **branch push** names the asset `cang-<arch>-unknown-linux-gnu` instead and only
+touches the rolling releases, which keep the 20 newest `sha-*` prereleases; pin a
+`v<version>` release. A tag push also cancels the branch-push run in the shared
+`rolling-alpha-release` concurrency group, which is harmless: the tag run
+publishes the versioned release *and* the `sha-<short-sha>` prerelease for its
+revision.
+
+Release a version in this order:
+
+1. Bump `workspace.package.version` in `Cargo.toml` and the workspace-member
+   entries in `Cargo.lock` (this is what `pins.cangVersion` reads) and commit it.
+2. Compute the asset SRI from a local build normalized exactly like the release
+   workflow. The asset is patched to a neutral interpreter and embeds no
+   `/nix/store` paths, so the result is byte-reproducible and is the hash CI
+   publishes:
+
+   ```bash
+   nix build .#cang-ci-sccache -o result-cang-ci
+   install -m 0755 result-cang-ci/bin/cang "/tmp/cang-v<version>-x86_64-unknown-linux-gnu"
+   nix shell nixpkgs#patchelf -c patchelf \
+     --set-interpreter /lib64/ld-linux-x86-64.so.2 --set-rpath "" \
+     "/tmp/cang-v<version>-x86_64-unknown-linux-gnu"
+   sha256sum "/tmp/cang-v<version>-x86_64-unknown-linux-gnu"
+   ```
+
+   Run this from `nix develop`, which provides `readelf` and `sha256sum`.
+3. Commit the pin in `nix/pins.nix`: `cangPrebuiltRelease.tag = "v<version>"`, the
+   versioned `asset` name from step 2, and that SRI.
+4. Tag **the pin commit** — not the version bump — and push branch and tag (v0.7.2
+   and v0.8.0 are both lightweight tags):
+
+   ```bash
+   git tag v<version>
+   git push origin main "v<version>"
+   ```
+
+The tag has to point at the pin commit because `nix build .#cang-prebuilt` reads
+the pin out of the tagged tree: tagging the bump commit leaves the pinned hash
+behind the tag, so a `v<version>` checkout would still pin the previous release.
+Do not tag first and pin afterwards, and do not move a tag once it is pushed.
+
+Both fork pins must already be permanent `v<version>-cang.<n>` releases. The
+tag-triggered job refuses to publish while `libkrunRelease.tag` or
+`libkrunfwRelease.tag` is a rolling `cang-<sha>` tag, because those are pruned.
+
+Verify the published release against the pin:
+
+```bash
+nix build .#cang-prebuilt
+./result-cang-prebuilt/bin/cang --version   # prints `cang <version>`
+```
 
 Refresh pinned Pi coding agent source/npm metadata in `nix/pins.nix` from `earendil-works/pi`:
 

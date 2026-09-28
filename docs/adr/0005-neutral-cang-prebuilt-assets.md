@@ -41,6 +41,10 @@ neutral upstream asset plus Nix-side patching in the package that consumes it.
 Existing legacy pins fail early until a new neutral `sha-*` release asset is
 published and pinned.
 
+Cutting a release that produces such an asset follows
+[the cang release scheme](../maintenance.md#cang-release-scheme): the pin is
+committed before the tag, and the tag points at the pin commit.
+
 The raw GitHub asset is honest about its role: it is a neutral dynamic Linux ELF
 for packaging. Ordinary users should prefer `nix build .#cang`,
 `nix build .#cang-prebuilt`, or the published `ghcr.io/<repo-owner>/cang`

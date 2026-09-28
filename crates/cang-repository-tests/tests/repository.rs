@@ -1,6 +1,7 @@
 const FLAKE_NIX: &str = include_str!("../../../flake.nix");
 const ADR_0005_NEUTRAL_CANG_PREBUILT_ASSETS_MD: &str =
     include_str!("../../../docs/adr/0005-neutral-cang-prebuilt-assets.md");
+const MAINTENANCE_MD: &str = include_str!("../../../docs/maintenance.md");
 const LAYERS: &str = include_str!("../../../nix/image/layers.nix");
 const CONTAINER_NIX: &str = include_str!("../../../nix/image/container.nix");
 const IMAGE_CONFIG_NIX: &str = include_str!("../../../nix/image/config.nix");
@@ -575,6 +576,28 @@ fn cang_prebuilt_adr_records_neutral_asset_decision() {
             ADR_0005_NEUTRAL_CANG_PREBUILT_ASSETS_MD.contains(required),
             "missing {required}"
         );
+    }
+}
+
+#[test]
+fn cang_release_workflow_is_documented() {
+    for required in [
+        // The prebuilt updater only re-pins a published asset, so the procedure
+        // that computes the SRI before the release exists has to stay written
+        // down next to it.
+        "follow the [cang release scheme](#cang-release-scheme)",
+        "### cang release scheme",
+        "cang-v<version>-<arch>-unknown-linux-gnu",
+        "`rolling-alpha-release` concurrency group",
+        "nix build .#cang-ci-sccache",
+        "--set-interpreter /lib64/ld-linux-x86-64.so.2",
+        r#"sha256sum "/tmp/cang-v<version>-x86_64-unknown-linux-gnu""#,
+        "Tag **the pin commit**",
+        "leaves the pinned hash",
+        r#"git push origin main "v<version>""#,
+        "nix build .#cang-prebuilt",
+    ] {
+        assert!(MAINTENANCE_MD.contains(required), "missing {required}");
     }
 }
 
