@@ -1,7 +1,7 @@
 ---
 label: wayfinder:task
 title: GPU smoke the new pin
-status: open
+status: closed
 blocked_by: ["07-pin-and-adapt-cang"]
 claimed_by: pi session (2026-09-28)
 ---
@@ -63,6 +63,20 @@ mode 9 PASS incl. `waypipe-transport`, `venus-presenting`, `frame-presented`,
 Details and the log excerpts are in
 [notes/08-gpu-smoke.md](../notes/08-gpu-smoke.md).
 
-**Still open**: the fix is unpublished, so the *pinned* release still fails.
-[Publish the GPU fixes as v2.0.0-cang.3 and re-pin](14-publish-gpu-fix.md) closes
-this ticket by re-running the same two modes against the published artifact.
+**Closed against the published pin.** `v2.0.0-cang.3` (tag on the fork's
+`3d7af2c2`, CI success) is pinned, `nix build .#cang` links it, and both smoke
+modes **PASS against the pinned artifact**:
+
+- GPU mode: 4 PASS, verdict PASS, 14 evidence files,
+  `renderer=ANGLE (AMD, Vulkan 1.4.334 (Virtio-GPU Venus (AMD Radeon RX 7600M XT
+  (RADV NAVI33)) (0x00007480)), venus)` - byte-identical to the pre-rebase
+  baseline's renderer string;
+- `--waypipe`: 9 PASS (incl. `waypipe-transport`, `venus-presenting`,
+  `frame-presented`, `renderer-on-frame`, `control-no-frame`), verdict PASS, 25
+  evidence files.
+
+Evidence lives in
+`/home/dev/cang/disk/chromium-smoke/pinned-c3-gpu` and
+`/home/dev/cang/disk/chromium-smoke/pinned-c3-waypipe`; revision pair: cang
+`0.7.2` (pinned libkrun `v2.0.0-cang.3`, libkrunfw `v5.6.2-cang.1`) against the
+unchanged `localhost/cang:latest` image.

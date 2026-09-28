@@ -99,9 +99,27 @@ The smoke's `--cang` wants a package prefix whose `lib/cang` can be swapped by
 exporting `CANG_LIBKRUN_LIBRARY=<libkrun.so.2>` - that is how the unpublished
 library was exercised without re-pinning.
 
-## Open item
+## Published and re-verified (v2.0.0-cang.3)
 
-The fix is committed on the fork (submodule commit `3d7af2c2`) but **not
-published**, so the pinned `v2.0.0-cang.2` still degrades to 2D and the smoke
-still fails against the pin. Publishing `v2.0.0-cang.3` and re-pinning is
-[Publish the GPU fixes and re-pin](14-publish-gpu-fix.md).
+The fix is published (tag `v2.0.0-cang.3` on `3d7af2c2`, CI success) and pinned;
+`nix build .#cang` links it (101 `krun_*` symbols). Both modes were re-run against
+the **pinned** build, with fresh out-dirs and the same image:
+
+```
+$ tools/chromium-cang-smoke/chromium-smoke.sh --container localhost/cang:latest \
+    --cang <result-cang> --out-dir .../chromium-smoke/pinned-c3-gpu
+PASS version  PASS chromium-rc  PASS webgl-vulkan  PASS webgl-png
+VERDICT: PASS (14 evidence files)
+renderer=ANGLE (AMD, Vulkan 1.4.334 (Virtio-GPU Venus (AMD Radeon RX 7600M XT (RADV NAVI33)) (0x00007480)), venus)
+
+$ tools/chromium-cang-smoke/chromium-smoke.sh --waypipe ... \
+    --weston <weston-15.0.1> --waypipe-bin <waypipe-bin> \
+    --out-dir .../chromium-smoke/pinned-c3-waypipe
+PASS version  PASS chromium-rc  PASS webgl-vulkan  PASS webgl-png
+PASS waypipe-transport  PASS venus-presenting  PASS frame-presented
+PASS renderer-on-frame  PASS control-no-frame
+VERDICT: PASS (25 evidence files)
+```
+
+Revision pair: cang `0.7.2` + pinned libkrun `v2.0.0-cang.3` + libkrunfw
+`v5.6.2-cang.1`, image `localhost/cang:latest` (unchanged since the baseline).

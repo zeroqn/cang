@@ -13,9 +13,7 @@ published as the permanent fork release **`v2.0.0-cang.1`**, pinned in
 ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
-**Status (2026-09-28): tickets 01-07 and 09-13 resolved. Ticket 08 is diagnosed
-and fixed locally; it and the new ticket 14 (publish the fix, re-pin, re-run the
-smoke) are the remaining work.**
+**Status (2026-09-28): all fourteen tickets resolved.**
 The fork's `cang` branch is pushed (tip `d578e4e2`) and the permanent release
 **`v2.0.0-cang.1`** is published and pinned. cang is ported to the ABI-2 object
 API (ticket 09) and live-boots a guest - but **only against a locally built
@@ -42,12 +40,12 @@ builder/object API** (tickets 09/10). PR **822 is out of this map** (bob,
 2026-09-27): it is inert on the pinned kernel, its own commit would collide with
 our `VIRTIO_GPU_F_FENCE_PASSING = 5`, and carrying it as intended would mean
 vendoring a patched `rutabaga_gfx` for a capability nothing can exercise.
-Frontier: ticket **14** - publish the ABI-2 GPU fixes as `v2.0.0-cang.3` and
-re-pin, which is what closes ticket **08**. The smoke's verdict on the *pinned*
-`v2.0.0-cang.2` is a real regression (venus degrades to 2D), it is attributed to
-three device-side causes and fixed in the fork's `3d7af2c2`, and both smoke modes
-pass against that library locally; only the publication is missing. "Not yet
-specified" below still names the map's open design questions.
+No frontier: the pin is `v2.0.0-cang.3` (fork commit `3d7af2c2`), `nix build
+.#cang` boots and the Chromium GPU smoke passes in both modes against the pinned
+build. Ticket 08's regression is written up there and in ticket 14: `.2` exported
+the ABI but silently degraded venus to the 2D fallback, which only the smoke
+catches - a reminder that the symbol assertion is necessary, not sufficient.
+"Not yet specified" below still names the map's open design questions.
 
 ### The GPU regression in one paragraph
 
@@ -110,8 +108,8 @@ the same mask, otherwise the guest's capset enumeration times out instead.
 ## Decisions so far
 
 - [Publish the GPU fixes as v2.0.0-cang.3 and re-pin](tickets/14-publish-gpu-fix.md):
-  push the fork's `3d7af2c2`, tag `v2.0.0-cang.3`, re-pin, and re-run both smoke
-  modes against the published artifact (this is what closes ticket 08).
+  branch pushed, tag `v2.0.0-cang.3` published (CI success) and pinned; both smoke
+  modes pass against the pinned build.
 - [GPU smoke the new pin](tickets/08-gpu-smoke-on-new-pin.md): run on the pinned
   `v2.0.0-cang.2` - FAIL with `renderer=no-webgl`, a rebase regression (the
   2026-09-26 baseline on the v1 pin shows the venus renderer). Fixed in the

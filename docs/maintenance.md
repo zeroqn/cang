@@ -83,13 +83,13 @@ any of them:
   `cang` branch. The publish workflow keeps only the newest ten, so these are
   disposable dev artifacts.
 - **Permanent `v<libkrun|libkrunfw version>-cang.<n>`** (for example
-  `v2.0.0-cang.2`): published by a manual `workflow_dispatch` run of the same
+  `v2.0.0-cang.3`): published by a manual `workflow_dispatch` run of the same
   workflow, or by pushing the tag directly (the workflow also triggers on tags). The prune job never touches these, so a pin into one never ages out.
 
 A versioned release is created with:
 
 ```bash
-gh workflow run publish-cang-release.yml --repo zeroqn/libkrun -f version=2.0.0-cang.2
+gh workflow run publish-cang-release.yml --repo zeroqn/libkrun -f version=2.0.0-cang.3
 gh workflow run publish-cang-release.yml --repo zeroqn/libkrunfw -f version=5.6.2-cang.1
 ```
 
@@ -106,10 +106,15 @@ fails at `krun_init_log` resolution. `libkrun_init.so` always gets `ffi` from th
 Makefile, which is why only the host library was ever hollow. A tree-built
 libkrun needs the same flag (`nix/dev` passes it).
 
+Publishing a libkrun fix also has to be re-verified through the GPU smoke, not
+just the symbol check: `.2` exported the ABI but regressed venus to the 2D
+fallback, which only the Chromium smoke catches (`tools/chromium-cang-smoke`,
+GPU and `--waypipe` modes). `.3` carries that fix.
+
 Pin a permanent release, and use it for any tagged cang release:
 
 ```bash
-nix develop --command ./scripts/update-libkrun.sh --tag v2.0.0-cang.2
+nix develop --command ./scripts/update-libkrun.sh --tag v2.0.0-cang.3
 nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.1
 nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang.1
 nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang.1
