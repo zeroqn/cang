@@ -193,6 +193,10 @@ the same mask, otherwise the guest's capset enumeration times out instead.
   crate. **Any future carry must keep `VIRTIO_GPU_F_CREATE_GUEST_HANDLE = 6`**,
   not the PR's `230f2c55` value of 5, which our kernel uses for
   `VIRTIO_GPU_F_FENCE_PASSING`. Evidence: `notes/02-pr-822-inertness.md`.
+  **Returned 2026-09-28 as a fresh effort** (destination redrawn):
+  [`../pr-822-guest-handle/MAP.md`](../pr-822-guest-handle/MAP.md) - carry the
+  fast path end to end, with the libkrunfw kernel work and a rev-pinned
+  `rutabaga_gfx` git dependency in scope.
 - **Consuming libkrun through a Rust interface instead of the C ABI.** Bob's
   separate question (2026-09-27): cang today `dlopen`s `libkrun.so` and binds
   `krun_*` symbols behind the `LibkrunApi` trait; Rust-direct means vendoring the
