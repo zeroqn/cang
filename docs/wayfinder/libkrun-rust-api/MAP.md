@@ -19,9 +19,21 @@ the Chromium GPU smoke passing in both modes against the Rust-API build.
 not every shared object. What replaces libkrun's `$ORIGIN`-based firmware lookup
 is cang's own rpath/`LD_LIBRARY_PATH`, which `cang-prebuilt` already sets.
 
-**Status (2026-09-28): charted.** Nothing implemented yet in the repo. Two
-tickets are already closed by work done while charting (01, 02); 03 and 04 are
-the frontier.
+**Status (2026-09-28): implemented, building, and booting a guest.**
+`nix build .#cang` compiles libkrun from `deps/libkrun` and passes the whole
+suite, `result/bin/cang` has no libkrun shared object in its `DT_NEEDED`, and
+the Rust-API binding is in place behind `LibkrunApi`. Closed: 01-06 and 08.
+Ticket 07's code questions are answered (the GPU flags flow through
+`from_bits_retain`, the render-server fd becomes an `OwnedFd`, `preload_libva`
+is gone); what remains there is the GPU run, which is ticket 09's. The first live
+boot exposed a *new* problem - libkrun could not open its firmware inside the VM
+worker - which ticket 11 resolved and re-verified with a live boot. **Ticket 09
+has since passed in full, including the Chromium GPU smoke with hardware venus,
+so the destination is reached and verified.** Only ticket 10 is open, and it is
+not a blocker for the destination as written: it is the cleanup of the prebuilt
+C-ABI `.so` pipeline and, sharpened by ticket 09, the question of what the
+published release asset can be now that the binary has a `libvirglrenderer`
+`DT_NEEDED`.
 
 ## Notes
 
@@ -86,6 +98,53 @@ the frontier.
 
 ## Decisions so far
 
+- [Verify - build, no libkrun .so, live boot, Chromium GPU smoke](tickets/09-verify-live-boot-and-gpu-smoke.md):
+  green end to end. `nix build .#cang` and `.#cang-musl` pass with fmt/clippy/
+  deny/tests clean; the binary has no libkrun `DT_NEEDED` (it does have
+  `libvirglrenderer.so.1`, which is ticket 10's release-asset problem); a live
+  guest printed `6.12.109-hardened1`; and the Chromium smoke PASSed with
+  `ANGLE (AMD, Vulkan ... (Virtio-GPU Venus (AMD Radeon RX 7600M XT (RADV
+  NAVI33))), venus)` - hardware venus.
+- [Port the GPU/launcher details, and re-verify the libva preload](tickets/07-port-gpu-and-launcher-details.md):
+  `from_bits_retain` keeps cang's `DRM`/`USE_VIDEO` bits, the render-server fd
+  becomes an `OwnedFd` the device owns, the console file's lifetime still covers
+  the fd duplication at `add_inout_port`, and `preload_libva` is *deleted* with
+  the GPU smoke as its acceptance (libvirglrenderer is now a `DT_NEEDED`,
+  resolved before `main`).
+- [Make the firmware load reachable in the VM worker](tickets/11-firmware-load-in-the-vm-worker.md):
+  the worker runs `AT_SECURE`, so glibc ignores `$ORIGIN` in `DT_RUNPATH` and
+  `LD_LIBRARY_PATH` - which is how libkrun's bare-soname firmware lookup used to
+  work and why the first Rust-API boot failed. `cang-libkrun` now preloads the
+  package-relative firmware by absolute path with `RTLD_GLOBAL`, so libkrun's
+  lookup finds the loaded object. Live boot verified; `CANG_LIBKRUNFW_LIBRARY` is
+  the tree-build override.
+- [Retire the dlopen path, the .so files and their checks](tickets/06-retire-the-dlopen-path.md):
+  `dynamic.rs` and its 1200 lines of dlsym are gone, the packager no longer
+  symlinks `libkrun*.so*`, the binary carries `$ORIGIN/../lib/cang` for the
+  firmware, and the repository test now *forbids* the old fragments. The
+  prebuilt `.so`, the image layer and the `libkrun-loadable` check stay, because
+  they have C-ABI consumers - ticket 10.
+- [Create cang-libkrun and make the launcher's seam a Rust-API backend](tickets/05-create-cang-libkrun-crate.md):
+  the trait and the recording fake survived; `linked.rs` drives libkrun's Rust
+  API out of an arena of `Slot` values at `'static`, with the init `Config`
+  leaked (it must outlive the VM). `LinkedLibkrunApi::new()` replaced
+  `DynamicLibkrunApi::open_default()` at both call sites.
+- [Nix: build inputs for the Rust-API build, and the musl init blob](tickets/04-nix-toolchain-and-init-blob.md):
+  one shared `nix/pkgs/libkrun-source.nix` (source, fork vendor hash, musl
+  `krunInitBinary`); the packager and devshell carry the bindgen hook,
+  `pkg-config`, `rustfmt`, `virglrenderer`, `libgbm` and `KRUN_INIT_BINARY_PATH`;
+  `nix/dev`'s local `.so` override collapsed; the binary got an
+  `$ORIGIN/../lib/cang` rpath for the firmware.
+- [Nix: compile libkrun inside cang's derivation](tickets/03-nix-cang-derivation-libkrun-source.md):
+  `inputs.self.submodules = true` puts the submodule pointer (now the libkrun
+  pin) into `src = self`; both packagers moved to `fetchCargoVendor`; a path
+  dependency inside the workspace directory is auto-enrolled as a *member* unless
+  `exclude = ["deps"]`, which is why `cargo test --workspace` briefly tried to
+  build libkrun's own crates.
+- [Supply-chain and lockfile policy for the enlarged graph](tickets/08-supply-chain-and-lockfile-policy.md):
+  `cargo deny check` green after allowing BSD-3-Clause/ISC/Zlib with the reason
+  written down; `ffier` stays as an unused build-time dependency of the blob
+  crate; the `deps/libkrun` bump procedure is in `docs/maintenance.md`.
 - [Research: libkrun's Rust API surface vs the C ABI](tickets/01-rust-api-versus-c-abi-surface.md):
   the Rust API covers every call cang makes (`VirglRendererFlags` is narrower -
   DRM/USE_VIDEO need `from_bits_retain` - and `DisplayBackend::new` still takes a
@@ -98,27 +157,23 @@ the frontier.
 
 ## Not yet specified
 
-- **Whether `nix/dev`'s local-source libkrun override survives.** Once cang
-  compiles libkrun itself, the dev sub-flake and the main derivation both build
-  the same source with the same rustc; the override may collapse into a plain
-  source pointer. Sharpens in ticket 03.
-- **The cache story for the enlarged graph.** Every libkrun commit changes the
-  vendor hash; how that interacts with the CI sccache cache key
-  (`publish_release.yml`'s `hashFiles('Cargo.lock', 'flake.lock', 'nix/pins.nix')`)
-  and with `cang-ci-sccache` is unexplored. Sharpens after 03.
-- **Whether `LibkrunApi` should survive the port.** The trait exists to make the
-  C-ABI seam testable; a Rust-API backend may make a deeper `cang-libkrun` module
-  the better seam (`codebase-design`). Sharpens in 05/06.
-- **Supply-chain policy for ~150 new crates** (licenses, advisories, and the
-  `ffier` git dependency that `krun-init-blob` carries unnecessarily). Sharpens
-  in 08.
-- **What the release asset becomes.** `publish_release.yml` publishes a neutral
-  ELF with `rpath` stripped and no `/nix/store` references; with libkrun static
-  the ELF gains `DT_NEEDED` entries (libvirglrenderer and friends), which may
-  change what "neutral" can mean. Sharpens in 10.
+- **What the release asset becomes.** Now the sharp form (it is ticket 10's
+  question, measured in ticket 09): `publish_release.yml` publishes a neutral ELF
+  with `rpath` stripped and no `/nix/store` references, but the binary now needs
+  `libvirglrenderer.so.1` (plus `libgcc_s`/`libc`) with a store-path `RUNPATH`.
+  Whether the asset becomes a bundle, a documented Nix-only ELF, or stays as-is
+  is a decision, not a detail.
 - **The next fork base.** If upstream cuts 2.0.0 while this runs, the Rust API
   may move; the pin bump is then a compile fix. That base decision belongs to the
   fork map, not here.
+- **Whether the `ffier` git dependency can leave the graph.** `krun-init-blob`
+  declares it unconditionally even with `ffi` off; making it optional is a
+  one-line fork change nobody has needed yet (tickets 01/03/08).
+- **Whether the trait survives as the seam.** `LibkrunApi` was kept so the
+  recording fake and the launcher fixtures could survive the port; with the
+  C-ABI shape gone, whether a `cang-libkrun` module boundary is the deeper seam
+  is a `codebase-design` question for a future effort, not a fog patch this map
+  can still act on.
 
 ## Out of scope
 

@@ -1,41 +1,50 @@
 ---
 label: wayfinder:task
 title: Retire the dlopen path, the .so files and their checks
-status: open
+status: closed
 blocked_by: ["05-create-cang-libkrun-crate"]
-claimed_by:
+claimed_by: pi session (2026-09-28)
 ---
 
 ## Question
 
 Delete everything that existed to load `libkrun.so.2` / `libkrun_init.so.0` at
-runtime, once the Rust-API binding is in place. Known sites:
+runtime, once the Rust-API binding is in place.
 
-- `crates/cang/src/runtime/vm/libkrun/dynamic.rs`: `dlopen`/`dlsym`, the hand
-  written symbol table and `KrunStr`/`KrunBytes`/error-vtable plumbing,
-  `CANG_LIBKRUN_LIBRARY`, `planned_library_load_order` /
-  `planned_libkrun_init_load_order_for_exe`, and the `preload_libva` RTLD_NOW
-  workaround (last one belongs to ticket 07's GPU verification, which decides
-  whether it becomes unnecessary rather than deleted blind).
-- `nix/pkgs/cang-rust.nix` and `nix/pkgs/cang-prebuilt.nix`: the
-  `$out/lib/cang/libkrun*.so*` symlink loops; `nix/pkgs/libkrun.nix`'s
-  `$ORIGIN`/virglrenderer rpath patching (only meaningful for a dlopen'd
-  library).
-- `flake.nix`'s `libkrun-loadable` check; `nix/image/{layers,checks}.nix`'s
-  libkrun install; `crates/cang-repository-tests/tests/repository.rs`'s
-  assertions on the `.so` symlink loops; `scripts/update-libkrun.sh`.
-- Docs: `README.md:29-34` (`CANG_LIBKRUN_LIBRARY`, the `lib/cang` lookup order)
-  and `docs/internals.md:7-9`. Replace with how the firmware is still found
-  (`libkrunfw.so.5` is dlopened *by libkrun* and resolves through cang's
-  rpath/`LD_LIBRARY_PATH`).
-- `crates/cang/src/runtime/vm/libkrun/mod.rs`'s test-only re-exports of
-  load-order helpers.
+## Resolution
 
-Careful: keep the `libkrunfw` wiring (`nix/pkgs/libkrunfw.nix`, the `$out/lib/cang`
-symlinks for `libkrunfw.so*`, the image's firmware) - only libkrun's own shared
-objects go.
+**The binding's dlopen path is gone; the prebuilt `.so` artefacts that still have
+C-ABI consumers are ticket 10's, not this ticket's.**
 
-Done when: `rg -n 'dlopen|dlsym|CANG_LIBKRUN_LIBRARY|libkrun\.so|libkrun_init\.so'`
-over `crates/`, `nix/`, `docs/` and `README.md` returns only what legitimately
-remains (the firmware), the repository tests are updated, and the package output
-contains no `libkrun.so*`/`libkrun_init.so*`.
+- Deleted: `crates/cang/src/runtime/vm/libkrun/{api,dynamic}.rs` - the 1200-line
+  dlsym layer (symbol table, `KrunStr`/`KrunBytes`, the error vtable,
+  `CANG_LIBKRUN_LIBRARY`, `preload_libva`, `planned_*_load_order`) - and the four
+  tests that asserted the load order and symbol presence. Their remaining
+  subject matter (the `CANG_LIBKRUN_COMPAT_NET_FEATURES` bit contract) kept its
+  test.
+- Deleted from `nix/pkgs/cang-rust.nix`: the `libkrun*.so*` symlink loop. The
+  firmware symlink loop stays (libkrun opens `libkrunfw.so.5` by soname) and the
+  binary gained an `$ORIGIN/../lib/cang` rpath in its place.
+- `nix/pkgs/libkrun.nix`'s `$ORIGIN`/virglrenderer rpath patching: kept, because
+  the prebuilt `.so` it patches is still published and still consumed by
+  C-ABI users (ticket 10).
+- Docs: `README.md` (the libkrun-at-runtime bullet + the source-build section),
+  `docs/internals.md` (the lookup-order paragraph), `docs/build.md` (build
+  outputs, and the submodule requirement), `docs/maintenance.md` (the FFI=1 pin's
+  remaining consumers, plus a new `deps/libkrun` bump procedure).
+- Repository tests: the cang-packager invariant test dropped the `.so` symlink
+  requirement, gained the Rust-API build inputs (`bindgenHook`, `pkg-config`,
+  `rustfmt`, `virglrenderer`, `libgbm`, `KRUN_INIT_BINARY_PATH`,
+  `fetchCargoVendor`) and now *forbids* the two `.so` symlink fragments and
+  `cargoLock = {`. It caught a stray `libkrun.so` mention in a comment, which is
+  why the assertion matches the symlink fragments rather than the bare name.
+- **Deferred to ticket 10, deliberately**: `flake.nix`'s `libkrun-loadable`
+  check, the `libkrun` package export, and the image's `toolingImageLayer`
+  libkrun entry. All three exist for the *prebuilt* C-ABI `.so` that the pinned
+  release asset still ships; the image's nested-cang path may still depend on it.
+  Removing them is a scope question about consumers, which is ticket 10's.
+
+Verified: `readelf -d result/bin/cang` shows `NEEDED libvirglrenderer.so.1`,
+`libgcc_s`, `libc`, `ld-linux` and **no** libkrun object; `strings` finds no
+`libkrun*.so` name in the binary; `result/lib/cang` holds only the firmware;
+`./result/bin/cang --help` runs.

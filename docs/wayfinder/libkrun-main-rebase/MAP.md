@@ -196,8 +196,9 @@ the same mask, otherwise the guest's capset enumeration times out instead.
 - **Consuming libkrun through a Rust interface instead of the C ABI.** Bob's
   separate question (2026-09-27): cang today `dlopen`s `libkrun.so` and binds
   `krun_*` symbols behind the `LibkrunApi` trait; Rust-direct means vendoring the
-  VMM crates into cang's build and dropping the prebuilt-pin pipeline. It gets
-  **its own map/effort**, not a ticket here.
+  VMM crates into cang's build and dropping the prebuilt-pin pipeline. It got
+  **its own map**, not a ticket here - charted 2026-09-28 as
+  [`../libkrun-rust-api/MAP.md`](../libkrun-rust-api/MAP.md).
 - **A fork-side v1 compatibility shim.** Considered in the re-chart and rejected
   by bob (2026-09-27) in favour of porting cang to the v2 API (ticket 09). Do not
   re-open it inside this effort; if the port stalls on a symbol with no v2

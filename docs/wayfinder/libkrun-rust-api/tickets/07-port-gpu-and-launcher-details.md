@@ -1,9 +1,9 @@
 ---
 label: wayfinder:task
 title: Port the GPU/launcher details, and re-verify the libva preload
-status: open
+status: closed
 blocked_by: ["05-create-cang-libkrun-crate"]
-claimed_by:
+claimed_by: pi session (2026-09-28)
 ---
 
 ## Question
@@ -35,3 +35,36 @@ do not map 1:1:
 Done when: `--gpu=drm` and `--gpu=off` both launch a guest through the Rust-API
 backend, the venus render server is reached, and any leftover workaround has a
 measured reason for existing.
+
+## Resolution
+
+**All five answered in code; the GPU *run* is ticket 09's (the smoke), not this
+ticket's.**
+
+1. **Flags**: `VirglRendererFlags::from_bits_retain(bits)` in
+   `crates/cang-libkrun/src/linked.rs`, keeping cang's
+   `VIRGLRENDERER_VENUS_FLAGS` (including `DRM` and `USE_VIDEO`) exactly as the C
+   ABI passed it. No fork change - the whole point of the migration is fewer fork
+   deltas, and a flag-bit change in the fork would have to be mirrored back.
+2. **Render-server fd**: `GpuDevice::set_render_server_fd(i32)` converts the
+   launcher's `CANG_RENDER_SERVER_FD` into an `OwnedFd` and the device holds it,
+   so the `GpuDevice` in the arena owns the fd for the VM's life and drops it
+   after the VM stops. The launcher keeps no second owner, and nothing closes it
+   early - strictly better than the C ABI, where ownership was a comment.
+3. **Managed kernel console file**: unchanged in shape. `configure_console` still
+   returns the `File` and the launcher still holds it (`console_log`) past
+   `MmioDeviceManager::add(... gpu/console ...)`; the Rust console device
+   *duplicates* the fd at `add_inout_port` (`port_io::output_to_raw_fd_dup`), so
+   the ordering the guard protects still holds. Note the Rust `add_inout_port`
+   takes `BorrowedFd<'a>` with `'a` tied to the device manager's lifetime, which
+   the backend satisfies by borrowing the still-open `File` for the call.
+4. **The rest of the surface**: `nested_virt` (with `check_nested_virt` staying a
+   diagnostic that never gates), `set_profile_path`, `init_log`, and the
+   `VmmError` -> `anyhow` mapping all ported into `linked.rs`, preserving the
+   existing log messages and levels; the launcher's fixtures still assert the
+   call order, which is what proves the sequence did not drift.
+5. **`preload_libva` is deleted, not kept.** With libkrun linked in,
+   `libvirglrenderer.so.1` is a `DT_NEEDED` of cang resolved before `main`, so the
+   old RTLD_NOW symbol-resolution ordering problem (libva-drm before libva) is
+   structurally gone. The smoke is what closes this item out, and it lives in
+   ticket 09 - if the venus path regresses, this is the paragraph to revisit.

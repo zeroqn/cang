@@ -1,9 +1,9 @@
 ---
 label: wayfinder:task
 title: Nix - build inputs for the Rust-API build, and the musl init blob
-status: open
+status: closed
 blocked_by: []
-claimed_by:
+claimed_by: pi session (2026-09-28)
 ---
 
 ## Question
@@ -11,25 +11,31 @@ claimed_by:
 Give both the derivation and the devshell everything libkrun's Rust-API build
 needs, without breaking the musl/static outputs.
 
-From the probe (`../notes/02-rust-api-build-probe.md`) and the previous map's
-ticket 12:
+## Resolution
 
-1. `rustPlatform.bindgenHook` in `nativeBuildInputs` (it populates `LIBCLANG_PATH`
-   and `BINDGEN_EXTRA_CLANG_ARGS` - required by `krun-display` and `krun-input`'s
-   build scripts), plus `pkg-config`, `virglrenderer` (>= 1.3.0; nixos-26.05 has
-   exactly 1.3.0) and `libgbm`/`mesa-libgbm` for `rutabaga_gfx`'s
-   `virgl_renderer` feature.
-2. The guest init blob: `krun-init-blob/build.rs` either cross-builds
-   `init/init-binary` for `-musl` (the host rustc has no musl std, so this
-   panics) or embeds a binary given via `KRUN_INIT_BINARY_PATH`. `nix/dev/flake.nix`
-   already builds that binary with `pkgs.pkgsStatic`'s rust (`krunInitBinary`,
-   with the `timesync` feature) and feeds it in - reuse it (move it somewhere
-   shared rather than duplicating it), and confirm it is wired into every
-   derivation that compiles `krun-init-blob`, not just the dev one.
-3. The devshell (`nix/shell/devshell.nix`) needs the same inputs so a
-   contributor's `cargo build`/`cargo test` works, plus whatever vendored
-   registry env nixpkgs needs for offline builds in a shell.
-4. Keep `cang-musl`/the image build unaffected: libkrun is host-only.
+**Done; `nix build .#cang`, `nix build .#cang-musl` and
+`nix develop --command cargo build` all succeed.**
 
-Done when: `nix build .#cang` and `nix develop --command cargo build` both
-succeed with libkrun compiled in, and `nix build .#cang-musl` still works.
+- New shared module `nix/pkgs/libkrun-source.nix` holds the three things the
+  source needs: `libkrunSrc` (`deps/libkrun` by default), `libkrunCargoDeps`
+  (the fork's own vendored registry, needed by the musl init) and
+  `krunInitBinary` (the guest init, built with `pkgs.pkgsStatic`'s rust and the
+  `timesync` feature, reusing the previously private version from
+  `nix/dev/flake.nix`). The main flake, `nix/dev` and the devshell all import it,
+  so there is one definition instead of three.
+- `nix/pkgs/cang-rust.nix` gained `rustPlatform.bindgenHook` (populates
+  `LIBCLANG_PATH` and `BINDGEN_EXTRA_CLANG_ARGS` for `krun-display` and
+  `krun-input`), `pkg-config`, `rustfmt` (ffier's generator shells out to it) and
+  `patchelf`, plus `virglrenderer`/`libgbm` as `buildInputs` for `rutabaga_gfx`'s
+  `virgl_renderer` probe - nixos-26.05 ships virglrenderer 1.3.0, exactly
+  `atleast_version("1.3.0")` - and `KRUN_INIT_BINARY_PATH` pointing at
+  `krunInitBinary`.
+- The devshell gained the same inputs; `libkrunfw` is a `buildInput` so a
+  dev-built binary can open the firmware by soname.
+- The package's `postFixup` adds `--add-rpath '$ORIGIN/../lib/cang'` to
+  `bin/cang`: the firmware is opened by soname from the cang process itself now,
+  and libkrun's old `$ORIGIN` runpath is gone with the shared object.
+- `nix/dev/flake.nix` collapsed: with cang compiling libkrun itself, the local
+  `.so` override (makeFlags `FFI=1`, the `pkgs.libkrun.override`) had no
+  consumer left. It now imports the shared module and keeps only its
+  local-source `libkrunfw`.
