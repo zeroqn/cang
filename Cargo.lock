@@ -81,7 +81,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "cang"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "cang-attach-protocol",
@@ -99,21 +99,21 @@ dependencies = [
 
 [[package]]
 name = "cang-attach-protocol"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "cang-exec-protocol"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "cang-guest-init"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "cang-attach-protocol",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "cang-repository-tests"
-version = "0.7.2"
+version = "0.8.0"
 
 [[package]]
 name = "cfg-if"
