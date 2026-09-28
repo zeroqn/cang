@@ -19,7 +19,8 @@ the Chromium GPU smoke passing in both modes against the Rust-API build.
 not every shared object. What replaces libkrun's `$ORIGIN`-based firmware lookup
 is cang's own rpath/`LD_LIBRARY_PATH`, which `cang-prebuilt` already sets.
 
-**Status (2026-09-28): done - every ticket closed.**
+**Status (2026-09-28): done - every ticket closed, and v0.9.0 released from
+`4cd3dce`.**
 `nix build .#cang` compiles libkrun from `deps/libkrun` and passes the whole
 suite, `result/bin/cang` has no libkrun shared object in its `DT_NEEDED`, and
 the Rust-API binding is in place behind `LibkrunApi`. Closed: 01-06 and 08.

@@ -91,3 +91,24 @@ plain `.#cang` links with `lto = "thin"` (4,597,800 bytes); the hash is stable
 across `SCCACHE_DIR` values, which is the only environment difference. Noted in
 `docs/maintenance.md` with the local caveat that `SCCACHE_DIR` points at
 `/nix/var/cache/sccache`, which only CI creates.
+
+## Released
+
+v0.9.0 was tagged at `4cd3dce` and pushed on 2026-09-28, following the cang
+release scheme (bump, pin, tag the pinned tree). Everything the map was for is
+now in a published artifact:
+
+- `Publish release binaries` and `Publish cang Image` for the tag both succeeded,
+  as did `Test` and the image job on `main`; the main-branch release run shows as
+  cancelled because the tag run takes the shared `rolling-alpha-release`
+  concurrency group, which is the documented behaviour.
+- The published `cang-v0.9.0-x86_64-unknown-linux-gnu.sha256` is
+  `19d4d67f04d7c9f74f6b739f3e309eaf51011f4a5d5bdec766c410027e683ecd`, byte-identical
+  to the hash pinned in `038ef6f` - the local normalization predicted CI's asset
+  exactly.
+- `nix build .#cang-prebuilt` fetched the published asset against that pin and
+  `./result/bin/cang --version` printed `cang 0.9.0`.
+- A **live guest boot through the published package** printed
+  `v0.9.0-release-boot-ok` and `6.12.109-hardened1`, exit 0.
+- `scripts/update-cang-prebuilt.sh --tag v0.9.0` reproduces the pin with no diff,
+  so the pin is canonical by the repository's own tooling.
