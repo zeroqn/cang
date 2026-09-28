@@ -152,10 +152,19 @@ no `gh` authentication and no `workflow_dispatch`. A **tag push** publishes
 
 A **branch push** names the asset `cang-<arch>-unknown-linux-gnu` instead and only
 touches the rolling releases, which keep the 20 newest `sha-*` prereleases; pin a
-`v<version>` release. A tag push also cancels the branch-push run in the shared
-`rolling-alpha-release` concurrency group, which is harmless: the tag run
-publishes the versioned release *and* the `sha-<short-sha>` prerelease for its
-revision.
+`v<version>` release.
+
+`publish_release.yml` serializes both ref types in one
+`rolling-alpha-release` concurrency group with `cancel-in-progress: true`, so the
+*later* run cancels the earlier one - not necessarily the tag run. Pushing `main`
+and the tag in one command is therefore a race, and v0.9.1 lost it: the branch
+run was created second, the tag run was cancelled, and no `v0.9.1` release was
+published at all. The tag run is the one that has to survive - it publishes the
+versioned release *and* updates the `sha-<short-sha>` prerelease for its
+revision - so push the branch first, wait for its run to finish, and only then
+push the tag. If the tag run does get cancelled, re-create the tag at the same
+commit (`git push --delete origin v<version>` and then `git push origin
+v<version>`) to trigger it again.
 
 Release a version in this order:
 
@@ -209,13 +218,20 @@ Release a version in this order:
    `nix build .#cang` links with `lto = "thin"` (about 4.6 MB).
 3. Commit the pin in `nix/pins.nix`: `cangPrebuiltRelease.tag = "v<version>"`, the
    versioned `asset` name from step 2, and that SRI.
-4. Tag **the pin commit** — not the version bump — and push branch and tag (v0.7.2
-   and v0.8.0 are both lightweight tags):
+4. Tag **the pin commit** — not the version bump — and push branch and tag, with
+   the branch push's run finished before the tag goes out (v0.7.2 and v0.8.0 are
+   both lightweight tags):
 
    ```bash
    git tag v<version>
-   git push origin main "v<version>"
+   git push origin main
+   # wait for the "Publish release binaries" run for main, then:
+   git push origin "v<version>"
    ```
+
+   One `git push origin main "v<version>"` is what v0.9.1 did, and it lost the
+   race described above: the tag run was cancelled, so the tag had to be
+   re-created before the versioned release appeared.
 
 The tag has to point at the pin commit because `nix build .#cang-prebuilt` reads
 the pin out of the tagged tree: tagging the bump commit leaves the pinned hash
@@ -232,6 +248,20 @@ Verify the published release against the pin:
 nix build .#cang-prebuilt
 ./result-cang-prebuilt/bin/cang --version   # prints `cang <version>`
 ```
+
+#### Released so far
+
+- `v0.9.1` (`dd9d248`) - the virtio-balloon attach; x86_64 asset sha256
+  `8488e43c320d76b48526d7e022774a065e8dc307001c5c0259b642ec50472edc`.
+- `v0.9.0` (`4cd3dce`) - the Rust-API link that closed the prebuilt-libkrun map;
+  x86_64 asset sha256
+  `19d4d67f04d7c9f74f6b739f3e309eaf51011f4a5d5bdec766c410027e683ecd`.
+
+Both are the hashes the releases publish, and both were reproduced locally from
+the tagged tree with the `overrideAttrs` recipe above (v0.9.1 before its pin
+went in, v0.9.0 while validating that recipe), so a freshly published `.sha256`
+that disagrees with this list means the build inputs moved: check
+`cargoDeps.hash` and the `cang-ci-sccache` attribute first.
 
 Refresh pinned Pi coding agent source/npm metadata in `nix/pins.nix` from `earendil-works/pi`:
 
