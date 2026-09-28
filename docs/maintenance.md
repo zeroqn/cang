@@ -20,6 +20,21 @@ nix develop --command ./scripts/update-cang-prebuilt.sh
 nix develop --command ./scripts/update-cang-prebuilt.sh --tag v0.7.1
 ```
 
+Releasing a new cang version has to happen in this order, because the tag is what
+`nix build .#cang-prebuilt` resolves the pin against:
+
+1. bump the workspace version (`Cargo.toml` + `Cargo.lock`) and commit it;
+2. compute the asset SRI from a local `nix build .#cang-ci-sccache` normalized
+   with the release workflow's `patchelf --set-interpreter
+   /lib64/ld-linux-x86-64.so.2 --set-rpath ""` step, whose result is
+   byte-reproducible because the neutral asset embeds no `/nix/store` paths;
+3. commit that pin (`tag`, versioned `asset` name, `hash`);
+4. tag **the pin commit** and push the branch and the tag, which is what makes
+   the release workflow publish `cang-v<version>-<arch>-unknown-linux-gnu`.
+
+Tagging an earlier commit leaves the pinned hash behind the tag, so a
+`v<version>` checkout of cang would still pin the previous release.
+
 Refresh pinned RTK prebuilt release metadata in `nix/pins.nix`:
 
 ```bash
