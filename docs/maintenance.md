@@ -17,7 +17,7 @@ from the tag:
 
 ```bash
 nix develop --command ./scripts/update-cang-prebuilt.sh
-nix develop --command ./scripts/update-cang-prebuilt.sh --tag v0.7.1
+nix develop --command ./scripts/update-cang-prebuilt.sh --tag v0.8.0
 ```
 
 Releasing a new cang version has to happen in this order, because the tag is what
