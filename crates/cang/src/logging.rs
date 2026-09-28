@@ -122,6 +122,11 @@ pub(crate) fn init_tracing(settings: &LogSettings) -> Result<()> {
         .with_target(true)
         .finish();
     let _ = tracing::subscriber::set_global_default(subscriber);
+    // libkrun logs through the `log` crate; forwards those records into the
+    // subscriber above so the fork's diagnostics reach cang's own log stream
+    // (filtered by the same RUST_LOG). Failing here only loses them, so the
+    // error is dropped.
+    let _ = tracing_log::LogTracer::init();
     Ok(())
 }
 

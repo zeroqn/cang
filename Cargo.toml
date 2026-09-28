@@ -40,6 +40,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.23"
 tracing = "0.1"
+# Bridges libkrun's `log` records into cang's tracing subscriber: without it the
+# fork's warnings (the /dev/udmabuf probe, the cross-domain mis-route) are
+# dropped on the floor.
+tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter", "ansi"] }
 vt100 = "0.16"
 
