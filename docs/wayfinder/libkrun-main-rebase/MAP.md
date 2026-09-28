@@ -13,7 +13,9 @@ published as the permanent fork release **`v2.0.0-cang.1`**, pinned in
 ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
-**Status (2026-09-28): tickets 01-07 and 09-13 resolved; only ticket 08 open.**
+**Status (2026-09-28): tickets 01-07 and 09-13 resolved. Ticket 08 is diagnosed
+and fixed locally; it and the new ticket 14 (publish the fix, re-pin, re-run the
+smoke) are the remaining work.**
 The fork's `cang` branch is pushed (tip `d578e4e2`) and the permanent release
 **`v2.0.0-cang.1`** is published and pinned. cang is ported to the ABI-2 object
 API (ticket 09) and live-boots a guest - but **only against a locally built
@@ -40,9 +42,24 @@ builder/object API** (tickets 09/10). PR **822 is out of this map** (bob,
 2026-09-27): it is inert on the pinned kernel, its own commit would collide with
 our `VIRTIO_GPU_F_FENCE_PASSING = 5`, and carrying it as intended would mean
 vendoring a patched `rutabaga_gfx` for a capability nothing can exercise.
-Frontier: ticket **08** (the GPU/wayland Chromium smoke), now runnable - the pin
-it needs exists and exports the render-server fd entry point. "Not yet specified"
-below still names the map's open design questions.
+Frontier: ticket **14** - publish the ABI-2 GPU fixes as `v2.0.0-cang.3` and
+re-pin, which is what closes ticket **08**. The smoke's verdict on the *pinned*
+`v2.0.0-cang.2` is a real regression (venus degrades to 2D), it is attributed to
+three device-side causes and fixed in the fork's `3d7af2c2`, and both smoke modes
+pass against that library locally; only the publication is missing. "Not yet
+specified" below still names the map's open design questions.
+
+### The GPU regression in one paragraph
+
+ABI 2's device code dropped two things the fork's vendored rutabaga used to do:
+it never told virglrenderer which DRM render node to use (vrend winsys and VA-API
+video got `-1`), and it advertises the DRM native-context capset, which - with
+upstream rutabaga's always-on `ASYNC_FENCE_CB` - makes virglrenderer run
+`drm_renderer_init`; when that probe fails (no virtio native context on a plain
+amdgpu host) virglrenderer gives up on the whole backend and rutabaga falls back
+to 2D, taking venus with it. Fixing the first and suppressing the DRM capset when
+a render server is present also requires the device's `num_capsets` to come from
+the same mask, otherwise the guest's capset enumeration times out instead.
 
 ## Notes
 
@@ -92,6 +109,13 @@ below still names the map's open design questions.
 
 ## Decisions so far
 
+- [Publish the GPU fixes as v2.0.0-cang.3 and re-pin](tickets/14-publish-gpu-fix.md):
+  push the fork's `3d7af2c2`, tag `v2.0.0-cang.3`, re-pin, and re-run both smoke
+  modes against the published artifact (this is what closes ticket 08).
+- [GPU smoke the new pin](tickets/08-gpu-smoke-on-new-pin.md): run on the pinned
+  `v2.0.0-cang.2` - FAIL with `renderer=no-webgl`, a rebase regression (the
+  2026-09-26 baseline on the v1 pin shows the venus renderer). Fixed in the
+  fork's device code; both modes PASS against that library; publication pending.
 - [Does the pinned libkrunfw boot libkrun 2.0.0?](tickets/05-libkrunfw-compat-check.md):
   yes - live boot on the pinned fw/kernel (`6.12.109-hardened1`), PID 1 = the
   injected `init.krun` blob, guest status files under `/run/cang`, all configured
