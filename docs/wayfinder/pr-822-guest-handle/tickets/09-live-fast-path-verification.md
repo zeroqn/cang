@@ -13,8 +13,13 @@ path, must demonstrably take `CREATE_GUEST_HANDLE` rather than the memfd copy
 path.
 
 Record: host `/dev/udmabuf` and its seal contract, the guest's
-`/dev/udmabuf`, the proxy's feature probe result, the udmabuf handles observed,
-and the guest-side proof that no copy happened. Say explicitly which leg could
+`/dev/udmabuf`, the proxy's feature probe result, the negotiated bits on both
+sides, an observed `udmabuf_create` for the shm pool, the proxy's own zero-copy
+mode line, and the guest-side proof that no copy happened. **Add a measured A/B
+delta** (ticket 04): a small guest-side `wl_shm` client blitting to a pool at a
+fixed rate, run with `--zero-copy-shm` on and off, reporting frames/s and guest
+CPU - no such client exists in the image today, so it has to be written and its
+home decided (a `tools/` sibling of `virgl-guest-probe`, or an image layer). Say explicitly which leg could
 not be shown here, and whether the chromium GPU smoke still passes (regression
 backstop: the previous map's venus regression was only caught by the smoke).
 

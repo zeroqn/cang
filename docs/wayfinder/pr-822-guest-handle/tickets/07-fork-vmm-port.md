@@ -21,7 +21,17 @@ Implement ticket 04's decision on `deps/libkrun`:
 3. Exclude or adapt `230f2c55`; keep the constant values ticket 04 fixed.
 4. Refresh `Cargo.lock` and the `fetchCargoVendor` hash in
    `nix/pkgs/libkrun-source.nix`, and keep `nix build ./nix/dev#cang-dev` green.
-5. Run `cargo fmt --check`, clippy with `-D warnings`, and the crate tests in the
+5. Wire the gate from cang: the `--zero-copy-shm` companion flag (error if given
+   without `--gpu=drm`), through `crates/cang-libkrun` into the fork's
+   `DeviceRequirements` bool - the same bool that gates the bits and the RAM
+   backing. Default off. When the stack cannot serve it, log one clear reason and
+   keep the copy path (do not fail the run).
+6. Add the fork-side guard: warn (with the `ctx_id`) when a
+   `CREATE_GUEST_HANDLE` blob would reach a component that ignores handles, and
+   keep serving.
+7. Document the flag in `README.md` (user-visible behaviour) and record that the
+   balloon is inert on fast-path runs.
+8. Run `cargo fmt --check`, clippy with `-D warnings`, and the crate tests in the
    devshell.
 
 **No fork release is involved:** cang compiles `deps/libkrun` with cang's own

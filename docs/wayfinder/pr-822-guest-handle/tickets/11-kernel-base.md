@@ -1,8 +1,9 @@
 ---
 label: wayfinder:grilling
 title: Backport the PRIME-import prerequisite onto 6.12.109, or move the libkrunfw kernel base to 6.14+?
-status: open
+status: closed
 blocked_by: []
+claimed_by: pi+bob (2026-09-28)
 ---
 
 ## Question
@@ -50,3 +51,25 @@ needs bit 7 either way.
 ## Deliverable
 
 The decision recorded here, with the base (if any) and what it moves.
+
+## Resolution (2026-09-28, bob + pi)
+
+**Option A - backport onto 6.12.109.** The prerequisite series plus Val's six
+commits plus the fork-authored conditional unlock land as `patches/0037...`,
+`CONFIG_UDMABUF=y` goes into all six configs, and `linux-hardened`
+`v6.12.109-hardened1`, the 36 existing patches, the LTO/KVM seeds and the release
+pipeline stay untouched. The base move stays a separate future effort, recorded
+in *Not yet specified* below.
+
+Two consequences for ticket 05:
+
+- The prerequisite (Vivek's v5) is **carried unconditionally**, matching what
+  upstream v6.14 ships - only the *new* feature is gated. A guest on a fast-path
+  run and a guest on a plain run differ only in the negotiated bit.
+- Only the new feature's behaviour is conditional: the blob-flag stamping and the
+  `VIRTGPU_PARAM` 10 answer must follow the negotiated
+  `VIRTIO_GPU_F_CREATE_GUEST_HANDLE`, or a host that withholds the bit still
+  receives flag-`0x8` blobs it cannot serve.
+
+When upstream's kernel series is posted and merged, the six carried commits (and
+our gate, if it goes upstream) are dropped on the next libkrunfw rebase.

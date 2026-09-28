@@ -89,6 +89,21 @@ is **shown actually taking the fast path** - evidence, not "it builds".
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link -->
 
+- [Backport the PRIME-import prerequisite onto 6.12.109, or move the libkrunfw kernel base to 6.14+?](tickets/11-kernel-base.md):
+  **backport** - carry Vivek's v5 series and Val's six commits as `patches/0037...`
+  plus `CONFIG_UDMABUF=y`; a base move would not even remove the unlock work
+  (every stable line 6.14-6.18 still carries the reverted gate), so it stays a
+  separate future effort.
+- [Decide the design, the gate and the feature-bit map the fork carries](tickets/04-carried-design.md):
+  the **`ctx_id` route** (bit 7) with 822's three rutabaga hunks **dropped**; bits
+  frozen at 5 = FENCE_PASSING (ours), 6 = CREATE_GUEST_HANDLE, 7 =
+  BLOB_CTX_ID_FIX; the gate is cang's **`--zero-copy-shm`** companion flag
+  (default off, one bool driving both the RAM backing and feature advertisement,
+  balloon inert on fast-path runs by design); unavailable means **warn and take
+  the copy path**; the fork **logs** a handle-dropping mis-routed ctx instead of
+  failing it; evidence is the proxy mode line + an observed `udmabuf_create` +
+  negotiated bits + a measured A/B `wl_shm` delta with the Chromium smoke as
+  backstop.
 - [Does the udmabuf fast path need all guest RAM file-backed, or only the GPU shm window?](tickets/10-udmabuf-ram-backing.md):
   all of it - the blob's pages are the imported dma-buf's sg list, i.e. ordinary
   RAM, which the shm window (a device BAR above `ram_last_addr`) can never hold;
@@ -125,6 +140,18 @@ is **shown actually taking the fast path** - evidence, not "it builds".
   re-authored hunks (ticket 02); if `deps/libkrunfw` ever rebases past v6.13 the
   two must be reconciled deliberately, and the fork's 0018 may have to move.
   Sharpens when a libkrunfw kernel bump happens.
+- **When the libkrunfw base moves past 6.13.** Ticket 11 deliberately backported
+  instead of bumping, because a bump does not remove the unlock work; but a base
+  move will happen at some point, and it has to reconcile cang's
+  `VIRTIO_GPU_F_FENCE_PASSING = 5` with upstream's `BLOB_ALIGNMENT = 5`,
+  regenerate the LTO/KVM seeds and re-verify the 36 patches. Recorded, not
+  scheduled.
+- **Retiring the carried kernel patches.** When Val's series is posted to lkml and
+  merged, the six commits (and our gate, if it goes upstream) are dropped on the
+  next libkrunfw rebase. Sharpens per upstream posting.
+- **Where the A/B `wl_shm` client lives.** Ticket 09 needs a small guest-side
+  `wl_shm` client that no image layer or `tools/` directory has today;
+  `tools/` (like `virgl-guest-probe`) or a new layer. Sharpens inside ticket 09.
 - **Architecture coverage for the first libkrunfw release.** The kernel patch
   touches virtio-gpu and udmabuf, which are per-arch configs and CI jobs;
   x86_64 (`kvm-lto`) is the cang default but aarch64/riscv64 ship too. Sharpens
