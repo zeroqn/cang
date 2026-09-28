@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/cang",
+  "crates/cang-libkrun",
   "crates/cang-guest-init",
   "crates/cang-attach-protocol",
   "crates/cang-exec-protocol",
@@ -8,15 +9,22 @@ members = [
 ]
 default-members = [
   "crates/cang",
+  "crates/cang-libkrun",
   "crates/cang-guest-init",
   "crates/cang-attach-protocol",
   "crates/cang-exec-protocol",
   "crates/cang-repository-tests",
 ]
 resolver = "3"
+# `cang-libkrun` depends on libkrun's source under `deps/libkrun` by path. Without
+# this exclusion cargo auto-enrolls that tree (and everything under deps/) into
+# this workspace, which turns `cargo test --workspace` into a run of libkrun's own
+# test targets and takes its crates out of lint-capping - neither is wanted, the
+# dependency is meant to be a dependency.
+exclude = ["deps"]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 
 [workspace.dependencies]
@@ -25,6 +33,7 @@ clap = { version = "4.6", features = ["derive", "env"] }
 libc = "0.2"
 landlock = "0.4"
 cang-attach-protocol = { path = "crates/cang-attach-protocol" }
+cang-libkrun = { path = "crates/cang-libkrun" }
 cang-exec-protocol = { path = "crates/cang-exec-protocol" }
 seccompiler = { version = "0.5", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }

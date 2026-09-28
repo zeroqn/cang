@@ -13,8 +13,7 @@ use crate::runtime::seccomp::{self, SeccompMode};
 use crate::runtime::session::supervisor::rlimits::host_nofile_hard_limit;
 use crate::runtime::vm::gpu::GpuMode;
 
-use super::api::{Handle, LibkrunApi};
-use super::dynamic::{CANG_FS_ROOT_TAG, CANG_LIBKRUN_COMPAT_NET_FEATURES};
+use cang_libkrun::{CANG_FS_ROOT_TAG, CANG_LIBKRUN_COMPAT_NET_FEATURES, Handle, LibkrunApi};
 
 pub(in crate::runtime::vm::libkrun) const PROFILE_KERNEL_CMDLINE_APPEND: &str =
     "ignore_loglevel loglevel=7 printk.time=1 initcall_debug";
@@ -415,8 +414,8 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
         Ok(console_log)
     }
 
-    /// Build the init config that `libkrun_init.so` turns into the guest's PID 1
-    /// and apply it to the overlay and the payload.
+    /// Build the init config that the guest init blob turns into the guest's
+    /// PID 1 and apply it to the overlay and the payload.
     ///
     /// ABI 2 has no `krun_set_exec`/`set_workdir`/`set_rlimits`: the init config
     /// owns the workload's argv, environment, workdir and resource limits, and

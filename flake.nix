@@ -2,6 +2,12 @@
   description = "Rust CLI for launching direct-libkrun microVM task environments";
 
   inputs = {
+    # `cang-libkrun` depends on libkrun's source at `deps/libkrun` by path
+    # (cang links libkrun's Rust API, so it must be compiled by cang's own
+    # rustc), and the flake's own source excludes submodule contents unless this
+    # is set.
+    self.submodules = true;
+
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -62,8 +68,12 @@
           libkrunfw = pkgs.callPackage ./nix/pkgs/libkrunfw.nix {
             inherit pins;
           };
-          libkrun = import ./nix/pkgs/libkrun.nix {
-            inherit pkgs pins libkrunfw;
+          # libkrun's source tree plus what building it inside Nix needs (the
+          # vendored registry and the musl guest init). cang compiles libkrun's
+          # Rust API itself, so `src = self` has to carry the submodule - see
+          # `inputs.self.submodules`.
+          libkrunSource = import ./nix/pkgs/libkrun-source.nix {
+            inherit pkgs;
           };
           wl-cross-domain-proxy = pkgs.callPackage ./nix/wl-cross-domain-proxy.nix { };
           renderServerEnv = import ./nix/lib/render-server-env.nix {
@@ -73,7 +83,6 @@
             inherit
               pkgs
               pins
-              libkrun
               libkrunfw
               ;
             renderServerEnv = renderServerEnv.env;
@@ -83,18 +92,18 @@
               self
               pkgs
               pins
-              libkrun
               libkrunfw
               ;
+            krunInitBinary = libkrunSource.krunInitBinary;
           };
           rustPackagesCiSccache = import ./nix/pkgs/cang-rust.nix {
             inherit
               self
               pkgs
               pins
-              libkrun
               libkrunfw
               ;
+            krunInitBinary = libkrunSource.krunInitBinary;
             enableCiSccache = true;
           };
           mkImage =
@@ -113,7 +122,7 @@
                 doltPrebuilt
                 beadsPrebuilt
                 containerLibPolicySeccompJson
-                libkrun
+                libkrunfw
                 wl-cross-domain-proxy
                 bun
                 ;
@@ -134,7 +143,6 @@
           cang-musl = rustPackages.cangMuslPackage;
           cang-musl-ci-sccache = rustPackagesCiSccache.cangMuslPackage;
           libkrunfw = libkrunfw;
-          libkrun = libkrun;
           virglrenderer = pkgs.virglrenderer;
           wl-cross-domain-proxy = wl-cross-domain-proxy;
           podman = pkgs.podman;
@@ -182,7 +190,7 @@
             doltPrebuilt = packages.dolt-prebuilt;
             beadsPrebuilt = packages.beads-prebuilt;
             containerLibPolicySeccompJson = packages.container-lib-policy-seccomp-json;
-            libkrun = packages.libkrun;
+            libkrunfw = packages.libkrunfw;
             wl-cross-domain-proxy = packages.wl-cross-domain-proxy;
             cangMuslPackage = packages.cang-musl;
           };
@@ -247,35 +255,6 @@
                 touch "$out"
               '';
 
-          # The pinned prebuilt libkrun is consumed by dlopen, so a DT_NEEDED
-          # edge with no matching RUNPATH entry only fails at VM launch: the
-          # rebased v1.19.5 libkrun links libpipewire into libkrun.so and the
-          # package restored a RUNPATH for libvirglrenderer alone, which made
-          # every boot die with "failed to load libkrun.so".  `ldd` resolves
-          # each DT_NEEDED through the library's own RUNPATH in a clean
-          # environment, so it reproduces that launch-time lookup here.
-          libkrun-loadable =
-            pkgs.runCommand "libkrun-loadable"
-              {
-                # ldd traces DT_NEEDED lookups with the dynamic loader; it is
-                # what turns a missing RUNPATH entry into a failing build.
-                nativeBuildInputs = [ pkgs.glibc.bin ];
-              }
-              ''
-                for so in ${packages.libkrun}/lib/libkrun.so.*; do
-                  if [ -L "$so" ]; then
-                    continue
-                  fi
-                  echo "== $so" >> report
-                  ldd "$so" >> report || true
-                done
-                cat report
-                if grep -F "not found" report; then
-                  echo "the pinned libkrun has a DT_NEEDED edge that no RUNPATH entry resolves; add the missing directory to the add-rpath list in nix/pkgs/libkrun.nix" >&2
-                  exit 1
-                fi
-                cp report "$out"
-              '';
         }
       );
 
@@ -284,6 +263,13 @@
         {
           default = import ./nix/shell/devshell.nix {
             inherit pkgs;
+            libkrunfw = pkgs.callPackage ./nix/pkgs/libkrunfw.nix {
+              inherit pins;
+            };
+            krunInitBinary =
+              (import ./nix/pkgs/libkrun-source.nix {
+                inherit pkgs;
+              }).krunInitBinary;
           };
         }
       );

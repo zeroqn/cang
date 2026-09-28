@@ -1,0 +1,50 @@
+Chromium GPU smoke against the Rust-API-linked cang
+===================================================
+
+Date: 2026-09-28
+cang:   /nix/store/ch3hdq3vkkwvnycyb6jmi456v4xjfy55-cang-0.8.0/bin/cang
+        (links libkrun's Rust API from deps/libkrun; no libkrun.so)
+guest:  /nix/store/wybapyv8bhxii7qwh87c45chw879v541-cang-static-x86_64-unknown-linux-musl-0.8.0/bin/cang-guest-init
+image:  localhost/cang:latest (the v2boot graphroot already had it, so the smoke
+        did not load a fresh archive - the guest init override is what makes the
+        guest side current)
+flags:  cang --mem 4 --gpu=drm --alloc hardened --seccomp=off --landlock=off
+run:    tools/chromium-cang-smoke/chromium-smoke.sh --out-dir <btrfs disk> ...
+exit:   0
+
+Smoke output
+------------
+cang vm exit: 0
+PASS  version (Chromium version)
+PASS  chromium-rc (the WebGL and probe-DOM runs exit 0)
+PASS  webgl-vulkan (ANGLE/Vulkan renderer, not SwiftShader)
+INFO  gpu-dom rc=0 captured; unscored (feature table is shadow DOM)
+PASS  webgl-png (non-empty PNG screenshot)
+VERDICT: PASS - evidence: .../workspace/evidence (fresh, 14 files)
+
+Evidence files (guest-visible host bind)
+----------------------------------------
+chromium-gpu.log, chromium-rc, chromium-webgl-dom.log, chromium-webgl.log,
+gpu-diag.txt, gpu-dom.html, guest-env-waypipe.txt, presenting-waypipe.log,
+presenting-waypipe-state.txt, renderer-env-waypipe.txt, version.txt,
+webgl-dom.html, webgl.png, webgl-renderer.txt
+
+Renderer (webgl-renderer.txt)
+-----------------------------
+Chromium 153.0.8010.52
+renderer=ANGLE (AMD, Vulkan 1.4.334 (Virtio-GPU Venus (AMD Radeon RX 7600M XT (RADV NAVI33)) (0x00007480)), venus)
+vendor=Google Inc. (AMD)
+gl_version=WebGL 2.0 (OpenGL ES 3.0 Chromium)
+
+Guest GPU environment (gpu-diag.txt)
+------------------------------------
+LIBGL_DRIVERS_PATH=/usr/lib/cang-mesa-runtime/lib/dri
+VK_ICD_FILENAMES=/usr/lib/cang-mesa-runtime/share/vulkan/icd.d/virtio_icd.x86_64.json
+
+Why this matters
+----------------
+This is hardware venus through the venus render server, in a guest booted by a
+cang whose libkrun is compiled in rather than dlopen'd - i.e. the acceptance test
+for `preload_libva`'s removal (it is gone, and the GPU still works) and for the
+`gpu`/`input`/`timesync` features that upstream's own test suite never exercises
+in its static-linking configuration.

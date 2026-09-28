@@ -26,12 +26,14 @@ rootless Podman tooling for development.
   through `buildah unshare`. Rootless btrfs-snapshot cleanup also requires the
   backing btrfs mount to allow user-owned subvolume removal; add
   `user_subvol_rm_allowed` to that mount's options when using this fast path.
-- `libkrun.so` at runtime. The Nix `.#cang` source package keeps `bin/cang` as
-  a raw ELF and resolves libkrun from `$out/lib/cang` before falling back to
-  sonames. The pinned `libkrun` also carries an `$ORIGIN` runpath, so its own
-  `libkrunfw.so.5` dlopen resolves against the same `$out/lib/cang` directory
-  instead of an ambient `LD_LIBRARY_PATH`. Source/debug builds can set
-  `CANG_LIBKRUN_LIBRARY=/path/to/libkrun.so.2`.
+- `libkrun` at build time, not at runtime. `cang` links libkrun's Rust API
+  (`crates/cang-libkrun`, built from the `deps/libkrun` submodule by cang's own
+  toolchain), so libkrun is part of the binary and no `libkrun.so` is loaded:
+  there is no `CANG_LIBKRUN_LIBRARY` override and no `$out/lib/cang` libkrun
+  lookup. The firmware (`libkrunfw.so.5`) is still opened by soname - by libkrun
+  itself - and the Nix `.#cang` binary carries an `$ORIGIN/../lib/cang` rpath
+  where the package places it; source builds need that directory on
+  `LD_LIBRARY_PATH` (the `nix develop` shell sets it).
 - `pasta`/`passt` for host-alias networking in both default passt and opt-in
   `--tsi` mode; included in the Nix `.#cang` helper dir, `.#cang-prebuilt`,
   and `nix develop` environments.
@@ -158,7 +160,6 @@ nix build .#dolt-prebuilt
 nix build .#beads-prebuilt
 nix build .#monty-prebuilt
 nix build .#libkrunfw
-nix build .#libkrun
 nix build .#podman
 nix build .#container-lib-policy-seccomp-json
 nix build .#container
@@ -475,10 +476,12 @@ packaging input and intentionally non-standalone: it must not contain
 release-builder `/nix/store/<hash>-...` references, and Nix packaging patches
 its ordinary ELF runtime dependencies before wiring the libkrun/runtime-tool
 environment.
-For ordinary source-built cang usage with pinned prebuilt libkrun firmware,
-prefer `nix build .#cang`; use `nix build .#cang-prebuilt` only for the
-explicit pinned release-asset packaging path with the same wrapper-free helper
-layout, or the published
+For ordinary source-built cang usage, prefer `nix build .#cang`, which compiles
+libkrun from the `deps/libkrun` submodule - so a source build needs
+`git submodule update --init --recursive` first (the flake's
+`inputs.self.submodules` is what carries that source into the build). Use
+`nix build .#cang-prebuilt` only for the explicit pinned release-asset packaging
+path with the same wrapper-free helper layout, or the published
 `ghcr.io/<repo-owner>/cang` image. Use `nix build ./nix/dev#cang-dev`
 only from a local checkout with initialized `deps/libkrun` and `deps/libkrunfw`
 submodules when local libkrun/libkrunfw experiments are intended; `github:`

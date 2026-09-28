@@ -2,11 +2,19 @@
 
 ## Build outputs
 
+Source builds of the host package compile libkrun's Rust API from `deps/libkrun`,
+so a fresh checkout needs `git submodule update --init --recursive` before
+`nix build .#cang` (the flake sets `inputs.self.submodules`, which is what makes
+the submodule's contents part of the build's source).
+
 - `.#cang`: compile the workspace Rust host package with `$out/bin/cang` as a
-  raw dynamic ELF. Runtime helpers are installed under
-  `$out/libexec/cang-helpers`, and the shared `libkrun`/`libkrunfw` packages
-  are exposed under `$out/lib/cang`, so source-built cang needs no wrapper
-  script or duplicate payload.
+  raw dynamic ELF. libkrun is *compiled in* from the `deps/libkrun` submodule
+  (the `cang-libkrun` crate binds libkrun's Rust API), so this output builds
+  libkrun too - it needs the bindgen hook, `pkg-config`, `virglrenderer`, `gbm`
+  and the musl guest init blob (`nix/pkgs/libkrun-source.nix`). Runtime helpers
+  are installed under `$out/libexec/cang-helpers`, the firmware
+  (`libkrunfw.so*`) under `$out/lib/cang` with an `$ORIGIN/../lib/cang` rpath on
+  the binary, and cang needs no wrapper script or duplicate payload.
 - `./nix/dev#cang-dev`: local-checkout-only development build of the workspace
   Rust host package wired to the checked-out `deps/libkrun` and `deps/libkrunfw`
   submodules through the submodule-aware dev flake. Use this target for local
@@ -15,7 +23,9 @@
 - `.#cang-prebuilt`: install a pinned published neutral dynamic Linux `cang`
   asset as raw `$out/bin/cang`, patch ordinary ELF runtime dependencies with
   Nix, and provide the same package-relative helper and `$out/lib/cang`
-  library layout as source-built `.#cang`.
+  library layout as source-built `.#cang`. Assets published before cang linked
+  libkrun still need `libkrun*.so` from the pinned `libkrun` package, which is
+  why this packager keeps that wiring.
 - `.#cang-render-server-env`: the host render-server environment
   (`CANG_MESA_LIBDIR`, `CANG_MESA_ICD`, `CANG_VULKAN_LOADER_LIBDIR`) a
   tree-built raw-ELF `.#cang` needs to find mesa and the Vulkan loader for
@@ -26,9 +36,9 @@
   is what lets its no-argument invocation run the default `.#cang`.
 - `.#cang-musl`: static/musl `cang-guest-init` (and `cang-granted`) binaries
   for image/guest use. It intentionally does not build or expose `bin/cang`;
-  the host `cang` binary is always dynamically linked so it can load
-  `libkrun.so`/`libkrunfw.so` from the package or dev shell runtime library
-  path.
+  the host `cang` binary is a dynamically linked ELF (libkrun itself is linked
+  in statically, but libc and the GPU stack are not), and it opens
+  `libkrunfw.so` from the package or dev shell runtime library path.
 - `.#rmux-prebuilt`: install the pinned published Helvesec/rmux Linux release
   tarball for the current system. The cang image includes this package as
   `rmux` alongside Nixpkgs `tmux`.
@@ -63,20 +73,15 @@
   client: client and worker reject each other over a protocol-version mismatch.
 - `.#libkrunfw`: install the pinned `zeroqn/libkrunfw` release asset for the
   current system.
-- `.#libkrun`: install the pinned `zeroqn/libkrun` prebuilt release asset for
-  the current system, matching `.#libkrunfw`'s release-asset model. Both pins
-  may name a rolling `cang-<sha>` or a permanent `v<version>-cang.<n>` fork
-  release; tagged cang releases pin the permanent form because the fork CI
-  prunes the rolling one.
-  Root consumers (`.#cang`, images, and `.#cang-prebuilt`) all use this pinned
-  prebuilt package. The package normalizes upstream Linux `lib64` payloads into
-  `$out/lib` and regenerates `libkrun.pc` for the Nix store path. Local source
-  development for libkrun is intentionally limited to the submodule-aware dev
-  flake (`./nix/dev#cang-dev`).
+- libkrun itself has no package output any more. `.#cang` compiles libkrun's
+  Rust API out of the `deps/libkrun` submodule (see the source-build note
+  above), so there is nothing to pin or install: the submodule pointer is the
+  version, and `./nix/dev#cang-dev` is simply the local-checkout form of the
+  same build.
 - `.#virglrenderer`: the nixpkgs `virglrenderer` with this repo's host-side
   patches (`virglrenderer-enum-26.patch` and
   `virglrenderer-gbm-layout-linear-modifier.patch`, applied by the overlay in
-  `nix/lib/systems.nix`). Host-side only: libkrun links `libvirglrenderer.so.1`
+  `nix/lib/systems.nix`). Host-side only: cang links `libvirglrenderer.so.1`
   and the `virgl_render_server` helper is symlinked from this package, so the
   cang packages already ship it; downstream flakes that build their own host
   vrend/libkrun stack should consume this output instead of nixpkgs'

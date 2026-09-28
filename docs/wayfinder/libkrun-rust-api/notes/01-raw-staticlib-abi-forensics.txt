@@ -1,0 +1,38 @@
+rust staticlib / cross-toolchain link forensics - 2026-09-28
+================================================================
+Context: bob's first lean was "staticlib, remove libkrun.so" (link the fork's
+generated C ABI statically) with the Rust API deferred to libkrun 2.0.0. This is
+the measurement that argued against the static-C-ABI route when the archive is
+built by a different toolchain than the consumer.
+
+Probe (all in $SCRATCH/libkrun-staticlib-probe, rustc 1.95.0):
+  libexample/  crate-type = ["staticlib"], uses std (HashMap/Vec/OnceLock/println)
+  app/         a Rust binary that links libexample.a via build.rs
+               (cargo:rustc-link-search=native=... + cargo:rustc-link-lib=static=example)
+
+Same toolchain (both 1.95.0):
+  $ cargo build --release          -> links, runs, sum=42
+  libexample.a = 9,069,796 bytes (bundles std); app = 568,408 bytes
+  Reason it is clean: the archive's std symbols are hash-identical to the
+  consumer's std, so the archive's std members are never pulled in.
+
+Symbol forensics on the archive (nm --defined-only, binutils 2.46):
+  * __rust_alloc family: mangled WITH the crate hash
+      _RNvCsiD4PkyReZVB_7___rustc12___rust_alloc   (T, strong)
+    -> a foreign rustc mangles these differently, so they collide only if the
+       *same* name were produced; they are not.
+  * compiler builtins: __adddf3, __muloti4, ceilf, ... -> W (WEAK). Safe.
+  * rust_eh_personality: T (STRONG) and UNMANGLED.
+    -> a foreign-toolchain link that pulls any archive member with a landing pad
+       (i.e. every real one) collides on this symbol; the link then needs
+       -Wl,--allow-multiple-definition, with two std copies in the process and
+       two personality routines on the unwind path.
+
+Consequence recorded in the map's Out of scope: a C-ABI static archive is only
+clean when the consumer's own toolchain built it, which removes the single
+advantage of consuming the fork CI's prebuilt .a (keeping libkrun's source,
+bindgen/clang and its ~150-crate graph out of cang's build). Building the archive
+in cang's own Nix instead raises the question that settled the map: if cang
+already compiles libkrun source with its own rustc, the Rust API (an rlib, one
+std, no generated ABI) is strictly less machinery than a static C archive plus
+the ABI-mirroring handle code.

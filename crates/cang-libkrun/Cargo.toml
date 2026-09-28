@@ -1,0 +1,23 @@
+[package]
+name = "cang-libkrun"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+libc.workspace = true
+tracing.workspace = true
+
+# libkrun comes from the fork submodule and is compiled into cang by cang's own
+# rustc: the Rust API is not a stable ABI, so an rlib built by a different
+# toolchain could not be linked. `libkrun` is the package, `krun` the lib name;
+# `krun-init-blob`'s `direct` feature is the statically linked init injection.
+libkrun = { path = "../../deps/libkrun/src/libkrun", features = [
+  "blk",
+  "net",
+  "gpu",
+  "input",
+  "timesync",
+] }
+krun-init-blob = { path = "../../deps/libkrun/init/init-blob", features = ["direct"] }

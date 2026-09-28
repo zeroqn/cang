@@ -1,6 +1,9 @@
 const FLAKE_NIX: &str = include_str!("../../../flake.nix");
 const ADR_0005_NEUTRAL_CANG_PREBUILT_ASSETS_MD: &str =
     include_str!("../../../docs/adr/0005-neutral-cang-prebuilt-assets.md");
+const ADR_0008_CANG_LINKS_LIBKRUN_RUST_API_MD: &str =
+    include_str!("../../../docs/adr/0008-cang-links-libkrun-rust-api.md");
+const CONTEXT_MD: &str = include_str!("../../../CONTEXT.md");
 const MAINTENANCE_MD: &str = include_str!("../../../docs/maintenance.md");
 const LAYERS: &str = include_str!("../../../nix/image/layers.nix");
 const CONTAINER_NIX: &str = include_str!("../../../nix/image/container.nix");
@@ -277,14 +280,15 @@ fn publish_release_prunes_only_dev_releases() {
 
 #[test]
 fn pinned_fork_releases_use_permanent_version_tags() {
-    for attr_name in ["libkrunRelease", "libkrunfwRelease"] {
-        let tag = pinned_release_tag(attr_name);
-        assert!(
-            is_versioned_fork_release_tag(&tag),
-            "{attr_name} pins rolling {tag}; pin a permanent v<version>-cang.<n> \
-             release so a tagged cang release cannot reference a pruned artifact"
-        );
-    }
+    // libkrunRelease left with the prebuilt C-ABI libkrun pipeline (ADR 0008);
+    // libkrunfw is the fork pin a cang release still depends on.
+    let attr_name = "libkrunfwRelease";
+    let tag = pinned_release_tag(attr_name);
+    assert!(
+        is_versioned_fork_release_tag(&tag),
+        "{attr_name} pins rolling {tag}; pin a permanent v<version>-cang.<n> \
+         release so a tagged cang release cannot reference a pruned artifact"
+    );
 }
 
 #[test]
@@ -324,13 +328,50 @@ fn cang_version_tag_shape_is_enforced() {
 #[test]
 fn publish_release_gates_tagged_releases_on_permanent_fork_pins() {
     for required in [
-        "Require versioned libkrun/libkrunfw pins",
+        "Require a versioned libkrunfw pin",
         "refusing to publish a tagged cang release with a rolling fork pin",
-        "libkrunRelease",
         "libkrunfwRelease",
     ] {
         assert!(PUBLISH_RELEASE_YML.contains(required), "missing {required}");
     }
+    // cang links libkrun's Rust API, so the pinned prebuilt C-ABI library is no
+    // longer something a cang release depends on.
+    assert!(
+        !PUBLISH_RELEASE_YML.contains("libkrunRelease"),
+        "the release pin gate should no longer mention the retired prebuilt libkrun pin"
+    );
+}
+
+/// The prebuilt C-ABI libkrun pipeline existed to give the dlopen binding
+/// something to load. cang now compiles libkrun's Rust API out of
+/// `deps/libkrun`, so the packager, its pin and its updater have no consumer,
+/// and the image must not carry a `libkrun.so` that nothing links.
+#[test]
+fn prebuilt_libkrun_pipeline_stays_retired() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for removed in ["nix/pkgs/libkrun.nix", "scripts/update-libkrun.sh"] {
+        assert!(
+            !repo_root.join(removed).exists(),
+            "{removed} should stay deleted: cang links libkrun's Rust API from deps/libkrun, so the prebuilt C-ABI library has no consumer"
+        );
+    }
+    // `packages.libkrunfw` and `libkrun-loadable`-style neighbours make a bare
+    // `libkrun` needle useless: assert the whole retired form instead.
+    for (source, absent) in [
+        (PINS_NIX, "libkrunRelease = {"),
+        (FLAKE_NIX, "libkrun-loadable"),
+        (FLAKE_NIX, "packages.libkrun;"),
+        (FLAKE_NIX, "nix/pkgs/libkrun.nix"),
+    ] {
+        assert!(
+            !source.contains(absent),
+            "the retired prebuilt libkrun pipeline should not reappear: found {absent}"
+        );
+    }
+    assert!(
+        !LAYERS.contains("\n    libkrun\n") && LAYERS.contains("\n    libkrunfw\n"),
+        "the image tooling layer should carry libkrunfw (the firmware), not libkrun.so"
+    );
 }
 
 #[test]
@@ -371,8 +412,21 @@ fn cang_package_exposes_stable_raw_elf_payload_for_release_workflow() {
         r#"ln -s ${pkgs.util-linux}/bin/blkid "$out/libexec/cang-helpers/blkid""#,
         r#"ln -s ${pkgs.passt}/bin/pasta "$out/libexec/cang-helpers/pasta""#,
         r#"ln -s ${pkgs.passt}/bin/passt "$out/libexec/cang-helpers/passt""#,
-        "${pkgs.lib.getLib libkrun}/lib/libkrun.so*",
         "${pkgs.lib.getLib libkrunfw}/lib/libkrunfw.so*",
+    ] {
+        assert!(CANG_RUST_NIX.contains(required), "missing {required}");
+    }
+
+    for required in [
+        // cang compiles libkrun's Rust API from the submodule, so the packager
+        // has to carry libkrun's build inputs and the musl guest init blob.
+        "pkgs.rustPlatform.bindgenHook",
+        "pkgs.pkg-config",
+        "pkgs.rustfmt",
+        "pkgs.virglrenderer",
+        "pkgs.libgbm",
+        "KRUN_INIT_BINARY_PATH",
+        "pkgs.rustPlatform.fetchCargoVendor",
     ] {
         assert!(CANG_RUST_NIX.contains(required), "missing {required}");
     }
@@ -383,6 +437,11 @@ fn cang_package_exposes_stable_raw_elf_payload_for_release_workflow() {
         // refuses a wrapper script, so the package must stay wrapper-free.
         r#"wrapProgram "$out/bin/cang""#,
         "pkgs.makeWrapper",
+        // libkrun is linked into the binary; the shared object symlinks and the
+        // pre-libkrun vendoring must not come back.
+        r#"${pkgs.lib.getLib libkrun}/lib/libkrun.so*"#,
+        r#"${pkgs.lib.getLib libkrun}/lib/libkrun_init.so*"#,
+        "cargoLock = {",
     ] {
         assert!(!CANG_RUST_NIX.contains(removed), "still contains {removed}");
     }
@@ -518,7 +577,6 @@ fn cang_prebuilt_package_pins_and_patches_neutral_elf() {
     );
 
     for required in [
-        "libkrun ? null,",
         "libkrunfw ? null,",
         "cangPrebuiltRelease = pins.cangPrebuiltRelease;",
         "throw ''",
@@ -530,8 +588,11 @@ fn cang_prebuilt_package_pins_and_patches_neutral_elf() {
         "pkgs.btrfs-progs",
         "pkgs.fuse-overlayfs",
         "pkgs.util-linux",
-        "pkgs.lib.getLib libkrun",
         "pkgs.lib.getLib libkrunfw",
+        // Since cang links libkrun's Rust API the released asset has a
+        // libvirglrenderer DT_NEEDED and a stripped rpath, so the packager has to
+        // resolve it with autoPatchelfHook from its own inputs.
+        "pkgs.virglrenderer",
         r#"magic="$(dd if="$src" bs=4 count=1"#,
         r#""7f454c46""#,
         r#"readelf -h "$src" >/dev/null"#,
@@ -575,6 +636,43 @@ fn cang_prebuilt_adr_records_neutral_asset_decision() {
         assert!(
             ADR_0005_NEUTRAL_CANG_PREBUILT_ASSETS_MD.contains(required),
             "missing {required}"
+        );
+    }
+}
+
+/// cang used to `dlopen` a pinned prebuilt libkrun; it now compiles libkrun's
+/// Rust API out of the submodule. The rationale and the parts of the old design
+/// that must not come back are recorded in ADR 0008, and CONTEXT.md's vocabulary
+/// has to keep saying so.
+#[test]
+fn cang_links_libkrun_adr_records_the_binding_decision() {
+    for required in [
+        "# cang links libkrun's Rust API instead of loading a shared library",
+        "Status: accepted",
+        "cang-libkrun",
+        "deps/libkrun",
+        "krun-init-blob",
+        "secure-execution mode",
+        "Retire the prebuilt C-ABI libkrun pipeline",
+        "libvirglrenderer.so.1",
+    ] {
+        assert!(
+            ADR_0008_CANG_LINKS_LIBKRUN_RUST_API_MD.contains(required),
+            "missing {required}"
+        );
+    }
+    // The amending note keeps ADR 0005 from contradicting 0008.
+    assert!(
+        ADR_0005_NEUTRAL_CANG_PREBUILT_ASSETS_MD.contains("0008-cang-links-libkrun-rust-api.md"),
+        "ADR 0005 should point at the amendment"
+    );
+    for required in [
+        "links libkrun's Rust API into itself and opens only the firmware",
+        "including the `libvirglrenderer` the linked libkrun needs",
+    ] {
+        assert!(
+            CONTEXT_MD.contains(required),
+            "CONTEXT.md missing {required}"
         );
     }
 }

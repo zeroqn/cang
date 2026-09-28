@@ -21,19 +21,23 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          # cang compiles libkrun's Rust API out of `deps/libkrun`, so the
+          # submodule has to be in the checkout.
+          submodules: recursive
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
-      - name: Require versioned libkrun/libkrunfw pins
+      - name: Require a versioned libkrunfw pin
         if: github.ref_type == 'tag'
         run: |
           set -euo pipefail
 
-          # Rolling cang-<sha> libkrun/libkrunfw prereleases are pruned by the
-          # fork CI, so a tagged cang release must pin the permanent
+          # Rolling cang-<sha> libkrunfw prereleases are pruned by the fork CI,
+          # so a tagged cang release must pin the permanent
           # v<version>-cang.<n> release that the fork CI never deletes.
-          for pin in libkrunRelease libkrunfwRelease; do
+          for pin in libkrunfwRelease; do
             tag="$(nix eval --raw --impure --expr "(import ./nix/pins.nix).${pin}.tag")"
             case "${tag}" in
               v[0-9]*-cang.*) ;;
@@ -168,7 +172,7 @@ jobs:
           - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
           Assets:
-          - \`${{ steps.prep.outputs.cang_asset_name }}\`: neutral dynamically linked cang ELF packaging input. It is not a standalone portable binary; Nix packaging patches ordinary ELF runtime dependencies and wires libkrun/runtime-tool dependencies. Prefer \`nix build .#cang\`, \`nix build .#cang-prebuilt\` once pinned, or the published \`ghcr.io/<repo-owner>/cang\` image for ordinary use.
+          - \`${{ steps.prep.outputs.cang_asset_name }}\`: neutral dynamically linked cang ELF packaging input. It is not a standalone portable binary: since cang links libkrun's Rust API it needs \`libvirglrenderer.so.1\` at run time (\`libkrunfw.so.5\` for the firmware), so Nix packaging patches ordinary ELF runtime dependencies and wires libkrunfw/runtime-tool dependencies. Prefer \`nix build .#cang\`, \`nix build .#cang-prebuilt\` once pinned, or the published \`ghcr.io/<repo-owner>/cang\` image for ordinary use.
 
           The versioned image \`ghcr.io/<repo-owner>/cang:${GITHUB_REF_NAME}\` is published by the image workflow on tag push.
           The matching \`${{ steps.prep.outputs.sha_tag }}\` prerelease is the revision-addressed binary set for this exact revision.
@@ -182,7 +186,7 @@ jobs:
           - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
           Assets:
-          - \`${{ steps.prep.outputs.cang_asset_name }}\`: neutral dynamically linked cang ELF packaging input. It is not a standalone portable binary; Nix packaging patches ordinary ELF runtime dependencies and wires libkrun/runtime-tool dependencies. Prefer \`nix build .#cang\`, \`nix build .#cang-prebuilt\` once pinned, or the published \`ghcr.io/<repo-owner>/cang\` image for ordinary use.
+          - \`${{ steps.prep.outputs.cang_asset_name }}\`: neutral dynamically linked cang ELF packaging input. It is not a standalone portable binary: since cang links libkrun's Rust API it needs \`libvirglrenderer.so.1\` at run time (\`libkrunfw.so.5\` for the firmware), so Nix packaging patches ordinary ELF runtime dependencies and wires libkrunfw/runtime-tool dependencies. Prefer \`nix build .#cang\`, \`nix build .#cang-prebuilt\` once pinned, or the published \`ghcr.io/<repo-owner>/cang\` image for ordinary use.
 
           The \`alpha\` prerelease is reused on every push to main.
           The matching \`${{ steps.prep.outputs.sha_tag }}\` prerelease is the revision-addressed binary set for this exact revision.

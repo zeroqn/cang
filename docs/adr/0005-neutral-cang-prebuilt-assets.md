@@ -35,6 +35,10 @@ neutral upstream asset plus Nix-side patching in the package that consumes it.
   dependencies.
 - Keep `libkrun` and `libkrunfw` runtime-loaded through package-relative
   lookup semantics instead of making them required ELF `NEEDED` dependencies.
+  (Amended 2026-09: cang now links libkrun's Rust API into the binary, so libkrun
+  is neither loaded nor a `NEEDED` edge, and only the firmware stays
+  runtime-loaded. `libvirglrenderer.so.1` does become a `NEEDED` edge that the
+  consumer supplies - see [ADR 0008](0008-cang-links-libkrun-rust-api.md).)
 
 ## Consequences
 

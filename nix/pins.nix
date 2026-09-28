@@ -104,22 +104,6 @@ in
     hash = "sha256-m3VSAlFq7ktF2dQRq4AMIP5PevlxZqk7fwfVsWwaTs0=";
   };
 
-  libkrunRelease = {
-    owner = "zeroqn";
-    repo = "libkrun";
-    tag = "v2.0.0-cang.3";
-    systems = {
-      x86_64-linux = {
-        asset = "libkrun-x86_64-linux-full.tgz";
-        hash = "sha256-Y1H5J9kbg9fTZk/0bmCo1BMZL0O+I2gKgZ2j1AnY9Sk=";
-      };
-      aarch64-linux = {
-        asset = "libkrun-aarch64-linux-full.tgz";
-        hash = "sha256-qLcEHzd3MC2dP1a72i15JpyE2pWxa2EVAMImvBgE9iY=";
-      };
-    };
-  };
-
   libkrunfwRelease = {
     owner = "zeroqn";
     repo = "libkrunfw";
@@ -146,11 +130,16 @@ in
     # Pinned by scripts/update-cang-prebuilt.sh, which rejects wrapper-script,
     # legacy flake-locked, and concrete /nix/store/<hash>-referencing cang
     # release payloads.
-    tag = "v0.8.0";
+    tag = "v0.9.0";
     systems = {
       x86_64-linux = {
-        asset = "cang-v0.8.0-x86_64-unknown-linux-gnu";
-        hash = "sha256-pWnugWrPnrHyDIEiEKtNQoTCIc+H3L0hpMz05g4PyoE=";
+        asset = "cang-v0.9.0-x86_64-unknown-linux-gnu";
+        # Computed from `nix build .#cang-ci-sccache` normalized exactly like the
+        # release workflow (`patchelf --set-interpreter
+        # /lib64/ld-linux-x86-64.so.2 --set-rpath ""`), so it is the byte-identical
+        # asset the tag push uploads. Recompute it the same way for the next
+        # release; see the cang release scheme in docs/maintenance.md.
+        hash = "sha256-GdTWfwTXyfdPa3OfPjCer1EBH0pdW97HZsQQAn5oPs0=";
       };
     };
   };

@@ -19,7 +19,7 @@ use crate::runtime::session::task_control::{
     ProcfsInspector, WorkspaceTaskGateReport, ensure_workspace_has_no_running_tasks,
 };
 use crate::runtime::vm::gpu::GpuMode;
-use crate::runtime::vm::libkrun::{DirectLibkrunLauncher, DynamicLibkrunApi};
+use crate::runtime::vm::libkrun::{DirectLibkrunLauncher, LinkedLibkrunApi};
 use crate::runtime::vm::prepared_root;
 use crate::state::StateLayout;
 
@@ -198,7 +198,7 @@ impl MaintenanceVmRunner for HostMaintenanceVmRunner {
         let prepared_root = prepared_root::prepare(config, task_state_dir)?;
         let launch_config = config.with_root_export(prepared_root.root().to_path_buf());
         launch_config.write_guest_config_to_rootfs()?;
-        let api = DynamicLibkrunApi::open_default()?;
+        let api = LinkedLibkrunApi::new();
         DirectLibkrunLauncher::new(api).start_enter_profiled_with_pre_enter_hook(
             &launch_config,
             None,

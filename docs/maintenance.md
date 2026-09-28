@@ -17,7 +17,7 @@ from the tag:
 
 ```bash
 nix develop --command ./scripts/update-cang-prebuilt.sh
-nix develop --command ./scripts/update-cang-prebuilt.sh --tag v0.8.0
+nix develop --command ./scripts/update-cang-prebuilt.sh --tag v0.9.0
 ```
 
 This updater only re-pins an artifact that is *already published* (it downloads
@@ -58,16 +58,27 @@ asset name, and SRI hash) in `nix/pins.nix` from the npm registry:
 nix develop --command ./scripts/update-monty-prebuilt.sh
 ```
 
-Refresh pinned `zeroqn/libkrun` prebuilt release metadata in `nix/pins.nix`
-from the newest matching rolling `cang-<sha>` tag that contains both required
-Linux assets. Root `.#libkrun` and every shared consumer (`.#cang`, images, and
-`.#cang-prebuilt`) use the same pinned prebuilt libkrun package. Local source
-builds stay in the submodule-aware dev flake and use the checked-out
-`deps/libkrun` submodule:
+libkrun itself is no longer pinned: cang links libkrun's Rust API out of the
+`deps/libkrun` submodule (see the next section), so `nix/pkgs/libkrun.nix`,
+`scripts/update-libkrun.sh`, the `libkrunRelease` pin and the
+`libkrun-loadable` check were removed. The fork's C-ABI release assets keep
+being published for third parties; cang does not consume them.
 
-```bash
-nix develop --command ./scripts/update-libkrun.sh
-```
+### Updating the `deps/libkrun` submodule
+
+A libkrun update is a submodule pointer bump, and things have to move together:
+
+1. Move the pointer (`git -C deps/libkrun fetch` + `checkout`, or a fork branch
+   update), then `git add deps/libkrun` here - flake builds only see tracked
+   files.
+2. Refresh `Cargo.lock` for the new graph (`nix develop --command cargo build`)
+   and commit it.
+3. Refresh both vendor hashes, taking the value from the build's hash-mismatch
+   error: `cargoDeps` in `nix/pkgs/cang-rust.nix` (cang's whole graph) and
+   `libkrunCargoDeps` in `nix/pkgs/libkrun-source.nix` (the fork's own lock, used
+   by the musl guest-init blob). `nix build .#cang` reports whichever mismatches
+   first.
+4. Re-verify with a live boot and the Chromium GPU smoke, not just a green build.
 
 Refresh pinned `zeroqn/libkrunfw` release metadata in `nix/pins.nix`:
 
@@ -101,24 +112,22 @@ The workflow rejects a version whose base does not match the branch's
 `FULL_VERSION`, and refuses to republish an existing version at a different
 commit (bump the number instead).
 
-The libkrun workflow builds with `FFI=1` and asserts that the packaged
-`libkrun.so.2` exports the C entry points (`krun_init_log`,
-`krun_vmm_builder_*`, `krun_gpu_device_new`) before it uploads anything: ABI 2
-gates the whole C surface behind that cargo feature, so without it the asset
-builds fine, ships a `libkrun.so` that exports **nothing**, and every consumer
-fails at `krun_init_log` resolution. `libkrun_init.so` always gets `ffi` from the
-Makefile, which is why only the host library was ever hollow. A tree-built
-libkrun needs the same flag (`nix/dev` passes it).
+The libkrunfw workflow publishes the kernel bundle cang opens at run time
+(`krunfw`). cang does not pin the libkrun workflow's C-ABI assets any more - see
+`./deps/libkrun` under "Updating the `deps/libkrun` submodule" - but the fork
+keeps publishing them for third-party C-ABI consumers, and the workflow still
+builds with `FFI=1` for them: ABI 2 gates the whole C surface behind that cargo
+feature, so without it the asset builds fine and ships a `libkrun.so` that
+exports **nothing**.
 
-Publishing a libkrun fix also has to be re-verified through the GPU smoke, not
-just the symbol check: `.2` exported the ABI but regressed venus to the 2D
-fallback, which only the Chromium smoke catches (`tools/chromium-cang-smoke`,
-GPU and `--waypipe` modes). `.3` carries that fix.
+Any libkrun change cang picks up is re-verified through the GPU smoke, not just a
+green build: `.2` exported the ABI but regressed venus to the 2D fallback, which
+only the Chromium smoke catches (`tools/chromium-cang-smoke`, GPU and
+`--waypipe` modes). `.3` carries that fix.
 
-Pin a permanent release, and use it for any tagged cang release:
+Pin a permanent libkrunfw release, and use it for any tagged cang release:
 
 ```bash
-nix develop --command ./scripts/update-libkrun.sh --tag v2.0.0-cang.3
 nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.1
 nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang.1
 nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang.1
@@ -126,8 +135,7 @@ nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag
 
 Each `update-libkrunfw.sh` run rewrites one system, so pass the same `--tag` for
 all three. The `.github/workflows/publish_release.yml` job for a cang version tag
-refuses to run while `libkrunRelease.tag` or `libkrunfwRelease.tag` is still a
-rolling `cang-<sha>` tag.
+refuses to run while `libkrunfwRelease.tag` is still a rolling `cang-<sha>` tag.
 
 ### cang release scheme
 
@@ -168,6 +176,16 @@ Release a version in this order:
    ```
 
    Run this from `nix develop`, which provides `readelf` and `sha256sum`.
+
+   The `.#cang-ci-sccache` attribute hard-codes `SCCACHE_DIR=/nix/var/cache/sccache`
+   (the CI runner creates it), so a local build fails with
+   `failed to create directory /nix/var/cache/sccache` unless that directory
+   exists and is writable, or the value is overridden. The hash does not depend
+   on which cache directory is used - verified 2026-09 by building the attribute
+   twice with two different `SCCACHE_DIR` values and hashing both normalized
+   assets - but it *does* depend on building this attribute: with `RUSTC_WRAPPER`
+   set the binary comes out un-LTO'd (about 10 MB), while a plain
+   `nix build .#cang` links with `lto = "thin"` (about 4.6 MB).
 3. Commit the pin in `nix/pins.nix`: `cangPrebuiltRelease.tag = "v<version>"`, the
    versioned `asset` name from step 2, and that SRI.
 4. Tag **the pin commit** — not the version bump — and push branch and tag (v0.7.2
@@ -183,9 +201,9 @@ the pin out of the tagged tree: tagging the bump commit leaves the pinned hash
 behind the tag, so a `v<version>` checkout would still pin the previous release.
 Do not tag first and pin afterwards, and do not move a tag once it is pushed.
 
-Both fork pins must already be permanent `v<version>-cang.<n>` releases. The
-tag-triggered job refuses to publish while `libkrunRelease.tag` or
-`libkrunfwRelease.tag` is a rolling `cang-<sha>` tag, because those are pruned.
+The libkrunfw pin must already be a permanent `v<version>-cang.<n>` release. The
+tag-triggered job refuses to publish while `libkrunfwRelease.tag` is a rolling
+`cang-<sha>` tag, because those are pruned.
 
 Verify the published release against the pin:
 

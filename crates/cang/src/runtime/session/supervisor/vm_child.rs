@@ -22,7 +22,7 @@ use crate::runtime::session::supervisor::entry::task_state_dir_from_config_path;
 use crate::runtime::session::supervisor::identity;
 use crate::runtime::session::supervisor::managed_exit_marker::{self, ManagedExitObservation};
 use crate::runtime::session::supervisor::readiness_pipe::HelperReadyWriter;
-use crate::runtime::vm::libkrun::{DirectLibkrunLauncher, DynamicLibkrunApi};
+use crate::runtime::vm::libkrun::{DirectLibkrunLauncher, LinkedLibkrunApi};
 use crate::runtime::vm::network;
 use crate::runtime::vm::prepared_root;
 
@@ -668,9 +668,7 @@ fn run_libkrun_with_prepared_root(
         "cang internal: launch config loaded"
     );
     tracing::debug!("libkrun API open: begin");
-    let api = profiler.measure_result("vm_worker_libkrun_open", || {
-        DynamicLibkrunApi::open_default()
-    })?;
+    let api = profiler.measure_result("vm_worker_libkrun_open", || Ok(LinkedLibkrunApi::new()))?;
     tracing::debug!("libkrun API open: complete");
     let session_started_at = Instant::now();
     let configure_started_at = Instant::now();

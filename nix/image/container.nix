@@ -10,7 +10,7 @@
   doltPrebuilt,
   beadsPrebuilt,
   containerLibPolicySeccompJson,
-  libkrun,
+  libkrunfw,
   wl-cross-domain-proxy,
   bun,
   cangMuslPackage,
@@ -31,7 +31,7 @@ let
       doltPrebuilt
       beadsPrebuilt
       containerLibPolicySeccompJson
-      libkrun
+      libkrunfw
       wl-cross-domain-proxy
       bun
       cangMuslPackage
@@ -60,7 +60,7 @@ let
       doltPrebuilt
       beadsPrebuilt
       containerLibPolicySeccompJson
-      libkrun
+      libkrunfw
       wl-cross-domain-proxy
       bun
       cangMuslPackage

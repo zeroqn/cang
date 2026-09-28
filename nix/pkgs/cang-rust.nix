@@ -2,7 +2,7 @@
   self,
   pkgs,
   pins,
-  libkrun ? null,
+  krunInitBinary,
   libkrunfw ? null,
   enableCiSccache ? false,
 }:
@@ -14,21 +14,50 @@ let
     SCCACHE_DIR = "/nix/var/cache/sccache";
     SCCACHE_IGNORE_SERVER_IO_ERROR = "1";
   };
+  # cang links libkrun's Rust API (crates/cang-libkrun), so libkrun's crates are
+  # part of cang's lock and have to be vendored. `importCargoLock` cannot express
+  # the fork's lock - it vendors ffier twice at one name-version - so the sources
+  # come from `fetchCargoVendor`, like the fork's own source does; a libkrun bump
+  # refreshes this hash in the same commit as the submodule pointer.
+  cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+    src = self;
+    hash = "sha256-QHvuKBf/ifzkHqoS6O6WmROqmkkqVS8FgyENxz8Uuhc=";
+  };
+
+  # Building libkrun is what needs clang/libclang (krun-display and krun-input
+  # run bindgen), pkg-config plus virglrenderer and gbm (rutabaga_gfx's
+  # virgl_renderer feature), and rustfmt (ffier's client generator shells out to
+  # it). `krunInitBinary` is the musl guest init the embedded init blob needs.
+  libkrunNativeBuildInputs = [
+    pkgs.rustPlatform.bindgenHook
+    pkgs.pkg-config
+    pkgs.rustfmt
+    pkgs.patchelf
+  ];
+  libkrunBuildInputs = [
+    pkgs.virglrenderer
+    pkgs.libgbm
+  ];
+  libkrunEnv = {
+    KRUN_INIT_BINARY_PATH = "${krunInitBinary}/bin/krun-init";
+  };
+
   # Keep $out/bin/cang a raw ELF. The release workflow publishes it as the
   # neutral asset and refuses a wrapper script, and a wrapper would also hide
   # the helper/library lookup below behind shell setup. Runtime tools resolve
-  # from $out/libexec/cang-helpers and libkrun from $out/lib/cang.
+  # from $out/libexec/cang-helpers, and the firmware (`libkrunfw.so.5`, opened by
+  # libkrun itself) from $out/lib/cang.
   rustPackage = pkgs.rustPlatform.buildRustPackage (
     {
       pname = "cang";
       version = cangVersion;
       src = self;
 
-      nativeBuildInputs = ciSccacheNativeBuildInputs;
+      inherit cargoDeps;
 
-      cargoLock = {
-        lockFile = ../../Cargo.lock;
-      };
+      nativeBuildInputs = ciSccacheNativeBuildInputs ++ libkrunNativeBuildInputs;
+      buildInputs = libkrunBuildInputs;
+      env = libkrunEnv;
 
       postInstall = ''
         mkdir -p "$out/libexec/cang-helpers" "$out/lib/cang"
@@ -42,18 +71,18 @@ let
         ln -s ${pkgs.passt}/bin/passt "$out/libexec/cang-helpers/passt"
         ln -s ${pkgs.strace}/bin/strace "$out/libexec/cang-helpers/strace"
         ln -s ${pkgs.virglrenderer}/libexec/virgl_render_server "$out/libexec/cang-helpers/virgl_render_server"
-        ${pkgs.lib.optionalString (libkrun != null) ''
-          for library in ${pkgs.lib.getLib libkrun}/lib/libkrun.so* \
-            ${pkgs.lib.getLib libkrun}/lib/libkrun_init.so*; do
-            [ -e "$library" ] || continue
-            ln -s "$library" "$out/lib/cang/$(basename "$library")"
-          done
-        ''}
         ${pkgs.lib.optionalString (libkrunfw != null) ''
           for library in ${pkgs.lib.getLib libkrunfw}/lib/libkrunfw.so*; do
             ln -s "$library" "$out/lib/cang/$(basename "$library")"
           done
         ''}
+      '';
+      # libkrun opens the firmware (`libkrunfw.so.5`) by soname, from the cang
+      # process itself. That used to resolve through the dlopen'd libkrun.so's
+      # `$ORIGIN` runpath; now the binary carries a package-relative rpath for it,
+      # which also keeps `$out/bin/cang` runnable without a wrapper.
+      postFixup = ''
+        patchelf --add-rpath '$ORIGIN/../lib/cang' "$out/bin/cang"
       '';
     }
     // ciSccacheEnv
@@ -73,11 +102,12 @@ let
       version = cangVersion;
       src = self;
 
-      nativeBuildInputs = ciSccacheNativeBuildInputs;
+      # The workspace lock now resolves libkrun's crates too, so the musl build
+      # needs the same vendored registry for resolution even though it compiles
+      # only `cang-guest-init`.
+      inherit cargoDeps;
 
-      cargoLock = {
-        lockFile = ../../Cargo.lock;
-      };
+      nativeBuildInputs = ciSccacheNativeBuildInputs;
 
       CARGO_BUILD_TARGET = muslTarget;
       cargoBuildFlags = [

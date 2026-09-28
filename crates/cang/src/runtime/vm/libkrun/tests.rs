@@ -8,15 +8,12 @@ use crate::runtime::launch::config::{
 };
 use crate::runtime::seccomp::{AuditMode, SeccompMode};
 use crate::runtime::vm::gpu::GpuMode;
+use crate::runtime::vm::libkrun::DirectLibkrunLauncher;
 use crate::runtime::vm::libkrun::launcher::{
     PROFILE_KERNEL_CMDLINE_APPEND, guest_nofile_rlimit_entry, with_audit_start_marker_hook_for_test,
 };
-use crate::runtime::vm::libkrun::{
-    CANG_LIBKRUN_COMPAT_NET_FEATURES, DirectLibkrunLauncher, LibkrunApi,
-    planned_libkrun_init_load_order_for_exe, planned_libkrun_load_order,
-    planned_libkrun_load_order_for_exe, required_symbol_presence_for_test,
-};
 use anyhow::{Result, anyhow, bail};
+use cang_libkrun::{CANG_LIBKRUN_COMPAT_NET_FEATURES, LibkrunApi};
 use std::cell::RefCell;
 use std::path::Path;
 use std::path::PathBuf;
@@ -589,75 +586,11 @@ fn test_mounts() -> Vec<BindMount> {
 }
 
 #[test]
-fn libkrun_loader_prefers_explicit_library_override_before_sonames() {
-    assert_eq!(
-        planned_libkrun_load_order(Some("/tmp/libkrun-custom.so")),
-        vec!["/tmp/libkrun-custom.so"]
-    );
-    assert_eq!(
-        planned_libkrun_load_order(None),
-        vec!["libkrun.so.2", "libkrun.so"]
-    );
-    assert_eq!(
-        planned_libkrun_load_order(Some("")),
-        vec!["libkrun.so.2", "libkrun.so"]
-    );
-}
-
-#[test]
-fn libkrun_loader_tries_package_relative_libraries_before_sonames() {
-    assert_eq!(
-        planned_libkrun_load_order_for_exe(
-            None,
-            Some(std::path::PathBuf::from("/nix/store/hash-cang/bin/cang"))
-        ),
-        vec![
-            "/nix/store/hash-cang/lib/cang/libkrun.so.2",
-            "/nix/store/hash-cang/lib/cang/libkrun.so",
-            "libkrun.so.2",
-            "libkrun.so",
-        ]
-    );
-}
-
-#[test]
-fn guest_init_loader_follows_an_explicit_libkrun_override() {
-    assert_eq!(
-        planned_libkrun_init_load_order_for_exe(
-            Some("/tmp/local/libkrun.so.2"),
-            Some(std::path::PathBuf::from("/nix/store/hash-cang/bin/cang"))
-        ),
-        vec![
-            "/tmp/local/libkrun_init.so.0",
-            "/tmp/local/libkrun_init.so",
-            "/nix/store/hash-cang/lib/cang/libkrun_init.so.0",
-            "/nix/store/hash-cang/lib/cang/libkrun_init.so",
-            "libkrun_init.so.0",
-            "libkrun_init.so",
-        ]
-    );
-}
-
-#[test]
 fn compat_net_features_match_libkrun_header_contract() {
     assert_eq!(
         CANG_LIBKRUN_COMPAT_NET_FEATURES,
         (1 << 0) | (1 << 1) | (1 << 7) | (1 << 10) | (1 << 11) | (1 << 14)
     );
-}
-
-#[test]
-fn required_symbol_resolution_names_the_missing_symbol() {
-    let symbol = std::ptr::dangling_mut::<std::os::raw::c_void>();
-
-    assert!(
-        required_symbol_presence_for_test("krun_init_builder_rlimits", Some(symbol))
-            .expect("present rlimits symbol should be accepted")
-    );
-
-    let err = required_symbol_presence_for_test("krun_init_builder_rlimits", None)
-        .expect_err("missing rlimits symbol should fail");
-    assert!(format!("{err:#}").contains("krun_init_builder_rlimits"));
 }
 
 #[test]

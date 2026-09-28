@@ -1,7 +1,6 @@
 {
   pkgs,
   pins,
-  libkrun ? null,
   libkrunfw ? null,
   renderServerEnv,
 }:
@@ -59,6 +58,12 @@ if builtins.hasAttr prebuiltSystem cangPrebuiltRelease.systems then
       buildInputs = [
         pkgs.stdenv.cc.cc.lib
         pkgs.stdenv.cc.libc
+        # Since cang links libkrun's Rust API, the released ELF has a
+        # `libvirglrenderer.so.1` DT_NEEDED (its release-time rpath is stripped),
+        # so autoPatchelfHook has to resolve it here. Consumers that run the bare
+        # asset without Nix have to provide that library themselves; the release
+        # notes say so.
+        pkgs.virglrenderer
       ];
 
       propagatedUserEnvPkgs = runtimeTools;
@@ -85,13 +90,6 @@ if builtins.hasAttr prebuiltSystem cangPrebuiltRelease.systems then
         ln -s ${pkgs.passt}/bin/pasta "$out/libexec/cang-helpers/pasta"
         ln -s ${pkgs.passt}/bin/passt "$out/libexec/cang-helpers/passt"
         ln -s ${pkgs.virglrenderer}/libexec/virgl_render_server "$out/libexec/cang-helpers/virgl_render_server"
-        ${pkgs.lib.optionalString (libkrun != null) ''
-          for library in ${pkgs.lib.getLib libkrun}/lib/libkrun.so* \
-            ${pkgs.lib.getLib libkrun}/lib/libkrun_init.so*; do
-            [ -e "$library" ] || continue
-            ln -s "$library" "$out/lib/cang/$(basename "$library")"
-          done
-        ''}
         ${pkgs.lib.optionalString (libkrunfw != null) ''
           for library in ${pkgs.lib.getLib libkrunfw}/lib/libkrunfw.so*; do
             ln -s "$library" "$out/lib/cang/$(basename "$library")"

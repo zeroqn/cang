@@ -22,11 +22,11 @@ The cang boundary that prevents the host CLI/runtime from depending directly on 
 _Avoid_: banning guest Podman tooling
 
 **dynamic cang host build**:
-The packaging boundary where the host `cang` binary is dynamically linked because it loads direct-libkrun runtime libraries supplied by the package or development shell.
-_Avoid_: static cang host artifact
+The packaging boundary where the host `cang` binary is a dynamically linked ELF (glibc, libgcc, libvirglrenderer) that links libkrun's Rust API into itself and opens only the firmware (`libkrunfw.so.5`) at run time.
+_Avoid_: static cang host artifact; runtime-loaded libkrun library
 
 **cang prebuilt**:
-The Nix package for a pinned neutral dynamic Linux `cang-<arch>-unknown-linux-gnu` release asset; Nix patches ordinary ELF runtime dependencies and provides package-relative helper plus `libkrun`/`libkrunfw` paths without wrapping `bin/cang`.
+The Nix package for a pinned neutral dynamic Linux `cang-<arch>-unknown-linux-gnu` release asset; Nix patches ordinary ELF runtime dependencies (including the `libvirglrenderer` the linked libkrun needs) and provides package-relative helpers plus the `libkrunfw` firmware without wrapping `bin/cang`.
 _Avoid_: flake-locked release asset; static/standalone host cang; pinned wrapper script
 
 **static cang guest init build**:

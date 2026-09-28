@@ -3,6 +3,13 @@ allow = [
   "Apache-2.0",
   "MIT",
   "Unicode-3.0",
+  # libkrun's dependency graph (krun-devices, rutabaga_gfx, zstd/bzip2 build
+  # helpers, ...) is permissive but wider than cang's own crates were: cang now
+  # compiles libkrun's Rust API out of `deps/libkrun`, so its licenses are part
+  # of cang's graph. All four are OSI-approved and copyleft-free.
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
 ]
 
 [licenses.private]

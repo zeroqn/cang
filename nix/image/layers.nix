@@ -10,7 +10,7 @@
   doltPrebuilt,
   beadsPrebuilt,
   containerLibPolicySeccompJson,
-  libkrun,
+  libkrunfw,
   wl-cross-domain-proxy,
   bun,
   cangMuslPackage,
@@ -296,7 +296,11 @@ let
   ]
   ++ pkgs.lib.optional (rtkPrebuilt != null) rtkPrebuilt
   ++ [
-    libkrun
+    # The firmware libkrun opens by soname (`libkrunfw.so.5`). cang links
+    # libkrun itself since it binds libkrun's Rust API, so the shared object is
+    # no longer in this layer; a cang built or downloaded into the guest still
+    # needs the firmware.
+    libkrunfw
     pkgs.starship
   ];
   toolingImageLayer = pkgs.buildEnv {
