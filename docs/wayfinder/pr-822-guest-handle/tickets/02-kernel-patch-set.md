@@ -3,6 +3,7 @@ label: wayfinder:research
 title: Which Linux guest-side patch set gives 6.12.109 CREATE_GUEST_HANDLE?
 status: open
 blocked_by: []
+claimed_by: pi research child-2 (2026-09-28)
 ---
 
 ## Question

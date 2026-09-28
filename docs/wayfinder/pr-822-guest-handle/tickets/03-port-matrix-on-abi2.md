@@ -3,6 +3,7 @@ label: wayfinder:research
 title: What does PR 822's payload look like on the current ABI-2 fork tip?
 status: open
 blocked_by: []
+claimed_by: pi research child-3 (2026-09-28)
 ---
 
 ## Question

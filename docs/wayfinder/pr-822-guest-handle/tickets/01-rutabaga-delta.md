@@ -3,6 +3,7 @@ label: wayfinder:research
 title: What does the ported VMM half still need from rutabaga_gfx?
 status: open
 blocked_by: []
+claimed_by: pi research child-1 (2026-09-28)
 ---
 
 ## Question
