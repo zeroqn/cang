@@ -2,7 +2,7 @@
 label: wayfinder:task
 title: Land the kernel config and patch in deps/libkrunfw and boot-test it locally
 status: open
-blocked_by: ["02-kernel-patch-set", "04-carried-design"]
+blocked_by: ["02-kernel-patch-set", "04-carried-design", "11-kernel-base"]
 ---
 
 ## Question

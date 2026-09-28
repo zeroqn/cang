@@ -101,6 +101,10 @@ taking the fast path** - evidence, not "it builds".
 
 ## Not yet specified
 
+- **Whether the 6.12.109 backport is retired once upstream's series lands.**
+  Ticket 11 may choose to bump the base instead of backporting; if it backports,
+  the six carried patches (plus our gate) are dropped when `guest-handle` is
+  posted and merged. Sharpens with ticket 11's answer and Val's v3.
 - **The latent bit-5 collision on a future libkrunfw rebase.** Upstream mainline
   assigned `VIRTIO_GPU_F_BLOB_ALIGNMENT = 5` while cang's fork kernel uses bit 5
   for `VIRTIO_GPU_F_FENCE_PASSING` (`patches/0018`). Today that only forces
