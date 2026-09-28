@@ -75,6 +75,12 @@ taking the fast path** - evidence, not "it builds".
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link -->
 
+- [What does the ported VMM half still need from rutabaga_gfx?](tickets/01-rutabaga-delta.md):
+  nothing beyond a rev-pinned git dep, **if** the fork adopts the `ctx_id` /
+  `BLOB_CTX_ID_FIX` route magma-gpu main already implements - 822's three
+  rutabaga hunks are then dropped, not carried; the alternative is a second fork
+  repo. Two `fetchCargoVendor` hashes move (`libkrun-source.nix` and
+  `cang-rust.nix`).
 - [Which Linux guest-side patch set gives 6.12.109 CREATE_GUEST_HANDLE?](tickets/02-kernel-patch-set.md):
   no single series - backport Vivek's v5 PRIME-import base (first in v6.14),
   port Val's un-posted `guest-handle` branch (`3e6a365d2ac9`), author the
