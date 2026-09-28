@@ -75,6 +75,11 @@ taking the fast path** - evidence, not "it builds".
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link -->
 
+- [Does the udmabuf fast path need all guest RAM file-backed, or only the GPU shm window?](tickets/10-udmabuf-ram-backing.md):
+  all of it - the blob's pages are the imported dma-buf's sg list, i.e. ordinary
+  RAM, which the shm window (a device BAR above `ram_last_addr`) can never hold;
+  narrowing fails *silently*, so the answer is one opt-in gate that withholds
+  the feature bit and keeps anonymous RAM together, default off until ticket 09.
 - [What does the ported VMM half still need from rutabaga_gfx?](tickets/01-rutabaga-delta.md):
   nothing beyond a rev-pinned git dep, **if** the fork adopts the `ctx_id` /
   `BLOB_CTX_ID_FIX` route magma-gpu main already implements - 822's three

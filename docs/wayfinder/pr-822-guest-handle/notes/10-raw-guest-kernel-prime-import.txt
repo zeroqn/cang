@@ -1,0 +1,242 @@
+### 10-raw-guest-kernel-prime-import.txt
+### Guest-kernel side of the fast path as it exists upstream today (2026-09-28).
+### Fetched with the web tools from raw.githubusercontent.com/torvalds/linux/master
+### and lkml.org; read-only evidence, no cang code here.
+###
+###   drivers/gpu/drm/virtio/virtgpu_prime.c
+###   drivers/gpu/drm/virtio/virtgpu_vq.c
+###   https://lkml.org/lkml/2026/9/11/1581
+###
+## ---------------------------------------------------------------------------
+## (A) virtgpu_dma_buf_import_sgt(): the mem_entries the guest sends are
+##     built from the *imported dma-buf's* sg table, address = sg_dma_address.
+##     With cang's no-IOMMU virtio transports that is the guest physical
+##     address of each page of the dma-buf, i.e. of the guest wl_shm memfd.
+## ---------------------------------------------------------------------------
+int virtgpu_dma_buf_import_sgt(struct virtio_gpu_mem_entry **ents,
+			       unsigned int *nents,
+			       struct virtio_gpu_object *bo,
+			       struct dma_buf_attachment *attach)
+{
+	struct scatterlist *sl;
+	struct sg_table *sgt;
+	long i, ret;
+
+	dma_resv_assert_held(attach->dmabuf->resv);
+
+	ret = dma_resv_wait_timeout(attach->dmabuf->resv,
+				    DMA_RESV_USAGE_KERNEL,
+				    false, MAX_SCHEDULE_TIMEOUT);
+	if (ret <= 0)
+		return ret < 0 ? ret : -ETIMEDOUT;
+
+	sgt = dma_buf_map_attachment(attach, DMA_BIDIRECTIONAL);
+	if (IS_ERR(sgt))
+		return PTR_ERR(sgt);
+
+	*ents = kvmalloc_objs(struct virtio_gpu_mem_entry, sgt->nents);
+	if (!(*ents)) {
+		dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
+		return -ENOMEM;
+	}
+
+	*nents = sgt->nents;
+	for_each_sgtable_dma_sg(sgt, sl, i) {
+		(*ents)[i].addr = cpu_to_le64(sg_dma_address(sl));
+		(*ents)[i].length = cpu_to_le32(sg_dma_len(sl));
+		(*ents)[i].padding = 0;
+	}
+
+	bo->sgt = sgt;
+	return 0;
+}
+
+
+## ---------------------------------------------------------------------------
+## (B) same file -- virtgpu_dma_buf_init_obj()
+##     params.blob_mem = VIRTGPU_BLOB_MEM_GUEST; the imported dma-buf is the
+##     backing of a *guest* blob. (The re-send will add
+##     VIRTGPU_BLOB_FLAG_CREATE_GUEST_HANDLE here; master today has only
+##     VIRTGPU_BLOB_FLAG_USE_SHAREABLE -- master's uapi header has no
+##     CREATE_GUEST_HANDLE define at all.)
+## ---------------------------------------------------------------------------
+
+static int virtgpu_dma_buf_init_obj(struct drm_device *dev,
+				    struct virtio_gpu_object *bo,
+				    struct dma_buf_attachment *attach)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct virtio_gpu_object_params params = { 0 };
+	struct dma_resv *resv = attach->dmabuf->resv;
+	struct virtio_gpu_mem_entry *ents = NULL;
+	unsigned int nents;
+	int ret;
+
+	ret = virtio_gpu_resource_id_get(vgdev, &bo->hw_res_handle);
+	if (ret) {
+		virtgpu_dma_buf_free_obj(&bo->base.base);
+		return ret;
+	}
+
+	dma_resv_lock(resv, NULL);
+
+	ret = dma_buf_pin(attach);
+	if (ret)
+		goto err_pin;
+
+	ret = virtgpu_dma_buf_import_sgt(&ents, &nents, bo, attach);
+	if (ret)
+		goto err_import;
+
+	params.blob = true;
+	params.blob_mem = VIRTGPU_BLOB_MEM_GUEST;
+	params.blob_flags = VIRTGPU_BLOB_FLAG_USE_SHAREABLE;
+	params.size = attach->dmabuf->size;
+
+	virtio_gpu_cmd_resource_create_blob(vgdev, bo, &params,
+					    ents, nents);
+	bo->guest_blob = true;
+
+	dma_buf_unpin(attach);
+	dma_resv_unlock(resv);
+
+	/*
+	 * Store the dmabuf imported object with its params to the
+	 * restore list.
+	 */
+	bo->params = params;
+	virtio_gpu_add_object_to_restore_list(vgdev, bo);
+
+	return 0;
+
+err_import:
+	dma_buf_unpin(attach);
+err_pin:
+	dma_resv_unlock(resv);
+	virtgpu_dma_buf_free_obj(&bo->base.base);
+	return ret;
+}
+
+
+## ---------------------------------------------------------------------------
+## (C) same file -- virtgpu_gem_prime_import()
+##     THIS is the guest-side gate that is in flux: with has_virgl_3d set (cang's
+##     case -- virgl/venus on) the driver falls back to the generic
+##     drm_gem_prime_import(), whose virtio gem_prime_import_sg_table returns
+##     -ENODEV, i.e. the proxy's prime_fd_to_buffer() fails. df4dc947c46b removed
+##     the `|| vgdev->has_virgl_3d` disjunct and was reverted 2026-09-11 because
+##     vrend cannot handle guest blobs; the re-send is to be gated on
+##     VIRTIO_GPU_F_CREATE_GUEST_HANDLE instead.
+## ---------------------------------------------------------------------------
+
+struct drm_gem_object *virtgpu_gem_prime_import(struct drm_device *dev,
+						struct dma_buf *buf)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct dma_buf_attachment *attach;
+	struct virtio_gpu_object *bo;
+	struct drm_gem_object *obj;
+	int ret;
+
+	if (buf->ops == &virtgpu_dmabuf_ops.ops) {
+		obj = buf->priv;
+		if (obj->dev == dev) {
+			/*
+			 * Importing dmabuf exported from our own gem increases
+			 * refcount on gem itself instead of f_count of dmabuf.
+			 */
+			drm_gem_object_get(obj);
+			return obj;
+		}
+	}
+
+	if (!vgdev->has_resource_blob || vgdev->has_virgl_3d)
+		return drm_gem_prime_import(dev, buf);
+
+	bo = kzalloc_obj(*bo);
+	if (!bo)
+		return ERR_PTR(-ENOMEM);
+
+	INIT_LIST_HEAD(&bo->restore_node);
+
+	obj = &bo->base.base;
+	obj->resv = buf->resv;
+	obj->funcs = &virtgpu_gem_dma_buf_funcs;
+	drm_gem_private_object_init(dev, obj, buf->size);
+
+	attach = dma_buf_dynamic_attach(buf, dev->dev,
+					&virtgpu_dma_buf_attach_ops, obj);
+	if (IS_ERR(attach)) {
+		kfree(bo);
+		return ERR_CAST(attach);
+	}
+
+	obj->import_attach = attach;
+	get_dma_buf(buf);
+
+	ret = virtgpu_dma_buf_init_obj(dev, bo, attach);
+	if (ret < 0)
+		return ERR_PTR(ret);
+
+	return obj;
+}
+
+
+## ---------------------------------------------------------------------------
+## (D) drivers/gpu/drm/virtio/virtgpu_vq.c -- what the host actually receives
+##     nr_entries + the mem_entry array travel in the
+##     VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB command payload.
+## ---------------------------------------------------------------------------
+
+void
+virtio_gpu_cmd_resource_create_blob(struct virtio_gpu_device *vgdev,
+				    struct virtio_gpu_object *bo,
+				    struct virtio_gpu_object_params *params,
+				    struct virtio_gpu_mem_entry *ents,
+				    uint32_t nents)
+{
+	struct virtio_gpu_resource_create_blob *cmd_p;
+	struct virtio_gpu_vbuffer *vbuf;
+
+	cmd_p = virtio_gpu_alloc_cmd(vgdev, &vbuf, sizeof(*cmd_p));
+	memset(cmd_p, 0, sizeof(*cmd_p));
+
+	cmd_p->hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB);
+	cmd_p->hdr.ctx_id = cpu_to_le32(params->ctx_id);
+	cmd_p->resource_id = cpu_to_le32(bo->hw_res_handle);
+	cmd_p->blob_mem = cpu_to_le32(params->blob_mem);
+	cmd_p->blob_flags = cpu_to_le32(params->blob_flags);
+	cmd_p->blob_id = cpu_to_le64(params->blob_id);
+	cmd_p->size = cpu_to_le64(params->size);
+	cmd_p->nr_entries = cpu_to_le32(nents);
+
+	vbuf->data_buf = ents;
+	vbuf->data_size = sizeof(*ents) * nents;
+
+	virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
+	bo->created = true;
+
+	if (nents)
+		bo->attached = true;
+}
+
+
+## ---------------------------------------------------------------------------
+## (E) The revert itself (lkml.org/lkml/2026/9/11/1581), body only
+## ---------------------------------------------------------------------------
+[[[PATCH v1] Revert drm/virtio: Allow importing prime buffers when 3D is enabled
+Guest userspace may import udmabuf to vrend. Vrend doesn't support guest
+blobs, and thus, further 3d operations with the imported blob are failing.
+Typical scenario of the problem shown with mouse cursor RGBA image imported
+into virtio-gpu, which previously was rejected by virtio-gpu driver.
+Revert enabling guest blobs importing into vrend to fix the regression.
+
+Fixes: df4dc947c46b (drm/virtio: Allow importing prime buffers when 3D is enabled)
+Signed-off-by: Dmitry Osipenko <dmitry.osipenko@collabora.com>
+---
+ drivers/gpu/drm/virtio/virtgpu_prime.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+-	if (!vgdev->has_resource_blob)
++	if (!vgdev->has_resource_blob || vgdev->has_virgl_3d)
+ 		return drm_gem_prime_import(dev, buf);

@@ -26,11 +26,14 @@ With tickets 01-03 in hand, decide the shape ticket 07 implements:
   values the fork advertises and how they are kept from colliding, both in
   libkrun's `src/devices/src/virtio/gpu/mod.rs` and in
   `deps/libkrunfw/patches/0018`.
-- **What happens to the balloon.** Ticket 03 showed 822's memfd-backed RAM
-  turns every guest region `MAP_SHARED` whenever a GPU is present, which costs
-  cang's `MADV_DONTNEED` host-memory reclaim. Take ticket 10's answer: carry it
-  as-is, narrow the file-backing, or gate the whole fast path behind an opt-in
-  so a plain `--gpu` run keeps anonymous RAM.
+- **The gate (ticket 10's answer, to confirm).** 822's whole-RAM file-backing
+  cannot be narrowed (the path needs ordinary RAM, and a narrowed variant fails
+  *silently*), so confirm: one opt-in bool resolved in `DeviceRequirements`,
+  mirroring `process_shareable_memory` -> `use_vhost_user`, consumed by **both**
+  `create_guest_memory` (`use_gpu_udmabuf`) and `Gpu::avail_features`, default
+  **off** until ticket 09 proves engagement. Record explicitly that the balloon
+  is inert on fast-path runs (a documented, accepted trade because the gate makes
+  it opt-in) and name where the bool is turned on from cang.
 - **The evidence design for ticket 09.** How the map will *prove* the guest took
   the fast path rather than the copy path (proxy log line, udmabuf counter,
   tracepoint, timing delta), and where that instrumentation goes.

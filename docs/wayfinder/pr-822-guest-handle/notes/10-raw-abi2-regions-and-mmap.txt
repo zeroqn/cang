@@ -1,0 +1,301 @@
+### 10-raw-abi2-regions-and-mmap.txt
+### Primary sources for the RAM-backing half of ticket 10, read from the
+### working tree (deps/libkrun at 3d7af2c2) and from the vendored vm-memory
+### 0.18.0 crate in ~/.cargo/registry/src (copied to $SCRATCH to read it).
+
+## ---------------------------------------------------------------------------
+## (A) deps/libkrun/src/libkrun/src/vmm/builder.rs:1938-1997 -- the memfd
+##     branch PORTED FROM PR 822 would become `if use_vhost_user ||
+##     use_gpu_udmabuf`. Note it creates ONE memfd PER REGION and passes
+##     FileOffset::new(memfd, 0) -- so each region is independently
+##     file-backed or anonymous, and file offset == guest addr - region
+##     start. shm_manager.regions() was appended to arch_mem_regions at
+##     :1941, so the GPU shm window would be memfd-backed too.
+## ---------------------------------------------------------------------------
+    let _ = use_vhost_user;
+
+    // Add SHM regions before creating guest memory
+    arch_mem_regions.extend(shm_manager.regions());
+
+    let guest_mem = if use_vhost_user {
+        #[cfg(all(feature = "vhost-user", target_os = "linux"))]
+        {
+            debug!(
+                "Creating file-backed memory for vhost-user (regions: {})",
+                arch_mem_regions.len()
+            );
+            // Create file-backed memory regions using memfd
+            let regions_with_files: Vec<_> = arch_mem_regions
+                .iter()
+                .map(|(addr, size)| {
+                    debug!(
+                        "Creating memfd for region: addr=0x{:x}, size=0x{:x}",
+                        addr.0, size
+                    );
+                    // SAFETY: memfd_create is called with a valid null-terminated C string and valid flags.
+                    // File descriptor ownership is transferred to File::from_raw_fd below.
+                    let memfd = unsafe {
+                        let fd = libc::memfd_create(c"guest_mem".as_ptr(), libc::MFD_CLOEXEC);
+                        if fd < 0 {
+                            error!("Failed to create memfd: {:?}", io::Error::last_os_error());
+                            return Err(io::Error::last_os_error());
+                        }
+                        if libc::ftruncate(fd, *size as i64) < 0 {
+                            error!(
+                                "Failed to ftruncate memfd: {:?}",
+                                io::Error::last_os_error()
+                            );
+                            libc::close(fd);
+                            return Err(io::Error::last_os_error());
+                        }
+                        debug!("Created memfd with fd={}", fd);
+                        File::from_raw_fd(fd)
+                    };
+
+                    let file_offset = FileOffset::new(memfd, 0);
+                    Ok((*addr, *size, Some(file_offset)))
+                })
+                .collect::<Result<Vec<_>, io::Error>>()
+                .map_err(|e| {
+                    StartMicrovmError::GuestMemoryMmap(format!("memfd creation failed: {e:?}"))
+                })?;
+
+            debug!(
+                "Created {} file-backed memory regions",
+                regions_with_files.len()
+            );
+            GuestMemoryMmap::from_ranges_with_files(&regions_with_files)
+                .map_err(|e| StartMicrovmError::GuestMemoryMmap(format!("{e:?}")))?
+        }
+        #[cfg(not(all(feature = "vhost-user", target_os = "linux")))]
+        unreachable!()
+    } else {
+        GuestMemoryMmap::from_ranges(&arch_mem_regions)
+            .map_err(|e| StartMicrovmError::GuestMemoryMmap(format!("{e:?}")))?
+    };
+
+## ---------------------------------------------------------------------------
+## (B) deps/libkrun/src/arch/src/x86_64/mod.rs -- the shm window is NOT RAM.
+##     shm_start_addr is computed from ram_last_addr, i.e. it starts past the
+##     last RAM address; for --mem 4 (0x1_0000_0000) shm_start_addr =
+##     0x1_8000_0000 while RAM ends at 0x1_4000_0000. The window is a device
+##     BAR (virtio shared-memory region), never in e820, so the guest page
+##     allocator cannot return its PFNs, and virtgpu_map maps host3d blobs
+##     into it. No guest blob's mem_entry can name it.
+## ---------------------------------------------------------------------------
+    // It's safe to cast MMIO_MEM_START to usize because it fits in a u32 variable
+    // (It points to an address in the 32 bit space).
+    let (ram_below_gap, ram_above_gap, ram_last_addr, shm_start_addr, regions, firmware_addr) =
+        match size.checked_sub(MMIO_MEM_START as usize) {
+            // case1: guest memory fits before the gap
+            None | Some(0) => {
+                let shm_start_addr = FIRST_ADDR_PAST_32BITS;
+
+                let (ram_last_addr, mut regions) = if let Some(kernel_load_addr) = kernel_load_addr
+                {
+                    if size < (kernel_load_addr + kernel_size as u64) as usize {
+                        panic!("Kernel doesn't fit in RAM");
+                    }
+   ...
+                )
+            }
+
+            // case2: guest memory extends beyond the gap
+            Some(remaining) => {
+                let ram_last_addr = FIRST_ADDR_PAST_32BITS + remaining as u64;
+                let shm_start_addr = ((ram_last_addr / 0x4000_0000) + 1) * 0x4000_0000;
+
+                let mut regions = if let Some(kernel_load_addr) = kernel_load_addr {
+                    vec![
+                        (GuestAddress(0), kernel_load_addr as usize),
+   ...
+        ram_below_gap,
+        ram_above_gap,
+        ram_last_addr,
+        shm_start_addr,
+        // To be filled later using GuestMemory.
+        guest_last_addr: 0,
+        page_size,
+        initrd_addr: ram_last_addr.min(MMIO_MEM_START) - initrd_size,
+        firmware_addr,
+    };
+    (info, regions)
+}
+
+/// Returns a Vec of the valid memory addresses.
+/// These should be used to configure the GuestMemoryMmap structure for the platform.
+
+## ---------------------------------------------------------------------------
+## (C) deps/libkrun/src/libkrun/src/vmm/device_manager/shm.rs -- regions()
+##     returns the fs DAX windows and the gpu window; they are carved out of
+##     the address space at shm_start_addr, above RAM.
+## ---------------------------------------------------------------------------
+    page_size: usize,
+    fs_regions: BTreeMap<usize, ShmRegion>,
+    gpu_region: Option<ShmRegion>,
+    #[cfg(feature = "vhost-user")]
+    vhost_user_regions: BTreeMap<usize, ShmRegion>,
+}
+
+impl ShmManager {
+    pub fn new(info: &ArchMemoryInfo) -> ShmManager {
+        Self {
+            next_guest_addr: info.shm_start_addr,
+            page_size: info.page_size,
+            fs_regions: BTreeMap::new(),
+            gpu_region: None,
+            #[cfg(feature = "vhost-user")]
+            vhost_user_regions: BTreeMap::new(),
+        }
+    }
+
+    pub fn regions(&self) -> Vec<(GuestAddress, usize)> {
+        let mut regions: Vec<(GuestAddress, usize)> = Vec::new();
+
+   ...
+        regions
+    }
+
+    #[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+    pub fn fs_region(&self, index: usize) -> Option<&ShmRegion> {
+        self.fs_regions.get(&index)
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn gpu_region(&self) -> Option<&ShmRegion> {
+        self.gpu_region.as_ref()
+    }
+
+    #[allow(unused)]
+    fn create_region(&mut self, size: usize) -> Result<ShmRegion, Error> {
+        let size = align_upwards!(size, self.page_size);
+
+        let region = ShmRegion {
+            guest_addr: GuestAddress(self.next_guest_addr),
+
+## ---------------------------------------------------------------------------
+## (D) vm-memory 0.18.0 src/mmap/mod.rs -- from_ranges_with_files takes an
+##     Option<FileOffset> PER REGION, so mixed (some memfd, some anonymous)
+##     backing is expressible: a targeted 'file-back only these regions'
+##     variant needs no new vm-memory API.
+## ---------------------------------------------------------------------------
+    /// Creates a container and allocates anonymous memory for guest memory regions.
+    ///
+    /// Valid memory regions are specified as a slice of (Address, Size) tuples sorted by Address.
+    pub fn from_ranges(ranges: &[(GuestAddress, usize)]) -> result::Result<Self, FromRangesError> {
+        Self::from_ranges_with_files(ranges.iter().map(|r| (r.0, r.1, None)))
+    }
+
+    /// Creates a container and allocates anonymous memory for guest memory regions.
+    ///
+    /// Valid memory regions are specified as a sequence of (Address, Size, [`Option<FileOffset>`])
+    /// tuples sorted by Address.
+    pub fn from_ranges_with_files<A, T>(ranges: T) -> result::Result<Self, FromRangesError>
+    where
+        A: Borrow<(GuestAddress, usize, Option<FileOffset>)>,
+        T: IntoIterator<Item = A>,
+    {
+        Self::from_regions(
+            ranges
+                .into_iter()
+                .map(|x| {
+                    GuestRegionMmap::from_range(x.borrow().0, x.borrow().1, x.borrow().2.clone())
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )
+        .map_err(Into::into)
+    }
+}
+
+## ---------------------------------------------------------------------------
+## (E) vm-memory 0.18.0 src/mmap/unix.rs:234-259 -- MmapRegion::new() (file
+##     backing = None) is MAP_ANONYMOUS|MAP_NORESERVE|MAP_PRIVATE;
+##     MmapRegion::from_file() is MAP_NORESERVE|MAP_SHARED.
+## ---------------------------------------------------------------------------
+unsafe impl<B: Send> Send for MmapRegion<B> {}
+// SAFETY: See comment above.
+unsafe impl<B: Sync> Sync for MmapRegion<B> {}
+
+impl<B: NewBitmap> MmapRegion<B> {
+    /// Creates a shared anonymous mapping of `size` bytes.
+    ///
+    /// # Arguments
+    /// * `size` - The size of the memory region in bytes.
+    pub fn new(size: usize) -> Result<Self> {
+        MmapRegionBuilder::new_with_bitmap(size, B::with_len(size))
+            .with_mmap_prot(libc::PROT_READ | libc::PROT_WRITE)
+            .with_mmap_flags(libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_PRIVATE)
+            .build()
+    }
+
+    /// Creates a shared file mapping of `size` bytes.
+    ///
+    /// # Arguments
+    /// * `file_offset` - The mapping will be created at offset `file_offset.start` in the file
+    ///   referred to by `file_offset.file`.
+    /// * `size` - The size of the memory region in bytes.
+    pub fn from_file(file_offset: FileOffset, size: usize) -> Result<Self> {
+        MmapRegionBuilder::new_with_bitmap(size, B::with_len(size))
+            .with_file_offset(file_offset)
+            .with_mmap_prot(libc::PROT_READ | libc::PROT_WRITE)
+            .with_mmap_flags(libc::MAP_NORESERVE | libc::MAP_SHARED)
+            .build()
+    }
+
+    /// Creates a mapping based on the provided arguments.
+    ///
+    /// # Arguments
+
+## ---------------------------------------------------------------------------
+## (F) deps/libkrun/src/devices/src/virtio/balloon/device.rs -- the only
+##     implemented queue is free-page-reporting, and its reclaim is a
+##     MADV_DONTNEED. Over a MAP_SHARED memfd mapping that drops the VMM's RSS
+##     but leaves the pages resident in the memfd page cache (unevictable with
+##     no host swap; this host has zram only).
+## ---------------------------------------------------------------------------
+
+    pub fn process_frq(&mut self) -> bool {
+        debug!("balloon: process_frq()");
+        let mem = match self.device_state {
+            DeviceState::Activated(ref mem, _) => mem,
+            // This should never happen, it's been already validated in the event handler.
+            DeviceState::Inactive => unreachable!(),
+        };
+
+        let queues = self
+            .queues
+            .as_mut()
+            .expect("queues should exist when activated");
+        let mut have_used = false;
+
+        while let Some(head) = queues[FRQ_INDEX].queue.pop(mem) {
+            let index = head.index;
+            for desc in head.into_iter() {
+                let host_addr = mem.get_host_address(desc.addr).unwrap();
+                debug!(
+                    "balloon: should release guest_addr={:?} host_addr={:p} len={}",
+                    desc.addr, host_addr, desc.len
+                );
+                #[cfg(target_os = "linux")]
+                let advice = libc::MADV_DONTNEED;
+                #[cfg(target_os = "macos")]
+                let advice = libc::MADV_FREE;
+                #[cfg(unix)]
+                unsafe {
+                    libc::madvise(
+                        host_addr as *mut libc::c_void,
+                        desc.len.try_into().unwrap(),
+                        advice,
+                    )
+                };
+
+## ---------------------------------------------------------------------------
+## (G) cang's GPU shm window is 256 MiB, not libkrun's 8 GiB default:
+##     crates/cang/src/runtime/vm/libkrun/launcher.rs:47
+##       const GPU_SHM_SIZE_BYTES: u64 = 256 * 1024 * 1024;
+##     ...passed to krun_gpu_device_new(virgl_flags, GPU_SHM_SIZE_BYTES,
+##     render_server_fd) at launcher.rs:311-312; libkrun's
+##     GpuDevice::shm_size() builder (api/device_builders.rs:1675) overrides
+##     DEFAULT_SHM_SIZE = 1 << 33, and requirements() reports
+##     gpu_shm: Some(self.shm_size) (:1687).
+## ---------------------------------------------------------------------------
