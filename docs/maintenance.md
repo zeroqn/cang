@@ -183,13 +183,29 @@ Release a version in this order:
    Run this from `nix develop`, which provides `readelf` and `sha256sum`.
 
    The `.#cang-ci-sccache` attribute hard-codes `SCCACHE_DIR=/nix/var/cache/sccache`
-   (the CI runner creates it), so a local build fails with
-   `failed to create directory /nix/var/cache/sccache` unless that directory
-   exists and is writable, or the value is overridden. The hash does not depend
-   on which cache directory is used - verified 2026-09 by building the attribute
-   twice with two different `SCCACHE_DIR` values and hashing both normalized
-   assets - but it *does* depend on building this attribute: with `RUSTC_WRAPPER`
-   set the binary comes out un-LTO'd (about 10 MB), while a plain
+   (the CI runner creates it), so a local build dies in that directory with
+   `sccache: failed to create directory /nix/var/cache/sccache/preprocessor:
+   Permission denied`. The workflow's own workaround,
+   `--option extra-sandbox-paths "/nix/var/cache/sccache=<host dir>"`, is a
+   restricted nix setting: an untrusted user only gets
+   `ignoring the client-specified setting 'sandbox-paths'`, the sandbox keeps
+   its read-only `/nix`, and the build fails the same way. Point `SCCACHE_DIR`
+   at a sandbox-writable path for the local hash run instead - `overrideAttrs`
+   needs no source edit:
+
+   ```bash
+   nix build --impure --expr 'let
+     f = builtins.getFlake "git+file://'"$PWD"'";
+     p = f.packages.x86_64-linux.cang-ci-sccache;
+   in p.overrideAttrs (oa: { SCCACHE_DIR = "/build/cang-sccache"; })' -o result-cang-ci
+   ```
+
+   The hash does not depend on which cache directory is used: verified 2026-09
+   by building the attribute twice with two different `SCCACHE_DIR` values and
+   hashing both normalized assets, and again when cutting v0.9.1 by rebuilding
+   v0.9.0's `038ef6f` this way and getting the published
+   `19d4d67f...` back. It *does* depend on building this attribute: with
+   `RUSTC_WRAPPER` set the binary comes out un-LTO'd (about 10 MB), while a plain
    `nix build .#cang` links with `lto = "thin"` (about 4.6 MB).
 3. Commit the pin in `nix/pins.nix`: `cangPrebuiltRelease.tag = "v<version>"`, the
    versioned `asset` name from step 2, and that SRI.
