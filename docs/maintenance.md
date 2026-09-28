@@ -83,13 +83,13 @@ any of them:
   `cang` branch. The publish workflow keeps only the newest ten, so these are
   disposable dev artifacts.
 - **Permanent `v<libkrun|libkrunfw version>-cang.<n>`** (for example
-  `v2.0.0-cang.1`): published by a manual `workflow_dispatch` run of the same
+  `v2.0.0-cang.2`): published by a manual `workflow_dispatch` run of the same
   workflow, or by pushing the tag directly (the workflow also triggers on tags). The prune job never touches these, so a pin into one never ages out.
 
 A versioned release is created with:
 
 ```bash
-gh workflow run publish-cang-release.yml --repo zeroqn/libkrun -f version=2.0.0-cang.1
+gh workflow run publish-cang-release.yml --repo zeroqn/libkrun -f version=2.0.0-cang.2
 gh workflow run publish-cang-release.yml --repo zeroqn/libkrunfw -f version=5.6.2-cang.1
 ```
 
@@ -97,10 +97,19 @@ The workflow rejects a version whose base does not match the branch's
 `FULL_VERSION`, and refuses to republish an existing version at a different
 commit (bump the number instead).
 
+The libkrun workflow builds with `FFI=1` and asserts that the packaged
+`libkrun.so.2` exports the C entry points (`krun_init_log`,
+`krun_vmm_builder_*`, `krun_gpu_device_new`) before it uploads anything: ABI 2
+gates the whole C surface behind that cargo feature, so without it the asset
+builds fine, ships a `libkrun.so` that exports **nothing**, and every consumer
+fails at `krun_init_log` resolution. `libkrun_init.so` always gets `ffi` from the
+Makefile, which is why only the host library was ever hollow. A tree-built
+libkrun needs the same flag (`nix/dev` passes it).
+
 Pin a permanent release, and use it for any tagged cang release:
 
 ```bash
-nix develop --command ./scripts/update-libkrun.sh --tag v2.0.0-cang.1
+nix develop --command ./scripts/update-libkrun.sh --tag v2.0.0-cang.2
 nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.1
 nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang.1
 nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang.1

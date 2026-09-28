@@ -13,8 +13,7 @@ published as the permanent fork release **`v2.0.0-cang.1`**, pinned in
 ported to libkrun's v2 C API and green against it, and the GPU smoke run on the
 new pin.
 
-**Status (2026-09-28): tickets 01, 02, 03, 04, 06, 07, 09, 10, 11 and 12
-resolved.**
+**Status (2026-09-28): tickets 01-07 and 09-13 resolved; only ticket 08 open.**
 The fork's `cang` branch is pushed (tip `d578e4e2`) and the permanent release
 **`v2.0.0-cang.1`** is published and pinned. cang is ported to the ABI-2 object
 API (ticket 09) and live-boots a guest - but **only against a locally built
@@ -23,13 +22,16 @@ libkrun**: the published asset is hollow. Its `libkrun.so.2.0.0` exports zero
 the C entry points behind that feature) and only checks that the files exist;
 `nix/dev` had the same gap and is fixed. That fix, the re-published asset and the
 re-pin are ticket **13**, and it needs bob's push/dispatch. Ticket 10 re-added the
-fork's own C extensions on the ABI-2 device/builder (`krun_gpu_device_set_render_server_fd`,
-`krun_vmm_builder_set_profile_path`, the fence-retirement/poll fixes) and folded
-the `FFI=1` fix into the release workflow, which now asserts the exported symbols
-before packaging. The branch and the tag **`v2.0.0-cang.2`** are pushed and CI is
-publishing; the re-pin and the live boot against the pinned asset are ticket
-**13**. The fork is rebased (main + CI/docs + PRs 865/840 + four fork commits) and
-`nix build ./nix/dev#cang-dev` is green on it.
+fork's own C extensions on the ABI-2 device/builder
+(`krun_gpu_device_set_render_server_fd`, `krun_vmm_builder_set_profile_path`, the
+fence-retirement/poll fixes) and folded the `FFI=1` fix into the release
+workflow, which now asserts the exported symbols before packaging. The permanent
+release **`v2.0.0-cang.2`** (tag on `18267332`) is published and pinned: its
+`libkrun.so.2` exports 101 `krun_*` symbols where `v2.0.0-cang.1` exported none,
+and `nix build .#cang` now boots a guest (ticket 13), which also answered ticket
+05 - the pinned fw is fine, PID 1 is the injected init blob and the guest's
+virtio devices and status files all come up. The fork is rebased (main + CI/docs +
+PRs 865/840 + four fork commits) and `nix build ./nix/dev#cang-dev` is green.
 Upstream `main` is a **ground-up C-ABI rewrite** (`a3d31822`, 2026-09-11;
 `ABI_VERSION=2`, `libkrun.so.2`): 20 of cang's 22 bound `krun_*` symbols are
 gone, init injection is caller-supplied via `libkrun_init.so`, and
@@ -38,9 +40,9 @@ builder/object API** (tickets 09/10). PR **822 is out of this map** (bob,
 2026-09-27): it is inert on the pinned kernel, its own commit would collide with
 our `VIRTIO_GPU_F_FENCE_PASSING = 5`, and carrying it as intended would mean
 vendoring a patched `rutabaga_gfx` for a capability nothing can exercise.
-Frontier: ticket **13** (re-pin the published `v2.0.0-cang.2` and live-boot the
-pinned asset), which also unblocks ticket **08** (the GPU smoke) and ticket
-**05** (the libkrunfw live check, whose boot can be the same run).
+Frontier: ticket **08** (the GPU/wayland Chromium smoke), now runnable - the pin
+it needs exists and exports the render-server fd entry point. "Not yet specified"
+below still names the map's open design questions.
 
 ## Notes
 
@@ -90,6 +92,14 @@ pinned asset), which also unblocks ticket **08** (the GPU smoke) and ticket
 
 ## Decisions so far
 
+- [Does the pinned libkrunfw boot libkrun 2.0.0?](tickets/05-libkrunfw-compat-check.md):
+  yes - live boot on the pinned fw/kernel (`6.12.109-hardened1`), PID 1 = the
+  injected `init.krun` blob, guest status files under `/run/cang`, all configured
+  virtio devices present, `/dev/zram0` swap up.
+- [Rebuild the v2 release with the C ABI and re-pin](tickets/13-release-c-abi-repin.md):
+  `v2.0.0-cang.2` published (CI run 36371495907) and pinned; the pinned
+  `libkrun.so.2` exports 101 `krun_*` symbols, `libkrun_init.so.0` 33, and
+  `nix build .#cang` boots.
 - [Re-add the fork's C extensions on main's device code](tickets/10-fork-c-extensions-on-main.md):
   `krun_gpu_device_set_render_server_fd` (owned fd -> `RutabagaBuilder::set_server_descriptor`),
   `krun_vmm_builder_set_profile_path` + `vmm::profile::KrunProfiler`, the

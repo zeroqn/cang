@@ -1,9 +1,9 @@
 ---
 label: wayfinder:research
 title: Does the pinned libkrunfw boot libkrun 2.0.0?
-status: open
+status: closed
 blocked_by: ["09-port-cang-to-v2-api"]
-claimed_by: unclaimed
+claimed_by: pi session (2026-09-28)
 ---
 
 ## Question
@@ -33,3 +33,16 @@ What remains is the **live leg**, which cannot run until cang boots again
 `notes/05-libkrunfw-compat.md`: the live-boot evidence (kernel version, device
 list, PID 1, guest status output) and a verdict - *pinned fw is fine* or *needs a
 fw rebase* (which redraws the destination and is its own effort).
+
+
+## Resolution (2026-09-28, pi session)
+
+**Pinned fw is fine; no fw rebase needed.** Live-booted the pinned
+`libkrunfwRelease.tag = v5.6.2-cang.1` with the pinned libkrun `v2.0.0-cang.2`:
+`uname -r` = `6.12.109-hardened1`, PID 1 is the injected `init.krun` blob (the
+workload is its fork), the cang-guest-init status files under `/run/cang` report
+`nix-prep=ready` / `podman-prep=running`, and the virtio devices cang configures
+all appear (fs `0x1a`, blk `0x02`, net `0x01`, vsock `0x13`, the two consoles,
+`/dev/vda`, `/dev/vsock`, `/dev/hvc0`). The fork's config deltas are live too:
+`/dev/zram0` swap is up. GPU was off in this run; venus/WebGL stays ticket 08.
+Evidence: [notes/05-libkrunfw-compat.md](../notes/05-libkrunfw-compat.md).

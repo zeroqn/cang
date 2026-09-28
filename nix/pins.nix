@@ -107,15 +107,15 @@ in
   libkrunRelease = {
     owner = "zeroqn";
     repo = "libkrun";
-    tag = "v2.0.0-cang.1";
+    tag = "v2.0.0-cang.2";
     systems = {
       x86_64-linux = {
         asset = "libkrun-x86_64-linux-full.tgz";
-        hash = "sha256-p+ZOHb8wHtORBRkYWqwZHVcidM6Mn0vmRnfBJ10r5SU=";
+        hash = "sha256-ig5Quu0+nEQiYbk3Var3TtGpKCqOrOU8V9L1CuveE/Q=";
       };
       aarch64-linux = {
         asset = "libkrun-aarch64-linux-full.tgz";
-        hash = "sha256-i29BoYqhSqMNfEsDkig2hHYxoNIg0u9ihYdsfYTRY2U=";
+        hash = "sha256-9pwXupe6mhMqX26ke1CGSA3FhWWPaWxLVD55dJ1lkMY=";
       };
     };
   };
