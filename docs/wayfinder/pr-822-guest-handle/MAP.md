@@ -7,20 +7,27 @@ title: PR 822 zero-copy guest-handle fast path into the fork
 
 `cang` runs libkrun **PR 822**'s zero-copy `CREATE_GUEST_HANDLE` fast path end to
 end: `deps/libkrun` (the `zeroqn/libkrun` fork, branch `cang`, ABI-2 base) carries
-the VMM half against a **rev-pinned `magma-gpu/rutabaga_gfx` git dependency**,
-`deps/libkrunfw` carries `CONFIG_UDMABUF=y` plus the virtio-gpu guest-side patch
-(**built and boot-tested locally before any tag**), both forks are published as
-new releases and pinned in `nix/pins.nix`, and a cang guest is **shown actually
-taking the fast path** - evidence, not "it builds".
+the VMM half against a **rev-pinned `magma-gpu/rutabaga_gfx` git dependency**
+and is compiled into cang by cang's own rustc (it is not a released artifact -
+the submodule pointer is the pin, and cang's vendored-crate hashes move with
+it); `deps/libkrunfw` carries `CONFIG_UDMABUF=y` plus the virtio-gpu guest-side
+patch and is **published as a new release and pinned per system in
+`nix/pins.nix`** (built and boot-tested locally before any tag); and a cang guest
+is **shown actually taking the fast path** - evidence, not "it builds".
 
 ## Notes
 
-- Domain: `deps/libkrun` (`zeroqn/libkrun`, branch `cang`), `deps/libkrunfw`
-  (`zeroqn/libkrunfw`, branch `cang`), `deps/wl-cross-domain-proxy` (the guest
-  userland half, already merged as upstream PR #24 at `cc64c65`), `nix/pins.nix`,
-  `nix/pkgs/libkrun-source.nix` (`fetchCargoVendor` hash - moves with the
-  submodule pointer), `nix/pkgs/libkrunfw.nix`, `scripts/update-libkrunfw.sh`,
-  the forks' release workflows, and the cang live-VM recipe.
+- Domain: `deps/libkrun` (`zeroqn/libkrun`, branch `cang`),
+  `crates/cang-libkrun` (the wrapper that links the fork's **Rust API** by path,
+  `libkrun = { path = "../../deps/libkrun/src/libkrun" }`),
+  `crates/cang/src/runtime/vm/libkrun/launcher.rs` (`GpuMode`, `configure_gpu`),
+  `deps/libkrunfw` (`zeroqn/libkrunfw`, branch `cang`),
+  `deps/wl-cross-domain-proxy` (the guest userland half, already merged as
+  upstream PR #24 at `cc64c65`), `nix/pins.nix`, `nix/pkgs/cang-rust.nix`
+  (`cargoDeps` - vendors libkrun's crates because cang compiles them),
+  `nix/pkgs/libkrun-source.nix` (`libkrunCargoDeps`, the musl `krunInitBinary`),
+  `nix/pkgs/libkrunfw.nix`, `scripts/update-libkrunfw.sh`, and the cang live-VM
+  recipe.
 - Skills: `cang-create-guest-handle-fast-path-prereqs` (the three gates),
   `cang-libkrun-family-fork-rebase-onto-release` (libkrunfw configs, patch
   ordering, `MakefileLto` seeds, the unwrapped-CC trap, per-system repin),
@@ -43,6 +50,13 @@ taking the fast path** - evidence, not "it builds".
   hours; **rutabaga_gfx is a rev-pinned git dependency**, not a submodule; bob
   pushes the `zeroqn/libkrun` and `zeroqn/libkrunfw` tags.
 - Starting facts (verified 2026-09-28):
+  - **cang links libkrun's Rust API** (`038ef6f`): `crates/cang-libkrun` depends
+    on `deps/libkrun/src/libkrun` by path, so **there is no libkrun prebuilt pin**
+    (`libkrunRelease`, `nix/pkgs/libkrun.nix` and `scripts/update-libkrun.sh` are
+    gone) and no fork release is on cang's critical path - the submodule pointer
+    is the pin. Only `libkrunfwRelease` is pinned. **Both** vendored-crate hashes
+    move with a libkrun change: `nix/pkgs/cang-rust.nix` `cargoDeps` and
+    `nix/pkgs/libkrun-source.nix` `libkrunCargoDeps`.
   - PR 822 is **still open, draft**, head `3819ce5` (2026-08-27), base `0d75eb4b`
     (pre-ABI-rewrite), `mergeable=false`; unchanged since August.
   - `magma-gpu/rutabaga_gfx` main = `ec60ee11` (2026-09-25). PR #81 (the
@@ -131,6 +145,11 @@ taking the fast path** - evidence, not "it builds".
 
 ## Out of scope
 
+- **Publishing/pinning a libkrun prebuilt release.** Obsolete since cang links
+  the fork's Rust API (`038ef6f`): there is no `libkrunRelease` pin, no
+  `nix/pkgs/libkrun.nix`, and no `scripts/update-libkrun.sh`. Ticket 08 was
+  closed as cancelled; the submodule pointer plus cang's two `fetchCargoVendor`
+  hashes are the whole pin.
 - **Upstreaming the Linux guest-side patches** (the virtio-comment series and the
   drm/virtio re-send). We port them into `deps/libkrunfw`; upstreaming them is
   Val's effort, not this map's.

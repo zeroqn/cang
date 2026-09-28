@@ -1,7 +1,7 @@
 ---
 label: wayfinder:task
 title: Publish the libkrun release and repin the fork
-status: open
+status: closed
 blocked_by: ["07-fork-vmm-port"]
 ---
 
@@ -21,3 +21,13 @@ Bob pushes the branch and tag (the workflow triggers on the tag), CI builds with
 
 The release published and pinned, with the symbol assertion and a boot as
 evidence recorded here.
+
+## Resolution (2026-09-28, cancelled - obsolete)
+
+This ticket was written before the repo moved: cang now links libkrun's **Rust
+API** (`038ef6f`), `crates/cang-libkrun` depends on `deps/libkrun/src/libkrun`
+by path, and the libkrun prebuilt pin (`libkrunRelease` in `nix/pins.nix`,
+`nix/pkgs/libkrun.nix`, `scripts/update-libkrun.sh`) has been deleted. There is
+nothing to publish and nothing to pin: the submodule pointer plus the two
+`fetchCargoVendor` hashes are the pin, and that work is folded into ticket 07.
+See the map's *Out of scope*.

@@ -3,6 +3,7 @@ label: wayfinder:task
 title: Port the VMM half onto the ABI-2 fork against the pinned rutabaga rev
 status: open
 blocked_by: ["01-rutabaga-delta", "03-port-matrix-on-abi2", "04-carried-design"]
+claimed_by: (unclaimed)
 ---
 
 ## Question
@@ -23,7 +24,14 @@ Implement ticket 04's decision on `deps/libkrun`:
 5. Run `cargo fmt --check`, clippy with `-D warnings`, and the crate tests in the
    devshell.
 
+**No fork release is involved:** cang compiles `deps/libkrun` with cang's own
+rustc, so the change lands as fork commits + a submodule pointer move, and both
+`cargoDeps` (`nix/pkgs/cang-rust.nix`) and `libkrunCargoDeps`
+(`nix/pkgs/libkrun-source.nix`), plus both `Cargo.lock`s, refresh in the same
+commit. `nix build .#cang` is the end-to-end check.
+
 ## Deliverable
 
-The fork commits (branch pushed for bob to tag), the updated lock/vendor hash,
-and `notes/07-fork-vmm-port.md` with the build evidence.
+The fork commits, the moved submodule pointer, the refreshed vendored-crate
+hashes and both lockfiles, and `notes/07-fork-vmm-port.md` with the build
+evidence.

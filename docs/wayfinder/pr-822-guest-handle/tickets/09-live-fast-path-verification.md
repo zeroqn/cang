@@ -2,7 +2,7 @@
 label: wayfinder:task
 title: Show a cang guest taking the zero-copy guest-handle fast path
 status: open
-blocked_by: ["06-libkrunfw-release-and-pin", "08-fork-release-and-pin"]
+blocked_by: ["06-libkrunfw-release-and-pin", "07-fork-vmm-port"]
 ---
 
 ## Question
