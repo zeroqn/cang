@@ -83,11 +83,18 @@ pub trait LibkrunApi {
         output_fd: Option<i32>,
     ) -> Result<()>;
     fn console_builder_build(&mut self, builder: Handle) -> Result<Handle>;
+    /// `krun_gpu_device_new` plus the zero-copy SHM request.
+    ///
+    /// `zero_copy_shm` is cang's `--zero-copy-shm`: it asks libkrun for the
+    /// udmabuf fast path. libkrun probes `/dev/udmabuf` itself and, when the
+    /// probe fails, keeps the copy path (no feature bits, no file-backed guest
+    /// RAM) rather than failing the launch.
     fn gpu_device_new(
         &mut self,
         virgl_flags: u32,
         shm_size: u64,
         render_server_fd: i32,
+        zero_copy_shm: bool,
     ) -> Result<Handle>;
     /// `krun_balloon_device_new`: virtio-balloon. libkrun implements only the
     /// free-page-reporting queue, so this lets the guest hand freed pages back

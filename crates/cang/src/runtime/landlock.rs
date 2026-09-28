@@ -24,6 +24,7 @@ use crate::runtime::vm::gpu::GpuMode;
 const FD_DIR: &str = "/proc/self/fd";
 const LIBKRUN_KVM_DEVICE: &str = "/dev/kvm";
 const GPU_DRI_DEVICE_DIR: &str = "/dev/dri";
+const GPU_UDMABUF_DEVICE: &str = "/dev/udmabuf";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub(crate) enum LandlockMode {
@@ -282,6 +283,9 @@ impl EffectivePolicy {
             path_rules.extend(gpu_runtime_device_rules());
             path_rules.extend(gpu_system_info_rules());
         }
+        if config.zero_copy_shm {
+            path_rules.extend(gpu_udmabuf_device_rules());
+        }
 
         normalize_path_rules(&mut path_rules);
         compute_read_only_guarantees(&mut path_rules);
@@ -458,6 +462,14 @@ fn libkrun_runtime_device_rules() -> Vec<PathRule> {
 /// broader `/dev` rule in `apply_render_server_rules`.
 fn gpu_runtime_device_rules() -> Vec<PathRule> {
     runtime_device_rules_from(&[("dri", PathBuf::from(GPU_DRI_DEVICE_DIR))])
+}
+
+/// ReadWrite access to `/dev/udmabuf` for the VM worker's zero-copy SHM path
+/// (`cang --zero-copy-shm`). The device probes the driver when the gate is set
+/// and later asks it for the host handle of a guest blob; without this rule the
+/// probe fails under Landlock and the guest silently keeps the copy path.
+fn gpu_udmabuf_device_rules() -> Vec<PathRule> {
+    runtime_device_rules_from(&[("udmabuf", PathBuf::from(GPU_UDMABUF_DEVICE))])
 }
 
 /// ReadOnly system-information mounts for the VM worker's in-process
@@ -644,7 +656,10 @@ fn classify_fd(fd: i32, target: &str, passt_fds: &HashSet<i32>) -> Option<Retain
     if target.starts_with("/proc/") && target.ends_with("/fd") {
         return Some(RetainedFdClass::RuntimeKernelObject);
     }
-    if target == "/dev/null" || target == "/dev/tty" {
+    if target == "/dev/null" || target == "/dev/tty" || target == GPU_UDMABUF_DEVICE {
+        // The udmabuf descriptor is opened by `cang --zero-copy-shm` during
+        // device setup, which happens before this inventory runs; it is a
+        // device we asked for, not a leak.
         return Some(RetainedFdClass::BenignDevice);
     }
     None
@@ -853,6 +868,7 @@ mod tests {
             log_level: LogLevel::Off,
             network_mode: NetworkMode::Tsi,
             gpu_mode: GpuMode::Off,
+            zero_copy_shm: false,
             new_perms: crate::runtime::launch::config::GuestPermissions::default(),
             publish: Vec::new(),
             workdir: "/workspace".to_owned(),
@@ -1408,6 +1424,46 @@ mod tests {
     }
 
     #[test]
+    fn vm_worker_policy_adds_udmabuf_rule_only_for_zero_copy_shm() {
+        let is_udmabuf_rule = |rule: &PathRule| matches!(&rule.category, PathCategory::RuntimeDevice { name } if name.as_str() == "udmabuf");
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path());
+        config.zero_copy_shm = false;
+
+        let off_policy = EffectivePolicy::build_with_fd_report(
+            &config,
+            dir.path(),
+            false,
+            RetainedFdReport::default(),
+        )
+        .unwrap();
+        assert!(
+            !off_policy.path_rules.iter().any(is_udmabuf_rule),
+            "the udmabuf rule must not be granted unless zero-copy shm was asked for"
+        );
+
+        config.zero_copy_shm = true;
+        let on_policy = EffectivePolicy::build_with_fd_report(
+            &config,
+            dir.path(),
+            false,
+            RetainedFdReport::default(),
+        )
+        .unwrap();
+        if Path::new(GPU_UDMABUF_DEVICE).exists() {
+            assert!(
+                on_policy.path_rules.iter().any(is_udmabuf_rule),
+                "zero-copy shm must grant the udmabuf device"
+            );
+        } else {
+            assert!(
+                !on_policy.path_rules.iter().any(is_udmabuf_rule),
+                "no udmabuf device on this host; nothing to grant"
+            );
+        }
+    }
+
+    #[test]
     fn vm_worker_policy_grants_read_only_sys_and_proc_only_for_gpu_mode_drm() {
         let is_sys_rule = |rule: &PathRule| matches!(&rule.category, PathCategory::GpuSystemInfo);
         let dir = tempfile::tempdir().unwrap();
@@ -1648,6 +1704,14 @@ mod tests {
 
         assert!(path_fd_points_to_file(&file_fd).unwrap());
         assert!(!path_fd_points_to_file(&dir_fd).unwrap());
+    }
+
+    #[test]
+    fn fd_classifier_accepts_the_udmabuf_device() {
+        assert_eq!(
+            classify_fd(9, GPU_UDMABUF_DEVICE, &HashSet::new()),
+            Some(RetainedFdClass::BenignDevice)
+        );
     }
 
     #[test]

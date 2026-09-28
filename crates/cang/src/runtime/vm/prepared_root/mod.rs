@@ -513,6 +513,7 @@ mod tests {
             network_mode: NetworkMode::Tsi,
             pulse: None,
             gpu_mode: crate::runtime::vm::gpu::GpuMode::Off,
+            zero_copy_shm: false,
             wayland: false,
             new_perms: crate::runtime::launch::config::GuestPermissions::default(),
             publish: &[],

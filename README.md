@@ -50,6 +50,16 @@ rootless Podman tooling for development.
   the caller's environment; the `.#cang-prebuilt` wrapper sets them, so a bare
   `.#cang` `bin/cang` run must export them for `--gpu=drm`. This mode requires
   a libkrun build with `krun_set_gpu_options3` support.
+- `cang --gpu=drm --zero-copy-shm` asks the virtio-GPU device for the udmabuf
+  zero-copy shared-memory fast path: a guest `wl_shm` client's pool is imported
+  as a guest blob that carries a host-side handle, so the host compositor reads
+  the client's pages instead of a copy. Requires `--gpu=drm`. The device probes
+  `/dev/udmabuf` itself; when the host cannot serve it (no `/dev/udmabuf`, or a
+  guest kernel without the feature) cang keeps the copy path and says why,
+  rather than negotiating a feature it cannot honour. On a run where the fast
+  path is active, guest RAM is file-backed and shared with the host, so the
+  virtio-balloon has nothing to reclaim; a plain `--gpu=drm` run keeps
+  anonymous guest RAM and the balloon's host memory reclaim.
 - `cang --wayland` enables guest Wayland passthrough through
   `wl-cross-domain-proxy` and libkrun virtio-gpu DRM. The cang image includes
   the guest proxy binary and guest-init exports `XDG_RUNTIME_DIR=/run/user/<uid>`

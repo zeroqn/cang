@@ -66,7 +66,7 @@ enum Call {
     ConsoleBuilderAddDefaultConsole(usize, i32, i32, i32),
     ConsoleBuilderAddInoutPort(usize, String, Option<i32>, Option<i32>),
     ConsoleBuilderBuild(usize),
-    GpuDeviceNew(u32, u64, i32),
+    GpuDeviceNew(u32, u64, i32, bool),
     VmmBuilderNew,
     VmmBuilderVcpus(usize, u8),
     VmmBuilderRamMib(usize, u32),
@@ -370,8 +370,14 @@ impl LibkrunApi for FakeLibkrunApi {
         virgl_flags: u32,
         shm_size: u64,
         render_server_fd: i32,
+        zero_copy_shm: bool,
     ) -> Result<usize> {
-        self.record(Call::GpuDeviceNew(virgl_flags, shm_size, render_server_fd));
+        self.record(Call::GpuDeviceNew(
+            virgl_flags,
+            shm_size,
+            render_server_fd,
+            zero_copy_shm,
+        ));
         self.checked("krun_gpu_device_new")?;
         Ok(10)
     }
@@ -453,6 +459,7 @@ fn config() -> LaunchConfig {
         network_mode: NetworkMode::Tsi,
         pulse: None,
         gpu_mode: GpuMode::Off,
+        zero_copy_shm: false,
         wayland: false,
         new_perms: crate::runtime::launch::config::GuestPermissions::default(),
         publish: &[],
@@ -798,6 +805,7 @@ fn drm_gpu_mode_enables_venus_render_server_flags_before_start() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let gpu_config = LaunchConfig {
         gpu_mode: GpuMode::Drm,
+        zero_copy_shm: false,
         ..config()
     };
     let result = DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
@@ -834,6 +842,7 @@ fn drm_gpu_mode_enables_venus_render_server_flags_before_start() {
                 | VIRGLRENDERER_USE_VIDEO,
             GPU_SHM_SIZE_BYTES,
             9,
+            false,
         )
     );
     assert!(gpu_index < start_index);

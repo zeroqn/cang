@@ -217,7 +217,7 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             self.api.mmio_device_manager_new(),
         )?;
 
-        self.configure_gpu(devices, config.gpu_mode)?;
+        self.configure_gpu(devices, config.gpu_mode, config.zero_copy_shm)?;
         self.configure_nested_virt(builder)?;
         let console_log = self.configure_console(devices, config)?;
 
@@ -291,7 +291,12 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
         Ok(console_log)
     }
 
-    fn configure_gpu(&mut self, devices: Handle, gpu_mode: GpuMode) -> Result<()> {
+    fn configure_gpu(
+        &mut self,
+        devices: Handle,
+        gpu_mode: GpuMode,
+        zero_copy_shm: bool,
+    ) -> Result<()> {
         match gpu_mode {
             GpuMode::Off => Ok(()),
             GpuMode::Drm => {
@@ -311,6 +316,7 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
                         VIRGLRENDERER_VENUS_FLAGS,
                         GPU_SHM_SIZE_BYTES,
                         render_server_fd,
+                        zero_copy_shm,
                     ),
                 )?;
                 add_device(&mut self.api, devices, device)?;

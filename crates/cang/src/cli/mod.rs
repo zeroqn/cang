@@ -271,6 +271,13 @@ pub(crate) struct Cli {
     gpu: CliGpuMode,
 
     #[arg(
+        long = "zero-copy-shm",
+        help = "Ask the guest for the udmabuf zero-copy shared-memory fast path",
+        long_help = "Ask the virtio-gpu device for the udmabuf zero-copy shared-memory fast path (wl_shm pools imported as guest blobs with host handles). Requires --gpu=drm. When the host cannot serve it (no /dev/udmabuf) cang logs why and the guest runs the copy path; guest RAM stays anonymous, so the virtio-balloon keeps reclaiming host memory. On fast-path runs the balloon has nothing to reclaim: guest RAM is file-backed and shared."
+    )]
+    zero_copy_shm: bool,
+
+    #[arg(
         long = "wayland",
         help = "Enable guest Wayland passthrough through wl-cross-domain-proxy",
         long_help = "Enable guest Wayland passthrough through wl-cross-domain-proxy. This starts a guest-local Wayland proxy and enables libkrun virtio-gpu DRM native-context support."
@@ -583,6 +590,7 @@ impl Cli {
             } else {
                 self.gpu.into()
             },
+            zero_copy_shm: self.zero_copy_shm,
             wayland: self.wayland,
             workspace: self.workspace,
             waypipe: self.waypipe,
@@ -624,6 +632,7 @@ pub(crate) struct RuntimeOptions {
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
     pub(crate) gpu_mode: GpuMode,
+    pub(crate) zero_copy_shm: bool,
     pub(crate) wayland: bool,
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) waypipe: Option<Option<PathBuf>>,

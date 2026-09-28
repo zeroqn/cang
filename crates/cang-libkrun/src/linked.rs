@@ -447,11 +447,13 @@ impl LibkrunApi for LinkedLibkrunApi {
         virgl_flags: u32,
         shm_size: u64,
         render_server_fd: i32,
+        zero_copy_shm: bool,
     ) -> Result<Handle> {
         let backend = headless_display_backend()?;
         let shm_size = usize::try_from(shm_size).context("GPU shm size does not fit usize")?;
         let mut device = GpuDevice::new(VirglRendererFlags::from_bits_retain(virgl_flags), backend)
-            .shm_size(shm_size);
+            .shm_size(shm_size)
+            .set_zero_copy_shm(zero_copy_shm);
         if render_server_fd >= 0 {
             device = device.set_render_server_fd(render_server_fd)?;
         }

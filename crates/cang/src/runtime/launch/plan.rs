@@ -42,6 +42,7 @@ pub(crate) struct LaunchPlan {
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
     pub(crate) gpu_mode: GpuMode,
+    pub(crate) zero_copy_shm: bool,
     pub(crate) wayland: bool,
     pub(crate) waypipe: bool,
     pub(crate) waypipe_socket: Option<PathBuf>,
@@ -114,6 +115,11 @@ impl LaunchPlan {
             .unwrap_or(TaskRootfsBackend::DEFAULT);
         let seccomp = resolve_normal_launch_seccomp(options.seccomp)?;
         let landlock = resolve_normal_launch_landlock(options.landlock);
+        if options.zero_copy_shm && options.gpu_mode != crate::runtime::vm::gpu::GpuMode::Drm {
+            anyhow::bail!(
+                "--zero-copy-shm requires --gpu=drm: the udmabuf fast path is a virtio-gpu property"
+            );
+        }
 
         Ok(Self {
             workspace_dir,
@@ -134,6 +140,7 @@ impl LaunchPlan {
             network_mode: options.network_mode,
             pulse: options.pulse,
             gpu_mode: options.gpu_mode,
+            zero_copy_shm: options.zero_copy_shm,
             wayland: options.wayland,
             waypipe,
             waypipe_socket,
@@ -356,6 +363,7 @@ mod tests {
             network_mode: NetworkMode::Tsi,
             pulse: None,
             gpu_mode: crate::runtime::vm::gpu::GpuMode::Off,
+            zero_copy_shm: false,
             wayland: false,
             workspace: None,
             waypipe: None,
