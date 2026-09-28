@@ -161,6 +161,11 @@ Release a version in this order:
 
 1. Bump `workspace.package.version` in `Cargo.toml` and the workspace-member
    entries in `Cargo.lock` (this is what `pins.cangVersion` reads) and commit it.
+   The vendored lock carries those member versions, so `cargoDeps.hash` in
+   `nix/pkgs/cang-rust.nix` has to move in the same commit: set it to
+   `pkgs.lib.fakeHash`, run `nix build .#cang`, and copy the `got:` hash out of
+   the mismatch. Nothing else about the graph changes, so that is the only hash
+   a version bump touches.
 2. Compute the asset SRI from a local build normalized exactly like the release
    workflow. The asset is patched to a neutral interpreter and embeds no
    `/nix/store` paths, so the result is byte-reproducible and is the hash CI
