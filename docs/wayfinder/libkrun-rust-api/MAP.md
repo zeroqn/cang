@@ -19,7 +19,7 @@ the Chromium GPU smoke passing in both modes against the Rust-API build.
 not every shared object. What replaces libkrun's `$ORIGIN`-based firmware lookup
 is cang's own rpath/`LD_LIBRARY_PATH`, which `cang-prebuilt` already sets.
 
-**Status (2026-09-28): implemented, building, and booting a guest.**
+**Status (2026-09-28): done - every ticket closed.**
 `nix build .#cang` compiles libkrun from `deps/libkrun` and passes the whole
 suite, `result/bin/cang` has no libkrun shared object in its `DT_NEEDED`, and
 the Rust-API binding is in place behind `LibkrunApi`. Closed: 01-06 and 08.
@@ -29,11 +29,14 @@ is gone); what remains there is the GPU run, which is ticket 09's. The first liv
 boot exposed a *new* problem - libkrun could not open its firmware inside the VM
 worker - which ticket 11 resolved and re-verified with a live boot. **Ticket 09
 has since passed in full, including the Chromium GPU smoke with hardware venus,
-so the destination is reached and verified.** Only ticket 10 is open, and it is
-not a blocker for the destination as written: it is the cleanup of the prebuilt
-C-ABI `.so` pipeline and, sharpened by ticket 09, the question of what the
-published release asset can be now that the binary has a `libvirglrenderer`
-`DT_NEEDED`.
+so the destination is reached and verified.** Ticket 10 is closed too: bob chose
+retiring the prebuilt C-ABI pipeline entirely and keeping the release asset a
+bare ELF whose consumer supplies `libvirglrenderer.so.1`, so the image now
+carries the firmware (`libkrunfw`) instead of libkrun and `.#cang-prebuilt`
+patchelf-resolves the new NEEDED. The v0.9.0 pin is a locally measured,
+byte-verified hash; only the tag push and the post-release
+`nix build .#cang-prebuilt` remain, and those are bob's. Landed as `038ef6f`
+(code) and `8367be8` (this map).
 
 ## Notes
 
@@ -98,6 +101,14 @@ published release asset can be now that the binary has a `libvirglrenderer`
 
 ## Decisions so far
 
+- [Retire the prebuilt-libkrun pipeline and re-derive the release asset](tickets/10-retire-prebuilt-libkrun-pipeline.md):
+  retired entirely - packager, updater, pin, `libkrun-loadable` check and its
+  flake export are gone, the pin gate now names libkrunfw alone, and the image's
+  tooling layer carries `libkrunfw` (the firmware) instead of libkrun. The
+  released asset stays a bare neutral ELF whose consumer provides
+  `libvirglrenderer.so.1`; `.#cang-prebuilt` gained that input, and was verified
+  by building it against a locally normalized v0.9.0 asset and live-booting
+  through it.
 - [Verify - build, no libkrun .so, live boot, Chromium GPU smoke](tickets/09-verify-live-boot-and-gpu-smoke.md):
   green end to end. `nix build .#cang` and `.#cang-musl` pass with fmt/clippy/
   deny/tests clean; the binary has no libkrun `DT_NEEDED` (it does have
