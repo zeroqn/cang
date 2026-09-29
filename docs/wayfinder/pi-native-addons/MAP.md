@@ -63,7 +63,9 @@ change through the cang flake input in `/home/dev/nix/disp`.
     the image Env sets **no** `LD_LIBRARY_PATH` (`nix/image/config.nix`), and the
     guest's `/etc/ld-nix.so.preload` holds cang's `pkgs.mimalloc`
     (`nix/image/container.nix:99`; guest-init rewrites it per `--alloc`), a
-    different build whose RUNPATH is not the host's. **Unverified** - ticket 01.
+    different build whose NEEDED set has no libstdc++. **Confirmed** by ticket 01,
+including a reproduction of the guest's loader condition on the host (the live
+guest itself is ticket 04).
   - The nix glibc loader's default "system search path" is its own store `lib`
     (seen via `LD_DEBUG` on the host); there is no `/etc/ld.so.cache`, no `/lib`,
     no `/usr/lib`.
@@ -84,6 +86,20 @@ change through the cang flake input in `/home/dev/nix/disp`.
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link -->
 
+- [What resolves a pi extension's glibc addon libraries today, in a cang guest and on the dev host?](tickets/01-glibc-addon-resolution-today.md):
+  nothing in the guest supplies `libstdc++.so.6`, and that soname is the *only*
+  missing piece - `pi`/`bun` have no RUNPATH and no libstdc++ in NEEDED, the host
+  works solely because NixOS's preloaded malloc provider NEEDs libstdc++ itself,
+  and the guest's `pkgs.mimalloc` does not. Reproduced with `bun` + mimalloc under
+  the guest's loader condition; `LD_LIBRARY_PATH` or a preload carrying libstdc++
+  both fix it.
+- [Can the image make extra shared libraries loader-visible without an inherited environment variable?](tickets/02-loader-visible-compat-libs.md):
+  the loader knows `/etc/ld-nix.so.preload` and `/etc/ld.so.cache`, there is no
+  default search path to extend (no `/lib`, no `/usr/lib`, only the loader's own
+  store `lib`), and the image already contains gcc's `libstdc++.so.6`. Env-free
+  `/etc` hooks are plausible but unprobed; the allocator's preload file is a trap
+  because `--alloc=glibc` deletes it.
+
 ## Not yet specified
 
 - **Where the invariant lives** - a `wrapperContracts` entry in
@@ -102,9 +118,9 @@ change through the cang flake input in `/home/dev/nix/disp`.
   environment needs a line there. Graduates with ticket 03.
 - **Per-arch coverage** - `@img/sharp-linux-arm64`, onnxruntime `linux/arm64`,
   and whether the image is built for aarch64 at all.
-- **Whether magic-context degrades silently today** (both deps are
-  `optionalDependencies`), so the user-visible symptom may be a quiet fallback
-  rather than a load error. Folds into ticket 01.
+- **Whether magic-context degrades silently today** - ticket 01 could not
+  establish it (the generated bundle's require/import sites are not greppable);
+  it matters for how loudly the fix has to be proven.
 
 ## Out of scope
 

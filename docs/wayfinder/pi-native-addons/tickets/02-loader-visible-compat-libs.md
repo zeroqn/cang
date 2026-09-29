@@ -1,9 +1,9 @@
 ---
 label: wayfinder:research
 title: Can the image make extra shared libraries loader-visible without an inherited environment variable?
-status: open
+status: closed
 blocked_by: []
-claimed_by: pi research child-2 (2026-09-29)
+claimed_by: pi research child-2 (2026-09-29); completed by the charting session after the child was killed by the host disk filling
 ---
 
 ## Question
@@ -54,3 +54,38 @@ plus a shortlist ticket 03 can weigh. Raw command output beside it as
   the house recipe (isolated config/state, hermetic container storage, never the
   ambient `~/.config/containers/storage.conf`).
 - Do not modify the host system (`/etc`, NixOS configuration, nix-ld).
+
+## Resolution (2026-09-29)
+
+**Answer: the loader knows `/etc/ld-nix.so.preload` and `/etc/ld.so.cache` (both
+literal paths are compiled into the nixpkgs glibc loader, verified with `grep -a`;
+`strings` is not installed here), there is no `/lib`, `/usr/lib` or earlier
+search path to extend, and `/lib64/ld-linux-x86-64.so.2` is a NixOS-only nix-ld
+shim that does not exist in the image.** Full mechanism table with verdicts:
+`../notes/02-loader-visible-compat-libs.md`.
+
+Measured facts:
+
+- `LD_LIBRARY_PATH=<gcc-15.3.0-lib/lib>` makes both addons load under the guest
+  condition - the env mechanism works.
+- `LD_PRELOAD` of a library that itself NEEDs libstdc++ also works (that is the
+  host's accidental mechanism, and the guest's `--alloc=hardened`); but the guest
+  file that carries that preload (`/etc/ld-nix.so.preload`) is the **allocator's**
+  file - `--alloc=glibc` deletes it, so extending it is a correctness trap rather
+  than a mechanism.
+- The only default search path is the loader's own read-only store `lib` dir, so
+  an FHS-style compat directory on the default path is ruled out.
+- An env-free `/etc` hook is plausible but unprobed: `/etc/ld.so.preload` (a real
+  glibc feature here) or a shipped `/etc/ld.so.cache` over a compat directory
+  built at image time. Nothing in the image generates a cache today.
+- RUNPATH rewriting of the addons works in principle but the addon tree is
+  installed at runtime under `~/.pi`, so it means mutating user state at start.
+- No new library content is needed: `gcc` is in the image
+  (`cToolchainImagePackages`), so `libstdc++.so.6` already exists in the guest's
+  store.
+
+**Shortlist handed to the mechanism ticket:** (1) `LD_LIBRARY_PATH` from a `pi`
+wrapper in `nix/pkgs/pi-coding-agent.nix` (reaches host and guest, proven);
+(2) the same path in the image Env (guest-wide, not the host); (3) an env-free
+`/etc` hook at image build (unprobed); (4) extending the allocator's preload file
+(ruled out above).

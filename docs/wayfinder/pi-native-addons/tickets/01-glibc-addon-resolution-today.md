@@ -1,9 +1,9 @@
 ---
 label: wayfinder:research
 title: What resolves a pi extension's glibc addon libraries today, in a cang guest and on the dev host?
-status: open
+status: closed
 blocked_by: []
-claimed_by: pi research child-1 (2026-09-29)
+claimed_by: pi research child-1 (2026-09-29); completed by the charting session after the child was killed by the host disk filling
 ---
 
 ## Question
@@ -62,3 +62,44 @@ outcome.
   (state/storage root on the btrfs disk).
 - Building the container image can be expensive; time-box it and report what you
   learned without it rather than stalling.
+
+## Resolution (2026-09-29)
+
+**Answer: the addons fail in the guest because nothing supplies `libstdc++.so.6`,
+and only `libstdc++.so.6` is missing.** Full evidence:
+`../notes/01-glibc-addon-resolution.md`.
+
+- `pi` is a bun standalone binary: `DT_NEEDED` is libc/ld-linux/libpthread/libdl/libm
+  with **no RUNPATH at all**, so nothing in its own chain can satisfy a dlopen'd
+  addon's C++ runtime. `bun` from nixpkgs is identical. (`node` is not: it NEEDs
+  libstdc++ and carries a rich RUNPATH, which is why a node-based probe passes
+  even with `/etc` masked - a trap for anyone re-testing this.)
+- sharp and onnxruntime's bindings NEED `libstdc++.so.6`; their own deps
+  (`libvips-cpp.so.8.18.7`, `libonnxruntime.so.1`) resolve through the addons'
+  `$ORIGIN` RUNPATHs, and `libgcc_s.so.1` resolves from the loader's default
+  search path. So exactly one soname is unaccounted for.
+- The host works by accident: `/etc/ld-nix.so.preload` preloads NixOS's malloc
+  provider, which itself has `DT_NEEDED libstdc++.so.6` and a RUNPATH into
+  `gcc-15.3.0-lib/lib`, so libstdc++ is in the global scope before any addon is
+  dlopened. The guest's default preload is cang's `pkgs.mimalloc`, whose NEEDED
+  set (libpthread/librt/libatomic/libc) contains no libstdc++ - so the accident
+  does not reproduce.
+- Reproduced on the host under the guest's loader conditions (bwrap with `/etc`
+  masked so the NixOS preload file disappears): with `mimalloc` preloaded,
+  `require('onnxruntime-node')` fails with
+  `libstdc++.so.6: cannot open shared object file: No such file or directory`
+  and sharp with its generic module-load error. With
+  `LD_PRELOAD=<cang hardened_malloc-14>` (the guest's `--alloc=hardened`) both
+  load; with `LD_LIBRARY_PATH=<gcc-15.3.0-lib/lib>` both load.
+- Survey: of the 8 linux `.node` addons under `~/.pi`, only sharp needs
+  libstdc++ (`clipboard`, `pi-tui` x11, `monty`, `ffi-rs` are libgcc_s-only and
+  load under the guest condition); the onnxruntime binding is the second
+  consumer.
+
+**Not established here:** an actual run inside a cang guest (the reproduction is
+the guest's loader condition on the host, with the guest's allocator library),
+and whether magic-context swallows the import failure and degrades quietly.
+
+**Consequence for the mechanism ticket:** the thing to deliver is the C++
+runtime directory (`gcc-*-lib/lib`) or the soname `libstdc++.so.6`, and the image
+already contains both - `pkgs.gcc` is in `cToolchainImagePackages`.
