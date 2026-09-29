@@ -93,6 +93,13 @@ is **shown actually taking the fast path** - evidence, not "it builds".
 the fast path is verified live.** Ticket 06 (publish the libkrunfw release and
 re-pin per system) is the only open ticket, and it needs bob's push/tag.
 
+- Released and pinned (ticket 06): `zeroqn/libkrunfw` `v5.6.2-cang.2` (fork tip
+  `6b38b17`) re-pinned per system in `nix/pins.nix`, `zeroqn/libkrun`
+  `v2.0.0-cang.4` published (no pin: the submodule pointer is the pin), and cang
+  **`v0.10.0`** tagged at `a9e9e66` with `cangPrebuiltRelease` on
+  `cang-v0.10.0-x86_64-unknown-linux-gnu`
+  (sha256 `8ddc3b889224a90a63f799c2c1f7b007952861f03156aba4089c5c590f8a3c8e`,
+  matched against the published asset and `nix build .#cang-prebuilt`).
 - `deps/libkrun` (branch `cang`) tip **`63f3737f`**: `a1a772a0` carries the port
   on the `ctx_id` route, `5d9cb075` the lock + regenerated bindings, `63f3737f`
   the udmabuf list coalescing fix ticket 09 needed. cang's submodule pointer
@@ -112,7 +119,7 @@ re-pin per system) is the only open ticket, and it needs bob's push/tag.
   guest names one run per 4 KiB page; the host's `/dev/udmabuf` must be openable
   from cang's keep-id user namespace (0666, like /dev/kvm) and the guest's must be
   openable by the task user (guest-init does it now, `57fc4ec`).
-- Closed: 01, 02, 03, 04, 05, 07, 09, 10, 11, 12 (08 cancelled). Open: **06**.
+- Closed: 01-05, 07, 09-12 (08 cancelled), and 06 with this release. The map is complete.
 
 ## Decisions so far
 

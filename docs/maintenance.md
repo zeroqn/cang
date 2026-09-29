@@ -249,8 +249,32 @@ nix build .#cang-prebuilt
 ./result-cang-prebuilt/bin/cang --version   # prints `cang <version>`
 ```
 
+#### Fork releases
+
+`zeroqn/libkrunfw` and `zeroqn/libkrun` publish their own artifacts from pushed
+permanent tags: push the fork's `cang` branch, then a `v<BASE>-cang.<n>` tag
+(`<BASE>` is the fork `Makefile`'s `FULL_VERSION`, e.g. `5.6.2` / `2.0.0`). The
+fork's `publish-cang-release.yml` validates the tag against that Makefile and
+publishes the release plus build-provenance attestations, so no `gh` auth is
+needed - the tag push is the whole trigger. Rolling `cang-<sha>` tags are
+disposable and pruned; only `v*` tags are pinnable.
+
+cang pins `libkrunfwRelease` only (it links libkrun's Rust API by path, so the
+libkrun submodule pointer *is* that pin). After the fork release is published:
+
+```bash
+for system in x86_64-linux aarch64-linux riscv64-linux; do
+  nix develop --command ./scripts/update-libkrunfw.sh --tag v<version>-cang.<n> --system "$system"
+done
+nix build .#libkrunfw
+```
+
 #### Released so far
 
+- `v0.10.0` (`a9e9e66`) - the `CREATE_GUEST_HANDLE` zero-copy `wl_shm` fast path
+  (`--zero-copy-shm`), on the libkrunfw `v5.6.2-cang.2` kernel (patches
+  0037-0039 plus `CONFIG_UDMABUF=y`); x86_64 asset sha256
+  `8ddc3b889224a90a63f799c2c1f7b007952861f03156aba4089c5c590f8a3c8e`.
 - `v0.9.1` (`dd9d248`) - the virtio-balloon attach; x86_64 asset sha256
   `8488e43c320d76b48526d7e022774a065e8dc307001c5c0259b642ec50472edc`.
 - `v0.9.0` (`4cd3dce`) - the Rust-API link that closed the prebuilt-libkrun map;

@@ -1,7 +1,7 @@
 ---
 label: wayfinder:task
 title: Publish the libkrunfw release and repin per system
-status: open
+status: closed
 blocked_by: ["05-libkrunfw-kernel-support"]
 ---
 
@@ -68,3 +68,35 @@ The steps, in order:
    release keeps `linux-6.12.109` and `v6.12.109-hardened1`, so neither changes.
 
 Record the CI run id, the published asset list and the new pin here when done.
+
+## Resolution (2026-09-29, pi) - released and pinned
+
+Both forks are released and both pins are in, verified against the published
+assets.
+
+- **`zeroqn/libkrunfw` `v5.6.2-cang.2`** - the fork's `cang` branch was rebased so
+  the kernel commit sits on the fork's own CI commit (`8707239`, "scope the
+  release concurrency group per ref") rather than beside it; the rebased tip is
+  `6b38b17`, byte-identical in content to the `3fdbb59` that was boot-tested.
+  Pushing the tag made the fork's `publish-cang-release.yml` build and publish
+  the release with `libkrunfw-x86_64-kvm-lto.tgz`, `libkrunfw-x86_64-lto.tgz`,
+  `libkrunfw-x86_64.tgz`, `libkrunfw-aarch64.tgz` and `libkrunfw-riscv64.tgz`
+  (run green, `draft: false`, `prerelease: true` as the fork's versioned releases
+  are). `nix/pins.nix` re-pinned per system with
+  `update-libkrunfw.sh --tag v5.6.2-cang.2` (`50ba147`) and
+  `nix build .#libkrunfw` validates the SRI.
+- **`zeroqn/libkrun` `v2.0.0-cang.4`** - pushed `cang` to `63f3737f` and an
+  annotated tag on it; the fork's CI published `libkrun-x86_64-linux-full.tgz`
+  and `libkrun-aarch64-linux-full.tgz`. cang has nothing to pin here: it links
+  the fork's Rust API by path, so the submodule pointer is the pin.
+- **cang `v0.10.0`** - `ecbfe8f` bumps the workspace version to 0.10.0 (and
+  `cargoDeps.hash`, which rides the vendored lock's member versions), `a9e9e66`
+  pins `cangPrebuiltRelease` to `v0.10.0` /
+  `cang-v0.10.0-x86_64-unknown-linux-gnu` with the SRI computed from
+  `nix build .#cang-ci-sccache` normalized as the workflow does. The tag is on
+  the pin commit; the main push's release run finished before the tag went out
+  (the v0.9.1 race), and the tag run published the versioned release plus the
+  `ghcr.io/zeroqn/cang:v0.10.0` image. Published asset sha256
+  `8ddc3b889224a90a63f799c2c1f7b007952861f03156aba4089c5c590f8a3c8e` matches the
+  local normalized build byte for byte, and `nix build .#cang-prebuilt` plus
+  `cang --version` (`cang 0.10.0`) confirm the pin resolves to the release.
