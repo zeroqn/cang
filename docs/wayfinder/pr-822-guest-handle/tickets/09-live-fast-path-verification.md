@@ -1,7 +1,7 @@
 ---
 label: wayfinder:task
 title: Show a cang guest taking the zero-copy guest-handle fast path
-status: open
+status: closed
 claimed_by: pi session (2026-09-29)
 blocked_by: ["06-libkrunfw-release-and-pin", "07-fork-vmm-port"]
 ---
@@ -45,3 +45,25 @@ The stall is ticketed separately as
 now blocks this ticket. The A/B client it needs exists
 (`tools/wl-shm-bench/`, validated against a host weston); only the completed run
 is missing.
+
+## Resolution (2026-09-29, pi)
+
+**The fast path is live end to end and measurably cheaper.** Full transcript,
+strace counts, the measured A/B, the host driver's limits and the two permission
+gates are in [`../notes/09-live-fast-path-verification.md`](../notes/09-live-fast-path-verification.md).
+
+- A `wl_shm` client through `wl-cross-domain-proxy` in a `--gpu=drm --wayland
+  --zero-copy-shm` guest: param 10 = 1, virtio-gpu bits 6/7 negotiated, the proxy
+  issues `UDMABUF_CREATE` for the pool and `PRIME_FD_TO_HANDLE` for the import,
+  and `PRIME_HANDLE_TO_FD` (the copy path) appears **zero** times - exactly
+  mirrored by the flag-off control run.
+- Measured A/B at 1920x1080x120 fps: guest busy CPU 2.800 s (46.7%) copy vs
+  **2.650 s (44.2%)** fast, i.e. -5.4%, with per-frame cost 3888.9 -> 3680.6 us.
+  The delta is the copy handler's `memcpy`; the proxy's cross-domain submit
+  dominates either way, which is why the measurement was required.
+- The Chromium GPU smoke still passes on the same tree (hardware venus), so the
+  copy path and the venus renderer are undisturbed.
+
+The A/B client is `tools/wl-shm-bench/` (validated against a host weston). What
+blocked the first run was ticket 12's udmabuf `list_limit`; the two permission
+gates (host node mode, guest devtmpfs node) are recorded with the harness.
