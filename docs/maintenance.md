@@ -293,6 +293,10 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.10.1` (`f0d5ecb`) - the libkrun and libkrunfw forks arrive as flake inputs
+  (a Nix build no longer needs submodule contents and `nix/dev` is gone) and
+  `ffier` leaves cang's lock; x86_64 asset sha256
+  `c1384613589aec772efa9eee84fde4ca6e4f3769a442324c5c0af1ea6228ba32`.
 - `v0.10.0` (`a9e9e66`) - the `CREATE_GUEST_HANDLE` zero-copy `wl_shm` fast path
   (`--zero-copy-shm`), on the libkrunfw `v5.6.2-cang.2` kernel (patches
   0037-0039 plus `CONFIG_UDMABUF=y`); x86_64 asset sha256
@@ -303,11 +307,12 @@ nix build .#libkrunfw
   x86_64 asset sha256
   `19d4d67f04d7c9f74f6b739f3e309eaf51011f4a5d5bdec766c410027e683ecd`.
 
-Both are the hashes the releases publish, and both were reproduced locally from
-the tagged tree with the `overrideAttrs` recipe above (v0.9.1 before its pin
-went in, v0.9.0 while validating that recipe), so a freshly published `.sha256`
-that disagrees with this list means the build inputs moved: check
-`cargoDeps.hash` and the `cang-ci-sccache` attribute first.
+Each of these is the hash its release publishes, and each was reproduced locally
+from the tagged tree with the `overrideAttrs` recipe above (v0.9.0 while
+validating that recipe; v0.9.1 and v0.10.1 before their pins went in - for
+v0.10.1 the main-branch run of the same commit published the same bytes first),
+so a freshly published `.sha256` that disagrees with this list means the build
+inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache` attribute first.
 
 Refresh pinned Pi coding agent source/npm metadata in `nix/pins.nix` from `earendil-works/pi`:
 
