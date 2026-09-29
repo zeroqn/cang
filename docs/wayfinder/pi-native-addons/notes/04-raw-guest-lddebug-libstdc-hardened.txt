@@ -1,0 +1,47 @@
+# run2 (--alloc hardened): the full bun require('sharp') section (LD_DEBUG=libs + verdict)
+### bun require('sharp')
+exit=0
+stdout: LOAD_OK
+stderr: 
+verdict: LOAD_OK
+lddebug libstdc lines:
+  DBG       1072:	find library=libstdc++.so.6 [0]; searching
+  DBG       1072:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+  DBG       1072:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+  DBG       1072:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+  DBG       1072:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/libstdc++.so.6
+  DBG       1072:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+  DBG       1072:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+  DBG       1072:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+  DBG       1072:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/libstdc++.so.6
+  DBG       1072:	calling init: /nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/libstdc++.so.6
+lddebug libmimalloc/hardened lines:
+  DBG       1072:	 search path=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v4:/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v3:/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v2:/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v4:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v3:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v2:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib		(RUNPATH from file /nix/store/mpkgijfbcl7i2p7gw1sphwrlp4hnwprd-graphene-hardened-malloc-14/lib/libhardened_malloc.so)
+  DBG       1072:	 search path=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib		(RUNPATH from file /nix/store/mpkgijfbcl7i2p7gw1sphwrlp4hnwprd-graphene-hardened-malloc-14/lib/libhardened_malloc.so)
+  DBG       1072:	calling init: /nix/store/mpkgijfbcl7i2p7gw1sphwrlp4hnwprd-graphene-hardened-malloc-14/lib/libhardened_malloc.so
+
+### bun require('onnxruntime-node')
+
+# run2 (--alloc hardened): the full bun require('onnxruntime-node') section
+### bun require('onnxruntime-node')
+exit=0
+stdout: LOAD_OK
+stderr: 
+verdict: LOAD_OK
+lddebug libstdc lines:
+  DBG       1135:	find library=libstdc++.so.6 [0]; searching
+  DBG       1135:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+  DBG       1135:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+  DBG       1135:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+  DBG       1135:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/libstdc++.so.6
+  DBG       1135:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+  DBG       1135:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+  DBG       1135:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+  DBG       1135:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/libstdc++.so.6
+  DBG       1135:	calling init: /nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/libstdc++.so.6
+lddebug libmimalloc/hardened lines:
+  DBG       1135:	 search path=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v4:/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v3:/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v2:/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v4:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v3:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v2:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib		(RUNPATH from file /nix/store/mpkgijfbcl7i2p7gw1sphwrlp4hnwprd-graphene-hardened-malloc-14/lib/libhardened_malloc.so)
+  DBG       1135:	 search path=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib		(RUNPATH from file /nix/store/mpkgijfbcl7i2p7gw1sphwrlp4hnwprd-graphene-hardened-malloc-14/lib/libhardened_malloc.so)
+  DBG       1135:	calling init: /nix/store/mpkgijfbcl7i2p7gw1sphwrlp4hnwprd-graphene-hardened-malloc-14/lib/libhardened_malloc.so
+
+### node require('sharp')

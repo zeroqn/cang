@@ -1,0 +1,38 @@
+== which pi-coding-agent the measured image carries ==
+guest probe line: # which pi = /nix/store/p9lzng046snafrmv9xakmd8dl90wd474-cang-agent-layer/bin/pi
+
+-- the guest agent layer's bin/pi symlink (host store view) --
+lrwxrwxrwx 2 root root 73 Jan  1  1970 /nix/store/p9lzng046snafrmv9xakmd8dl90wd474-cang-agent-layer/bin/pi -> /nix/store/yj15wxdjj7vba7z1cwki520qaswyrywg-pi-coding-agent-0.87.1/bin/pi
+
+-- that pi derivation's bin/pi --
+lrwxrwxrwx 3 root root 25 Jan  1  1970 /nix/store/yj15wxdjj7vba7z1cwki520qaswyrywg-pi-coding-agent-0.87.1/bin/pi -> ../lib/pi-coding-agent/pi
+file type: symbolic link
+reference to native-addon-runtime in that output: 0 (0 = unwrapped)
+-> this is the UNWRAPPED, pre-fix pi: bin/pi is a symlink to the raw bun ELF binary.
+
+-- derivation that produced it --
+5055xiwdkvdh6s1fvni5bmcy4zgh62aa-pi-coding-agent-0.87.1.drv -> /nix/store/yj15wxdjj7vba7z1cwki520qaswyrywg-pi-coding-agent-0.87.1
+(this .drv is the one nix built during this ticket's run: 'building /nix/store/5055xiwd...-pi-coding-agent-0.87.1.drv' in nix-build-attempt1.err)
+
+== the two paths the parent named (NOT in this image) ==
+/nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1 = wrapped (makeWrapper --prefix LD_LIBRARY_PATH):
+#! /nix/store/7n1hai8jk6vgc967drgkqi6k7j6ff28q-bash-5.3p9/bin/bash -e
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+':'$LD_LIBRARY_PATH':'}
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH/':''/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib'':'/':'}
+LD_LIBRARY_PATH='/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib'$LD_LIBRARY_PATH
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH#':'}
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH%':'}
+export LD_LIBRARY_PATH
+exec "/nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1/lib/pi-coding-agent/pi"  "$@" 
+
+/nix/store/0ik8k841n595v9kvif0rfdrr8w5486jn-pi-coding-agent-0.87.1 = an installPhase-time wrapper (its bin/pi execs '... pi "installPhase"'), mtime 21:58:11:
+#!/nix/store/7n1hai8jk6vgc967drgkqi6k7j6ff28q-bash-5.3p9/bin/bash
+native_addon_runtime_dir=/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime
+case "::" in
+  *"::"*) ;;
+  "::") export LD_LIBRARY_PATH="" ;;
+  *) export LD_LIBRARY_PATH=":" ;;
+esac
+exec /nix/store/0ik8k841n595v9kvif0rfdrr8w5486jn-pi-coding-agent-0.87.1/lib/pi-coding-agent/pi "installPhase"
+
+neither is referenced by the measured image.

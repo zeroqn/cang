@@ -1,0 +1,77 @@
+== shared-checkout note ==
+git HEAD at image-build time (21:45-21:54 local): fd8c0a1449aa32969f6b315fb456d303768df10d
+git HEAD when this file was written : ea2faf771dcca081cf38a1bb0a4cf967e3d88b98
+delta (fd8c0a1..HEAD) is docs-only:
+ CONTEXT.md                                         |  8 ++
+ docs/adr/0009-pi-extension-cxx-runtime-delivery.md | 96 ++++++++++++++++++++++
+ docs/wayfinder/pi-native-addons/MAP.md             | 33 ++++----
+ .../notes/04-live-guest-failure.md                 | 24 ++++++
+ .../tickets/03-mechanism-and-placement.md          | 39 ++++++++-
+ .../tickets/04-live-guest-failure.md               |  2 +-
+ .../tickets/05-wrapper-and-runtime-dir.md          | 32 ++++++++
+ .../tickets/06-live-guest-addons-load.md           | 31 +++++++
+ .../tickets/07-regression-invariant.md             | 28 +++++++
+ .../tickets/08-document-mechanism-and-stopgap.md   | 25 ++++++
+ .../pi-native-addons/tickets/09-host-checklist.md  | 27 ++++++
+ 11 files changed, 326 insertions(+), 19 deletions(-)
+
+nix/pkgs/pi-coding-agent.nix working-tree mtime: 2026-09-29 21:58:45.301959816 +0800
+(that file was edited by another session AFTER this image was built and before the VM runs;
+ the image and guest-init used here were already realised at 21:54, so the measurement is pre-fix.)
+
+== repo / tree ==
+git log: ea2faf7 docs(wayfinder): decide the pi addon C++ runtime delivery (ADR 0009) and graduate its tickets fd8c0a1 docs(wayfinder): resolve the two pi addon research tickets, chart the live-guest check d1d666b docs(wayfinder): chart the pi native addon library map 
+
+== nix build .#container .#cang .#cang-musl --no-link --print-out-paths ==
+/nix/store/2jzzdyj4ckpmmlwjswvmgr7z1hymm08i-cang.tar.gz
+/nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1
+/nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1
+EXIT=0
+
+== hermetic container storage (btrfs loop) ==
+[storage]
+driver = "btrfs"
+graphroot = "/home/dev/cang/disk/pi-native-addons-04/container-storage/graph"
+runroot = "/home/dev/cang/disk/pi-native-addons-04/container-storage/run"
+== isolated cang config ==
+[state]
+location = "/home/dev/cang/disk/pi-native-addons-04/state"
+
+[task-rootfs]
+backend = "btrfs-snapshot"
+
+== localhost/cang:latest after podman load ==
+localhost/cang:latest ID=c7cc57913b74 Digest=sha256:b821b52eb4a1cc88d7a4f94512b87bc0debe75255b14fd729b1f537599dfcb9d
+ID=c7cc57913b744916f1c6e9696c338e3edfde9d2d564feb78e933c77035667ef5|Digest=sha256:b821b52eb4a1cc88d7a4f94512b87bc0debe75255b14fd729b1f537599dfcb9d|Created=1970-01-01 00:00:01 +0000 UTC|Entrypoint=["/nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init","enter","--"]|WorkingDir=/workspace
+
+== launch commands (all three runs) and VM exit codes ==
+--- mimalloc ---
+cang: /nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1/bin/cang
+image: localhost/cang:latest
+alloc: mimalloc
+guest-init: /nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init
+cwd: /home/dev/cang/disk/pi-native-addons-04/workspace
+launch: /nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1/bin/cang --mem 4 --alloc mimalloc --seccomp=off --landlock=off --guest-init /nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init -- sh /workspace/probe.sh
+vm-exit=0
+
+--- hardened ---
+cang: /nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1/bin/cang
+image: localhost/cang:latest
+alloc: hardened
+guest-init: /nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init
+cwd: /home/dev/cang/disk/pi-native-addons-04/workspace
+launch: /nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1/bin/cang --mem 4 --alloc hardened --seccomp=off --landlock=off --guest-init /nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init -- sh /workspace/probe.sh
+vm-exit=0
+
+--- mimalloc2 ---
+cang: /nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1/bin/cang
+image: localhost/cang:latest
+alloc: mimalloc
+guest-init: /nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init
+cwd: /home/dev/cang/disk/pi-native-addons-04/workspace
+launch: /nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1/bin/cang --mem 4 --alloc mimalloc --seccomp=off --landlock=off --guest-init /nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init -- sh /workspace/probe.sh
+vm-exit=0
+
+
+== postscript ==
+HEAD later moved to 1d8272d4e4fe0babc08a12514246d640d3383928 ("pi: wrap the pi binary with a native addon runtime directory", 2026-09-29 22:05:51), which changes only nix/pkgs/pi-coding-agent.nix and postdates the image/VM runs above.

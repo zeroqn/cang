@@ -1,0 +1,54 @@
+== attempt 1: the two verbatim errors ==
+
+---- error A: flaky cang-guest-init musl test ----
+error: Cannot build '/nix/store/4ghhzvdy4g2yfc7yw55a3bn84sw5l0ai-cang-static-x86_64-unknown-linux-musl-0.10.1.drv'.
+       Reason: builder failed with exit code 101.
+       Output paths:
+         /nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1
+       Last 25 log lines:
+       > test guest_init::runtime::session::tests::terminal_state_keeps_recording_after_resize_to_one_row ... ok
+       > test guest_init::runtime::session::tests::terminal_state_record_output_preserves_combined_behavior ... ok
+       > test guest_init::runtime::session::tests::terminal_state_returns_normalized_output_for_live_proxy ... ok
+       > test guest_init::tests::guest_init_uses_modular_runtime_dispatcher ... ok
+       > test guest_init::components::waypipe::tests::failed_replacement_can_be_retried ... ok
+       > test guest_init::components::podman::service::tests::rootless_info_verification_handles_timeout_exit_races ... ok
+       > test guest_init::runtime::session::tests::pty_input_write_retries_transient_would_block ... ok
+       > test guest_init::runtime::session::tests::attached_client_receives_initial_pty_output ... ok
+       > test guest_init::runtime::session::tests::post_start_attach_sends_detached_restore_before_live_proxy ... ok
+       >
+       > failures:
+       >
+       > ---- guest_init::components::podman::service::tests::rootless_info_verification_preserves_failure_stderr stdout ----
+       >
+       > thread 'guest_init::components::podman::service::tests::rootless_info_verification_preserves_failure_stderr' (1981) panicked at crates/cang-guest-init/src/guest_init/components/podman/service_tests.rs:61:5:
+       > assertion failed: err.to_string().contains("idmap setup failed")
+       > note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+       >
+       >
+       > failures:
+       >     guest_init::components::podman::service::tests::rootless_info_verification_preserves_failure_stderr
+       >
+       > test result: FAILED. 297 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+       >
+       > error: test failed, to rerun pass `-p cang-guest-init --lib`
+       For full logs, run:
+
+---- error B: substitution failure + image nix-db refs throw ----
+96:error: unable to download 'https://mirrors.ustc.edu.cn/nix-channels/store/nar/0jklwj0ckxr161fg82a98fhnrk1phpxr692hj7sgsxw7yhyprgr2.nar.zst': HTTP error 416
+       … while evaluating the attribute 'missingImageConfigNixDbRefs'
+         at /home/dev/cang/cang/nix/image/checks.nix:397:5:
+          396|     imageNixDbStorePaths
+          397|     missingImageConfigNixDbRefs
+             |     ^
+          398|     missingRefsMessage
+
+       (stack trace truncated; use '--show-trace' to show the full, detailed trace)
+
+---- attempt 1 nix-build.out ----
+EXIT=1
+
+---- attempt 2 nix-build.out (success) ----
+/nix/store/2jzzdyj4ckpmmlwjswvmgr7z1hymm08i-cang.tar.gz
+/nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1
+/nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1
+EXIT=0

@@ -95,3 +95,20 @@ single soname `libstdc++.so.6`. Two mechanisms are already proven by the table
 above: an environment path (`LD_LIBRARY_PATH`) and a preloaded library that
 carries libstdc++ as its own dependency (which is what the host does, and what
 `--alloc=hardened` would do in the guest).
+
+## Addendum (ticket 04, live guest)
+
+Ticket 04 reproduced all of this inside a real cang guest (digest
+`sha256:b821b52e…`, pre-fix tree): `bun` fails `sharp` with
+`ERR_DLOPEN_FAILED: libstdc++.so.6: cannot open shared object file` and
+`onnxruntime-node` with the bare loader error, `--alloc=hardened` loads both, and
+`node` passes as the predicted trap. Two points this session had left open are
+now settled by that run's `LD_DEBUG`:
+
+- a **preloaded object's RUNPATH is not a rescue** - mimalloc's run path does
+  contain `gcc-15.3.0-lib/lib`, but it only serves mimalloc's own `DT_NEEDED`, so
+  the addon's `dlopen` still fails;
+- the guest **does** have `/lib` and `/usr/lib` compatibility farms, but neither
+  contains `libstdc++.so.6` and neither is on the loader's system search path.
+
+Full write-up: `04-live-guest-failure.md`.

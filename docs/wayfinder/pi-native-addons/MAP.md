@@ -63,9 +63,9 @@ change through the cang flake input in `/home/dev/nix/disp`.
     the image Env sets **no** `LD_LIBRARY_PATH` (`nix/image/config.nix`), and the
     guest's `/etc/ld-nix.so.preload` holds cang's `pkgs.mimalloc`
     (`nix/image/container.nix:99`; guest-init rewrites it per `--alloc`), a
-    different build whose NEEDED set has no libstdc++. **Confirmed** by ticket 01,
-including a reproduction of the guest's loader condition on the host (the live
-guest itself is ticket 04).
+    different build whose NEEDED set has no libstdc++. **Confirmed** by ticket 01 on the
+host's loader condition and by ticket 04 inside a real guest (with the sharp/
+onnxruntime failure verbatim under `bun`, and `node` passing as a trap).
   - The nix glibc loader's default "system search path" is its own store `lib`
     (seen via `LD_DEBUG` on the host); there is no `/etc/ld.so.cache`, no `/lib`,
     no `/usr/lib`.
@@ -111,6 +111,13 @@ guest itself is ticket 04).
   `bin/pi` is now a `makeWrapper` script prepending it to `LD_LIBRARY_PATH`.
   Under the guest's masked-`/etc` condition both addons go from LOAD_FAIL to
   LOAD_OK with that directory alone; image build and wrapper contracts are green.
+- [Reproduce the addon failure inside a real cang guest before the mechanism is chosen](tickets/04-live-guest-failure.md):
+  confirmed on the target (digest `sha256:b821b52e…`) - `bun` fails both addons
+  with `libstdc++.so.6: cannot open shared object file` under the default
+  mimalloc allocator and loads both under `--alloc=hardened`, while the `node`
+  control passes; `LD_DEBUG` shows the loader's system path never reaching the
+  image's `gcc-15.3.0-lib/lib`, and a preloaded object's RUNPATH is confirmed not
+  to rescue a later `dlopen`.
 
 ## Not yet specified
 

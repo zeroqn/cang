@@ -1,0 +1,88 @@
+      1162:	find library=libc.so.6 [0]; searching
+      1162:	 search cache=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/etc/ld.so.cache
+      1162:	 search path=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v4:/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v3:/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v2:/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v4:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v3:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v2:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib		(system search path)
+      1162:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v4/libc.so.6
+      1162:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v3/libc.so.6
+      1162:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v2/libc.so.6
+      1162:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libc.so.6
+      1162:	
+      1162:	find library=libpthread.so.0 [0]; searching
+      1162:	 search cache=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/etc/ld.so.cache
+      1162:	 search path=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v4:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v3:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v2:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib		(system search path)
+      1162:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libpthread.so.0
+      1162:	
+      1162:	find library=libdl.so.2 [0]; searching
+      1162:	 search cache=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/etc/ld.so.cache
+      1162:	 search path=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v4:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v3:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v2:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib		(system search path)
+      1162:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libdl.so.2
+      1162:	
+      1162:	find library=libm.so.6 [0]; searching
+      1162:	 search cache=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/etc/ld.so.cache
+      1162:	 search path=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v4:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v3:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v2:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib		(system search path)
+      1162:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libm.so.6
+      1162:	
+      1162:	find library=librt.so.1 [0]; searching
+      1162:	 search path=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v4:/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v3:/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v2:/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v4:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v3:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v2:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib		(RUNPATH from file /nix/store/l1hlc2dd721m61pblg8rlp8xalfmay1w-mimalloc-3.3.2/lib/libmimalloc.so)
+      1162:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v4/librt.so.1
+      1162:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v3/librt.so.1
+      1162:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/glibc-hwcaps/x86-64-v2/librt.so.1
+      1162:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/librt.so.1
+      1162:	
+      1162:	find library=libatomic.so.1 [0]; searching
+      1162:	 search path=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v4:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v3:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v2:/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib		(RUNPATH from file /nix/store/l1hlc2dd721m61pblg8rlp8xalfmay1w-mimalloc-3.3.2/lib/libmimalloc.so)
+      1162:	  trying file=/nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/libatomic.so.1
+      1162:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v4/libatomic.so.1
+      1162:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v3/libatomic.so.1
+      1162:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/glibc-hwcaps/x86-64-v2/libatomic.so.1
+      1162:	  trying file=/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/libatomic.so.1
+      1162:	
+      1162:	
+      1162:	calling init: /nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/ld-linux-x86-64.so.2
+      1162:	
+      1162:	
+      1162:	calling init: /nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libc.so.6
+      1162:	
+      1162:	
+      1162:	calling init: /nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libpthread.so.0
+      1162:	
+      1162:	
+      1162:	calling init: /nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/libatomic.so.1
+      1162:	
+      1162:	
+      1162:	calling init: /nix/store/znb3q6g1ik34454j3vcjx824h1871asg-glibc-2.42-84/lib/librt.so.1
+      1162:	
+      1162:	
+      1162:	calling init: /nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libm.so.6
+      1162:	
+      1162:	
+      1162:	calling init: /nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libdl.so.2
+      1162:	
+      1162:	
+      1162:	calling init: /nix/store/l1hlc2dd721m61pblg8rlp8xalfmay1w-mimalloc-3.3.2/lib/libmimalloc.so
+      1162:	
+      1162:	
+      1162:	initialize program: bun
+      1162:	
+      1162:	
+      1162:	transferring control: bun
+      1162:	
+      1162:	bun: error: symbol lookup error: undefined symbol: __asan_init (fatal)
+      1162:	bun: error: symbol lookup error: undefined symbol: __tsan_init (fatal)
+      1162:	find library=libonnxruntime.so.1 [0]; searching
+      1162:	 search path=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/glibc-hwcaps/x86-64-v4:/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/glibc-hwcaps/x86-64-v3:/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/glibc-hwcaps/x86-64-v2:/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64		(RUNPATH from file /home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/onnxruntime_binding.node)
+      1162:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/glibc-hwcaps/x86-64-v4/libonnxruntime.so.1
+      1162:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/glibc-hwcaps/x86-64-v3/libonnxruntime.so.1
+      1162:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/glibc-hwcaps/x86-64-v2/libonnxruntime.so.1
+      1162:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/libonnxruntime.so.1
+      1162:	
+      1162:	find library=libstdc++.so.6 [0]; searching
+      1162:	 search path=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64		(RUNPATH from file /home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/onnxruntime_binding.node)
+      1162:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/libstdc++.so.6
+      1162:	 search cache=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/etc/ld.so.cache
+      1162:	 search path=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v4:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v3:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v2:/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib		(system search path)
+      1162:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libstdc++.so.6
+      1162:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1162:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1162:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1162:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/libstdc++.so.6
+      1162:	
