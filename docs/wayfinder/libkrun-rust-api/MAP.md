@@ -155,8 +155,10 @@ byte-verified hash; only the tag push and the post-release
   build libkrun's own crates.
 - [Supply-chain and lockfile policy for the enlarged graph](tickets/08-supply-chain-and-lockfile-policy.md):
   `cargo deny check` green after allowing BSD-3-Clause/ISC/Zlib with the reason
-  written down; `ffier` stays as an unused build-time dependency of the blob
-  crate; the `deps/libkrun` bump procedure is in `docs/maintenance.md`.
+  written down; `ffier` stayed an unused build-time
+  dependency of the blob crate until 2026-10, when it was made optional and left
+  cang's graph ([ticket 03](tickets/03-nix-cang-derivation-libkrun-source.md));
+  the `deps/libkrun` bump procedure is in `docs/maintenance.md`.
 - [Research: libkrun's Rust API surface vs the C ABI](tickets/01-rust-api-versus-c-abi-surface.md):
   the Rust API covers every call cang makes (`VirglRendererFlags` is narrower -
   DRM/USE_VIDEO need `from_bits_retain` - and `DisplayBackend::new` still takes a
@@ -178,9 +180,6 @@ byte-verified hash; only the tag push and the post-release
 - **The next fork base.** If upstream cuts 2.0.0 while this runs, the Rust API
   may move; the pin bump is then a compile fix. That base decision belongs to the
   fork map, not here.
-- **Whether the `ffier` git dependency can leave the graph.** `krun-init-blob`
-  declares it unconditionally even with `ffi` off; making it optional is a
-  one-line fork change nobody has needed yet (tickets 01/03/08).
 - **Whether the trait survives as the seam.** `LibkrunApi` was kept so the
   recording fake and the launcher fixtures could survive the port; with the
   C-ABI shape gone, whether a `cang-libkrun` module boundary is the deeper seam

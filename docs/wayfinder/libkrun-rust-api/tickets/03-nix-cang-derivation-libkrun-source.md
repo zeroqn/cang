@@ -61,3 +61,10 @@ Known constraints, from charting:
   fork. `ffier` stays in cang's graph as a build-time dependency of the blob
   crate (unused without the `ffi` feature); it costs build time, not behaviour.
   Left as a possible fork cleanup.
+
+- **Later (2026-10)**: the cleanup was taken. Fork `0847b562` makes
+  `krun-init-blob`'s `ffier` optional (`ffi = ["ffi-client", "dep:ffier"]`), so
+  `ffier` is no longer in cang's `Cargo.lock` and `cargoDeps`
+  (`nix/pkgs/cang-rust.nix`) moved with it. The fork's own lock still records
+  `ffier` - `bindings/init-blob-via-cdylib` is one of its members - so
+  `libkrunCargoDeps` in `nix/pkgs/libkrun-source.nix` is unchanged.

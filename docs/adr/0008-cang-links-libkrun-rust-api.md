@@ -66,6 +66,13 @@ it and Nix vendors it (`fetchCargoVendor`, which
 refreshes two vendor hashes plus `Cargo.lock` - see
 [the maintenance procedure](../maintenance.md#updating-the-libkrun-fork).
 
+The fork's `ffier` dependency is only for the C bindings its release pipeline
+generates: `krun-init-blob` declares it optionally and the `ffi` feature enables
+it, so cang's graph contains no `ffier` at all (2026-10, fork `0847b562`; before
+that it was compiled here as an unused dependency). Cang's lock still reaches
+outside crates.io for the GPU stack (`rutabaga_gfx` at the fork's `magma-gpu`
+rev), so the vendor helper stays.
+
 The published release asset stays a bare neutral ELF (ADR 0005), but it now
 carries `libvirglrenderer.so.1` as a `DT_NEEDED`, so a consumer that is not Nix
 has to provide that library.
