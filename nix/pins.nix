@@ -5,13 +5,13 @@ in
   cangVersion = cargoToml.workspace.package.version;
 
   piCodingAgent = {
-    version = "0.85.1";
+    version = "0.87.1";
     owner = "earendil-works";
     repo = "pi";
-    rev = "v0.85.1";
-    srcHash = "sha256-gU8BSiqqOYt2RRuQONHHGvZeSM5KFQVrwif9bmuUXUc=";
-    npmDepsHash = "sha256-6/CE7cCSopNH7cUJDkRLunhhiFDgYkhKi6QRBx8zwes=";
-    aiNpmTarballHash = "sha256-r30RmGF5RFzm/oizfVfeIvgjwP/TplyuMcVVt/XpklM=";
+    rev = "v0.87.1";
+    srcHash = "sha256-GUhlq6t+l6iiViOZ0bkV28v3ZDqcLvEwpZpYZ5JAyDk=";
+    npmDepsHash = "sha256-Pktim/DwSKoKi+p9C2ID+ioma9RWWb3hgDSF5zfp9o4=";
+    aiNpmTarballHash = "sha256-NbRDLyfMJmX4a+67mvajmxJRlwiDwwRL2L5PToxzHKA=";
   };
 
   # Pinned by scripts/update-herdr.sh (tag + per-system asset hashes).
@@ -87,11 +87,11 @@ in
   # mismatch, and upstream may build a newer protocol than the published
   # client speaks.
   montyPrebuiltRelease = {
-    version = "0.0.23";
+    version = "1.0.0";
     systems = {
       x86_64-linux = {
-        asset = "monty-linux-x64-gnu-0.0.23.tgz";
-        hash = "sha256-q1ftin57G3vAMydqTWbimaDtSlDmrErbTLgFCv4sCSA=";
+        asset = "monty-linux-x64-gnu-1.0.0.tgz";
+        hash = "sha256-JR2VG0JYPJw0I12P7hO3Ig5sXIaeDGSNz9XA/itlaMw=";
       };
     };
   };
