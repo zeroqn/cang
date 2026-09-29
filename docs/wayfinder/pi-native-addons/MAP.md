@@ -106,6 +106,11 @@ guest itself is ticket 04).
   covered. `--alloc=hardened` is documented as a stopgap, not promoted to the
   mechanism; evidence is a scored live-guest probe plus a repo wiring check.
   Recorded as [ADR 0009](../../adr/0009-pi-extension-cxx-runtime-delivery.md).
+- [Install the pi wrapper and the native addon runtime directory](tickets/05-wrapper-and-runtime-dir.md):
+  landed - `cang-native-addon-runtime` exposes only `libstdc++.so.6`, and
+  `bin/pi` is now a `makeWrapper` script prepending it to `LD_LIBRARY_PATH`.
+  Under the guest's masked-`/etc` condition both addons go from LOAD_FAIL to
+  LOAD_OK with that directory alone; image build and wrapper contracts are green.
 
 ## Not yet specified
 
