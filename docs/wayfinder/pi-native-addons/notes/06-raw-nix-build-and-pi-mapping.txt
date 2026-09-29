@@ -1,0 +1,31 @@
+== ticket 06 image build inputs, pi mapping, and the wrapper ==
+== image tar + derivations from this build (nix-build-attempt1.log tail, EXIT=0) ==
+building '/nix/store/3ynkf2y9jmwilsz3j6yxb3sy7xiz1zgp-cang.tar.gz.drv'...
+/nix/store/l28k4y2fqhhm68l7hhp0gzj0wvv5khy3-cang.tar.gz
+/nix/store/22i0vnx2672phbgvgwjp11rkc76x1z69-cang-0.10.1
+/nix/store/1j99c1xhp2jffvi5xphzric6708skzqq-cang-static-x86_64-unknown-linux-musl-0.10.1
+EXIT=0
+
+== pi derivations in the store for 0.87.1 ==
+/nix/store/0ygnmd5mw7g23qq36kvawb6p5qqrn3sf-pi-coding-agent-0.87.1
+/nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1
+
+== the wrapped pi this build resolves to (the image content) ==
+-r-xr-xr-x 2 root root 563 Jan  1  1970 /nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1/bin/pi
+--- bin/pi ---
+#! /nix/store/7n1hai8jk6vgc967drgkqi6k7j6ff28q-bash-5.3p9/bin/bash -e
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+':'$LD_LIBRARY_PATH':'}
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH/':''/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib'':'/':'}
+LD_LIBRARY_PATH='/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib'$LD_LIBRARY_PATH
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH#':'}
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH%':'}
+export LD_LIBRARY_PATH
+exec "/nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1/lib/pi-coding-agent/pi"  "$@" 
+--- native addon runtime dir ---
+total 4
+lrwxrwxrwx 3 root root 77 Jan  1  1970 libstdc++.so.6 -> /nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/libstdc++.so.6
+--- libstdc++.so.6 target ---
+/nix/store/2ga5nd1m56n5cx2wh8vbf6nrdhqk2f0q-gcc-15.3.0-lib/lib/libstdc++.so.6.0.34
+
+== ticket 05 commit in this tree ==
+1d8272d pi: wrap the pi binary with a native addon runtime directory

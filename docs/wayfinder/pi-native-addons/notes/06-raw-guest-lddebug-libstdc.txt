@@ -1,0 +1,62 @@
+# ticket 06 guest LD_DEBUG=libs: how libstdc++.so.6 resolves (raw grep of the lddebug files)
+
+## Wrapper environment (the LD_LIBRARY_PATH bin/pi exports), bun require('sharp')
+      1095:	find library=libstdc++.so.6 [0]; searching
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../sharp-libvips-linux-x64/lib/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../../../@img-sharp-libvips-linux-x64-npm-1.3.4-28ab0da74d/node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../../../@img-sharp-libvips-linux-x64-npm-1.3.4-28ab0da74d/node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../../../@img-sharp-libvips-linux-x64-npm-1.3.4-28ab0da74d/node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1095:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../../../@img-sharp-libvips-linux-x64-npm-1.3.4-28ab0da74d/node_modules/@img/sharp-libvips-linux-x64/lib/libstdc++.so.6
+      1095:	  trying file=/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib/libstdc++.so.6
+      1095:	calling init: /nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib/libstdc++.so.6
+
+## Wrapper environment, bun require('onnxruntime-node')
+      1124:	find library=libstdc++.so.6 [0]; searching
+      1124:	  trying file=/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib/libstdc++.so.6
+      1124:	calling init: /nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib/libstdc++.so.6
+
+## Control: plain environment (no LD_LIBRARY_PATH), bun require('sharp')
+      1036:	find library=libstdc++.so.6 [0]; searching
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../sharp-libvips-linux-x64/lib/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../../../@img-sharp-libvips-linux-x64-npm-1.3.4-28ab0da74d/node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../../../@img-sharp-libvips-linux-x64-npm-1.3.4-28ab0da74d/node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../../../@img-sharp-libvips-linux-x64-npm-1.3.4-28ab0da74d/node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1036:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../../../@img-sharp-libvips-linux-x64-npm-1.3.4-28ab0da74d/node_modules/@img/sharp-libvips-linux-x64/lib/libstdc++.so.6
+      1036:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libstdc++.so.6
+      1036:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1036:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1036:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1036:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/libstdc++.so.6
+
+## Control: plain environment, bun require('onnxruntime-node')
+      1066:	find library=libstdc++.so.6 [0]; searching
+      1066:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/onnxruntime-node/bin/napi-v6/linux/x64/libstdc++.so.6
+      1066:	  trying file=/nix/store/lm3pknxi0ipypy3lxh1wmm8wvvavdwrn-glibc-2.42-84/lib/libstdc++.so.6
+      1066:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+      1066:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+      1066:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+      1066:	  trying file=/nix/store/m07syxhld8hpprrdmzq565ziia6vlw9l-xgcc-15.3.0-libgcc/lib/libstdc++.so.6

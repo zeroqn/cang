@@ -1,0 +1,36 @@
+== ticket 06 module outcomes from the guest, verbatim (all six probe cases) ==
+### CASE [plain-plain] LDPATH=plain bun require('sharp')
+exit=0 verdict=LOAD_FAIL
+stdout: LOAD_FAIL: Could not load the "sharp" module using the linux-x64 runtime|ERR_DLOPEN_FAILED: libstdc++.so.6: cannot open shared object file: No such file or directory|Possible solutions:|- Manually install libvips >= 8.18.7|    See https://sharp.pixelplumbing.com/install#building-from-source|- Add WebAssembly-based dependencies:|    npm install sharp @img/sharp-wasm32|- Consult the installation documentation:|    See https://sharp.pixelplumbing.com/install|
+stderr: 
+LOAD_FAIL
+
+### CASE [plain-plain] LDPATH=plain bun require('onnxruntime-node')
+exit=0 verdict=LOAD_FAIL
+stdout: LOAD_FAIL: libstdc++.so.6: cannot open shared object file: No such file or directory|
+stderr: 
+LOAD_FAIL
+
+### CASE [wrapper-env] LDPATH=wrapper bun require('sharp')
+exit=0 verdict=LOAD_OK
+stdout: LOAD_OK|
+stderr: 
+LOAD_OK
+
+### CASE [wrapper-env] LDPATH=wrapper bun require('onnxruntime-node')
+exit=0 verdict=LOAD_OK
+stdout: LOAD_OK|
+stderr: 
+LOAD_OK
+
+### CASE [plain-node] LDPATH=plain node require('sharp')
+exit=0 verdict=LOAD_OK
+stdout: LOAD_OK|
+stderr: 
+LOAD_OK
+
+### CASE [plain-node] LDPATH=plain node require('onnxruntime-node')
+exit=0 verdict=LOAD_OK
+stdout: LOAD_OK|
+stderr: 
+LOAD_OK

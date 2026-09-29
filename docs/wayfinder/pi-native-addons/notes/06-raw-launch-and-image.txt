@@ -1,0 +1,25 @@
+== ticket 06 live-guest run: inputs and launch (verbatim logs/launch.txt) ==
+date-utc: 2026-09-29T15:20:15Z
+repo-head: 60cb5a61b868dbb4c9c4f87ddd46e07db1456801
+repo-dirty: ?? docs/wayfinder/pi-native-addons/notes/09-raw/;?? result-cang-ci;
+cang: /nix/store/22i0vnx2672phbgvgwjp11rkc76x1z69-cang-0.10.1/bin/cang
+guest-init: /nix/store/1j99c1xhp2jffvi5xphzric6708skzqq-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init
+image-ref: localhost/cang:latest
+image-store-tar: /nix/store/l28k4y2fqhhm68l7hhp0gzj0wvv5khy3-cang.tar.gz
+image-digest: sha256:923d645e8e212064e3fc1f75973efd6291611070e04fef3300b0da3bd3ca8249
+image-id: 78df820f0812
+alloc: <default, no --alloc flag>
+cwd: /home/dev/cang/disk/pi-native-addons-06/workspace
+launch: /nix/store/22i0vnx2672phbgvgwjp11rkc76x1z69-cang-0.10.1/bin/cang --mem 4 --seccomp=off --landlock=off --guest-init /nix/store/1j99c1xhp2jffvi5xphzric6708skzqq-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init -- sh /workspace/probe.sh
+vm-exit=0
+== hermetic podman store (CONTAINERS_STORAGE_CONF) ==
+[storage]
+driver = "btrfs"
+graphroot = "/home/dev/cang/disk/pi-native-addons-06/container-storage/graph"
+runroot = "/home/dev/cang/disk/pi-native-addons-06/container-storage/run"
+== isolated cang config (XDG_CONFIG_HOME/cang/cang.toml) ==
+[state]
+location = "/home/dev/cang/disk/pi-native-addons-06/state"
+
+[task-rootfs]
+backend = "btrfs-snapshot"
