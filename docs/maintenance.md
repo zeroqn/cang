@@ -92,6 +92,58 @@ A libkrun update is therefore:
    first.
 5. Re-verify with a live boot and the Chromium GPU smoke, not just a green build.
 
+### Re-basing the libkrunfw guest kernel
+
+`deps/libkrunfw` bundles a kernel whose base is two variables in the `Makefile`
+(`KERNEL_VERSION` + `KERNEL_REMOTE`, and `KERNEL_HARDENED_VERSION`), mirrored by
+`kernelVersion`/`kernelHardenedVersion` and two hashes in
+`nix/pkgs/libkrunfw.nix`. Moving the base is a patch-series re-base, not a
+version bump:
+
+1. Apply the current series to a pristine checkout of the **old** kernel as a
+   commit series (`git am patches/0*.patch`), import the **new** kernel's
+   pristine tree as an unrelated root commit, and replay with
+   `git rebase --onto <new> <old> series`. Git then resolves the mechanical drift
+   itself and stops only on real conflicts; commits whose content is already
+   upstream come out empty - in the 6.12.109 → 7.2.7 re-base that removed nine
+   patches wholesale (vsock dgram, virtio-CAN, virtio_rtc, virtgpu partial map,
+   scanout import).
+2. Port what conflicts, then regenerate the patch files with
+   `git format-patch <new-base>..series` and renumber them - the `Makefile`
+   applies `patches/0*.patch` in sorted order and then the hardened patch, and
+   each of them has to apply on a pristine tree.
+3. Refresh `config-libkrunfw_x86_64-kvm` from the `.config` `olddefconfig`
+   produces during a real build, and check the options cang needs survived
+   (`CONFIG_UDMABUF`, `CONFIG_SECURITY_LANDLOCK`, `CONFIG_DRM_VIRTIO_GPU`,
+   `CONFIG_FUSE_DAX`, `CONFIG_NFT_TPROXY`, `CONFIG_ZRAM`, `CONFIG_KVM`,
+   `CONFIG_NR_CPUS`). The `-kvm-lto` config is a separate file and drifts
+   separately - the released `libkrunfw-x86_64-kvm-lto.tgz` asset is built from
+   `MakefileLto`, so refresh it (and re-check its clang ThinLTO settings) before
+   cutting an LTO release.
+4. Build the kernel (`make` in the fork checkout, or
+   `nix build .#cang-dev --override-input libkrunfw-src path:$PWD/deps/libkrunfw`)
+   and **boot a real guest** with the built firmware
+   (`CANG_LIBKRUNFW_LIBRARY=<checkout>/libkrunfw.so.5` plus the harness in
+   `docs/wayfinder/libkrunfw-kernel-rebase/notes/`), then cut and pin the fork
+   release as in the scheme above.
+
+Two traps worth knowing, both found the hard way in the 7.2.7 re-base:
+
+- **Virtualization feature bits collide with upstream.** The fork's
+  `VIRTIO_GPU_F_FENCE_PASSING` and upstream's `VIRTIO_GPU_F_BLOB_ALIGNMENT` are
+  both bit 5. Because the libkrun host offers bit 5 as `RESOURCE_SYNC` and has no
+  blob-alignment config field, reading the bit as `BLOB_ALIGNMENT` left
+  `vgdev->blob_alignment` at zero and the create-blob ioctl's
+  `IS_ALIGNED(size, 0)` check rejected every blob - a dead GPU. Re-check every
+  fork bit against the new kernel's `include/uapi/linux/virtio_*.h`.
+- **Kernel-internal APIs drift under the patches.** In 7.x, `proto_ops.bind`/
+  `.connect` take `struct sockaddr_unsized *` (`.getname` still takes
+  `struct sockaddr *`), `__udp4/6_lib_lookup()` dropped the `udp_table`
+  argument, and `v4l2_fh_add()`/`v4l2_fh_del()` take the `struct file *`. A
+  three-way merge can also drop a closing brace or a `break` at a hunk boundary
+  without complaining, so compile every touched file - the kernel build is the
+  only check that matters.
+
 `deps/libkrunfw` works the same way: its **`libkrunfw-src` input** (the kernel
 source `.#cang-dev` builds) moves with the **submodule pointer**, while the
 *released* kernel bundle cang opens at run time stays the separate
