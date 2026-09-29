@@ -126,6 +126,14 @@ let
   );
   configSourceFile = pkgs.writeText "cang-config-nix-source.txt" (builtins.readFile ./config.nix);
   layersSourceFile = pkgs.writeText "cang-layers-nix-source.txt" (builtins.readFile ./layers.nix);
+  piSourceFile = pkgs.writeText "cang-pi-coding-agent-nix-source.txt" (
+    builtins.readFile ../pkgs/pi-coding-agent.nix
+  );
+
+  # The directory the pi wrapper exposes to prebuilt extension addons, and the
+  # wrapper's own path into it; see ADR 0009 and the map under
+  # docs/wayfinder/pi-native-addons/.
+  nativeAddonRuntimeDir = piCodingAgent.passthru.nativeAddonRuntimeDir;
   allocatorContracts = ''
     grep -F 'mimallocLib = ' ${layersSourceFile}
     grep -F 'pkgs.mimalloc' ${layersSourceFile}
@@ -240,6 +248,35 @@ let
     ''}
   '';
 
+  # Prebuilt addons that pi extensions install at runtime (magic-context's
+  # `sharp` and `onnxruntime-node`) are glibc ELF objects with
+  # `DT_NEEDED libstdc++.so.6`, while the pi binary is a bun standalone artifact
+  # with no RUNPATH and no libstdc++ in its own DT_NEEDED - and the guest has no
+  # default library path that supplies it. The wrapper is what carries the
+  # soname into the process, so assert both halves of that wiring and that the
+  # wrapper really hands the variable to its child.
+  nativeAddonRuntimeContracts = ''
+    grep -F 'nativeAddonRuntimeDir' ${piSourceFile}
+    grep -F 'makeWrapper $out/lib/pi-coding-agent/pi $out/bin/pi' ${piSourceFile}
+    test -e ${nativeAddonRuntimeDir}/lib/libstdc++.so.6
+    test -x ${piCodingAgent}/lib/pi-coding-agent/pi
+    # The wrapper, not a symlink to the raw bun binary, is what the image runs.
+    test ! -L ${piCodingAgent}/bin/pi
+    grep -F '${nativeAddonRuntimeDir}/lib' ${piCodingAgent}/bin/pi
+    test -x ${layers.agentImageLayer}/bin/pi
+    grep -F '${nativeAddonRuntimeDir}/lib' ${layers.agentImageLayer}/bin/pi
+    ${piCodingAgent}/bin/pi --version | grep -F '${piCodingAgent.version}'
+    # Behavioural: mentioning the directory is not enough - a child process
+    # started through the wrapper must actually see it in LD_LIBRARY_PATH.
+    sed -e 's|^exec .*|exec env|' ${piCodingAgent}/bin/pi > native-addon-wrapper-env
+    if cmp -s native-addon-wrapper-env ${piCodingAgent}/bin/pi; then
+      echo "native addon runtime: could not rewrite the pi wrapper's exec line" >&2
+      exit 1
+    fi
+    chmod +x native-addon-wrapper-env
+    ./native-addon-wrapper-env | grep -F "LD_LIBRARY_PATH=${nativeAddonRuntimeDir}/lib"
+  '';
+
   rootCargoAbsent = pkgs.runCommand "cang-image-root-cargo-absent-check" { } ''
     set -euo pipefail
 
@@ -330,6 +367,7 @@ let
         ${beadsContracts}
         ${sqliteContracts}
         ${montyContracts}
+        ${nativeAddonRuntimeContracts}
 
         grep -F 'CANG_NIX_OVERLAY' ${layers.nixCommandCompat}/bin/nix
         grep -F 'cang-guest-init internal nix wait' ${layers.nixCommandCompat}/bin/nix

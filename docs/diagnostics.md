@@ -289,6 +289,26 @@ the launch path still consumes the encoded private handoff format.
   startup fails if the loaded libkrun does not provide `krun_set_rlimits` or
   rejects the nofile limit request.
 
+- A pi extension that ships a prebuilt native addon can fail to load in the
+  guest with
+
+  ```text
+  libstdc++.so.6: cannot open shared object file: No such file or directory
+  ```
+
+  The addon is a glibc object opening a C++ runtime that neither Pi's bundled Bun
+  runtime nor the guest's library search path provides: Bun has no `RUNPATH` and
+  no `libstdc++` in its `DT_NEEDED`, the guest's `/lib` and `/usr/lib` are
+  compatibility farms that are not on the loader's default path and carry no
+  `libstdc++`, and the default `mimalloc` preload does not link it either.
+  Current images serve it through the `pi` wrapper (see the container environment
+  summary). On an image built before that wrapper, `cang --alloc=hardened ...`
+  also unblocks the load, because that allocator library happens to carry
+  `libstdc++` in its own `DT_NEEDED`; that is incidental rather than a fix -
+  `--alloc=glibc` removes the same preload file and fails the same way. Note that
+  probing with `node` hides the problem: node links `libstdc++` itself and loads
+  the addon even when the guest cannot, so use `bun` (or `pi`) to reproduce it.
+
 - The guest has two descriptor ceilings, and cang keeps them consistent: the
   per-process `RLIMIT_NOFILE` and the guest-kernel-wide
   `/proc/sys/fs/file-max`. The guest kernel derives `file-max` from guest RAM at

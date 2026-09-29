@@ -1,7 +1,9 @@
 # Ticket 04 - the addon failure inside a real cang guest
 
 Status: RESOLVED - the failure ticket 01 predicted is confirmed on the real
-target, with the allocator control that ticket 01's host sandbox implied.
+target, with the allocator control that ticket 01's host sandbox implied. A
+clearly-labelled **post-fix** addendum (after ticket 05's fix landed) is at the
+end.
 
 ## Answer
 
@@ -90,10 +92,17 @@ This measurement is the **pre-fix baseline**. The image's agent layer resolves
 
 The ticket-05 fix's outputs are **not** in this image:
 `/nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1` (makeWrapper
-`--prefix LD_LIBRARY_PATH .../cang-native-addon-runtime/lib`) and the
-installPhase-time wrapper
+`--prefix LD_LIBRARY_PATH .../cang-native-addon-runtime/lib`, the one a post-fix
+build resolves to) and the installPhase-time wrapper
 `/nix/store/0ik8k841n595v9kvif0rfdrr8w5486jn-pi-coding-agent-0.87.1` (its `bin/pi`
 execs `... pi "installPhase"`). Full evidence: `04-raw-pi-store-path.txt`.
+
+pi mapping, both images:
+
+| image | agent layer | `bin/pi` resolves to | form |
+|---|---|---|---|
+| pre-fix (this ticket; tar `2jzzdyj4`) | `p9lzng046...` | `yj15wxdj...-pi-coding-agent-0.87.1` | symlink to the raw ELF (**unwrapped**) |
+| post-fix (addendum; tar `hwrpy4v0`) | `9ha2nyk8...` | `nwvcnfx...-pi-coding-agent-0.87.1` | makeWrapper script (**wrapped**) |
 
 Consequence: the wrapper only affects processes *started as* `pi`, so a probe
 that invokes `bun` directly (as this one does) reports the same FAIL even against
@@ -204,6 +213,44 @@ as directories, but they do not change the conclusion:
 So the operative fact stands: nothing on the loader's default path supplies
 `libstdc++.so.6` under the default (mimalloc) allocator.
 
+## Bonus: post-fix confirmation (clearly labelled, not the baseline)
+
+After ticket 05's fix landed (`1d8272d`, "pi: wrap the pi binary with a native
+addon runtime directory"), the probe was re-run against a freshly built image to
+check the mechanism end to end. This is **not** part of ticket 04's pre-fix
+baseline.
+
+- image tar `/nix/store/hwrpy4v01s9rshpas3hwvacf2rf6pkaf-cang.tar.gz`, digest
+  `sha256:e633045040dc1b81a01a6657fb7ca9f1ac2f6b32faaf6d0039f1c386152b8396`,
+  agent layer `9ha2nyk8...`, `bin/pi -> /nix/store/nwvcnfx...-pi-coding-agent-0.87.1/bin/pi`
+  (the makeWrapper form), prepending
+  `/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib` to
+  `LD_LIBRARY_PATH`; that directory's only entry is `libstdc++.so.6`.
+- same launch shape and same default allocator (`--alloc mimalloc`), `vm-exit=0`.
+
+| probe | sharp | onnxruntime-node |
+|---|---|---|
+| plain `bun` (not the wrapper - control) | FAIL | FAIL |
+| `bun` with exactly the wrapper's `LD_LIBRARY_PATH` | **LOAD_OK** | **LOAD_OK** |
+
+`LD_DEBUG=libs` under the wrapper environment shows the resolution the wrapper
+buys:
+
+```
+find library=libstdc++.so.6 [0]; searching
+  trying file=/nix/store/0hpv152...-cang-native-addon-runtime/lib/libstdc++.so.6
+  calling init: /nix/store/0hpv152...-cang-native-addon-runtime/lib/libstdc++.so.6
+```
+
+`/etc/ld-nix.so.preload` is still the mimalloc line in that run, so the fix works
+alongside the default allocator.
+
+Two honest limits on the addendum: it runs `bun` under the wrapper's environment,
+not inside the `pi` process itself (`pi` needs a TTY/session), and the plain-`bun`
+row is a deliberate control proving the *wrapper*, not some other image change,
+is what makes the load succeed. Running the addon inside a real `pi` session is
+ticket 06's measurement, not this one.
+
 ## Caveats
 
 - **Shared, mutable checkout.** The repo is shared with another session that
@@ -241,6 +288,12 @@ So the operative fact stands: nothing on the loader's default path supplies
 - `04-raw-guest-lddebug-libstdc-mimalloc.txt` - the libstdc++ search lines plus
   the preloaded mimalloc RUNPATH.
 - `04-raw-guest-lddebug-libstdc-hardened.txt` - the hardened sections.
+- `04-raw-pi-store-path.txt` - which `pi` derivation each image carries, plus the
+  actual contents of the two paths named for comparison.
+- `04-raw-postfix-launch-and-image.txt`,
+  `04-raw-postfix-guest-probe.txt`,
+  `04-raw-postfix-module-outcomes.txt`,
+  `04-raw-postfix-lddebug-libstdc.txt` - the labelled post-fix addendum.
 
 Working copies of everything (logs, evidence dirs, storage, state) stay under
 `/home/dev/cang/disk/pi-native-addons-04/`.

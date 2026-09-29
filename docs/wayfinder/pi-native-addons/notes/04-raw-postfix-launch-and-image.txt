@@ -1,0 +1,19 @@
+== post-fix (bonus) run: inputs and result ==
+repo HEAD at post-fix build: 4f950c49e4ed26b266713a1983aa6e752fd432c8 (fix commit 1d8272d)
+image tar: /nix/store/hwrpy4v01s9rshpas3hwvacf2rf6pkaf-cang.tar.gz
+image digest: sha256:e633045040dc1b81a01a6657fb7ca9f1ac2f6b32faaf6d0039f1c386152b8396
+image id:     69e87b076383d6c96bcb7042534cad92a2708d8b0a1cee582743e6e604046778
+agent layer:  /nix/store/9ha2nyk83f6wxdaxvvd84rdpgh6mgd68-cang-agent-layer
+  bin/pi -> /nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1/bin/pi (WRAPPED)
+
+== pre-fix vs post-fix pi mapping ==
+pre-fix  (tar 2jzzdyj4, digest sha256:b821b52e...): agent layer p9lzng046 -> yj15wxdj  (unwrapped: bin/pi symlink to the raw ELF)
+post-fix (tar hwrpy4v0, digest sha256:e6330450...): agent layer 9ha2nyk8 -> nwvcnfx  (wrapped: makeWrapper --prefix LD_LIBRARY_PATH)
+
+== launch ==
+cang: /nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1/bin/cang
+image: localhost/cang:latest
+alloc: mimalloc
+guest-init: /nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init
+launch: /nix/store/cj14gd195wvigrrkipadx7iilq30g8w7-cang-0.10.1/bin/cang --mem 4 --alloc mimalloc --seccomp=off --landlock=off --guest-init /nix/store/qw5cm13a0xc6mdlqyvk2338lh7w6f86z-cang-static-x86_64-unknown-linux-musl-0.10.1/bin/cang-guest-init -- sh /workspace/probe-postfix.sh
+vm-exit=0

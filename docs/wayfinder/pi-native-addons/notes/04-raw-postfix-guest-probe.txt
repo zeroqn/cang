@@ -1,0 +1,64 @@
+### ticket04 POST-FIX guest probe (image with the ticket-05 pi wrapper)
+# date-utc: 2026-09-29T14:16:36Z
+# uname: Linux localhost 6.12.109-hardened1 #1 SMP PREEMPT_DYNAMIC Tue Mar 10 13:28:56 CET 2026 x86_64 GNU/Linux
+# bun --version = 1.4.2
+# pi --version = 0.87.1
+
+### the pi entrypoint in this image
+command -v pi = /nix/store/9ha2nyk83f6wxdaxvvd84rdpgh6mgd68-cang-agent-layer/bin/pi
+readlink -f pi  = /nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1/bin/pi
+file type       = symbolic link
+--- first lines of the pi entry (wrapper?) ---
+  ENTRY #! /nix/store/7n1hai8jk6vgc967drgkqi6k7j6ff28q-bash-5.3p9/bin/bash -e
+  ENTRY LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+':'$LD_LIBRARY_PATH':'}
+  ENTRY LD_LIBRARY_PATH=${LD_LIBRARY_PATH/':''/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib'':'/':'}
+  ENTRY LD_LIBRARY_PATH='/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib'$LD_LIBRARY_PATH
+  ENTRY LD_LIBRARY_PATH=${LD_LIBRARY_PATH#':'}
+  ENTRY LD_LIBRARY_PATH=${LD_LIBRARY_PATH%':'}
+  ENTRY export LD_LIBRARY_PATH
+  ENTRY exec "/nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1/lib/pi-coding-agent/pi"  "$@" 
+--- does the entry mention the native addon runtime dir? ---
+  hits=2
+runtime dir parsed from the wrapper: /nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime
+runtime dir contents: libstdc++.so.6|
+
+### /etc/ld-nix.so.preload
+preload: /nix/store/l1hlc2dd721m61pblg8rlp8xalfmay1w-mimalloc-3.3.2/lib/libmimalloc.so
+
+### [plain] LD_LIBRARY_PATH=plain bun require('sharp')
+stdout: LOAD_FAIL: Could not load the "sharp" module using the linux-x64 runtime
+ERR_DLOPEN_FAILED: libstdc++.so.6: cannot open shared object file: No such file or directory
+Possible solutions:
+- Manually install libvips >= 8.18.7
+    See https://sharp.pixelplumbing.com/install#building-from-source
+- Add WebAssembly-based dependencies:
+    npm install sharp @img/sharp-wasm32
+- Consult the installation documentation:
+    See https://sharp.pixelplumbing.com/install
+verdict: LOAD_FAIL
+lddebug libstdc++ resolution:
+  DBG        917:	find library=libstdc++.so.6 [0]; searching
+
+### [plain] LD_LIBRARY_PATH=plain bun require('onnxruntime-node')
+stdout: LOAD_FAIL: libstdc++.so.6: cannot open shared object file: No such file or directory
+verdict: LOAD_FAIL
+lddebug libstdc++ resolution:
+  DBG        945:	find library=libstdc++.so.6 [0]; searching
+
+### [wrapper-env] LD_LIBRARY_PATH=wrapper-env bun require('sharp')
+stdout: LOAD_OK
+verdict: LOAD_OK
+lddebug libstdc++ resolution:
+  DBG        973:	find library=libstdc++.so.6 [0]; searching
+  DBG        973:	  trying file=/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib/libstdc++.so.6
+  DBG        973:	calling init: /nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib/libstdc++.so.6
+
+### [wrapper-env] LD_LIBRARY_PATH=wrapper-env bun require('onnxruntime-node')
+stdout: LOAD_OK
+verdict: LOAD_OK
+lddebug libstdc++ resolution:
+  DBG       1006:	find library=libstdc++.so.6 [0]; searching
+  DBG       1006:	  trying file=/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib/libstdc++.so.6
+  DBG       1006:	calling init: /nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib/libstdc++.so.6
+
+### DONE

@@ -1,0 +1,27 @@
+# POST-FIX: bun require('sharp') with the pi wrapper's LD_LIBRARY_PATH (LD_DEBUG=libs, libstdc++ lines)
+       973:	find library=libstdc++.so.6 [0]; searching
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../sharp-libvips-linux-x64/lib/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+       973:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+
+# POST-FIX: plain bun require('sharp'), no wrapper env (control - still fails)
+       917:	find library=libstdc++.so.6 [0]; searching
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../sharp-libvips-linux-x64/lib/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../sharp-libvips-linux-x64/1.3.4/lib/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v2/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../node_modules/@img/sharp-libvips-linux-x64/lib/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v4/libstdc++.so.6
+       917:	  trying file=/home/dev/.pi/agent/git/github.com/zeroqn/pi/node_modules/@img/sharp-linux-x64/lib/../../../node_modules/@img/sharp-libvips-linux-x64/lib/glibc-hwcaps/x86-64-v3/libstdc++.so.6

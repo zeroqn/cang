@@ -438,6 +438,10 @@ The container provides:
   evidence when `/run/cang/nix-disk/upper` is visible
 - `rustc` and `rust-analyzer` wrappers that mask `/etc/ld-nix.so.preload` so
   both tools keep the default allocator
+- a `pi` wrapper that prepends a cang-owned runtime directory holding only
+  `libstdc++.so.6`, for prebuilt extension addons that open a C++ runtime at
+  load time (`sharp` and `onnxruntime-node` in Magic Context) and that Pi's
+  bundled Bun runtime cannot supply on its own
 - `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` preset to the bundled
   `clang_mold_wrapper` helper for the `x86_64-unknown-linux-gnu` target
 - `LIBCLANG_PATH` preset to the bundled Nix `libclang` library directory

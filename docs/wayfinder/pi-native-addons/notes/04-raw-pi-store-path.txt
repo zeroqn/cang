@@ -36,3 +36,15 @@ esac
 exec /nix/store/0ik8k841n595v9kvif0rfdrr8w5486jn-pi-coding-agent-0.87.1/lib/pi-coding-agent/pi "installPhase"
 
 neither is referenced by the measured image.
+
+== post-fix (bonus) image, same question ==
+image tar: /nix/store/hwrpy4v01s9rshpas3hwvacf2rf6pkaf-cang.tar.gz
+image digest: sha256:e633045040dc1b81a01a6657fb7ca9f1ac2f6b32faaf6d0039f1c386152b8396
+agent layer: /nix/store/9ha2nyk83f6wxdaxvvd84rdpgh6mgd68-cang-agent-layer
+  bin/pi -> /nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1/bin/pi  (WRAPPED)
+guest probe (in-VM): command -v pi = /nix/store/9ha2nyk83f6wxdaxvvd84rdpgh6mgd68-cang-agent-layer/bin/pi
+                     readlink -f pi  = /nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1/bin/pi
+                     file type        = symbolic link (to the makeWrapper script)
+                     wrapper hits for cang-native-addon-runtime = 2
+                     runtime dir = /nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime
+                     runtime dir lib contents = libstdc++.so.6

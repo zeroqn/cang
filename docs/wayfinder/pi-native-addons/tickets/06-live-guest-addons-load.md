@@ -3,7 +3,7 @@ label: wayfinder:task
 title: Show both addons loading inside a real cang guest
 status: open
 blocked_by: ["05-wrapper-and-runtime-dir"]
-claimed_by: ""
+claimed_by: pi research child-4 (2026-09-29)
 ---
 
 ## Question
