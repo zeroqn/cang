@@ -70,20 +70,49 @@ is **shown actually taking the fast path** - evidence, not "it builds".
     git dependency (`ffier`), rutabaga's `third_party/mesa3d` is a plain tree
     (not a submodule), and `fetchCargoVendor` vendors git deps.
   - Pinned kernel (`libkrunfw v5.6.2-cang.1`, `linux-6.12.109` +
-    `v6.12.109-hardened1`) has **none** of the guest side: no `VIRTGPU_PARAM` 10,
+    `v6.12.109-hardened1`) had **none** of the guest side: no `VIRTGPU_PARAM` 10,
     use mask `0x7`, `virtgpu_gem_prime_import()` = plain
     `drm_gem_prime_import()`, `CONFIG_UDMABUF is not set` in all six configs.
+    (Superseded 2026-09-29: `deps/libkrunfw` `3fdbb59` carries it; the *pinned
+    release* is still the old asset until ticket 06 re-pins.)
   - The Linux side is **in flux**: the PRIME-import change landed
     (`df4dc947c46b`) and was **reverted 2026-09-15** (it broke vrend); the
     re-send is gated on `VIRTIO_GPU_F_CREATE_GUEST_HANDLE`, and a virtio-comment
     series (v2, 2026-09-03) proposes bits **6 (CREATE_GUEST_HANDLE)** and
     **7 (BLOB_CTX_ID_FIX)**. cang's kernel already claims bit **5** for
     `VIRTIO_GPU_F_FENCE_PASSING` (`patches/0018`).
-  - `deps/libkrun` HEAD `3d7af2c2` (`v2.0.0-cang.3`, branch `cang-main-rebase`);
+  - `deps/libkrun` HEAD was `3d7af2c2` (`v2.0.0-cang.3`, `cang-main-rebase`);
     `deps/libkrunfw` HEAD `9616ca0`; `upstream/main` `a980e779` (2026-09-25);
-    cang pin `v0.9.1`.
+    cang pin `v0.9.1`. (HEADs move - see *Status* below.)
 - Harness note: `rlm.spawn` children **do** have tools in this session (the
   prior map's research tickets were resolved that way).
+
+## Status (2026-09-29)
+
+**The destination's first half is done: the port and the kernel are landed and
+the fast path is verified live.** Ticket 06 (publish the libkrunfw release and
+re-pin per system) is the only open ticket, and it needs bob's push/tag.
+
+- `deps/libkrun` (branch `cang`) tip **`63f3737f`**: `a1a772a0` carries the port
+  on the `ctx_id` route, `5d9cb075` the lock + regenerated bindings, `63f3737f`
+  the udmabuf list coalescing fix ticket 09 needed. cang's submodule pointer
+  `6166b8c` is the pin; both `fetchCargoVendor` hashes are current
+  (`cang-rust.nix` `sha256-/tsacxWjGgl9uCRNkaO9pF893yn0gXIMhqORxnekYfw=`,
+  `libkrun-source.nix` `sha256-5Snz7O5nbcg0qVgLPhSzFdGUk5+pqy+Iavt0mE3FLaQ=`).
+- `deps/libkrunfw` (branch `cang`) tip **`3fdbb59`**: patches `0037-0039` +
+  `CONFIG_UDMABUF=y` in all six configs.
+- Verified live (tickets 05 and 09, notes 05/09): the guest boots on the locally
+  built firmware, `/dev/udmabuf` + `VIRTGPU_PARAM` 10 + bits 6/7 gate exactly on
+  `--zero-copy-shm`, a `wl_shm` client through the proxy takes
+  `UDMABUF_CREATE`+`PRIME_FD_TO_HANDLE` and no copy ioctl, and the measured A/B is
+  -5.4% guest CPU (2.800 s -> 2.650 s busy over 6 s at 1920x1080x120). The
+  Chromium GPU smoke passes with hardware venus on the same tree.
+- Mechanics worth not rediscovering: the udmabuf driver's `list_limit` (1024
+  runs) and `size_limit_mb` (64 MiB) both surface as a bare `EINVAL`, and the
+  guest names one run per 4 KiB page; the host's `/dev/udmabuf` must be openable
+  from cang's keep-id user namespace (0666, like /dev/kvm) and the guest's must be
+  openable by the task user (guest-init does it now, `57fc4ec`).
+- Closed: 01, 02, 03, 04, 05, 07, 09, 10, 11, 12 (08 cancelled). Open: **06**.
 
 ## Decisions so far
 
