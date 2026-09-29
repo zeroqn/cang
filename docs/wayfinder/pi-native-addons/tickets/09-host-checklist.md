@@ -80,3 +80,9 @@ sudo nixos-rebuild switch --flake /home/dev/nix/disp#disp
 The ticket stays open until that is applied and `command -v pi` resolves to the
 wrapped path - the evidence above is of the flake's package, not of the activated
 host. Re-run `../notes/09-raw/` probes against the activated binary afterwards.
+
+One consequence to expect at the switch: the wrapper fix rides the same branch as
+the pi pin bump (commit `eaffa99`), so applying the configuration also moves the
+host's `pi` from `0.85.1` to `0.87.1` - it is not possible to take the wrapper
+without the version bump short of cherry-picking, and restoring
+`flake.lock.bak-2026-09-29` would keep `0.85.1` *and* leave the host unwrapped.
