@@ -130,9 +130,12 @@ onnxruntime failure verbatim under `bun`, and `node` passing as a trap).
   `libstdc++.so.6` because that is what `sharp` and `onnxruntime-node` lack.
   `libxcb.so.1` (the pi-tui X11 prebuild) has the same shape of dependency and
   will need its own decision when something loads it in the guest.
-- **Whether magic-context degrades silently today** - ticket 01 could not
-  establish it (the generated bundle's require/import sites are not greppable);
-  it matters for how loudly the fix has to be proven.
+- **Whether magic-context degrades silently** - unanswered and now
+  decision-irrelevant. Ticket 01 could not establish it from the generated
+  bundle, and it cannot be answered from `pi --help`/`pi list` either: both run
+  rc 0 with `/etc` masked on the old unwrapped pi *and* the new wrapped one,
+  printing only the unrelated `[rtk] rtk binary not found in PATH` line, so
+  neither imports the extension's addons. Answering it needs a live session.
 - **Per-arch coverage** - the mechanism itself is arch-independent (the runtime
   directory is built from `pkgs.stdenv.cc.cc.lib` for whatever system the image
   targets, and the wrapper is a shell script), so the only open part is whether
