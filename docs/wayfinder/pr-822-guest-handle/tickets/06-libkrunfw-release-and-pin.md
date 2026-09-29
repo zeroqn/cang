@@ -100,3 +100,10 @@ assets.
   `8ddc3b889224a90a63f799c2c1f7b007952861f03156aba4089c5c590f8a3c8e` matches the
   local normalized build byte for byte, and `nix build .#cang-prebuilt` plus
   `cang --version` (`cang 0.10.0`) confirm the pin resolves to the release.
+- **The released pair boots.** Running the packaged prebuilt
+  (`.../cang-0.10.0-prebuilt-v0.10.0/bin/cang`, whose `lib/cang` carries the
+  pinned `libkrunfw-v5.6.2-cang.2`, no firmware override) with
+  `--gpu=drm --zero-copy-shm`: guest `uname -r` `6.12.109-hardened1`, guest
+  `/dev/udmabuf`, negotiated virtio-gpu bits 0-4 plus **6/7**,
+  `VIRTGPU_PARAM_CREATE_GUEST_HANDLE` = **1**. So the released cang binary, the
+  released firmware and the pin all agree end to end.
