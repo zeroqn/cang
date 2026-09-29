@@ -121,10 +121,11 @@ onnxruntime failure verbatim under `bun`, and `node` passing as a trap).
 
 ## Not yet specified
 
-- **The residual coverage gap** - the wrapper reaches pi's process tree; a
-  dynamic process started from the guest task shell outside it (a `node` the
-  user runs directly, a nested container) is not covered. That is accepted for
-  now; it graduates into a ticket only if someone actually hits it.
+- **The residual coverage gap** - the wrapper reaches pi's process tree and
+  everything pi launches. Narrower than it first looks: a `node` process is fine
+  on its own (nixpkgs' node links `libstdc++` itself), so the uncovered case is
+  `bun` started from the guest task shell outside pi, or a nested container.
+  Accepted for now; it graduates into a ticket only if someone actually hits it.
 - **Future addons with other sonames** - the runtime directory holds
   `libstdc++.so.6` because that is what `sharp` and `onnxruntime-node` lack.
   `libxcb.so.1` (the pi-tui X11 prebuild) has the same shape of dependency and
@@ -132,8 +133,11 @@ onnxruntime failure verbatim under `bun`, and `node` passing as a trap).
 - **Whether magic-context degrades silently today** - ticket 01 could not
   establish it (the generated bundle's require/import sites are not greppable);
   it matters for how loudly the fix has to be proven.
-- **Per-arch coverage** - `@img/sharp-linux-arm64`, onnxruntime `linux/arm64`,
-  and whether the image is built for aarch64 at all.
+- **Per-arch coverage** - the mechanism itself is arch-independent (the runtime
+  directory is built from `pkgs.stdenv.cc.cc.lib` for whatever system the image
+  targets, and the wrapper is a shell script), so the only open part is whether
+  a given addon package publishes an arm64 build at all - which is the addon's
+  business, not cang's. Revisit only if an aarch64 guest actually loads one.
 
 ## Out of scope
 
