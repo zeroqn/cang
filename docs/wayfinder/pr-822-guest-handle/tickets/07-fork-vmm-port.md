@@ -61,16 +61,22 @@ file-by-file record and the build evidence are in
 - cang: `f62b3ca` adds `--zero-copy-shm` (errors without `--gpu=drm`, off by
   default) through `crates/cang-libkrun` into `DeviceRequirements` - the same bool
   that gates the bits and the RAM backing - plus the Landlock `/dev/udmabuf`
-  grant and its `classify_fd` classification; `761c6b9` bridges libkrun's `log`
-  records into cang's tracing subscriber, without which the fork's
-  "cannot serve it, running without it" warning and the mis-route warning were
-  dropped. `README.md` documents the flag and the balloon trade.
+  grant and its `classify_fd` classification. `761c6b9`'s `tracing-log` bridge
+  was **reverted in `84b9b9d`**: libkrun's `krun_init_log` installs an env_logger
+  with `try_init()` and treats "already set" as fatal, so the bridge made every
+  boot fail - cang floors libkrun's own level at `warn` instead, which is what
+  makes the "cannot serve it, running without it" warning visible. `README.md`
+  documents the flag, the balloon trade and the `/dev/udmabuf` permission
+  prerequisite.
 - Both vendored-crate hashes refreshed in `6a5e14a`; `nix build .#cang` is green
   (`/nix/store/p78385yi099hddafyddxdwp8k64wd3ll-cang-0.9.1`), with
   `buildRustPackage`'s lock-consistency check running against both vendor dirs.
 - Gates in the devshell: `cargo fmt --check`, `cargo clippy --all-targets
   --all-features -- -D warnings`, `cargo deny check` (advisories/bans/licenses/
-  sources ok) and `cargo test` all clean.
+  sources ok) and `cargo test` all clean (597 + 39 + 5 + 296 + 4 + 47 passing).
+- Live: the VM boots on a locally built firmware and the gated bits behave
+  (`notes/05-libkrunfw-kernel-support.md`). The live boot is also what caught the
+  broken log bridge - no unit test launches a VM.
 
 One trap worth carrying forward: the two `fetchCargoVendor` calls are both named
 `cargo-deps-vendor`, and a fixed-output derivation's path comes from the name and

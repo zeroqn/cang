@@ -50,11 +50,14 @@ committed in `deps/libkrun`, the submodule pointer is moved, both
   already allows `memfd_create`, `fcntl`, unfiltered `ioctl`, `ftruncate`,
   `mmap` and `madvise`. This commit also carries the `deps/libkrun` and
   `deps/libkrunfw` pointer moves.
-- `761c6b9` **cang: bridge libkrun log records into cang tracing** - libkrun logs
-  through `log` and cang installed only a tracing subscriber, so every fork
-  diagnostic (the probe failure behind `--zero-copy-shm`, the mis-route warning)
-  was dropped. `tracing-log`'s `LogTracer` now forwards them into the same
-  subscriber and `RUST_LOG` filter.
+- `761c6b9` **cang: bridge libkrun log records into cang tracing** - later
+  **reverted** (see the live-boot finding below): libkrun's own `krun_init_log`
+  installs an env_logger with `try_init()` and treats "logger already set" as
+  fatal, so the `tracing-log` `LogTracer` made every boot die. The problem it
+  aimed at is fixed instead by `84b9b9d` - libkrun's own log level is floored at
+  `warn`, so the fork's warnings (`--zero-copy-shm` falling back to the copy
+  path, a failed GPU backend, a mis-routed handle) always reach stderr while
+  cang's tracing still honours `--log-level`.
 - `127313d` **deps: move the libkrun pointer past the lock and bindings refresh.**
 
 ## Vendored-crate hashes (refreshed)
@@ -85,15 +88,42 @@ one fake) so the two never meet at one store path.
 - `cargo check -p cang`, `cargo fmt --check` and the touched unit tests pass in
   the repo devshell (earlier run, before the commits).
 
+## Live-boot finding (2026-09-29)
+
+The first live VM on this tree died before boot:
+`cang sandboxed VM worker: libkrun setup failed: krun_init_log: internal error:
+logger init: attempted to set a logger after the logging system was already
+initialized`. `761c6b9` was the cause: cang's `tracing_log::LogTracer::init()`
+owns the `log` logger, and libkrun's `env_logger::Builder::try_init()` in
+`krun_init_log` then fails with `VmmError::Internal`, which cang's launcher turns
+into a hard setup error. No unit test launches a VM, so only a boot caught it.
+
+`84b9b9d` reverts the bridge and the `tracing-log` dependency and floors the
+level cang passes to libkrun at `warn` (`LogLevel::libkrun_log_level`), since
+libkrun's diagnostics never went through cang's subscriber in the first place -
+they were merely level-gated by cang's default `--log-level off`. That commit
+also refreshes `nix/pkgs/cang-rust.nix`'s `cargoDeps` (the lock loses
+`tracing-log`/`valuable`), and `docs/diagnostics.md` records the floor.
+
 ## Validation gates (repo devshell, 2026-09-29)
 
 - `nix build .#cang`: green (above).
 - `cargo fmt --check`: clean.
 - `cargo clippy --all-targets --all-features -- -D warnings`: clean (45 s,
   `Finished \`dev\` profile`).
-- `cargo test`: green - `596 passed` (cang), `39` + `5` + `296` + `4`
+- `cargo test`: green - `597 passed` (cang; +1 for the new
+  `libkrun_log_level_is_floored_at_warn`), `39` + `5` + `296` + `4`
   (cang-libkrun / cang-guest-init / cang-repository-tests), `47` in the
   repository-invariant suite; 0 failed, 0 ignored.
+- `cargo deny check`: advisories/bans/licenses/sources ok.
+
+## Live boot (after the fix)
+
+A cang guest boots on a firmware built from this tree (see
+[`notes/05`](05-libkrunfw-kernel-support.md)): `uname -r` = `6.12.109-hardened1`,
+guest `/dev/udmabuf`, virtio-gpu bits `0-4 + VERSION_1`, and with
+`--zero-copy-shm` additionally bits 6/7 with `VIRTGPU_PARAM_CREATE_GUEST_HANDLE`
+answering 1.
 
 ## Still open
 

@@ -54,9 +54,14 @@ rootless Podman tooling for development.
   zero-copy shared-memory fast path: a guest `wl_shm` client's pool is imported
   as a guest blob that carries a host-side handle, so the host compositor reads
   the client's pages instead of a copy. Requires `--gpu=drm`. The device probes
-  `/dev/udmabuf` itself; when the host cannot serve it (no `/dev/udmabuf`, or a
-  guest kernel without the feature) cang keeps the copy path and says why,
-  rather than negotiating a feature it cannot honour. On a run where the fast
+  `/dev/udmabuf` itself; when the host cannot serve it (no `/dev/udmabuf`, an
+  unusable one, or a guest kernel without the feature) cang keeps the copy path
+  and says why, rather than negotiating a feature it cannot honour. The probe
+  runs inside cang's keep-id VM-worker user namespace, so the host device must be
+  openable there: a `crw-rw---- root kvm` node is not (that namespace does not
+  map the `kvm` group), and `/dev/udmabuf` needs mode `0666`, as `/dev/kvm`
+  is. The reason is reported through libkrun's logger, which cang never
+  silences below `warn`. On a run where the fast
   path is active, guest RAM is file-backed and shared with the host, so the
   virtio-balloon has nothing to reclaim; a plain `--gpu=drm` run keeps
   anonymous guest RAM and the balloon's host memory reclaim.
