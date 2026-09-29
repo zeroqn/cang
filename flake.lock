@@ -57,6 +57,40 @@
         "type": "github"
       }
     },
+    "libkrun-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790662536,
+        "narHash": "sha256-rceWo26FG6C5HR6TA9bffEGNYyyMw99wspHUBXLNJqc=",
+        "owner": "zeroqn",
+        "repo": "libkrun",
+        "rev": "63f3737fa1b529755bc8f4e3d7a84bd4953c1bc1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "zeroqn",
+        "ref": "cang",
+        "repo": "libkrun",
+        "type": "github"
+      }
+    },
+    "libkrunfw-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790664639,
+        "narHash": "sha256-fl7A/pJQismjtNBXjOYZm+PEHGFIts92tktw/hFuleo=",
+        "owner": "zeroqn",
+        "repo": "libkrunfw",
+        "rev": "6b38b17198e8cb35d81b7341ebb2cb2fa627aa0b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "zeroqn",
+        "ref": "cang",
+        "repo": "libkrunfw",
+        "type": "github"
+      }
+    },
     "niri-src": {
       "inputs": {
         "nixpkgs": "nixpkgs"
@@ -183,6 +217,8 @@
     "root": {
       "inputs": {
         "headless": "headless",
+        "libkrun-src": "libkrun-src",
+        "libkrunfw-src": "libkrunfw-src",
         "nixpkgs": "nixpkgs_3",
         "nixpkgs-unstable": "nixpkgs-unstable"
       }

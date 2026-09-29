@@ -2,12 +2,12 @@
 # itself: a vendored registry for building that source inside Nix, and the musl
 # guest init that `krun-init-blob`'s build script embeds.
 #
-# `src` defaults to the `deps/libkrun` submodule, so what gets built is the fork
-# checkout; the flake sets `inputs.self.submodules = true` so the source tree the
-# sandbox receives contains it.
+# `src` is the `deps/libkrun` fork checkout the flake passes in as its
+# `libkrun-src` input; a flake's own source cannot carry submodule contents, see
+# `nix/pkgs/workspace-src.nix`.
 {
   pkgs,
-  src ? ../../deps/libkrun,
+  src,
 }:
 let
   libkrunSrc = src;
@@ -15,8 +15,8 @@ let
   # The fork's lock vendors ffier twice at one name-version, which
   # `importCargoLock` cannot express, so the sources come from
   # `fetchCargoVendor` - the helper nixpkgs' own libkrun package uses. This hash
-  # moves with the submodule pointer: a libkrun bump has to refresh it in the
-  # same commit.
+  # moves with the fork revision: a libkrun bump (submodule pointer plus
+  # `libkrun-src`) has to refresh it in the same commit.
   libkrunCargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     src = libkrunSrc;
     hash = "sha256-5Snz7O5nbcg0qVgLPhSzFdGUk5+pqy+Iavt0mE3FLaQ=";

@@ -27,8 +27,9 @@ rootless Podman tooling for development.
   backing btrfs mount to allow user-owned subvolume removal; add
   `user_subvol_rm_allowed` to that mount's options when using this fast path.
 - `libkrun` at build time, not at runtime. `cang` links libkrun's Rust API
-  (`crates/cang-libkrun`, built from the `deps/libkrun` submodule by cang's own
-  toolchain), so libkrun is part of the binary and no `libkrun.so` is loaded:
+  (`crates/cang-libkrun`, compiled from the `libkrun-src` flake input grafted
+  into `deps/libkrun` by cang's own toolchain), so libkrun is part of the binary
+  and no `libkrun.so` is loaded:
   there is no `CANG_LIBKRUN_LIBRARY` override and no `$out/lib/cang` libkrun
   lookup. The firmware (`libkrunfw.so.5`) is still opened by soname - by libkrun
   itself - and the Nix `.#cang` binary carries an `$ORIGIN/../lib/cang` rpath
@@ -168,7 +169,7 @@ env -u LD_PRELOAD some-foreign-binary --flag
 
 ```bash
 nix build .#cang
-nix build ./nix/dev#cang-dev
+nix build .#cang-dev
 nix build .#cang-prebuilt
 nix build .#cang-musl
 nix build .#rmux-prebuilt
@@ -496,15 +497,18 @@ release-builder `/nix/store/<hash>-...` references, and Nix packaging patches
 its ordinary ELF runtime dependencies before wiring the libkrun/runtime-tool
 environment.
 For ordinary source-built cang usage, prefer `nix build .#cang`, which compiles
-libkrun from the `deps/libkrun` submodule - so a source build needs
-`git submodule update --init --recursive` first (the flake's
-`inputs.self.submodules` is what carries that source into the build). Use
-`nix build .#cang-prebuilt` only for the explicit pinned release-asset packaging
-path with the same wrapper-free helper layout, or the published
-`ghcr.io/<repo-owner>/cang` image. Use `nix build ./nix/dev#cang-dev`
-only from a local checkout with initialized `deps/libkrun` and `deps/libkrunfw`
-submodules when local libkrun/libkrunfw experiments are intended; `github:`
-downstream consumers should use root non-dev outputs.
+libkrun's Rust API from the fork revisions the flake pins as its `libkrun-src`
+and `libkrunfw-src` inputs (grafted into `deps/` by
+`nix/pkgs/workspace-src.nix`), so the build needs no submodules - locally, in
+CI, or through `github:`. Use `nix build .#cang-prebuilt` only for the explicit
+pinned release-asset packaging path with the same wrapper-free helper layout, or
+the published `ghcr.io/<repo-owner>/cang` image. `nix build .#cang-dev` is the
+same host package built against a locally compiled libkrunfw kernel; point
+either target at fork work in the checkout with
+`--override-input libkrun-src "git+file://$PWD/deps/libkrun"` (or
+`libkrunfw-src`). In-tree `cargo` builds still read the `deps/libkrun` and
+`deps/libkrunfw` submodules, so clone with
+`git submodule update --init --recursive` for those.
 
 ---
 

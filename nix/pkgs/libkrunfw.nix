@@ -29,7 +29,10 @@
   xz,
   zlib,
   useLocalSource ? false,
-  libkrunfwSrc ? ../../deps/libkrunfw,
+  # The `deps/libkrunfw` fork checkout, passed in by the flake as its
+  # `libkrunfw-src` input (see nix/pkgs/workspace-src.nix). Only the local
+  # kernel build reads it.
+  libkrunfwSrc,
   variant ? null,
 }:
 

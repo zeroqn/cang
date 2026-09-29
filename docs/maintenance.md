@@ -58,27 +58,47 @@ asset name, and SRI hash) in `nix/pins.nix` from the npm registry:
 nix develop --command ./scripts/update-monty-prebuilt.sh
 ```
 
-libkrun itself is no longer pinned: cang links libkrun's Rust API out of the
-`deps/libkrun` submodule (see the next section), so `nix/pkgs/libkrun.nix`,
+libkrun itself is no longer pinned as an asset: cang links libkrun's Rust API
+compiled from source (see the next section), so `nix/pkgs/libkrun.nix`,
 `scripts/update-libkrun.sh`, the `libkrunRelease` pin and the
 `libkrun-loadable` check were removed. The fork's C-ABI release assets keep
 being published for third parties; cang does not consume them.
 
-### Updating the `deps/libkrun` submodule
+### Updating the libkrun fork
 
-A libkrun update is a submodule pointer bump, and things have to move together:
+Two references name a libkrun revision, and they have to move together:
+
+- the `deps/libkrun` **submodule pointer**, which is what in-tree `cargo` builds
+  (the devshell and CI's `cargo` steps) compile, and
+- the `libkrun-src` **flake input**, which is what every Nix build compiles:
+  `nix/pkgs/workspace-src.nix` grafts it into `deps/libkrun` of the workspace
+  source, because a flake's own source cannot carry submodule contents.
+
+A libkrun update is therefore:
 
 1. Move the pointer (`git -C deps/libkrun fetch` + `checkout`, or a fork branch
    update), then `git add deps/libkrun` here - flake builds only see tracked
    files.
-2. Refresh `Cargo.lock` for the new graph (`nix develop --command cargo build`)
+2. Point the input at the same revision: `nix flake update libkrun-src`, then
+   compare `flake.lock`'s `libkrun-src` rev with
+   `git submodule status deps/libkrun`. A mismatch means Nix builds and in-tree
+   `cargo` builds compile different libkrun revisions.
+3. Refresh `Cargo.lock` for the new graph (`nix develop --command cargo build`)
    and commit it.
-3. Refresh both vendor hashes, taking the value from the build's hash-mismatch
+4. Refresh both vendor hashes, taking the value from the build's hash-mismatch
    error: `cargoDeps` in `nix/pkgs/cang-rust.nix` (cang's whole graph) and
    `libkrunCargoDeps` in `nix/pkgs/libkrun-source.nix` (the fork's own lock, used
    by the musl guest-init blob). `nix build .#cang` reports whichever mismatches
    first.
-4. Re-verify with a live boot and the Chromium GPU smoke, not just a green build.
+5. Re-verify with a live boot and the Chromium GPU smoke, not just a green build.
+
+`deps/libkrunfw` works the same way: its **`libkrunfw-src` input** (the kernel
+source `.#cang-dev` builds) moves with the **submodule pointer**, while the
+*released* kernel bundle cang opens at run time stays the separate
+`libkrunfwRelease` pin refreshed below. Neither fork checkout needs a commit to
+be built against:
+`nix build .#cang --override-input libkrun-src "git+file://$PWD/deps/libkrun"`
+(or `libkrunfw-src`) compiles the worktree.
 
 Refresh pinned `zeroqn/libkrunfw` release metadata in `nix/pins.nix`:
 
@@ -114,7 +134,7 @@ commit (bump the number instead).
 
 The libkrunfw workflow publishes the kernel bundle cang opens at run time
 (`krunfw`). cang does not pin the libkrun workflow's C-ABI assets any more - see
-`./deps/libkrun` under "Updating the `deps/libkrun` submodule" - but the fork
+`./deps/libkrun` under "Updating the libkrun fork" - but the fork
 keeps publishing them for third-party C-ABI consumers, and the workflow still
 builds with `FFI=1` for them: ABI 2 gates the whole C surface behind that cargo
 feature, so without it the asset builds fine and ships a `libkrun.so` that
@@ -259,8 +279,10 @@ publishes the release plus build-provenance attestations, so no `gh` auth is
 needed - the tag push is the whole trigger. Rolling `cang-<sha>` tags are
 disposable and pruned; only `v*` tags are pinnable.
 
-cang pins `libkrunfwRelease` only (it links libkrun's Rust API by path, so the
-libkrun submodule pointer *is* that pin). After the fork release is published:
+cang pins `libkrunfwRelease` only (it links libkrun's Rust API compiled from
+source, so the `libkrun` and `libkrunfw` revisions live in the submodule
+pointers plus the `libkrun-src`/`libkrunfw-src` inputs, not in a release pin).
+After the fork release is published:
 
 ```bash
 for system in x86_64-linux aarch64-linux riscv64-linux; do
@@ -312,9 +334,10 @@ nix develop --command ./scripts/update-zvec-grep.sh
 
 `deps/wl-cross-domain-proxy` is a git subtree of
 <https://codeberg.org/drakulix/wl-cross-domain-proxy>, not a submodule: the
-sources are committed directly so a flake build sees them without
-`?submodules=1`. `nix/wl-cross-domain-proxy.nix` builds that directory and the
-cang image installs the resulting guest proxy.
+sources are committed directly, so every flake source carries them. (The two
+real submodules do not rely on that: their checkouts arrive as the
+`libkrun-src` and `libkrunfw-src` inputs.) `nix/wl-cross-domain-proxy.nix`
+builds that directory and the cang image installs the resulting guest proxy.
 
 Pull upstream commits with:
 

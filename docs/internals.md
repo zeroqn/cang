@@ -5,8 +5,10 @@ Host-side lookup order, prepared-root grafting, and the guest entry contract.
 ## libkrun and host-tool lookup
 
 cang binds libkrun through **libkrun's Rust API**, not its C ABI: the
-`cang-libkrun` crate depends on the `deps/libkrun` submodule by path (libkrun's
-Rust API is not a stable ABI, so the rlib has to be built by cang's own rustc)
+`cang-libkrun` crate depends on the checkout at `deps/libkrun` by path (libkrun's
+Rust API is not a stable ABI, so the rlib has to be built by cang's own rustc;
+a Nix build gets that checkout from the `libkrun-src` input via
+`nix/pkgs/workspace-src.nix`, an in-tree `cargo` build from the submodule)
 and is linked into the binary, as is `krun-init-blob` - the guest init blob plus
 its config builder, which installs the guest's PID 1. Nothing under the name
 `libkrun.so` is loaded at runtime and there is no library override; only

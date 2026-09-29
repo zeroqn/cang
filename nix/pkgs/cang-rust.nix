@@ -1,5 +1,7 @@
 {
-  self,
+  # cang's workspace tree with the fork checkouts grafted into `deps/` (see
+  # nix/pkgs/workspace-src.nix).
+  src,
   pkgs,
   pins,
   krunInitBinary,
@@ -18,9 +20,10 @@ let
   # part of cang's lock and have to be vendored. `importCargoLock` cannot express
   # the fork's lock - it vendors ffier twice at one name-version - so the sources
   # come from `fetchCargoVendor`, like the fork's own source does; a libkrun bump
-  # refreshes this hash in the same commit as the submodule pointer.
+  # refreshes this hash in the same commit as the submodule pointer and the
+  # `libkrun-src` input.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
-    src = self;
+    inherit src;
     hash = "sha256-xoC6XlchevF5fO230yPBo/IvCIkgoQZjloSGq8BvGU4=";
   };
 
@@ -51,7 +54,7 @@ let
     {
       pname = "cang";
       version = cangVersion;
-      src = self;
+      inherit src;
 
       inherit cargoDeps;
 
@@ -61,8 +64,8 @@ let
 
       postInstall = ''
         mkdir -p "$out/libexec/cang-helpers" "$out/lib/cang"
-        install -Dm644 ${self}/crates/cang/assets/seccomp/default.json "$out/share/cang/seccomp/default.json"
-        install -Dm644 ${self}/crates/cang/assets/seccomp/render-server.json "$out/share/cang/seccomp/render-server.json"
+        install -Dm644 ${src}/crates/cang/assets/seccomp/default.json "$out/share/cang/seccomp/default.json"
+        install -Dm644 ${src}/crates/cang/assets/seccomp/render-server.json "$out/share/cang/seccomp/render-server.json"
         ln -s ${pkgs.buildah}/bin/buildah "$out/libexec/cang-helpers/buildah"
         ln -s ${pkgs.btrfs-progs}/bin/btrfs "$out/libexec/cang-helpers/btrfs"
         ln -s ${pkgs.btrfs-progs}/bin/mkfs.btrfs "$out/libexec/cang-helpers/mkfs.btrfs"
@@ -100,7 +103,7 @@ let
     {
       pname = "cang";
       version = cangVersion;
-      src = self;
+      inherit src;
 
       # The workspace lock now resolves libkrun's crates too, so the musl build
       # needs the same vendored registry for resolution even though it compiles

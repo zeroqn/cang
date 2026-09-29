@@ -2,24 +2,31 @@
 
 ## Build outputs
 
-Source builds of the host package compile libkrun's Rust API from `deps/libkrun`,
-so a fresh checkout needs `git submodule update --init --recursive` before
-`nix build .#cang` (the flake sets `inputs.self.submodules`, which is what makes
-the submodule's contents part of the build's source).
+Source builds of the host package compile libkrun's Rust API from the fork
+checkouts the flake pins as its `libkrun-src` and `libkrunfw-src` inputs, kept in
+`flake.lock`; `nix/pkgs/workspace-src.nix` grafts them into `deps/` of the
+workspace source, so a Nix build needs no submodules - not from a local
+checkout, not in CI, and not for a `github:` consumer. The `deps/libkrun` and
+`deps/libkrunfw` submodules stay for in-tree `cargo` builds, so a fresh checkout
+still wants `git submodule update --init --recursive` before `cargo build`. A
+local fork edit goes to the input instead of the checkout:
+`nix build .#cang --override-input libkrun-src "git+file://$PWD/deps/libkrun"`.
 
 - `.#cang`: compile the workspace Rust host package with `$out/bin/cang` as a
-  raw dynamic ELF. libkrun is *compiled in* from the `deps/libkrun` submodule
-  (the `cang-libkrun` crate binds libkrun's Rust API), so this output builds
-  libkrun too - it needs the bindgen hook, `pkg-config`, `virglrenderer`, `gbm`
-  and the musl guest init blob (`nix/pkgs/libkrun-source.nix`). Runtime helpers
+  raw dynamic ELF. libkrun is *compiled in* from the `libkrun-src` input grafted
+  into `deps/libkrun` (the `cang-libkrun` crate binds libkrun's Rust API), so
+  this output builds libkrun too - it needs the bindgen hook, `pkg-config`,
+  `virglrenderer`, `gbm` and the musl guest init blob
+  (`nix/pkgs/libkrun-source.nix`). Runtime helpers
   are installed under `$out/libexec/cang-helpers`, the firmware
   (`libkrunfw.so*`) under `$out/lib/cang` with an `$ORIGIN/../lib/cang` rpath on
   the binary, and cang needs no wrapper script or duplicate payload.
-- `./nix/dev#cang-dev`: local-checkout-only development build of the workspace
-  Rust host package wired to the checked-out `deps/libkrun` and `deps/libkrunfw`
-  submodules through the submodule-aware dev flake. Use this target for local
-  libkrun/libkrunfw or kernel configuration experiments; downstream flakes that
-  consume this repository via `github:` should use non-dev root outputs.
+- `.#cang-dev`: the same host package built against libkrunfw compiled from the
+  `libkrunfw-src` input instead of the pinned release asset
+  (`useLocalSource = true` in `nix/pkgs/libkrunfw.nix`), for local kernel
+  configuration experiments; the kernel build is slow, so this target is only
+  worth it for that. Point it at the checkout with
+  `--override-input libkrunfw-src "git+file://$PWD/deps/libkrunfw"`.
 - `.#cang-prebuilt`: install a pinned published neutral dynamic Linux `cang`
   asset as raw `$out/bin/cang`, patch ordinary ELF runtime dependencies with
   Nix, and provide the same package-relative helper and `$out/lib/cang`
@@ -74,10 +81,11 @@ the submodule's contents part of the build's source).
 - `.#libkrunfw`: install the pinned `zeroqn/libkrunfw` release asset for the
   current system.
 - libkrun itself has no package output any more. `.#cang` compiles libkrun's
-  Rust API out of the `deps/libkrun` submodule (see the source-build note
-  above), so there is nothing to pin or install: the submodule pointer is the
-  version, and `./nix/dev#cang-dev` is simply the local-checkout form of the
-  same build.
+  Rust API from the `libkrun-src` input (see the source-build note above), so
+  there is nothing to pin or install: that input's revision is the version, it
+  lives in `flake.lock`, and it moves together with the `deps/libkrun` submodule
+  pointer - see
+  [the maintenance procedure](maintenance.md#updating-the-libkrun-fork).
 - `.#virglrenderer`: the nixpkgs `virglrenderer` with this repo's host-side
   patches (`virglrenderer-enum-26.patch` and
   `virglrenderer-gbm-layout-linear-modifier.patch`, applied by the overlay in

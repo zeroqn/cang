@@ -2,17 +2,30 @@
   description = "Rust CLI for launching direct-libkrun microVM task environments";
 
   inputs = {
-    # `cang-libkrun` depends on libkrun's source at `deps/libkrun` by path
-    # (cang links libkrun's Rust API, so it must be compiled by cang's own
-    # rustc), and the flake's own source excludes submodule contents unless this
-    # is set.
-    self.submodules = true;
-
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     headless.url = "github:zeroqn/headless";
+
+    # `cang-libkrun` depends on libkrun's source at `deps/libkrun` by path (cang
+    # links libkrun's Rust API, so libkrun has to be compiled by cang's own
+    # rustc). A flake's own source cannot carry submodule contents - neither from
+    # a `git` checkout nor with `inputs.self.submodules = true`, which only
+    # writes `submodules = true` into the ref a downstream `flake.lock` records
+    # and the `github:` scheme then rejects (NixOS/nix#13571), while the flake's
+    # own tree stays submodule-less - so the fork revisions are inputs, grafted
+    # into the workspace source by `nix/pkgs/workspace-src.nix`. Keep them equal
+    # to the pointers in `.gitmodules`; a local fork edit is
+    # `--override-input libkrun-src "git+file://$PWD/deps/libkrun"`.
+    libkrun-src = {
+      url = "github:zeroqn/libkrun/cang";
+      flake = false;
+    };
+    libkrunfw-src = {
+      url = "github:zeroqn/libkrunfw/cang";
+      flake = false;
+    };
   };
 
   outputs =
@@ -21,6 +34,8 @@
       nixpkgs,
       nixpkgs-unstable,
       headless,
+      libkrun-src,
+      libkrunfw-src,
 
     }:
     let
@@ -67,13 +82,29 @@
           };
           libkrunfw = pkgs.callPackage ./nix/pkgs/libkrunfw.nix {
             inherit pins;
+            libkrunfwSrc = libkrunfw-src;
+          };
+          # The same firmware built from the fork checkout instead of the pinned
+          # asset. Only `.#cang-dev` uses it, for local kernel-configuration
+          # experiments.
+          libkrunfwLocal = pkgs.callPackage ./nix/pkgs/libkrunfw.nix {
+            inherit pins;
+            libkrunfwSrc = libkrunfw-src;
+            useLocalSource = true;
           };
           # libkrun's source tree plus what building it inside Nix needs (the
-          # vendored registry and the musl guest init). cang compiles libkrun's
-          # Rust API itself, so `src = self` has to carry the submodule - see
-          # `inputs.self.submodules`.
+          # vendored registry and the musl guest init).
           libkrunSource = import ./nix/pkgs/libkrun-source.nix {
             inherit pkgs;
+            src = libkrun-src;
+          };
+          # cang's own tree with the fork checkouts grafted into `deps/`: what a
+          # build actually compiles.
+          workspaceSrc = import ./nix/pkgs/workspace-src.nix {
+            inherit pkgs;
+            src = self;
+            libkrunSrc = libkrun-src;
+            libkrunfwSrc = libkrunfw-src;
           };
           wl-cross-domain-proxy = pkgs.callPackage ./nix/wl-cross-domain-proxy.nix { };
           renderServerEnv = import ./nix/lib/render-server-env.nix {
@@ -89,22 +120,35 @@
           };
           rustPackages = import ./nix/pkgs/cang-rust.nix {
             inherit
-              self
               pkgs
               pins
               libkrunfw
               ;
+            src = workspaceSrc;
             krunInitBinary = libkrunSource.krunInitBinary;
           };
           rustPackagesCiSccache = import ./nix/pkgs/cang-rust.nix {
             inherit
-              self
               pkgs
               pins
               libkrunfw
               ;
+            src = workspaceSrc;
             krunInitBinary = libkrunSource.krunInitBinary;
             enableCiSccache = true;
+          };
+          # Local development: the firmware is built from the fork checkout
+          # (kernel and all) instead of the pinned asset, so kernel work is an
+          # `--override-input libkrunfw-src "git+file://$PWD/deps/libkrunfw"`
+          # away from this target.
+          rustPackagesDev = import ./nix/pkgs/cang-rust.nix {
+            inherit
+              pkgs
+              pins
+              ;
+            src = workspaceSrc;
+            libkrunfw = libkrunfwLocal;
+            krunInitBinary = libkrunSource.krunInitBinary;
           };
           mkImage =
             cangMuslPackage:
@@ -138,6 +182,7 @@
           symposium = symposium;
           cang = rustPackages.rustPackage;
           cang-ci-sccache = rustPackagesCiSccache.rustPackage;
+          cang-dev = rustPackagesDev.rustPackage;
           cang-prebuilt = prebuiltCang;
           cang-render-server-env = renderServerEnv.file;
           cang-musl = rustPackages.cangMuslPackage;
@@ -265,10 +310,12 @@
             inherit pkgs;
             libkrunfw = pkgs.callPackage ./nix/pkgs/libkrunfw.nix {
               inherit pins;
+              libkrunfwSrc = libkrunfw-src;
             };
             krunInitBinary =
               (import ./nix/pkgs/libkrun-source.nix {
                 inherit pkgs;
+                src = libkrun-src;
               }).krunInitBinary;
           };
         }

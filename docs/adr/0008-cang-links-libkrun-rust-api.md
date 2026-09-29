@@ -36,10 +36,14 @@ consumer shape.
 - Bind libkrun's Rust API from a dedicated `crates/cang-libkrun`, keeping
   cang's existing `LibkrunApi` trait (and its recording fake) as the seam: the
   launcher's launch policy, ordering and tests are unchanged.
-- Take libkrun as a **path dependency on the `deps/libkrun` submodule**, not a
-  git revision: the source is compiled either way, and the submodule is where a
-  fork hack belongs. The submodule pointer *is* the libkrun version; the flake
-  sets `inputs.self.submodules = true` so the source reaches the sandbox.
+- Take libkrun as a **path dependency on the checkout at `deps/libkrun`**, not a
+  git revision: the source is compiled either way, and a fork hack belongs in a
+  checkout. The libkrun version is the revision of that checkout.
+  (Amended 2026-09: the revision reaches a Nix build as the `libkrun-src` flake
+  input, which `nix/pkgs/workspace-src.nix` grafts into `deps/libkrun`, because a
+  flake's own source cannot carry submodule contents and
+  `inputs.self.submodules = true` only makes a downstream `github:` lock ref
+  invalid. The crate stays a path dependency on `deps/libkrun`.)
 - Open the firmware (`libkrunfw.so.5`) by **absolute path before libkrun looks
   for it**: the VM worker is exec'd through `unshare --keep-id` with a changed
   uid, which puts glibc in secure-execution mode, where `$ORIGIN` in `DT_RUNPATH`
@@ -57,9 +61,10 @@ Source builds of cang need libkrun's build inputs: the bindgen hook
 (`rutabaga_gfx`), `rustfmt` (ffier's generator) and a musl guest init blob. The
 workspace `Cargo.lock` grows libkrun's dependency graph, so `cargo deny` covers
 it and Nix vendors it (`fetchCargoVendor`, which
-`importCargoLock` cannot express for the fork's lock). A libkrun bump is a
-submodule pointer move plus two vendor hashes plus a `Cargo.lock` refresh - see
-[the maintenance procedure](../maintenance.md#updating-the-deps-libkrun-submodule).
+`importCargoLock` cannot express for the fork's lock). A libkrun bump moves the
+`deps/libkrun` submodule pointer and the `libkrun-src` flake input together and
+refreshes two vendor hashes plus `Cargo.lock` - see
+[the maintenance procedure](../maintenance.md#updating-the-libkrun-fork).
 
 The published release asset stays a bare neutral ELF (ADR 0005), but it now
 carries `libvirglrenderer.so.1` as a `DT_NEEDED`, so a consumer that is not Nix
@@ -80,7 +85,9 @@ GPU smoke, not the test suite, is what proves those still work.
   cang's toolchain, which Rust's ABI rules out.
 - **A git-revision dependency on the fork.** Rejected: it still downloads and
   compiles the whole source, and it removes the local checkout that fork work
-  needs while libkrun is pre-2.0.
+  needs while libkrun is pre-2.0. (Amended 2026-09: the `libkrun-src` input is a
+  revision pin for Nix builds only - the crate still resolves libkrun through
+  `deps/libkrun`, and `--override-input` points a build at fork work there.)
 - **Keep `dlopen` until libkrun 2.0.0 is released.** Rejected: the C ABI is a
   projection of the Rust API, so the wait protects nothing, and it would keep the
   load-order/symbol machinery and the `.so` packaging alive.

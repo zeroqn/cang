@@ -16,8 +16,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          # cang compiles libkrun's Rust API out of `deps/libkrun`, so the
-          # submodule has to be in the checkout.
+          # In-tree `cargo` resolves libkrun through `deps/libkrun`, so the
+          # submodule has to be in the checkout. The Nix builds do not: they
+          # compile the fork checkouts the flake pins as `libkrun-src` and
+          # `libkrunfw-src`.
           submodules: recursive
 
       - name: Install Nix
@@ -39,8 +41,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          # cang compiles libkrun's Rust API out of `deps/libkrun`, so the
-          # submodule has to be in the checkout.
+          # In-tree `cargo` resolves libkrun through `deps/libkrun`, so the
+          # submodule has to be in the checkout. The Nix builds do not: they
+          # compile the fork checkouts the flake pins as `libkrun-src` and
+          # `libkrunfw-src`.
           submodules: recursive
 
       - name: Install Nix
@@ -61,10 +65,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
-        with:
-          # cang compiles libkrun's Rust API out of `deps/libkrun`, so the
-          # submodule has to be in the checkout.
-          submodules: recursive
+      # No submodule checkout: the flake checks build the fork sources from the
+      # `libkrun-src`/`libkrunfw-src` inputs, not from `deps/`.
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31

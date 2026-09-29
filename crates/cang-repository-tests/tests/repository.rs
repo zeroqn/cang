@@ -11,7 +11,7 @@ const IMAGE_CONFIG_NIX: &str = include_str!("../../../nix/image/config.nix");
 const IMAGE_CHECKS_NIX: &str = include_str!("../../../nix/image/checks.nix");
 const NIX_STORE_DB_CHECK_NIX: &str = include_str!("../../../nix/image/nix-store-db-check.nix");
 const PINS_NIX: &str = include_str!("../../../nix/pins.nix");
-const NIX_DEV_FLAKE_NIX: &str = include_str!("../../../nix/dev/flake.nix");
+const WORKSPACE_SRC_NIX: &str = include_str!("../../../nix/pkgs/workspace-src.nix");
 const SECCOMP_JSON_NIX: &str =
     include_str!("../../../nix/pkgs/container-lib-policy-seccomp-json.nix");
 const CANG_RUST_NIX: &str = include_str!("../../../nix/pkgs/cang-rust.nix");
@@ -127,14 +127,56 @@ fn flake_exposes_cang_outputs() {
     ] {
         assert!(FLAKE_NIX.contains(required), "missing {required}");
     }
-    assert!(!FLAKE_NIX.contains("cang-dev ="));
 }
 
+/// The fork checkouts a build compiles arrive as flake inputs, not as Git
+/// submodule contents: a flake's own source cannot carry those, and
+/// `inputs.self.submodules = true` only records `submodules = true` on the
+/// ref a downstream `github:` lock writes, which that scheme then rejects with
+/// "input attribute 'submodules' not supported by scheme 'github'"
+/// (NixOS/nix#13571).
 #[test]
-fn dev_flake_exposes_cang_dev_output() {
+fn fork_sources_are_flake_inputs_grafted_into_the_workspace() {
+    for required in [
+        "libkrun-src = {",
+        "libkrunfw-src = {",
+        "url = \"github:zeroqn/libkrun/cang\";",
+        "url = \"github:zeroqn/libkrunfw/cang\";",
+        "flake = false;",
+        "workspaceSrc = import ./nix/pkgs/workspace-src.nix {",
+    ] {
+        assert!(FLAKE_NIX.contains(required), "missing {required}");
+    }
     assert!(
-        NIX_DEV_FLAKE_NIX.contains("cang-dev = rustPackages.rustPackage;"),
-        "dev sub-flake should expose cang-dev"
+        !FLAKE_NIX.contains("self.submodules = true;"),
+        "inputs.self.submodules poisons a downstream github: lock ref without \
+         carrying submodule contents; the fork inputs do that instead"
+    );
+    for required in [
+        "cp -r --no-preserve=mode,ownership ${libkrunSrc} $out/deps/libkrun",
+        "cp -r --no-preserve=mode,ownership ${libkrunfwSrc} $out/deps/libkrunfw",
+    ] {
+        assert!(WORKSPACE_SRC_NIX.contains(required), "missing {required}");
+    }
+}
+
+/// `cang-dev` used to live in the `nix/dev` sub-flake, whose source was the
+/// same submodule-less tree as the root flake's. It is a root output now, and
+/// every build compiles the grafted workspace source instead of `self`.
+#[test]
+fn flake_exposes_cang_dev_output_from_the_grafted_source() {
+    for required in [
+        "cang-dev = rustPackagesDev.rustPackage;",
+        "rustPackagesDev = import ./nix/pkgs/cang-rust.nix {",
+        "libkrunfw = libkrunfwLocal;",
+        "libkrunfwSrc = libkrunfw-src;",
+    ] {
+        assert!(FLAKE_NIX.contains(required), "missing {required}");
+    }
+    assert_eq!(
+        FLAKE_NIX.matches("src = workspaceSrc;").count(),
+        3,
+        "cang, cang-ci-sccache and cang-dev should all build the grafted workspace source"
     );
 }
 
@@ -418,8 +460,9 @@ fn cang_package_exposes_stable_raw_elf_payload_for_release_workflow() {
     }
 
     for required in [
-        // cang compiles libkrun's Rust API from the submodule, so the packager
-        // has to carry libkrun's build inputs and the musl guest init blob.
+        // cang compiles libkrun's Rust API from the fork source grafted into
+        // `deps/`, so the packager has to carry libkrun's build inputs and the
+        // musl guest init blob.
         "pkgs.rustPlatform.bindgenHook",
         "pkgs.pkg-config",
         "pkgs.rustfmt",

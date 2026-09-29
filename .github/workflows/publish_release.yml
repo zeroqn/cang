@@ -21,10 +21,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
-        with:
-          # cang compiles libkrun's Rust API out of `deps/libkrun`, so the
-          # submodule has to be in the checkout.
-          submodules: recursive
+        # No submodule checkout: every step here is a Nix build, and the flake
+        # compiles the fork sources from its `libkrun-src`/`libkrunfw-src`
+        # inputs.
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
