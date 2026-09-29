@@ -13,7 +13,11 @@ both recorded below with the harness.
 
 - cang: the tree build; firmware: `libkrunfw-v5.6.2-cang.1-local` (ticket 05) via
   `CANG_LIBKRUNFW_LIBRARY`; guest-init: `--guest-init <cang-musl>/bin/cang-guest-init`
-  from the tree (the image's own guest-init predates the udmabuf fix below).
+  from the tree. The image archive in the graphroot was built before `57fc4ec`, so
+  its own `/bin/cang-guest-init` predates the udmabuf permission fix and the
+  override is what carried it - the rebuilt archive (clz0p5m, see below) has the
+  fixed one as its `Entrypoint`, so a product-shaped no-override run is a rebuild
+  away, not a code change.
 - image: `nix build path:$PWD#container`, loaded into a hermetic btrfs graphroot.
   **A stale image silently has no fast path**: the proxy is an in-image store
   path, and one earlier archive predated upstream PR #24, so it never calls
@@ -135,6 +139,16 @@ from it, guest-init override from `.#cang-musl`, fresh btrfs graphroot), default
 renderer `ANGLE (AMD, Vulkan 1.4.334 (Virtio-GPU Venus (AMD Radeon RX 7600M XT
 (RADV NAVI33)) (0x00007480)), venus)`. The fork port neither disturbed the copy
 path nor the venus renderer.
+
+## Artifact
+
+`nix build path:$PWD#container` on this tree (with the guest-init fix, the fork
+pointer and the coalescing fix) produced `clz0p5mby4whjsxl6vwzxazni5dnn89c-cang.tar.gz`
+and its `Entrypoint` was read back out of the archive as
+`/nix/store/bnv1bqyid1z5gg18fa92l3bjbvvhb2h7-cang-static-x86_64-unknown-linux-musl-0.9.1/bin/cang-guest-init`
+- i.e. the fixed guest-init. The image-path (no `--guest-init`) re-run was not
+done here: loading another 9 GiB image needs room on the btrfs loop image, which
+is at 23/40 GiB with the smoke's and this harness's graphroots on it.
 
 ## Not shown here
 
