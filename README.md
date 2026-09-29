@@ -60,8 +60,11 @@ rootless Podman tooling for development.
   runs inside cang's keep-id VM-worker user namespace, so the host device must be
   openable there: a `crw-rw---- root kvm` node is not (that namespace does not
   map the `kvm` group), and `/dev/udmabuf` needs mode `0666`, as `/dev/kvm`
-  is. The reason is reported through libkrun's logger, which cang never
-  silences below `warn`. On a run where the fast
+  is. In the guest the same node is created root-only by devtmpfs, so guest-init
+  opens it to the task user on `--gpu=drm`/`--wayland` runs, which is what the
+  in-guest `wl-cross-domain-proxy` needs to import a `wl_shm` pool as a udmabuf.
+  The reason is reported through libkrun's logger, which cang never silences
+  below `warn`. On a run where the fast
   path is active, guest RAM is file-backed and shared with the host, so the
   virtio-balloon has nothing to reclaim; a plain `--gpu=drm` run keeps
   anonymous guest RAM and the balloon's host memory reclaim.
