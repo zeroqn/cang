@@ -124,4 +124,8 @@ linux-hardened-v7.2.7-hardened1.patch     sha256-6AZcuBsr6Ax26Z0sdBUhYqwo8cndegr
 ```
 
 so `nix build .#cang-dev --override-input libkrunfw-src path:<fork checkout on
-rebase-7.2.7>` builds the 7.2.7 kernel plus cang against it.
+rebase-7.2.7>` builds the 7.2.7 kernel plus cang against it. Verified: that build
+is green (`/nix/store/fqr6qz9z1wr8mzr9m7lgp91r3n22jway-cang-0.10.1`) and the
+package boots a guest on the firmware it carries
+(`/nix/store/pwci1ib0h94wgbika8bgbqhzgn0ci7aj-libkrunfw-v5.6.2-cang.2-local`),
+with the same probe output as above (`vm-exit=0`).
