@@ -44,14 +44,14 @@ shm_version=1 compositor_version=4
 width=1920 height=1080 stride=7680 pool_bytes=8294400
 frames=1200 seconds=10.000 fps=120.00
 cpu_user_s=1.234 cpu_sys_s=0.456 cpu_s=1.690 cpu_pct=16.9
+guest_cpu_s=1.900 guest_cpu_pct=19.0 guest_cpu_per_frame_us=1583.3
 ```
 
-`cpu_*` is the client process's own user+system CPU (`os.times`), i.e. the guest
-side of the copy. The proxy's copy happens in the proxy process, so its own cost
-does not appear here; compare the pair of runs by `fps` (a copy path that cannot
-keep up shows a lower achieved rate at `--rate 0`, or the client's own CPU when
-the rate is fixed and the copy is cheap enough that the proxy is not the
-bottleneck).
+`cpu_*` is the client process's own user+system CPU (`os.times`).
+`guest_cpu_*` is the whole guest's busy CPU (`/proc/stat`), which is where the
+A/B shows up: the proxy's copy happens in the proxy process, so the same client
+run costs the guest more with `--zero-copy-shm` off than on, while the client's
+own CPU barely moves either way.
 
 ## Evidence to pair with it
 

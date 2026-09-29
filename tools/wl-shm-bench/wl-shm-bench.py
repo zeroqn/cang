@@ -140,6 +140,19 @@ class Wayland:
             break
 
 
+def guest_cpu_seconds():
+    """Busy CPU seconds for the whole guest, from /proc/stat (HZ=100)."""
+    try:
+        with open("/proc/stat") as handle:
+            fields = handle.readline().split()[1:]
+    except OSError:
+        return None
+    ticks = [int(value) for value in fields]
+    total = sum(ticks)
+    idle = ticks[3] + (ticks[4] if len(ticks) > 4 else 0)  # idle + iowait
+    return (total - idle) / 100.0
+
+
 def connect():
     fd = os.environ.get("WAYLAND_SOCKET")
     if fd:
@@ -251,6 +264,7 @@ def main():
     connection.roundtrip()
 
     start_cpu = os.times()
+    start_guest_cpu = guest_cpu_seconds()
     start = time.monotonic()
     frames = 0
     interval = 1.0 / args.rate if args.rate > 0 else 0.0
@@ -278,6 +292,16 @@ def main():
         % (user, system, cpu, 100.0 * cpu / elapsed),
         flush=True,
     )
+    # The proxy's copy (or its absence) happens in the proxy process, so the
+    # guest-wide busy CPU is what the A/B compares.
+    end_guest_cpu = guest_cpu_seconds()
+    if start_guest_cpu is not None and end_guest_cpu is not None:
+        busy = end_guest_cpu - start_guest_cpu
+        print(
+            "guest_cpu_s=%.3f guest_cpu_pct=%.1f guest_cpu_per_frame_us=%.1f"
+            % (busy, 100.0 * busy / elapsed, 1e6 * busy / max(frames, 1)),
+            flush=True,
+        )
     return 0
 
 
