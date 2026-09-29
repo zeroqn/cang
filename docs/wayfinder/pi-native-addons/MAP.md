@@ -119,6 +119,23 @@ onnxruntime failure verbatim under `bun`, and `node` passing as a trap).
   image's `gcc-15.3.0-lib/lib`, and a preloaded object's RUNPATH is confirmed not
   to rescue a later `dlopen`.
 
+- [Make a regression in the wrapper wiring fail loudly](tickets/07-regression-invariant.md):
+  `nativeAddonRuntimeContracts` inside `wrapperContracts` (`nix/image/checks.nix`)
+  asserts the runtime directory's soname, that `bin/pi` is the wrapper rather than
+  a symlink, that both the derivation and the agent layer carry the directory, and
+  behaviourally that a child process started through the wrapper sees it in
+  `LD_LIBRARY_PATH`; red/green shown by overriding the pi derivation.
+- [Document the mechanism and the hardened-allocator stopgap](tickets/08-document-mechanism-and-stopgap.md):
+  a README "Container environment summary" bullet and a `docs/diagnostics.md` FAQ
+  entry carrying the failure mode, the reason the guest cannot supply the runtime,
+  the `--alloc=hardened` stopgap labelled incidental, and the `node`-check trap.
+- [Show both addons loading inside a real cang guest](tickets/06-live-guest-addons-load.md):
+  both addons load in a real guest under the default allocator with no hand-set
+  `LD_LIBRARY_PATH`, and the wrapper is why - plain `bun` fails both, `bun` with
+  the wrapper's exported value loads both, a live `pi` process carries that value
+  in `/proc/<pid>/environ`, and `LD_DEBUG` resolves `libstdc++.so.6` in the
+  runtime directory; `node` passes either way and is recorded only as the trap.
+
 ## Not yet specified
 
 - **The residual coverage gap** - the wrapper reaches pi's process tree and
