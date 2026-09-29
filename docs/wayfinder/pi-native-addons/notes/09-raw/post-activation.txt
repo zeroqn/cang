@@ -1,0 +1,22 @@
+== ticket 09 post-activation check ==
+date-utc: 2026-09-29T15:34:30Z
+command -v pi            : /etc/profiles/per-user/dev/bin/pi
+  -> profile symlink     : /nix/store/gsngqzm486g8pgc567q0j8fnxl68jx3p-home-manager-path/bin/pi
+activated (the wrapper)  : /nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1/bin/pi
+that bin/pi is a symlink?: no
+wrapper names runtime dir: 2 reference(s)
+pi --version             : 0.87.1
+
+-- the activated wrapper under the guest loader condition (/etc masked) --
+0.87.1
+
+-- strace execve of the inner bun binary: the value in the child's own environment --
+"LD_LIBRARY_PATH=/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib
+   (runtime dir first; the host's own value is appended after it)
+
+-- bun (/nix/store/qkydg77xf2s395md9fq0a6djjpq7fzh4-bun-1.4.2/bin/bun) probes, /etc masked --
+the activated wrapper's exported value: /nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib
+plain    sharp            : LOAD_FAIL: Could not load the "sharp" module using the linux-x64 runtime
+wrapper  sharp            : LOAD_OK
+plain    onnxruntime-node : LOAD_FAIL: libstdc++.so.6: cannot open shared object file: No such file or directory
+wrapper  onnxruntime-node : LOAD_OK

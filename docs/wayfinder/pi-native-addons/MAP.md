@@ -20,6 +20,10 @@ change through the cang flake input in `/home/dev/nix/disp`.
 
 ## Notes
 
+- **Status (2026-09-29): the destination is reached.** Tickets 01-09 are closed;
+  the mechanism ships in the image and on the host, and its wiring is guarded by
+  the `container-wrapper-contracts` flake check.
+
 - **Domain**: the extension host is the bun-compiled `pi` binary built by
   `nix/pkgs/pi-coding-agent.nix` (`pins.piCodingAgent`, v0.87.1 pinned; this host
   runs 0.85.1 of the same derivation) and installed at
@@ -135,6 +139,13 @@ onnxruntime failure verbatim under `bun`, and `node` passing as a trap).
   the wrapper's exported value loads both, a live `pi` process carries that value
   in `/proc/<pid>/environ`, and `LD_DEBUG` resolves `libstdc++.so.6` in the
   runtime directory; `node` passes either way and is recorded only as the trap.
+
+- [Close the host checklist](tickets/09-host-checklist.md):
+  the `cang` flake input in `/home/dev/nix/disp` was bumped (and the fix pushed),
+  and after `nixos-rebuild switch` the host's `pi` is the wrapper (`0.87.1`); a
+  strace of the wrapper's exec shows the runtime directory as the first
+  `LD_LIBRARY_PATH` element of the inner bun binary, and with `/etc` masked the
+  two addons go LOAD_FAIL -> LOAD_OK with that value.
 
 ## Not yet specified
 

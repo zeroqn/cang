@@ -1,7 +1,7 @@
 ---
 label: wayfinder:task
 title: Host checklist - bump the cang input in /home/dev/nix/disp and prove the addons load there
-status: open
+status: closed
 blocked_by: ["05-wrapper-and-runtime-dir"]
 claimed_by: bob + pi session (2026-09-29)
 ---
@@ -86,3 +86,24 @@ the pi pin bump (commit `eaffa99`), so applying the configuration also moves the
 host's `pi` from `0.85.1` to `0.87.1` - it is not possible to take the wrapper
 without the version bump short of cherry-picking, and restoring
 `flake.lock.bak-2026-09-29` would keep `0.85.1` *and* leave the host unwrapped.
+
+## Resolution (2026-09-29) - the host runs the wrapped pi
+
+Bob applied the configuration; the full record is in
+`../notes/09-host-checklist.md` and `../notes/09-raw/post-activation.txt`.
+
+| check (after `nixos-rebuild switch`) | result |
+|---|---|
+| `command -v pi` | `/etc/profiles/per-user/dev/bin/pi` -> `...-home-manager-path/bin/pi` -> `/nix/store/nwvcnfx3...-pi-coding-agent-0.87.1/bin/pi` |
+| that `bin/pi` is a symlink? | no - it is the `makeWrapper` script (two references to the runtime directory) |
+| `pi --version` | `0.87.1` (was `0.85.1`, unwrapped) |
+| the wrapper under the guest's loader condition (`/etc` masked) | `pi --version` still answers - it does not depend on NixOS's preload |
+| `strace -f -e trace=execve pi --version` | the inner bun binary is exec'd with `LD_LIBRARY_PATH=/nix/store/0hpv152...-cang-native-addon-runtime/lib...` - the runtime directory first, the host's own value appended |
+| `bun` + `sharp` / `onnxruntime-node`, `/etc` masked, no hand-set variable | **LOAD_FAIL** / **LOAD_FAIL** (`libstdc++.so.6: cannot open shared object file`) |
+| the same two, given the activated wrapper's exported value | **LOAD_OK** / **LOAD_OK** |
+
+The one caveat: the probe env is the value the *activated* wrapper computes
+(derived by rewriting its exec line) rather than the environment of a live
+interactive `pi` session - starting a real session needs a model and a TTY. The
+live-process form of that measurement was taken in the guest instead (ticket 06:
+`/proc/957/environ`).
