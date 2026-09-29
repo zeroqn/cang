@@ -76,3 +76,12 @@ and wrapped pi `nwvcnfx3...` are identical to the clean tree's build, so the
 image content is the current tree's; (2) the probe drives `bun` with the value
 the wrapper exports (plus the live-`pi` capture above) rather than opening the
 addon from inside a `pi` session, which would need a model and a TTY.
+
+The harness that produced this run is preserved beside the raw output, because
+the working copy lived on the btrfs disk outside the repository:
+`../notes/06-raw-harness-env.sh` (hermetic `CONTAINERS_STORAGE_CONF`, `TMPDIR`,
+`XDG_CONFIG_HOME`, `XDG_STATE_HOME` and `CANG_IMAGE` on the btrfs disk),
+`../notes/06-raw-harness-run-vm.sh` (host runner: builds/loads the image, boots
+the VM under `script`, captures `logs/`), and
+`../notes/06-raw-harness-guest-probe.sh` (the in-guest probe, in the version the
+recorded run used).
