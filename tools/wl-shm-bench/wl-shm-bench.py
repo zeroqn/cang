@@ -128,16 +128,19 @@ class Wayland:
             self.buffer = self.buffer[size:]
         return messages
 
-    def roundtrip(self):
+    def roundtrip(self, timeout=5.0):
+        """Wait for the wl_display.sync reply; a missing one is an error.
+
+        The proxy forwards this to the host compositor, so a fast-path run that
+        never answers is a real finding rather than a reason to spin."""
         callback = self.alloc()
         self.send(1, WL_DISPLAY_SYNC, u32(callback))
-        while True:
-            for object_id, opcode, _payload in self.pump(2.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for object_id, opcode, _payload in self.pump(0.2):
                 if object_id == callback and opcode == 0:
                     return
-            else:
-                continue
-            break
+        raise TimeoutError("no wl_display.sync reply within %.1fs" % timeout)
 
 
 def guest_cpu_seconds():
@@ -200,6 +203,10 @@ def main():
     parser.add_argument(
         "--rate", type=float, default=120.0, help="target commits/s, 0 = unthrottled"
     )
+    parser.add_argument(
+        "--roundtrip-timeout", type=float, default=5.0,
+        help="seconds to wait for the warm-up wl_display.sync reply",
+    )
     args = parser.parse_args()
 
     page = mmap.PAGESIZE
@@ -261,7 +268,14 @@ def main():
     )
 
     present(0)
-    connection.roundtrip()
+    try:
+        connection.roundtrip(args.roundtrip_timeout)
+        print("warmup=roundtrip_ok", flush=True)
+    except TimeoutError as error:
+        # Keep going: commits are asynchronous, so a proxy that never answers the
+        # sync still lets the loop run, and the measurement plus this line is
+        # what shows a stalled fast path rather than a missing one.
+        print("warmup=no_sync_reply (%s)" % error, flush=True)
 
     start_cpu = os.times()
     start_guest_cpu = guest_cpu_seconds()
