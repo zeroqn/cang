@@ -212,6 +212,14 @@ _Avoid_: waypipe display (that names only the guest-side socket), waypipe accele
 Putting venus-rendered frames on screen through a guest Vulkan surface (`VkSurfaceKHR`). It cannot work across the microvm boundary, because the host GPU never sees the guest's `wl_display`; offscreen venus rendering plus buffer sharing to the compositor is the path that does work.
 _Avoid_: venus GPU acceleration (that is the offscreen render path, which does work)
 
+**native addon runtime directory**:
+The cang-owned library directory that supplies the shared-library runtime a
+runtime-installed native addon links against but cannot find for itself. It is
+scoped to exactly the sonames addons need, because it is searched ahead of a
+binary's own run path.
+_Avoid_: gcc library directory, compatibility library directory
+
+
 ## Example dialogue
 
 Dev: Should this task use a named VM instance?

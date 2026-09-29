@@ -3,7 +3,7 @@ label: wayfinder:task
 title: Reproduce the addon failure inside a real cang guest before the mechanism is chosen
 status: open
 blocked_by: []
-claimed_by: ""
+claimed_by: pi research child-3 (2026-09-29)
 ---
 
 ## Question

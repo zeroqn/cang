@@ -1,9 +1,9 @@
 ---
 label: wayfinder:grilling
 title: Which mechanism carries the C++ runtime to pi's addons, and where does it live?
-status: open
+status: closed
 blocked_by: ["01-glibc-addon-resolution-today", "02-loader-visible-compat-libs"]
-claimed_by: ""
+claimed_by: bob + pi session (2026-09-29)
 ---
 
 ## Question
@@ -46,3 +46,38 @@ loader-visible mechanisms, decide - with bob - the mechanism and its placement:
 The decision as this ticket's resolution, an ADR in `docs/adr/` if it is hard to
 reverse and surprising without context, and the tickets the decision graduates
 (host checklist, invariant, docs, per-arch).
+
+## Resolution (2026-09-29, bob + pi session)
+
+Decided, with the evidence from tickets 01 and 02 (`../notes/01-*.md`,
+`../notes/02-*.md`):
+
+1. **Delivery: a `pi` wrapper in `nix/pkgs/pi-coding-agent.nix`.** `$out/bin/pi`
+   stops being a symlink to the raw bun binary and becomes a wrapper that
+   prepends the native addon runtime directory to `LD_LIBRARY_PATH`. One change
+   reaches the guest (image layer) and the host (the dev host takes
+   `pi-coding-agent` from the cang flake), and it covers everything the agent
+   launches - extensions, `node`/`npm`/`bun` runs, subagents. Accepted limit: a
+   dynamic process started from the guest task shell *outside* pi's tree is not
+   covered, and the raw `$out/lib/pi-coding-agent/pi` still bypasses the wrapper.
+2. **Artifact: the soname only.** A cang-owned directory exposes exactly
+   `libstdc++.so.6` (built from the flake's gcc, which the image carries anyway).
+   `LD_LIBRARY_PATH` is searched *ahead of* a binary's own `DT_RUNPATH`, so the
+   directory is deliberately scoped to the one library addons are missing rather
+   than pointing at gcc's whole lib directory.
+3. **The `--alloc=hardened` stopgap gets documented, not defaulted.** The guest
+   already loads both addons today with `--alloc=hardened`, because cang's
+   graphene-hardened-malloc carries libstdc++ in its own `DT_NEEDED` - the
+   host's accident reproduced deliberately. It is a stopgap for someone hitting
+   this now; the allocator stays mimalloc by default, because `--alloc=glibc`
+   would break the addons again and the allocator policy should not be load
+   bearing for a loader problem.
+4. **Evidence: a scored live-guest probe plus a repo invariant.** Both addons
+   must import inside a real guest (probe exits non-zero otherwise), and a cheap
+   repo check must fail when the wrapper or its directory is unwired.
+
+Consequences recorded in the map: the wrapper is now the entry point that
+matters, `versionCheckHook`/`--version` must keep working through it, and any
+future addon needing a *different* soname needs its own decision.
+
+Recorded as ADR `docs/adr/0009-pi-extension-cxx-runtime-delivery.md`.

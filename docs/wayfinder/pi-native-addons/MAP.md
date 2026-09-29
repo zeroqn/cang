@@ -99,28 +99,29 @@ guest itself is ticket 04).
   store `lib`), and the image already contains gcc's `libstdc++.so.6`. Env-free
   `/etc` hooks are plausible but unprobed; the allocator's preload file is a trap
   because `--alloc=glibc` deletes it.
+- [Which mechanism carries the C++ runtime to pi's addons, and where does it live?](tickets/03-mechanism-and-placement.md):
+  a **`pi` wrapper in `nix/pkgs/pi-coding-agent.nix`** prepends a native addon
+  runtime directory holding **only `libstdc++.so.6`** to `LD_LIBRARY_PATH`, so the
+  guest and the host get it from one change and everything the agent launches is
+  covered. `--alloc=hardened` is documented as a stopgap, not promoted to the
+  mechanism; evidence is a scored live-guest probe plus a repo wiring check.
+  Recorded as [ADR 0009](../../adr/0009-pi-extension-cxx-runtime-delivery.md).
 
 ## Not yet specified
 
-- **Where the invariant lives** - a `wrapperContracts` entry in
-  `nix/image/checks.nix`, a repository test, or a scored `tools/` smoke.
-  Sharpens with ticket 03.
-- **The live evidence's harness** - extend an existing smoke versus a new probe
-  that asserts both addons import in a real guest. Sharpens with ticket 03.
-- **How far the general class reaches** - bob chose "any dlopen'd glibc addon",
-  so whether the mechanism must also cover `node`/`npm` runs the agent launches
-  (not only pi's tree) has to be pinned down in ticket 03.
-- **The host checklist ticket** - bump the `cang` input in `/home/dev/nix/disp`,
-  rebuild, prove the addons load there. Graduates when ticket 03 fixes where the
-  mechanism lives.
-- **Documentation** - `README.md`'s "Container environment summary" already
-  lists allocator and library details, so a mechanism that adds libraries or
-  environment needs a line there. Graduates with ticket 03.
-- **Per-arch coverage** - `@img/sharp-linux-arm64`, onnxruntime `linux/arm64`,
-  and whether the image is built for aarch64 at all.
+- **The residual coverage gap** - the wrapper reaches pi's process tree; a
+  dynamic process started from the guest task shell outside it (a `node` the
+  user runs directly, a nested container) is not covered. That is accepted for
+  now; it graduates into a ticket only if someone actually hits it.
+- **Future addons with other sonames** - the runtime directory holds
+  `libstdc++.so.6` because that is what `sharp` and `onnxruntime-node` lack.
+  `libxcb.so.1` (the pi-tui X11 prebuild) has the same shape of dependency and
+  will need its own decision when something loads it in the guest.
 - **Whether magic-context degrades silently today** - ticket 01 could not
   establish it (the generated bundle's require/import sites are not greppable);
   it matters for how loudly the fix has to be proven.
+- **Per-arch coverage** - `@img/sharp-linux-arm64`, onnxruntime `linux/arm64`,
+  and whether the image is built for aarch64 at all.
 
 ## Out of scope
 
