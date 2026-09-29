@@ -1,0 +1,21 @@
+== ticket 09 host checklist ==
+date-utc: 2026-09-29T15:19:33Z
+host cang flake input rev: 60cb5a61b868dbb4c9c4f87ddd46e07db1456801 (github:zeroqn/cang)
+host pi store path: /nix/store/nwvcnfx3bma7h97gzhh79msr3g4jswww-pi-coding-agent-0.87.1   (the same path a local build produces and the github build produces)
+
+-- step 2: shape of the pi the host flake now resolves to --
+bin/pi is a symlink?           no
+wrapper names the runtime dir: 2 reference(s)
+inner bun binary present:      yes
+pi --version through wrapper:  0.87.1
+
+-- the wrapper's own exported value (exec line rewritten to echo) --
+sed rewrote the exec line: yes
+LD_LIBRARY_PATH=/nix/store/0hpv152zh95hv36a8ksi0iywicgaphpn-cang-native-addon-runtime/lib
+
+-- step 3: masked-/etc loader condition (the guest's, NixOS preload removed) --
+plain    sharp             : LOAD_FAIL: Could not load the "sharp" module using the linux-x64 runtime
+plain    onnxruntime-node  : LOAD_FAIL: libstdc++.so.6: cannot open shared object file: No such file or directory
+wrapper  sharp             : LOAD_OK
+wrapper  onnxruntime-node  : LOAD_OK
+(raw evidence: docs/wayfinder/pi-native-addons/notes/09-raw/)
