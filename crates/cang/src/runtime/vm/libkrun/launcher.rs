@@ -146,12 +146,12 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
     ) -> Result<()> {
         tracing::debug!(
             level = ?config.log_level,
-            libkrun_level = config.log_level.libkrun_level(),
+            libkrun_level = config.log_level.libkrun_log_level(),
             "libkrun log init: begin"
         );
         setup(
             "krun_init_log",
-            self.api.init_log(config.log_level.libkrun_level()),
+            self.api.init_log(config.log_level.libkrun_log_level()),
         )?;
         tracing::debug!("libkrun log init: complete");
         tracing::debug!("krun_vmm_builder_new: begin");

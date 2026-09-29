@@ -4,7 +4,11 @@
 
 For host-side and direct-libkrun diagnostics, use `--log-level` with one of
 `off`, `error`, `warn`, `info`, `debug`, or `trace`. The same effective level is
-used by the parent process, the keep-id libkrun helper, and libkrun logging;
+used by the parent process, the keep-id libkrun helper, and libkrun logging -
+except that libkrun's own logger is never set below `warn`, because its warnings
+(a GPU backend that failed to come up, `--zero-copy-shm` falling back to the copy
+path, a guest handle about to be mis-routed) describe a degraded launch that
+`--log-level off` silences cang's own records for without hiding;
 `debug` and `trace` also set `CANG_GUEST_DEBUG=1` so `cang-guest-init` prints
 early guest-entry breadcrumbs to stderr. `CANG_LOG_LEVEL` provides the same
 setting through the environment. When neither `--log-level` nor

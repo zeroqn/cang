@@ -38,6 +38,20 @@ impl LogLevel {
         }
     }
 
+    /// The numeric level handed to libkrun's own logger (`krun_init_log`),
+    /// floored at `warn`.
+    ///
+    /// libkrun's diagnostics go through `log` and env_logger, not through
+    /// cang's tracing subscriber, and only at the level cang passes here. cang's
+    /// default is `off`, which would swallow the fork's warnings: `--zero-copy-shm`
+    /// falling back to the copy path because `/dev/udmabuf` is unusable, a GPU
+    /// backend that failed to come up, a guest handle about to be mis-routed.
+    /// Those describe a degraded or failing launch, so they are never silenced -
+    /// cang's own tracing still honours `--log-level` exactly.
+    pub(crate) fn libkrun_log_level(self) -> u32 {
+        self.libkrun_level().max(Self::Warn.libkrun_level())
+    }
+
     pub(crate) fn enables_debug(self) -> bool {
         self >= Self::Debug
     }
@@ -122,11 +136,6 @@ pub(crate) fn init_tracing(settings: &LogSettings) -> Result<()> {
         .with_target(true)
         .finish();
     let _ = tracing::subscriber::set_global_default(subscriber);
-    // libkrun logs through the `log` crate; forwards those records into the
-    // subscriber above so the fork's diagnostics reach cang's own log stream
-    // (filtered by the same RUST_LOG). Failing here only loses them, so the
-    // error is dropped.
-    let _ = tracing_log::LogTracer::init();
     Ok(())
 }
 
@@ -155,6 +164,19 @@ fn parse_scalar_rust_log(value: &str) -> Option<LogLevel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn libkrun_log_level_is_floored_at_warn() {
+        // Off/Error/Warn all reach libkrun's logger as warn, so its
+        // "running without it" diagnostics cannot be silenced; info and above
+        // pass through unchanged.
+        assert_eq!(LogLevel::Off.libkrun_log_level(), 2);
+        assert_eq!(LogLevel::Error.libkrun_log_level(), 2);
+        assert_eq!(LogLevel::Warn.libkrun_log_level(), 2);
+        assert_eq!(LogLevel::Info.libkrun_log_level(), 3);
+        assert_eq!(LogLevel::Debug.libkrun_log_level(), 4);
+        assert_eq!(LogLevel::Trace.libkrun_log_level(), 5);
+    }
 
     #[test]
     fn log_level_maps_to_libkrun_numeric_contract() {
