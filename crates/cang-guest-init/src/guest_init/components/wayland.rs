@@ -36,6 +36,12 @@ const DRI_DIR: &str = "/dev/dri";
 const ROOT_UID: u32 = 0;
 const VIDEO_GID: u32 = 44;
 const RENDER_GID: u32 = 107;
+// `<linux/udmabuf.h>`'s device node. devtmpfs creates it root-only, and the
+// guest proxy runs as the task user, so a GPU guest has to open the mode up or
+// the proxy's `/dev/udmabuf` probe fails and every `wl_shm` pool takes the
+// copy path instead of PR 822's zero-copy one.
+const UDMABUF_PATH: &str = "/dev/udmabuf";
+const UDMABUF_MODE: u32 = 0o666;
 
 pub(in crate::guest_init) fn export_mesa_if_enabled(enabled: bool) {
     if !enabled {
@@ -53,6 +59,7 @@ pub(in crate::guest_init) fn start_if_enabled(
     identity: &DevIdentity,
 ) -> Result<Option<Child>> {
     prepare_drm_devices_for_start(wayland_enabled, gpu_drm_enabled, Path::new(DRI_DIR))?;
+    prepare_udmabuf_for_start(wayland_enabled, gpu_drm_enabled, Path::new(UDMABUF_PATH))?;
     if !wayland_enabled {
         return Ok(None);
     }
@@ -87,6 +94,30 @@ fn prepare_drm_devices_for_start_with(
 ) -> Result<()> {
     if wayland_enabled || gpu_drm_enabled {
         prepare_drm_devices_under_with(dri_dir, apply)?;
+    }
+    Ok(())
+}
+
+fn prepare_udmabuf_for_start(
+    wayland_enabled: bool,
+    gpu_drm_enabled: bool,
+    path: &Path,
+) -> Result<()> {
+    prepare_udmabuf_for_start_with(wayland_enabled, gpu_drm_enabled, path, &mut |path, mode| {
+        guest_fs::chmod(path, mode)
+    })
+}
+
+fn prepare_udmabuf_for_start_with(
+    wayland_enabled: bool,
+    gpu_drm_enabled: bool,
+    path: &Path,
+    apply: &mut impl FnMut(&Path, u32) -> Result<()>,
+) -> Result<()> {
+    // Only a GPU guest has anything to do with the node, and a kernel built
+    // without `CONFIG_UDMABUF` has none to open.
+    if (wayland_enabled || gpu_drm_enabled) && path.exists() {
+        apply(path, UDMABUF_MODE)?;
     }
     Ok(())
 }
@@ -315,6 +346,56 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn udmabuf_preparation_opens_the_node_for_gpu_guests_only() {
+        let temp = tempfile::tempdir().expect("temporary directory should be created");
+        let node = temp.path().join("udmabuf");
+        fs::write(&node, "").expect("udmabuf node should be created");
+        let mut applied = Vec::new();
+
+        prepare_udmabuf_for_start_with(true, false, &node, &mut |path, mode| {
+            applied.push((path.to_path_buf(), mode));
+            Ok(())
+        })
+        .expect("udmabuf preparation should succeed");
+        prepare_udmabuf_for_start_with(false, true, &node, &mut |path, mode| {
+            applied.push((path.to_path_buf(), mode));
+            Ok(())
+        })
+        .expect("udmabuf preparation should succeed with --gpu=drm alone");
+
+        assert_eq!(
+            applied,
+            [(node.clone(), UDMABUF_MODE), (node.clone(), UDMABUF_MODE)]
+        );
+
+        let mut applied = Vec::new();
+        prepare_udmabuf_for_start_with(false, false, &node, &mut |path, mode| {
+            applied.push((path.to_path_buf(), mode));
+            Ok(())
+        })
+        .expect("udmabuf preparation should succeed without a GPU");
+        assert!(
+            applied.is_empty(),
+            "a non-GPU guest must not touch the node"
+        );
+    }
+
+    #[test]
+    fn udmabuf_preparation_tolerates_a_kernel_without_the_node() {
+        let temp = tempfile::tempdir().expect("temporary directory should be created");
+        let missing = temp.path().join("udmabuf");
+        let mut applied = Vec::new();
+
+        prepare_udmabuf_for_start_with(true, true, &missing, &mut |path, mode| {
+            applied.push((path.to_path_buf(), mode));
+            Ok(())
+        })
+        .expect("a missing udmabuf node is not an error");
+
+        assert!(applied.is_empty());
     }
 
     #[test]
