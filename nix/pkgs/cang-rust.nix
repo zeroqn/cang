@@ -21,7 +21,7 @@ let
   # refreshes this hash in the same commit as the submodule pointer.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     src = self;
-    hash = "sha256-N76HcvPi1Dj8rTK0yTMwtKPsak59JG66dHput48cVsk=";
+    hash = "sha256-CmzlNqPRBTDmTQp00s6WUP6nIJ4jW8IjdgKWqAu1yzE=";
   };
 
   # Building libkrun is what needs clang/libclang (krun-display and krun-input

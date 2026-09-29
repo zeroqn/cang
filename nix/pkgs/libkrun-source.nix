@@ -19,7 +19,7 @@ let
   # same commit.
   libkrunCargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     src = libkrunSrc;
-    hash = "sha256-SjThWtfmffo38w3ormnO+hSa4H6IugRz2wq4DvWX5Jg=";
+    hash = "sha256-5Snz7O5nbcg0qVgLPhSzFdGUk5+pqy+Iavt0mE3FLaQ=";
   };
 
   muslTarget =
