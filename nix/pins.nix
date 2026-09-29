@@ -130,16 +130,16 @@ in
     # Pinned by scripts/update-cang-prebuilt.sh, which rejects wrapper-script,
     # legacy flake-locked, and concrete /nix/store/<hash>-referencing cang
     # release payloads.
-    tag = "v0.9.1";
+    tag = "v0.10.0";
     systems = {
       x86_64-linux = {
-        asset = "cang-v0.9.1-x86_64-unknown-linux-gnu";
+        asset = "cang-v0.10.0-x86_64-unknown-linux-gnu";
         # Computed from `nix build .#cang-ci-sccache` normalized exactly like the
         # release workflow (`patchelf --set-interpreter
         # /lib64/ld-linux-x86-64.so.2 --set-rpath ""`), so it is the byte-identical
         # asset the tag push uploads. Recompute it the same way for the next
         # release; see the cang release scheme in docs/maintenance.md.
-        hash = "sha256-hIjkPDINdrSFJtfgIndKBl6NwwcAHFwCWbZC7FBHLtw=";
+        hash = "sha256-jdw7iJIkqQpj95nCwfewB5UoYfAxVqukCJxcWQ+KPI4=";
       };
     };
   };
