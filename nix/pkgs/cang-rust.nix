@@ -24,7 +24,7 @@ let
   # the same commit as the submodule pointer and the `libkrun-src` input.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-ZoyEE71PoBkobjnc2p+woLnbZhHicB58adCtcaffvdQ=";
+    hash = "sha256-S+76+LkD2v2Yd5/5hU5iFjbdWOgutZ5dDivkNec3HII=";
   };
 
   # Building libkrun is what needs clang/libclang (krun-display and krun-input
