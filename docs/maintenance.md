@@ -383,6 +383,11 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.11.2` (`b3007a1`) - the guest attach session no longer drops a child's
+  final PTY output (it is forwarded before the `Exit` frame) and the
+  guest-init suite is deterministic under load, so the nix builds whose
+  checkPhase runs it stop failing at random; x86_64 asset sha256
+  `290f103ce0999f0a0abf384a8dd0eb88a98f1ed10acffcdfbeba864c5174089d`.
 - `v0.11.1` (`6cd1bd8`) - the default host sandbox boots again: Landlock
   relax mode accepts the managed guest kernel console log and the console
   device builders' duplicates of the worker's own stdio descriptors, and the
@@ -411,10 +416,11 @@ nix build .#libkrunfw
 
 Each of these is the hash its release publishes, and each was reproduced locally
 from the tagged tree with the `overrideAttrs` recipe above (v0.9.0 while
-validating that recipe; v0.9.1, v0.10.1, v0.11.0 and v0.11.1 before their pins
-went in - for v0.10.1 and v0.11.0 the main-branch run of the same commit
-published the same bytes first, while for v0.11.1 that run's build step failed
-and the tag run published the bytes the local recipe had already produced),
+validating that recipe; v0.9.1, v0.10.1, v0.11.0, v0.11.1 and v0.11.2 before
+their pins went in - for v0.10.1, v0.11.0 and v0.11.2 the main-branch run of the
+same commit published the same bytes as the rolling `sha-<shortsha>` artifact
+first, while for v0.11.1 that run's build step failed and the tag run published
+the bytes the local recipe had already produced),
 so a freshly published `.sha256` that disagrees with this list means the build
 inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache` attribute first.
 
