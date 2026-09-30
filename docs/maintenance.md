@@ -383,6 +383,12 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.11.0` (`4a6ad8b`) - the libkrun fork is re-based onto upstream main
+  (`v2.0.0-cang.5`) and reads virtio-blk in parallel, libkrunfw moves to the
+  7.2.7 kernel line (`v5.6.2-cang.3`, with aarch64/riscv64 on
+  `v5.6.2-cang-lts.1`), and the agent layer ships the pinned `fresh` editor;
+  x86_64 asset sha256
+  `9c76d8f3e5d9a43db4fed4f21cb7144cf23407622793ba80cf365e98ff2632c6`.
 - `v0.10.1` (`f0d5ecb`) - the libkrun and libkrunfw forks arrive as flake inputs
   (a Nix build no longer needs submodule contents and `nix/dev` is gone) and
   `ffier` leaves cang's lock; x86_64 asset sha256
@@ -399,8 +405,9 @@ nix build .#libkrunfw
 
 Each of these is the hash its release publishes, and each was reproduced locally
 from the tagged tree with the `overrideAttrs` recipe above (v0.9.0 while
-validating that recipe; v0.9.1 and v0.10.1 before their pins went in - for
-v0.10.1 the main-branch run of the same commit published the same bytes first),
+validating that recipe; v0.9.1, v0.10.1 and v0.11.0 before their pins went in -
+for v0.10.1 and v0.11.0 the main-branch run of the same commit published the same
+bytes first),
 so a freshly published `.sha256` that disagrees with this list means the build
 inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache` attribute first.
 
