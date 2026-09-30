@@ -196,6 +196,8 @@ pub(crate) enum RetainedFdClass {
     PasstSocket,
     RuntimeKernelObject,
     BenignDevice,
+    ManagedConsoleLog,
+    StdioDuplicate,
     Unexpected,
 }
 
@@ -227,7 +229,14 @@ impl EffectivePolicy {
         task_state_dir: &Path,
         profile_enabled: bool,
     ) -> Result<Self> {
-        let fd_report = retained_fd_report(config.landlock, config.passt_fd)?;
+        let fd_report = retained_fd_report(
+            config.landlock,
+            config.passt_fd,
+            config
+                .managed_session
+                .as_ref()
+                .map(|session| session.guest_kernel_console_log.as_path()),
+        )?;
         Self::build_with_fd_report(config, task_state_dir, profile_enabled, fd_report)
     }
 
@@ -590,10 +599,15 @@ fn parse_publish_host_port(spec: &str) -> Result<Option<u16>> {
     Ok(Some(port))
 }
 
-fn retained_fd_report(mode: LandlockMode, passt_fd: Option<i32>) -> Result<RetainedFdReport> {
+fn retained_fd_report(
+    mode: LandlockMode,
+    passt_fd: Option<i32>,
+    managed_console_log: Option<&Path>,
+) -> Result<RetainedFdReport> {
     let mut entries = Vec::new();
     let mut unexpected = Vec::new();
     let passt_fd = passt_fd.into_iter().collect::<HashSet<_>>();
+    let stdio_targets = retained_stdio_targets();
     let fd_dir = match fs::read_dir(FD_DIR) {
         Ok(dir) => dir,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -609,7 +623,9 @@ fn retained_fd_report(mode: LandlockMode, passt_fd: Option<i32>) -> Result<Retai
         let target = fs::read_link(entry.path())
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| "<unavailable>".to_owned());
-        if let Some(classification) = classify_fd(fd, &target, &passt_fd) {
+        if let Some(classification) =
+            classify_fd(fd, &target, &passt_fd, managed_console_log, &stdio_targets)
+        {
             entries.push(RetainedFd {
                 fd,
                 target,
@@ -640,12 +656,41 @@ fn retained_fd_report(mode: LandlockMode, passt_fd: Option<i32>) -> Result<Retai
     })
 }
 
-fn classify_fd(fd: i32, target: &str, passt_fds: &HashSet<i32>) -> Option<RetainedFdClass> {
+fn retained_stdio_targets() -> HashSet<String> {
+    (0..=2)
+        .filter_map(|fd| {
+            fs::read_link(format!("{FD_DIR}/{fd}"))
+                .ok()
+                .map(|path| path.display().to_string())
+        })
+        .collect()
+}
+
+fn classify_fd(
+    fd: i32,
+    target: &str,
+    passt_fds: &HashSet<i32>,
+    managed_console_log: Option<&Path>,
+    stdio_targets: &HashSet<String>,
+) -> Option<RetainedFdClass> {
     if (0..=2).contains(&fd) {
         return Some(RetainedFdClass::Stdio);
     }
     if passt_fds.contains(&fd) {
         return Some(RetainedFdClass::PasstSocket);
+    }
+    if managed_console_log.is_some_and(|path| Path::new(target) == path) {
+        // The managed guest's kernel console log is opened by this process
+        // while the console device is built, which happens before this
+        // inventory runs; it is a descriptor we asked for, not a leak.
+        return Some(RetainedFdClass::ManagedConsoleLog);
+    }
+    if stdio_targets.contains(target) {
+        // The console device builders duplicate the worker's own stdio fds
+        // while the default console is built, again before this inventory
+        // runs; a duplicate of an accepted stdio descriptor grants no access
+        // the accepted descriptor did not already grant.
+        return Some(RetainedFdClass::StdioDuplicate);
     }
     if target.starts_with("anon_inode:")
         || target.starts_with("socket:")
@@ -1709,22 +1754,73 @@ mod tests {
     #[test]
     fn fd_classifier_accepts_the_udmabuf_device() {
         assert_eq!(
-            classify_fd(9, GPU_UDMABUF_DEVICE, &HashSet::new()),
+            classify_fd(
+                9,
+                GPU_UDMABUF_DEVICE,
+                &HashSet::new(),
+                None,
+                &HashSet::new()
+            ),
             Some(RetainedFdClass::BenignDevice)
+        );
+    }
+
+    #[test]
+    fn fd_classifier_accepts_the_managed_console_log() {
+        let console_log = Path::new("/state/task/guest-kernel-console.log");
+
+        assert_eq!(
+            classify_fd(
+                4,
+                "/state/task/guest-kernel-console.log",
+                &HashSet::new(),
+                Some(console_log),
+                &HashSet::new()
+            ),
+            Some(RetainedFdClass::ManagedConsoleLog)
+        );
+        assert_eq!(
+            classify_fd(
+                4,
+                "/state/task/guest-kernel-console.log",
+                &HashSet::new(),
+                None,
+                &HashSet::new()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn fd_classifier_accepts_a_duplicate_of_worker_stdio() {
+        let stdio_targets = HashSet::from(["/state/task/helper.stdout.log".to_owned()]);
+
+        assert_eq!(
+            classify_fd(
+                7,
+                "/state/task/helper.stdout.log",
+                &HashSet::new(),
+                None,
+                &stdio_targets
+            ),
+            Some(RetainedFdClass::StdioDuplicate)
         );
     }
 
     #[test]
     fn fd_classifier_rejects_unexpected_regular_files() {
         assert_eq!(
-            classify_fd(0, "/tmp/file", &HashSet::new()),
+            classify_fd(0, "/tmp/file", &HashSet::new(), None, &HashSet::new()),
             Some(RetainedFdClass::Stdio)
         );
         assert_eq!(
-            classify_fd(9, "socket:[123]", &HashSet::new()),
+            classify_fd(9, "socket:[123]", &HashSet::new(), None, &HashSet::new()),
             Some(RetainedFdClass::RuntimeKernelObject)
         );
-        assert_eq!(classify_fd(9, "/tmp/file", &HashSet::new()), None);
+        assert_eq!(
+            classify_fd(9, "/tmp/file", &HashSet::new(), None, &HashSet::new()),
+            None
+        );
     }
 
     #[test]

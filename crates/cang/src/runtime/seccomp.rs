@@ -1228,6 +1228,20 @@ mod tests {
     }
 
     #[test]
+    fn packaged_default_seccomp_policy_allows_sigaltstack() {
+        let policy: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../../assets/seccomp/default.json"))
+                .expect("default seccomp policy should parse");
+        let syscalls =
+            allowed_syscalls_from_policy_value(&policy).expect("default policy should inspect");
+
+        assert!(
+            syscalls.contains("sigaltstack"),
+            "libkrun installs an alternate signal stack while building the VMM; without sigaltstack the enforced default policy kills the VM worker with SIGSYS"
+        );
+    }
+
+    #[test]
     fn compile_enforce_policy_reads_policy_before_apply() {
         let dir = tempfile::tempdir().expect("tempdir");
         let policy_path = dir.path().join("default.json");
