@@ -42,13 +42,18 @@ let
   system = stdenv.hostPlatform.system;
   release = pins.libkrunfwRelease;
   systemPins = release.systems.${system} or (throw "unsupported libkrunfw system: ${system}");
+  # A line's assets are published per branch: the newest-kernel line (`cang`)
+  # carries x86_64 while the LTS line (`cang-lts`) carries the other
+  # architectures, so a system may name its own release. `tag` is the primary
+  # release otherwise - the one the cang release gate checks.
+  systemTag = systemPins.tag or release.tag;
 
   prebuilt = stdenvNoCC.mkDerivation {
     pname = "libkrunfw";
     version = release.tag;
 
     src = fetchurl {
-      url = "https://github.com/${release.owner}/${release.repo}/releases/download/${release.tag}/${systemPins.asset}";
+      url = "https://github.com/${release.owner}/${release.repo}/releases/download/${systemTag}/${systemPins.asset}";
       hash = systemPins.hash;
     };
 
@@ -78,17 +83,17 @@ let
     };
   };
 
-  kernelVersion = "linux-6.12.109";
-  kernelHardenedVersion = "v6.12.109-hardened1";
+  kernelVersion = "linux-7.2.7";
+  kernelHardenedVersion = "v7.2.7-hardened1";
 
   kernelTarball = fetchurl {
-    url = "https://cdn.kernel.org/pub/linux/kernel/v6.x/${kernelVersion}.tar.xz";
-    hash = "sha256-VITlUqM04VAZ9K66ieW1jwRlHPL04k4E3p8VLxw44/o=";
+    url = "https://cdn.kernel.org/pub/linux/kernel/v7.x/${kernelVersion}.tar.xz";
+    hash = "sha256-SsNMR9slQP+ycTlD+NiR/xcC4LppNFJaSTt9HK1DFFo=";
   };
 
   kernelHardenedPatch = fetchurl {
     url = "https://github.com/anthraxx/linux-hardened/releases/download/${kernelHardenedVersion}/linux-hardened-${kernelHardenedVersion}.patch";
-    hash = "sha256-6LJdOv3pSXvU5J9bvZCMBML/Ix6TiaYaaR9SFhW6Dww=";
+    hash = "sha256-6AZcuBsr6Ax26Z0sdBUhYqwo8cndegrq+W7Jwt1x2MI=";
   };
 
   python = python3.withPackages (pythonPackages: [

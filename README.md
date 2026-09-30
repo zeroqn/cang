@@ -510,8 +510,14 @@ the published `ghcr.io/<repo-owner>/cang` image. `nix build .#cang-dev` is the
 same host package built against a locally compiled libkrunfw kernel; point
 either target at fork work in the checkout with
 `--override-input libkrun-src "git+file://$PWD/deps/libkrun"` (or
-`libkrunfw-src`). In-tree `cargo` builds still read the `deps/libkrun` and
-`deps/libkrunfw` submodules, so clone with
+`libkrunfw-src`). The `libkrunfw-src` input follows the fork's `cang` branch, its
+newest kernel line (linux-7.2.7 + linux-hardened); the fork's `cang-lts` branch
+keeps the LTS kernel line (linux-6.12.109), which is also the line that still
+carries its arm64 patches. Each line publishes its own permanent release
+(`v5.6.2-cang.<n>` and `v<version>-cang-lts.<n>`), and `nix/pins.nix` pins
+x86_64 from the newest line while aarch64 and riscv64 come from the LTS line -
+see `docs/maintenance.md`. In-tree `cargo` builds still read the `deps/libkrun`
+and `deps/libkrunfw` submodules, so clone with
 `git submodule update --init --recursive` for those.
 
 ---

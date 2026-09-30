@@ -41,16 +41,22 @@ fn is_numeric(value: &str) -> bool {
     !value.is_empty() && value.chars().all(|character| character.is_ascii_digit())
 }
 
-/// A permanent fork release tag of the form `v<upstream version>-cang.<n>`.
-/// The fork CI publishes these on demand and never prunes them; its rolling
-/// `cang-<sha>` prereleases are deleted once ten newer ones exist.
+/// A permanent fork release tag of the form `v<upstream version>-cang.<n>` or
+/// - for the LTS kernel line - `v<upstream version>-cang-lts.<n>`. The fork CI
+/// publishes these on demand and never prunes them; its rolling `<line>-<sha>`
+/// prereleases are deleted once ten newer ones exist per line.
 fn is_versioned_fork_release_tag(tag: &str) -> bool {
     let Some(rest) = tag.strip_prefix('v') else {
         return false;
     };
-    let Some((base, counter)) = rest.rsplit_once("-cang.") else {
-        return false;
+    let rest = match rest.rsplit_once("-cang-lts.") {
+        Some((base, counter)) => (base, counter),
+        None => match rest.rsplit_once("-cang.") {
+            Some((base, counter)) => (base, counter),
+            None => return false,
+        },
     };
+    let (base, counter) = rest;
     let parts: Vec<&str> = base.split('.').collect();
     parts.len() == 3 && parts.iter().all(|part| is_numeric(part)) && is_numeric(counter)
 }
@@ -64,6 +70,16 @@ fn is_cang_version_tag(tag: &str) -> bool {
     };
     let parts: Vec<&str> = rest.split('.').collect();
     parts.len() == 3 && parts.iter().all(|part| is_numeric(part))
+}
+
+/// Every `tag = "<release>";` inside a pinned release attrset, in order.
+fn pinned_release_tags(attr_name: &str) -> Vec<(usize, String)> {
+    let body = nix_top_level_attr_body(PINS_NIX, attr_name);
+    body.split("tag = \"")
+        .skip(1)
+        .enumerate()
+        .filter_map(|(index, tail)| tail.split('"').next().map(|tag| (index, tag.to_owned())))
+        .collect()
 }
 
 fn pinned_release_tag(attr_name: &str) -> String {
@@ -325,6 +341,16 @@ fn pinned_fork_releases_use_permanent_version_tags() {
     // libkrunRelease left with the prebuilt C-ABI libkrun pipeline (ADR 0008);
     // libkrunfw is the fork pin a cang release still depends on.
     let attr_name = "libkrunfwRelease";
+    // The x86_64 assets come from the newest-kernel line and the other
+    // architectures from the LTS line, so a system may carry its own tag.
+    for (_line_number, tag) in pinned_release_tags(attr_name) {
+        assert!(
+            is_versioned_fork_release_tag(&tag),
+            "{attr_name} pins rolling {tag}; pin a permanent \
+             v<version>-cang.<n> / v<version>-cang-lts.<n> release so a tagged \
+             cang release cannot reference a pruned artifact"
+        );
+    }
     let tag = pinned_release_tag(attr_name);
     assert!(
         is_versioned_fork_release_tag(&tag),
@@ -335,7 +361,13 @@ fn pinned_fork_releases_use_permanent_version_tags() {
 
 #[test]
 fn versioned_fork_release_tag_shape_is_enforced() {
-    for accepted in ["v1.19.5-cang.1", "v5.6.2-cang.42", "v10.0.0-cang.7"] {
+    for accepted in [
+        "v1.19.5-cang.1",
+        "v5.6.2-cang.42",
+        "v10.0.0-cang.7",
+        "v5.6.2-cang-lts.1",
+        "v10.0.0-cang-lts.7",
+    ] {
         assert!(
             is_versioned_fork_release_tag(accepted),
             "should accept {accepted}"
@@ -343,12 +375,16 @@ fn versioned_fork_release_tag_shape_is_enforced() {
     }
     for rejected in [
         "cang-8390691dec6e",
+        "cang-lts-8390691dec6e",
         "v1.19.5",
         "1.19.5-cang.1",
         "v1.19-cang.1",
         "v1.19.5.1-cang.1",
         "v1.19.5-cang",
         "v1.19.5-cang.x",
+        "v1.19.5-cang-lts",
+        "v1.19.5-canglts.1",
+        "v1.19.5-cang-lts.x",
     ] {
         assert!(
             !is_versioned_fork_release_tag(rejected),

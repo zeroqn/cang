@@ -77,11 +77,11 @@
     "libkrunfw-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790664639,
-        "narHash": "sha256-fl7A/pJQismjtNBXjOYZm+PEHGFIts92tktw/hFuleo=",
+        "lastModified": 1790735217,
+        "narHash": "sha256-sxOht2d6KskK+ILO87tANmmpl2mfRek43GopjSM4Xgo=",
         "owner": "zeroqn",
         "repo": "libkrunfw",
-        "rev": "6b38b17198e8cb35d81b7341ebb2cb2fa627aa0b",
+        "rev": "328b04bca5c62be5eb4764dd54633ec6769aaca6",
         "type": "github"
       },
       "original": {

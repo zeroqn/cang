@@ -112,20 +112,32 @@ version bump:
    `git format-patch <new-base>..series` and renumber them - the `Makefile`
    applies `patches/0*.patch` in sorted order and then the hardened patch, and
    each of them has to apply on a pristine tree.
-3. Refresh `config-libkrunfw_x86_64-kvm` from the `.config` `olddefconfig`
-   produces during a real build, and check the options cang needs survived
-   (`CONFIG_UDMABUF`, `CONFIG_SECURITY_LANDLOCK`, `CONFIG_DRM_VIRTIO_GPU`,
-   `CONFIG_FUSE_DAX`, `CONFIG_NFT_TPROXY`, `CONFIG_ZRAM`, `CONFIG_KVM`,
-   `CONFIG_NR_CPUS`). The `-kvm-lto` config is a separate file and drifts
-   separately - the released `libkrunfw-x86_64-kvm-lto.tgz` asset is built from
-   `MakefileLto`, so refresh it (and re-check its clang ThinLTO settings) before
-   cutting an LTO release.
+3. Refresh the x86_64 configs from the `.config` `olddefconfig` produces during
+   a real build, and check the options cang needs survived (`CONFIG_UDMABUF`,
+   `CONFIG_SECURITY_LANDLOCK`, `CONFIG_DRM_VIRTIO_GPU`, `CONFIG_FUSE_DAX`,
+   `CONFIG_NFT_TPROXY`, `CONFIG_ZRAM`, `CONFIG_KVM`, `CONFIG_NR_CPUS`). There are
+   four of them and they differ only in a handful of lines: `-kvm` is what cang's
+   own `libkrunfw` build uses (lz4 kernel + deferred struct-page init), the
+   release's plain `x86_64` swaps those two back to the upstream defaults (gzip,
+   no deferred init), and `-lto`/`-kvm-lto` add `CONFIG_LTO_CLANG_THIN` for
+   `MakefileLto`, which carries its own copy of `KERNEL_VERSION`, `FULL_VERSION`
+   and `TIMESTAMP` - move those with the base, or the LTO assets keep being built
+   from the old kernel under the new release tag.
+   A local LTO build needs an *unwrapped* clang: nix's wrapped one feeds its own
+   `--target`/`-nostdlibinc` into the kernel's flags and turns them into errors,
+   and the final `-shared` link cannot find `crtn.o`. Build it as
+   `make -f MakefileLto package HOSTCC=gcc HOSTCXX=g++ 'CLANG=clang -nostartfiles'`
+   with `nixpkgs#llvmPackages.clang-unwrapped` and
+   `nixpkgs#llvmPackages.bintools-unwrapped` on `PATH`; CI's stock clang needs
+   none of that.
 4. Build the kernel (`make` in the fork checkout, or
    `nix build .#cang-dev --override-input libkrunfw-src path:$PWD/deps/libkrunfw`)
    and **boot a real guest** with the built firmware
    (`CANG_LIBKRUNFW_LIBRARY=<checkout>/libkrunfw.so.5` plus the harness in
-   `docs/wayfinder/libkrunfw-kernel-rebase/notes/`), then cut and pin the fork
-   release as in the scheme above.
+   `docs/wayfinder/libkrunfw-kernel-rebase/notes/`). Re-base on that line's own
+   branch, add an architecture to `release-arches` only once its config is
+   refreshed and its build is verified, and cut and pin the fork release as in
+   the scheme above.
 
 Two traps worth knowing, both found the hard way in the 7.2.7 re-base:
 
@@ -166,12 +178,16 @@ Both forks publish two kinds of prerelease on `zeroqn/libkrun` and
 `gh attestation verify <asset> --repo zeroqn/libkrun` (or `libkrunfw`) works for
 any of them:
 
-- **Rolling `cang-<sha>`**: built and published on every push to the fork's
-  `cang` branch. The publish workflow keeps only the newest ten, so these are
-  disposable dev artifacts.
+- **Rolling `<line>-<sha>`**: built and published on every push to the fork's
+  release branch - `cang` on `zeroqn/libkrun`, and `cang` or `cang-lts` on
+  `zeroqn/libkrunfw`, the latter publishing `cang-lts-<sha>`. The publish
+  workflow keeps only the newest ten per line, so these are disposable dev
+  artifacts.
 - **Permanent `v<libkrun|libkrunfw version>-cang.<n>`** (for example
-  `v2.0.0-cang.3`): published by a manual `workflow_dispatch` run of the same
-  workflow, or by pushing the tag directly (the workflow also triggers on tags). The prune job never touches these, so a pin into one never ages out.
+  `v2.0.0-cang.3`), and `v<version>-cang-lts.<n>` for the libkrunfw LTS line:
+  published by a manual `workflow_dispatch` run of the same workflow, or by
+  pushing the tag directly (the workflow also triggers on tags). The prune job
+  never touches these, so a pin into one never ages out.
 
 A versioned release is created with:
 
@@ -197,17 +213,38 @@ green build: `.2` exported the ABI but regressed venus to the 2D fallback, which
 only the Chromium smoke catches (`tools/chromium-cang-smoke`, GPU and
 `--waypipe` modes). `.3` carries that fix.
 
+#### libkrunfw's two kernel lines
+
+`zeroqn/libkrunfw` keeps one kernel line per branch, so a kernel re-base never
+has to drag a second line along:
+
+- **`cang`** is the newest kernel line (currently linux-7.2.7 + linux-hardened
+  v7.2.7-hardened1). cang's `libkrunfw-src` input and the primary
+  `libkrunfwRelease` pin follow it.
+- **`cang-lts`** is the LTS line (linux-6.12.109 + v6.12.109-hardened1). It also
+  carries the fork's arm64 patches; a re-base of the newest line drops them.
+
+`release-arches` in the fork tree names the architectures a line's release
+carries, and the publish workflow builds and asserts exactly those: a line whose
+kernel config has not been refreshed for its `KERNEL_VERSION` publishes no asset
+for that architecture rather than a stale one. Today that is x86_64 for `cang`
+(whose aarch64/riscv64 configs are still 6.12-era) and x86_64, aarch64, riscv64
+for `cang-lts`.
+
 Pin a permanent libkrunfw release, and use it for any tagged cang release:
 
 ```bash
-nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.1
-nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang.1
-nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang.1
+nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.3
+nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang-lts.1
+nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang-lts.1
 ```
 
-Each `update-libkrunfw.sh` run rewrites one system, so pass the same `--tag` for
-all three. The `.github/workflows/publish_release.yml` job for a cang version tag
-refuses to run while `libkrunfwRelease.tag` is still a rolling `cang-<sha>` tag.
+Each `update-libkrunfw.sh` run rewrites one system: the x86_64 run moves the
+primary `tag` (the release `publish_release.yml`, `nix/pkgs/libkrunfw.nix` and the
+primary pin all key off), while another system records a `tag` of its own only
+when its asset is published on the other line - a system without one inherits the
+primary. The `.github/workflows/publish_release.yml` job for a cang version tag
+refuses to run while `libkrunfwRelease.tag` is still a rolling tag.
 
 ### cang release scheme
 

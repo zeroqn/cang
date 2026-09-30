@@ -129,3 +129,11 @@ is green (`/nix/store/fqr6qz9z1wr8mzr9m7lgp91r3n22jway-cang-0.10.1`) and the
 package boots a guest on the firmware it carries
 (`/nix/store/pwci1ib0h94wgbika8bgbqhzgn0ci7aj-libkrunfw-v5.6.2-cang.2-local`),
 with the same probe output as above (`vm-exit=0`).
+
+## Where this landed
+
+The re-base became the fork's `cang` branch (released as `v5.6.2-cang.3`) while
+the 6.12.109 series stayed on `cang-lts` (`v5.6.2-cang-lts.1`, the only line with
+the arm64 patches). The refreshed LTO configs, the release/scope mechanics, the
+Chromium smoke on the `-kvm-lto` firmware and the release-scope gate bug found on
+the way are in [note 02](02-two-kernel-lines-and-lto.md).

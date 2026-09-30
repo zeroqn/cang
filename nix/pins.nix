@@ -107,19 +107,21 @@ in
   libkrunfwRelease = {
     owner = "zeroqn";
     repo = "libkrunfw";
-    tag = "v5.6.2-cang.2";
+    tag = "v5.6.2-cang.3";
     systems = {
       x86_64-linux = {
         asset = "libkrunfw-x86_64-kvm-lto.tgz";
-        hash = "sha256-Dcx3kfkLBLZgGGLtlTlwzSiCiKQVSflyiP/+76w175U=";
+        hash = "sha256-a4/E+cnMko5ztbnb4GxA2dsObv/C3EsF2j2oTpzmiCo=";
       };
       aarch64-linux = {
+        tag = "v5.6.2-cang-lts.1";
         asset = "libkrunfw-aarch64.tgz";
-        hash = "sha256-EsF/UDO/ZBp7PJsiA3FV4kB2D53dbeGck1m59i88ikg=";
+        hash = "sha256-CdELT909Nf+RvGaRKHbs8+jhKZG9esuMqIBKNHnUZ6c=";
       };
       riscv64-linux = {
+        tag = "v5.6.2-cang-lts.1";
         asset = "libkrunfw-riscv64.tgz";
-        hash = "sha256-dff9os8wy1yapgtmhaoQvnzdC7ASpYoWFcqxpGddwQ4=";
+        hash = "sha256-AF7SB+Q5ckfYt0GSviF7zTrqVzo9kqFQ4MDKeQcnc0I=";
       };
     };
   };

@@ -127,7 +127,34 @@ so the screenshot names it too.
 **GPU acceleration works**: Chromium in the cang microVM renders WebGL through
 the host GPU via `virtio-gpu` venus (`--gpu=drm`), with RADV on the host.
 
-### Why `--disable-vulkan-surface` is in the guest flags
+### Baseline update (2026-09-30): libkrunfw `v5.6.2-cang.3` (unreleased at the time), guest kernel 7.2.7-hardened1, clang ThinLTO
+
+Re-measured for the fork's 7.2.7 kernel line (linux-7.2.7 +
+linux-hardened v7.2.7-hardened1), on the **`-kvm-lto`** firmware `MakefileLto`
+builds - the asset cang's own `libkrunfwRelease` pin consumes, here built
+locally with clang 21.1.8 / LLD (`sha256
+b92ee738810ad641807dcb077f9ac2696a36b3ad273dba4cb7794ed2830ff1a1`, 24,576,952
+bytes), against `.#container` and the tree-built `cang` 0.10.1 with
+`CANG_LIBKRUNFW_LIBRARY` pointing at it:
+
+```text
+PASS  version       Chromium 154.0.8037.57
+PASS  chromium-rc   gpu-dom=0 webgl=0 dom=0  (all three Chromium runs exit 0)
+PASS  webgl-vulkan  ANGLE (AMD, Vulkan 1.4.334 (Virtio-GPU Venus (AMD Radeon RX 7600M XT (RADV NAVI33)) (0x00007480)), venus)
+PASS  webgl-png     non-empty PNG screenshot
+INFO  gpu-dom       rc=0 captured; unscored (feature table is shadow DOM)
+VERDICT: PASS — evidence: <out>/workspace/evidence (fresh, 14 files)
+```
+
+The run's own `gpu-diag.txt` line 1 reads `uname: Linux localhost
+7.2.7-hardened1 #1 SMP PREEMPT_DYNAMIC ... x86_64 GNU/Linux`, so the venus
+renderer above is the 7.2.7 kernel's, not a stale 6.12 guest's. This is the
+evidence that the 7.2.7 re-base (23 patches, the bit-5
+`FENCE_PASSING`/`BLOB_ALIGNMENT` collision fix, and the re-applied
+`CREATE_GUEST_HANDLE`/`BLOB_CTX_ID_FIX` work) keeps the GPU path intact - see
+`docs/wayfinder/libkrunfw-kernel-rebase/`.
+
+## Why `--disable-vulkan-surface` is in the guest flags
 
 Without it the GPU process dies with `GPU process exited unexpectedly:
 exit_code=6` and `renderer=` stays empty, which reads like "venus is broken".
