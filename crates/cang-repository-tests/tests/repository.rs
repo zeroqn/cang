@@ -41,8 +41,8 @@ fn is_numeric(value: &str) -> bool {
     !value.is_empty() && value.chars().all(|character| character.is_ascii_digit())
 }
 
-/// A permanent fork release tag of the form `v<upstream version>-cang.<n>` or
-/// - for the LTS kernel line - `v<upstream version>-cang-lts.<n>`. The fork CI
+/// A permanent fork release tag of the form `v<upstream version>-cang.<n>`, or
+/// `v<upstream version>-cang-lts.<n>` for the LTS kernel line. The fork CI
 /// publishes these on demand and never prunes them; its rolling `<line>-<sha>`
 /// prereleases are deleted once ten newer ones exist per line.
 fn is_versioned_fork_release_tag(tag: &str) -> bool {
