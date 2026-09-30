@@ -749,6 +749,14 @@ fn serve_attached_client(
         }
         apply_pending_resizes(&resize_rx, terminal_state);
         if let Some(code) = reap_child(child)? {
+            forward_final_attached_pty_output(
+                &mut pty_reader,
+                &mut buf,
+                &mut client,
+                terminal_state,
+                &mut profiler,
+                pty_forwarding_mode,
+            )?;
             let _ = write_frame(&mut client, &Frame::Exit { code });
             let _ = profiler.report_to(&mut std::io::stderr().lock());
             stop_client_input(&active, client.as_raw_fd(), input_thread);
@@ -1077,6 +1085,63 @@ fn write_all_retrying_would_block(file: &mut File, mut data: &[u8]) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Forward whatever the PTY master still holds once the child has exited.
+///
+/// The child can exit between two polls with its last output still buffered in
+/// the master, so the attached client has to be given that output before the
+/// `Exit` frame - otherwise a session that ends drops its final bytes. A master
+/// whose slave side has closed reports `EIO` in place of EOF, so any read that
+/// yields nothing ends the drain: the child is gone, and whatever was readable
+/// has already been forwarded.
+fn forward_final_attached_pty_output(
+    reader: &mut File,
+    buf: &mut [u8; IO_BUF_SIZE],
+    client: &mut File,
+    terminal_state: &mut TerminalState,
+    profiler: &mut GuestAttachProfiler,
+    mode: PtyForwardingMode,
+) -> Result<()> {
+    set_nonblocking(reader.as_raw_fd(), true)?;
+    let drain = forward_final_attached_pty_output_nonblocking(
+        reader,
+        buf,
+        client,
+        terminal_state,
+        profiler,
+        mode,
+    );
+    let restore = set_nonblocking(reader.as_raw_fd(), false);
+    drain.and(restore)
+}
+
+fn forward_final_attached_pty_output_nonblocking(
+    reader: &mut File,
+    buf: &mut [u8; IO_BUF_SIZE],
+    client: &mut File,
+    terminal_state: &mut TerminalState,
+    profiler: &mut GuestAttachProfiler,
+    mode: PtyForwardingMode,
+) -> Result<()> {
+    loop {
+        match reader.read(buf) {
+            Ok(0) => return Ok(()),
+            Ok(read) => {
+                if !forward_and_record_pty_output(
+                    &buf[..read],
+                    client,
+                    terminal_state,
+                    profiler,
+                    mode,
+                ) {
+                    return Ok(());
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Ok(()),
+        }
+    }
 }
 
 fn drain_detached_pty_output(master_fd: RawFd, terminal_state: &mut TerminalState) -> Result<()> {
@@ -1493,7 +1558,7 @@ mod tests {
         assert!(child >= 0, "fork failed");
         if child == 0 {
             close_inherited_fds();
-            let code = write_then_sleep_on_pty_slave(&slave, b"primary-da-visible\n");
+            let code = write_then_wait_on_pty_slave(&slave, b"primary-da-visible\n");
             // SAFETY: a forked child of this multi-threaded harness must leave
             // through `_exit`; `std::process::exit` runs the stdio flush that can
             // deadlock on a lock another harness thread held at fork time.
@@ -1527,10 +1592,47 @@ mod tests {
         assert_data_frames_eq(&mut client, b"primary-da-visible\r\n");
         write_frame(&mut client, &Frame::Detach).unwrap();
         assert_eq!(server.join().unwrap().unwrap(), ClientResult::Detached);
+        // The child waits for this signal, so the detach above always landed on
+        // a live session; end it the way `run_sigwinch_redraw_pty_child` is ended.
+        assert_eq!(unsafe { libc::kill(child, libc::SIGTERM) }, 0);
         let mut status = 0;
         assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
-        assert!(libc::WIFEXITED(status));
-        assert_eq!(libc::WEXITSTATUS(status), 0);
+        assert!(libc::WIFSIGNALED(status));
+        assert_eq!(libc::WTERMSIG(status), libc::SIGTERM);
+    }
+
+    #[test]
+    fn final_pty_output_is_forwarded_after_the_writers_close() {
+        let pty = Pty::open().unwrap();
+        {
+            let mut slave = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(pty.slave_path.as_str())
+                .unwrap();
+            slave.write_all(b"final-visible\n").unwrap();
+        }
+
+        let (mut peer, client) = UnixStream::pair().unwrap();
+        let mut client = unsafe { File::from_raw_fd(client.into_raw_fd()) };
+        let mut master = pty.master;
+        let mut terminal_state = TerminalState::new(PtySize::default());
+        let mut profiler = GuestAttachProfiler::new(false);
+        forward_final_attached_pty_output(
+            &mut master,
+            &mut [0u8; IO_BUF_SIZE],
+            &mut client,
+            &mut terminal_state,
+            &mut profiler,
+            PtyForwardingMode::Normalized,
+        )
+        .unwrap();
+
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert_eq!(
+            read_frame(&mut peer).unwrap(),
+            Some(Frame::Data(b"final-visible\r\n".to_vec()))
+        );
     }
 
     #[test]
@@ -2193,15 +2295,31 @@ mod tests {
         }
     }
 
+    /// True when an error chain bottoms out in a nonblocking read.
+    fn is_would_block(err: &anyhow::Error) -> bool {
+        err.chain()
+            .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+            .any(|io| io.kind() == std::io::ErrorKind::WouldBlock)
+    }
+
     fn assert_data_frames_eq<T>(client: &mut T, expected: &[u8])
     where
         T: Read,
     {
         let mut received = Vec::new();
+        // The harness runs hundreds of tests in parallel, so a client read can
+        // hit its timeout (`WouldBlock`) while the frame is still on its way.
+        // Keep waiting until the deadline rather than reporting a slow machine
+        // as a protocol failure.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while received.len() < expected.len() {
-            match read_frame(client).unwrap() {
-                Some(Frame::Data(data)) => received.extend(data),
-                frame => panic!("expected PTY data frame, got {frame:?}"),
+            match read_frame(client) {
+                Ok(Some(Frame::Data(data))) => received.extend(data),
+                Ok(frame) => panic!("expected PTY data frame, got {frame:?}"),
+                Err(err) if is_would_block(&err) && std::time::Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(err) => panic!("failed to read PTY data frame: {err:#}"),
             }
         }
         assert_eq!(received, expected);
@@ -2252,23 +2370,19 @@ mod tests {
         true
     }
 
-    /// `nanosleep(2)` for the requested duration.
-    fn sleep_millis(millis: u64) {
-        let request = libc::timespec {
-            tv_sec: (millis / 1000) as libc::time_t,
-            tv_nsec: ((millis % 1000) * 1_000_000) as libc::c_long,
-        };
-        // SAFETY: a null remaining-time pointer is allowed by nanosleep.
-        unsafe { libc::nanosleep(&request, std::ptr::null_mut()) };
-    }
-
-    /// Write `data` to the PTY slave, hold it open for 200ms, then return 0.
+    /// Write `data` to the PTY slave and then hold it open until the test signals
+    /// this child.
+    ///
+    /// Holding it open until a signal - rather than for a fixed nap - keeps the
+    /// client's detach landing while the session is still serving it on a loaded
+    /// machine. Only a setup failure returns, exactly like
+    /// `run_sigwinch_redraw_pty_child`; the parent reaps the child afterwards.
     ///
     /// This runs in a forked child of the multi-threaded test harness, so it stays
     /// syscall-only. `fork()` copies every lock the other harness threads held at
     /// that instant - including glibc's malloc arenas - so an allocation here can
     /// block forever and hang the parent's `waitpid`.
-    fn write_then_sleep_on_pty_slave(slave: &CStr, data: &[u8]) -> i32 {
+    fn write_then_wait_on_pty_slave(slave: &CStr, data: &[u8]) -> i32 {
         // SAFETY: opening the PTY slave path read-write for this child only.
         let fd = unsafe { libc::open(slave.as_ptr(), libc::O_RDWR) };
         if fd < 0 {
@@ -2277,12 +2391,9 @@ mod tests {
         if !write_all_fd(fd, data) {
             return 1;
         }
-        // Hold the slave open for the whole window, exactly as the attach client
-        // sees it before the child exits (and closing it) on its own.
-        sleep_millis(200);
-        // SAFETY: closing the slave fd opened above.
-        unsafe { libc::close(fd) };
-        0
+        loop {
+            unsafe { libc::pause() };
+        }
     }
 
     extern "C" fn write_redraw_marker(_signal: libc::c_int) {

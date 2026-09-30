@@ -394,7 +394,11 @@ mod tests {
                 argv: vec![
                     "/bin/sh".into(),
                     "-c".into(),
-                    "printf out; printf err >&2; exit 23".into(),
+                    // `read` keeps the command alive until the `StdinEof` below
+                    // arrives: without it the command can exit - and the session
+                    // close the connection - before the harness gets to write the
+                    // frame, which turns a scheduling delay into a spurious EPIPE.
+                    "read line; printf out; printf err >&2; exit 23".into(),
                 ],
                 waypipe: WaypipeAction::Disabled,
             },
