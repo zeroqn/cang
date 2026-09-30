@@ -9,6 +9,7 @@
   zvecGrep,
   doltPrebuilt,
   beadsPrebuilt,
+  freshPrebuilt,
   containerLibPolicySeccompJson,
   libkrunfw,
   wl-cross-domain-proxy,
@@ -30,6 +31,7 @@ let
       zvecGrep
       doltPrebuilt
       beadsPrebuilt
+      freshPrebuilt
       containerLibPolicySeccompJson
       libkrunfw
       wl-cross-domain-proxy
@@ -59,6 +61,7 @@ let
       zvecGrep
       doltPrebuilt
       beadsPrebuilt
+      freshPrebuilt
       containerLibPolicySeccompJson
       libkrunfw
       wl-cross-domain-proxy

@@ -177,6 +177,7 @@ nix build .#rtk-prebuilt
 nix build .#herdr-prebuilt
 nix build .#dolt-prebuilt
 nix build .#beads-prebuilt
+nix build .#fresh-prebuilt
 nix build .#monty-prebuilt
 nix build .#libkrunfw
 nix build .#podman
@@ -430,6 +431,7 @@ The container provides:
 - `gcc`, `musl`, `clang`
 - `mimalloc` enabled by default for Nix-linked dynamic binaries through `/etc/ld-nix.so.preload`; cang selects the task allocator with `--alloc=mimalloc`, `--alloc=hardened`, or `--alloc=glibc`, and `hardening-run` remains the per-command foreign/FHS `LD_PRELOAD` opt-in
 - RTK (`rtk`)
+- the pinned `fresh` terminal text editor (`fresh`), a static-musl prebuilt
 - libkrun 2.0.0 (`libkrun.so.2`) plus pinned `libkrunfw.so` for nested KVM support inside the container
 - `nix` wrapper that clears the container NSS wrapper preload before invoking
   the real Nix binary, avoiding glibc-version mismatches in nested dev shells
@@ -525,8 +527,8 @@ and `deps/libkrunfw` submodules, so clone with
 ## Maintenance helpers
 
 The pinned-asset refresh scripts for `nix/pins.nix` (cang, RTK, rmux, dolt,
-beads, monty, libkrun, libkrunfw, Pi, herdr, and zvec-grep) are documented in
-[docs/maintenance.md](docs/maintenance.md).
+beads, fresh, monty, libkrun, libkrunfw, Pi, herdr, and zvec-grep) are documented
+in [docs/maintenance.md](docs/maintenance.md).
 
 ---
 

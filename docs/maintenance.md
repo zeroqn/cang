@@ -417,6 +417,16 @@ asset hashes) in `nix/pins.nix`:
 nix develop --command ./scripts/update-herdr.sh
 ```
 
+Refresh pinned `sinelaw/fresh` prebuilt release metadata (tag and per-system
+static-musl asset hashes) in `nix/pins.nix`. The updater refuses to pin a release
+younger than two days - without `--tag` it selects the newest release that has
+already aged past that, and with `--tag` it verifies the named release is old
+enough too:
+
+```bash
+nix develop --command ./scripts/update-fresh-prebuilt.sh
+```
+
 Refresh pinned `zvec-ai/zvec-grep` source and npm dependency metadata in
 `nix/pins.nix` (the updater also rejects a release whose `bin.zg` no longer
 points at `dist/cli/index.js`, which `nix/pkgs/zvec-grep.nix` installs):

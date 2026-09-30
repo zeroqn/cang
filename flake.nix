@@ -77,6 +77,9 @@
           beadsPrebuilt = import ./nix/pkgs/beads-prebuilt.nix {
             inherit pkgs pins;
           };
+          freshPrebuilt = import ./nix/pkgs/fresh-prebuilt.nix {
+            inherit pkgs pins;
+          };
           containerLibPolicySeccompJson = import ./nix/pkgs/container-lib-policy-seccomp-json.nix {
             inherit pkgs pins;
           };
@@ -165,6 +168,7 @@
                 zvecGrep
                 doltPrebuilt
                 beadsPrebuilt
+                freshPrebuilt
                 containerLibPolicySeccompJson
                 libkrunfw
                 wl-cross-domain-proxy
@@ -197,6 +201,7 @@
           zvec-grep = zvecGrep;
           dolt-prebuilt = doltPrebuilt;
           beads-prebuilt = beadsPrebuilt;
+          fresh-prebuilt = freshPrebuilt;
         }
         // pkgs.lib.optionalAttrs (herdrPrebuilt != null) {
           herdr-prebuilt = herdrPrebuilt;
@@ -234,6 +239,7 @@
             zvecGrep = packages.zvec-grep;
             doltPrebuilt = packages.dolt-prebuilt;
             beadsPrebuilt = packages.beads-prebuilt;
+            freshPrebuilt = packages.fresh-prebuilt;
             containerLibPolicySeccompJson = packages.container-lib-policy-seccomp-json;
             libkrunfw = packages.libkrunfw;
             wl-cross-domain-proxy = packages.wl-cross-domain-proxy;

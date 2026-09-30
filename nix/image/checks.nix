@@ -9,6 +9,7 @@
   zvecGrep,
   doltPrebuilt,
   beadsPrebuilt,
+  freshPrebuilt,
   containerLibPolicySeccompJson,
   libkrunfw,
   wl-cross-domain-proxy,
@@ -30,6 +31,7 @@ let
       zvecGrep
       doltPrebuilt
       beadsPrebuilt
+      freshPrebuilt
       containerLibPolicySeccompJson
       libkrunfw
       wl-cross-domain-proxy
@@ -229,6 +231,15 @@ let
       *) exit 1 ;;
     esac
   '';
+  freshContracts = ''
+    grep -F 'freshPrebuilt' ${layersSourceFile}
+    test -x ${layers.agentImageLayer}/bin/fresh
+    HOME="$TMPDIR" ${layers.agentImageLayer}/bin/fresh --version | grep -F 'fresh ${freshPrebuilt.version}'
+    case ":${layers.imagePath}:" in
+      *":${layers.agentImageLayer}/bin:"*) ;;
+      *) exit 1 ;;
+    esac
+  '';
   sqliteContracts = ''
     grep -F 'pkgs.sqlite' ${layersSourceFile}
     test -x ${layers.agentImageLayer}/bin/sqlite3
@@ -365,6 +376,7 @@ let
         ${herdrContracts}
         ${doltContracts}
         ${beadsContracts}
+        ${freshContracts}
         ${sqliteContracts}
         ${montyContracts}
         ${nativeAddonRuntimeContracts}

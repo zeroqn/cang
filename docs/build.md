@@ -59,6 +59,9 @@ local fork edit goes to the input instead of the checkout:
 - `.#herdr-prebuilt`: install the pinned published `herdrdev/herdr` Linux
   release binary (static-PIE) for the current system. The cang image includes
   this package as `herdr` in the agent layer.
+- `.#fresh-prebuilt`: install the pinned `sinelaw/fresh` static-musl Linux
+  release tarball for the current system. The cang image includes this package
+  as `fresh` in the agent layer.
 - `.#zvec-grep` (`x86_64-linux`): install the pinned `zvec-ai/zvec-grep` (`zg`)
   hybrid workspace search CLI from the GitHub source archive, wrapped around
   Nixpkgs Node.js. The agent layer keeps the glibc x86_64 native payloads and

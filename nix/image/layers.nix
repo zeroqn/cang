@@ -9,6 +9,7 @@
   zvecGrep,
   doltPrebuilt,
   beadsPrebuilt,
+  freshPrebuilt,
   containerLibPolicySeccompJson,
   libkrunfw,
   wl-cross-domain-proxy,
@@ -329,6 +330,7 @@ let
     zvecGrep
     doltPrebuilt
     beadsPrebuilt
+    freshPrebuilt
   ]
   ++ pkgs.lib.optional (herdrPrebuilt != null) herdrPrebuilt
   ++ pkgs.lib.optional (montyPrebuilt != null) montyPrebuilt;

@@ -31,6 +31,24 @@ in
     };
   };
 
+  # Refreshed by scripts/update-fresh-prebuilt.sh (tag + per-system asset
+  # hashes); that updater refuses to pin a release younger than two days.
+  freshPrebuiltRelease = {
+    owner = "sinelaw";
+    repo = "fresh";
+    tag = "v0.5.2";
+    systems = {
+      x86_64-linux = {
+        asset = "fresh-editor-x86_64-unknown-linux-musl.tar.gz";
+        hash = "sha256-Ld4dTn9ZVv2/9cNlYVJcmM7OJCLihJN8iX/y6xfEA30=";
+      };
+      aarch64-linux = {
+        asset = "fresh-editor-aarch64-unknown-linux-musl.tar.gz";
+        hash = "sha256-pg+h6xm8SDt1hu//Ig03+zz9B58bHLNKSKGhmwnfXwg=";
+      };
+    };
+  };
+
   rmuxPrebuiltRelease = {
     owner = "Helvesec";
     repo = "rmux";
