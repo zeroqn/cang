@@ -87,9 +87,10 @@ A libkrun update is therefore:
    and commit it.
 4. Refresh both vendor hashes, taking the value from the build's hash-mismatch
    error: `cargoDeps` in `nix/pkgs/cang-rust.nix` (cang's whole graph) and
-   `libkrunCargoDeps` in `nix/pkgs/libkrun-source.nix` (the fork's own lock, used
-   by the musl guest-init blob). `nix build .#cang` reports whichever mismatches
-   first.
+   `krunInitCargoDeps` in `nix/pkgs/libkrun-source.nix` (the musl guest-init
+   blob, which is not a workspace member and vendors from its own
+   `init/init-binary/Cargo.lock`). `nix build .#cang` reports whichever
+   mismatches first.
 5. Re-verify with a live boot and the Chromium GPU smoke, not just a green build.
 
 ### Re-basing the libkrunfw guest kernel

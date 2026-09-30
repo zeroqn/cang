@@ -12,14 +12,18 @@
 let
   libkrunSrc = src;
 
-  # The fork's lock vendors ffier twice at one name-version, which
-  # `importCargoLock` cannot express, so the sources come from
-  # `fetchCargoVendor` - the helper nixpkgs' own libkrun package uses. This hash
-  # moves with the fork revision: a libkrun bump (submodule pointer plus
-  # `libkrun-src`) has to refresh it in the same commit.
-  libkrunCargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+  # `init/init-binary` is excluded from libkrun's workspace and tracks its own
+  # lock (upstream checks it with `cargo check --locked`), so the guest init
+  # vendors from that lock, not the workspace's: a vendor directory only carries
+  # the versions its own lock names, and the two locks resolve the same crates
+  # (anyhow, nix, ...) to different ones. This hash moves with the fork
+  # revision: a libkrun bump (submodule pointer plus `libkrun-src`) has to
+  # refresh it in the same commit.
+  krunInitCargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+    name = "krun-init-cargo-deps";
     src = libkrunSrc;
-    hash = "sha256-5Snz7O5nbcg0qVgLPhSzFdGUk5+pqy+Iavt0mE3FLaQ=";
+    cargoRoot = "init/init-binary";
+    hash = "sha256-0Qjy3te+nAzRLASyqrhpl9QsSwCZcn0HAN7Ia/3jRjs=";
   };
 
   muslTarget =
@@ -40,7 +44,10 @@ let
     pname = "krun-init";
     version = "0.1.0";
     src = libkrunSrc;
-    cargoDeps = libkrunCargoDeps;
+    # `cargoRoot` tells the cargo setup hook to compare `cargoDeps`' lock
+    # against `init/init-binary/Cargo.lock` instead of the workspace lock.
+    cargoRoot = "init/init-binary";
+    cargoDeps = krunInitCargoDeps;
     CARGO_BUILD_TARGET = muslTarget;
     cargoBuildFlags = [
       "--manifest-path"
@@ -60,5 +67,5 @@ let
   };
 in
 {
-  inherit libkrunSrc libkrunCargoDeps krunInitBinary;
+  inherit libkrunSrc krunInitCargoDeps krunInitBinary;
 }
