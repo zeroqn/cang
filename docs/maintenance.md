@@ -383,6 +383,12 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.11.1` (`6cd1bd8`) - the default host sandbox boots again: Landlock
+  relax mode accepts the managed guest kernel console log and the console
+  device builders' duplicates of the worker's own stdio descriptors, and the
+  packaged seccomp policy allows `sigaltstack`, which libkrun calls while it
+  builds the VMM; x86_64 asset sha256
+  `23b0953e9cbd197a4b872b8c9a955fa15f44c90e1de0de9a5d28fb3100dc9066`.
 - `v0.11.0` (`4a6ad8b`) - the libkrun fork is re-based onto upstream main
   (`v2.0.0-cang.5`) and reads virtio-blk in parallel, libkrunfw moves to the
   7.2.7 kernel line (`v5.6.2-cang.3`, with aarch64/riscv64 on
@@ -405,9 +411,10 @@ nix build .#libkrunfw
 
 Each of these is the hash its release publishes, and each was reproduced locally
 from the tagged tree with the `overrideAttrs` recipe above (v0.9.0 while
-validating that recipe; v0.9.1, v0.10.1 and v0.11.0 before their pins went in -
-for v0.10.1 and v0.11.0 the main-branch run of the same commit published the same
-bytes first),
+validating that recipe; v0.9.1, v0.10.1, v0.11.0 and v0.11.1 before their pins
+went in - for v0.10.1 and v0.11.0 the main-branch run of the same commit
+published the same bytes first, while for v0.11.1 that run's build step failed
+and the tag run published the bytes the local recipe had already produced),
 so a freshly published `.sha256` that disagrees with this list means the build
 inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache` attribute first.
 
