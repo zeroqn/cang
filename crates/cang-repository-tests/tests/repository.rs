@@ -3,7 +3,7 @@ const ADR_0005_NEUTRAL_CANG_PREBUILT_ASSETS_MD: &str =
     include_str!("../../../docs/adr/0005-neutral-cang-prebuilt-assets.md");
 const ADR_0008_CANG_LINKS_LIBKRUN_RUST_API_MD: &str =
     include_str!("../../../docs/adr/0008-cang-links-libkrun-rust-api.md");
-const CONTEXT_MD: &str = include_str!("../../../CONTEXT.md");
+const GLOSSARY_MD: &str = include_str!("../../../GLOSSARY.md");
 const MAINTENANCE_MD: &str = include_str!("../../../docs/maintenance.md");
 const LAYERS: &str = include_str!("../../../nix/image/layers.nix");
 const CONTAINER_NIX: &str = include_str!("../../../nix/image/container.nix");
@@ -721,7 +721,7 @@ fn cang_prebuilt_adr_records_neutral_asset_decision() {
 
 /// cang used to `dlopen` a pinned prebuilt libkrun; it now compiles libkrun's
 /// Rust API out of the submodule. The rationale and the parts of the old design
-/// that must not come back are recorded in ADR 0008, and CONTEXT.md's vocabulary
+/// that must not come back are recorded in ADR 0008, and GLOSSARY.md's vocabulary
 /// has to keep saying so.
 #[test]
 fn cang_links_libkrun_adr_records_the_binding_decision() {
@@ -750,8 +750,8 @@ fn cang_links_libkrun_adr_records_the_binding_decision() {
         "including the `libvirglrenderer` the linked libkrun needs",
     ] {
         assert!(
-            CONTEXT_MD.contains(required),
-            "CONTEXT.md missing {required}"
+            GLOSSARY_MD.contains(required),
+            "GLOSSARY.md missing {required}"
         );
     }
 }
