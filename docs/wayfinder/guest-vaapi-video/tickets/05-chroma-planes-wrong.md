@@ -96,3 +96,37 @@ instrumentation rather than another hypothesis: read back the source texture and
 the destination plane in `sync_video_buffer_to_dmabuf` (a debug-only build) and
 compare the bytes against a synthetic chroma pattern in the guest, which names
 the side that loses the chroma.
+
+## Attempt 2: the import is fine, the plane is only partly written
+
+A debug build (temporary patch, not carried) read back, inside
+`sync_video_buffer_to_dmabuf`, the bytes the host has for each plane: the guest's
+source resource (read from the framebuffer the blit copies from) and the
+encoder's destination texture (the imported VA surface plane). Encoding a solid
+red frame in the guest, row 0 of both is exactly right:
+
+```
+plane 0: dl 320x240 pitch 512 off 0      fmt 0x20203852  res 320x240 src=51 00 ... dst=51 00 ...
+plane 1: dl 320x240 pitch 512 off 131072 fmt 0x38385247  res 160x120 src=5a f0 ... dst=5a f0 ...
+```
+
+`51 00` = Y 81 and `5a f0` = U 90 / V 240, i.e. the luma and chroma of BT.601 red;
+`0x38385247` is `GR88`, so the wire already describes the chroma plane with its
+own fourcc (`fill_video_dma_buf` sets the layer's format, but here the plane
+arrives from the guest already correct) - which is why attempt 1 changed nothing.
+`res 160x120` confirms the chroma resource is chroma-sized.
+
+So the upload's *first row* is correct on both sides, and the decoder says the
+rest is not: decoding that stream and looking at the chroma plane, the correct
+values appear in ~40% of samples while **~26% are `0x00`** (U mode 89 in 7335 of
+19200, 0 in 5228; V mode 241 in 7968, 0 in 3680) with luma 99.6% correct. Zeros in
+the chroma of a solid-colour frame mean the encoder's chroma input had zeros
+there, i.e. the destination plane is written only in part.
+
+That moves the suspicion from the EGL attributes (correct, as measured) to the
+blit's *extent*: `glCopyTexSubImage2D(..., res->base.width0, res->base.height0)`
+from a framebuffer that holds the guest's plane resource, into an EGLImage-backed
+texture whose real layout is the VA surface's (pitch 512, chroma offset 131072).
+Next: dump the whole destination plane (per-row modes) in the same debug build to
+see *which* rows are stale, which decides between the copy's extent and the
+driver's view of the imported texture.
