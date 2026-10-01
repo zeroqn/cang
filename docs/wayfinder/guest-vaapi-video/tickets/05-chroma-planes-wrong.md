@@ -293,3 +293,45 @@ Next, in this order:
    and the search moves to the guest side (mesa's virtio_gpu VA driver, or whether
    the guest's `ffmpeg` really used `h264_vaapi` against the venus/virgl device);
 3. only then read the parameters and diff them against the native trace.
+
+## None of vrend's video entry points run either
+
+Same method, one level up: direct-file markers in `virgl_video_create_codec`
+(printing the wire's profile/entrypoint and their VA mapping) and in
+`virgl_video_encode_bitstream` (printing the picture's and the codec's profile).
+Built clean, ran a full guest encode with it, and again no file at all:
+
+```
+console: encode exit=0 size=1006
+/dev/shm/vrendpath.log: No such file or directory
+```
+
+So for this configuration a guest VA-API encode does not reach
+`virgl_video_create_codec`, `virgl_video_encode_bitstream`,
+`h264_encode_bitstream`, `h264_fill_enc_picture_param` or
+`h264_fill_enc_slice_param` - i.e. **not vrend's video path at all** - while the
+guest nevertheless produces a decodable H.264 stream with the host's
+characteristics (SPS/PPS matching the client's bytes, luma matching the native
+encode to six decimals).
+
+That makes the ticket's premise wrong, and the two things it was built on need
+reconciling with it:
+
+- the ticket-02 patches *did* change the guest's output (before them the stream had
+  no parameter sets and no decoder accepted it), so some code they touch does run
+  for a guest encode;
+- the per-row read-back dump *did* fire, but its function,
+  `sync_video_buffer_to_dmabuf`, belongs to the *upload* path
+  (`vrend_video.c`), not to the encode path (`virgl_video.c`).
+
+The next candidates, in order:
+
+1. the guest's own VA driver: mesa's `virtio_gpu_drv_video.so` may implement
+   encode on the guest side (or route it away from vrend's video code), which also
+   decides whether the guest's client ever sends the `VIRGL_CCMD_*` video commands
+   in this configuration;
+2. the native-context path (`--gpu=drm` with a DRM native context / venus-style
+   submission, as in the WebGL work), where the encode could reach the host's Mesa
+   directly and never touch vrend;
+3. `vrend_decode.c`'s CCMD dispatch, to see which video CCMDs are even handled in
+   this build (a marker per case, rather than per function).
