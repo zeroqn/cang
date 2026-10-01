@@ -55,9 +55,6 @@ so a `glFinish()` in the upload path now ships with `.#virglrenderer`.
 
 ## Not yet specified
 
-- Why the guest's stream has no B-frames (`type:I`/`type:P` only) where the host
-  control emits `type:B` - some picture-type configuration does not cross the
-  wire; discovered while charting ticket 03 and unaffected by its fence.
 - Client-level hardware video in the guest (mpv `--hwdec=auto` picking VA-API,
   Chromium `<video>` decode) - not measured; may deserve its own map.
 - Whether to offer the ticket 02 wire extension upstream to virglrenderer and
@@ -65,10 +62,13 @@ so a `glFinish()` in the upload path now ships with `.#virglrenderer`.
 
 ## Open tickets
 
-- [The guest's encoder attribute queries are all zero](tickets/04-encode-attribute-queries-are-zero.md):
+- [The guest's encoder attribute queries are all zero (and cost B-frames)](tickets/04-encode-attribute-queries-are-zero.md):
   `virgl_get_video_param` implements decode caps only, and the caps wire
   structure has no encoder-attribute fields, so the host's answers cannot reach
-  the guest - a completeness gap behind the advertised `EncSlice` entrypoint.
+  the guest. Beyond the missing log line it costs B-frames: ffmpeg's VAAPI GOP
+  comes from `VAConfigAttribEncMaxRefFrames`, mesa's frontend falls back to
+  "past references only" when the cap is 0, and the guest's stream is therefore
+  `type:I`/`type:P` where the host control emits `type:B`.
 
 ## Out of scope
 
