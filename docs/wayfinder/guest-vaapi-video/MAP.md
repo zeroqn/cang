@@ -62,6 +62,12 @@ so a `glFinish()` in the upload path now ships with `.#virglrenderer`.
 
 ## Open tickets
 
+- [The guest encode's chroma planes are wrong](tickets/05-chroma-planes-wrong.md):
+  the guest's H.264 stream decodes cleanly and its luma PSNR matches the host's to
+  six decimals, but chroma PSNR is ~28 dB worse (15.6 vs 43.6 dB) and the encode
+  spends ~2.4x the bits of the same command on the host at the same QP (measured
+  at QP 20/26/32). A quality defect first, an efficiency one second, and the
+  reason ticket 02's "decodes with exit 0" acceptance was too weak.
 - [The guest's encoder attribute queries are all zero (and cost B-frames)](tickets/04-encode-attribute-queries-are-zero.md):
   `virgl_get_video_param` implements decode caps only, and the caps wire
   structure has no encoder-attribute fields, so the host's answers cannot reach
@@ -69,6 +75,17 @@ so a `glFinish()` in the upload path now ships with `.#virglrenderer`.
   comes from `VAConfigAttribEncMaxRefFrames`, mesa's frontend falls back to
   "past references only" when the cap is 0, and the guest's stream is therefore
   `type:I`/`type:P` where the host control emits `type:B`.
+
+  A first attempt at forwarding the attribute is measured and reverted: the guest
+  then agrees (`intra, P- and B-frames (1 / 1)`) but the stream grows 1.5x
+  (testsrc) because a B-frame's reference lists do not cross the wire -
+  `vrend/virgl_video.c` fills `VAEncSliceParameterBufferH264` from the wire
+  desc and leaves `RefPicList0`/`RefPicList1` commented out, inventing the
+  picture's `ReferenceFrames` from its own `frame_num % 32` ring of surfaces.
+  B-frames need a reference-list extension (per-picture DPB with picture-order
+  counts, per-slice lists plus active counts) before the attribute can be
+  advertised. The prize, measured on the host for the same real content:
+  1 671 174 B at `-bf 0` vs 1 123 666 B with B-frames, i.e. 33%.
 
 ## Out of scope
 

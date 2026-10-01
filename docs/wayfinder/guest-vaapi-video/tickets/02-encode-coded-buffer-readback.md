@@ -132,6 +132,12 @@ therefore a wire extension with one patch per side, both in this repo:
   guest-init's `MESA_ENV` puts that directory first in `LIBVA_DRIVERS_PATH`. The
   image's GL and Vulkan stay the pinned prebuilt mesa.
 
+> **Correction (ticket 05).** The evidence below is "the stream software-decodes
+> with exit 0". A later PSNR/SSIM comparison shows a stream can decode cleanly
+> while carrying the wrong chroma, so decode success alone is not sufficient
+> verification for an encode: see
+> [`05-chroma-planes-wrong.md`](05-chroma-planes-wrong.md).
+
 Verified 2026-10-01 in a `--gpu=drm` guest (cang 0.11.2 with both patches): a
 10-frame `testsrc` 640x360 `h264_vaapi` encode now starts
 `00 00 00 01 67 64 0c 1e ...` (SPS), `... 01 68 ee 38 30` (PPS), `... 01 06 05`

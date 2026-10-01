@@ -61,3 +61,35 @@ does anything in the guest actually depend on them?
   attribute (for instance the wire's DPB/`ref_pic_list` handling cannot express
   a B-frame's references), that belongs in its own ticket.
 - Whatever is not carried stays documented, with the reason.
+
+## First attempt, 2026-10-01: the attribute is not the whole loss
+
+The caps extension was built and tested (host `virglrenderer-encode-caps.patch`:
+fills `max_past_references` / `max_future_references` per caps entry from
+`vaGetConfigAttributes(VAConfigAttribEncMaxRefFrames)`; guest
+`mesa-virgl-encode-caps.patch`: returns them from
+`PIPE_VIDEO_CAP_ENC_MAX_REFERENCES_PER_FRAME`, both in the `reserved:20` space of
+`struct virgl_video_caps` so the struct size does not change). The guest's
+encoder immediately agreed: `Using intra, P- and B-frames (supported references:
+1 / 1)` - but the stream got *worse*, not better:
+
+| 10-frame testsrc 640x360, QP 20 | sizes | file |
+| --- | --- | --- |
+| before the caps change | `287, 18, 18, 18, 18, 14227, 3064, ...` | 26 517 B |
+| after (B-frames enabled) | `14531, 3896, 14144, 13916, 13881, 13959, 13885, ...` | 129 821 B |
+| host control (native, same command) | `31, 8, 162, 5030, 828, 193, ...` | 8 723 B |
+
+Still decodable (exit 0) and the guest's VA decode is unaffected, but ~5x the
+host's size and ~1.5x the guest's *previous* size: the client now codes
+B-frames, and the price it pays is that a B-frame's references do not survive
+the trip. The picture type crosses the wire, the reference *lists* a B-frame
+needs (`ref_pic_list0/1`, the DPB state, the reordering) do not - so the host's
+encoder codes each frame almost as if it were intra.
+
+So the fix is two-layered: this ticket's attribute forwarding is the *enabler*
+(kept, but not shippable on its own), and the reference/DPB plumbing is the part
+that makes it pay - a follow-up of the same kind as ticket 02, to be found by
+diffing what the host's VA submission carries for a B frame against what vrend
+submits (the method that found the packed headers). Until that lands, the
+attribute should not be advertised: forwarding it alone makes a guest encode
+1.5x bigger.
