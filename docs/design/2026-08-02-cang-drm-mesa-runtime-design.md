@@ -70,6 +70,9 @@ During cang bootstrap, after parsing the launch contract and before dropping pri
 When `gpu_drm` is true, it exports:
 
 - `LIBGL_DRIVERS_PATH` pointing at the stable Mesa DRI directory
+- `LIBVA_DRIVERS_PATH` pointing at the same directory, so the guest-side
+  `virtio_gpu` VA-API driver (the vrend video path) is discoverable; libva has no
+  default search path for the mesa runtime directory
 - `__EGL_VENDOR_LIBRARY_FILENAMES` pointing at Mesa's EGL vendor metadata
 - Vulkan ICD discovery pointing at the stable Mesa Vulkan ICD directory or its hardware-capable metadata set
 

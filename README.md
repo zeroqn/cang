@@ -50,7 +50,15 @@ rootless Podman tooling for development.
   `CANG_MESA_LIBDIR`, `CANG_MESA_ICD`, and `CANG_VULKAN_LOADER_LIBDIR` from
   the caller's environment; the `.#cang-prebuilt` wrapper sets them, so a bare
   `.#cang` `bin/cang` run must export them for `--gpu=drm`. This mode requires
-  a libkrun build with `krun_set_gpu_options3` support.
+  a libkrun build with `krun_set_gpu_options3` support. The same device carries
+  vrend's VA-API video path: host-side `libva` initializes on the DRM node and
+  the guest's `virtio_gpu` VA driver advertises the host's hardware profiles, so
+  `vainfo` lists H.264/HEVC/VP9/AV1/JPEG and `ffmpeg -hwaccel vaapi` decodes with
+  it. guest-init exports `LIBVA_DRIVERS_PATH` for that driver as part of the
+  `--gpu=drm` Mesa environment. Decode is what that path provides so far: the
+  encode entrypoints `vainfo` also lists run but emit a stream nothing can
+  decode, and the reason is upstream in the vrend video path
+  (see `docs/vaapi-video-investigation.md`).
 - `cang --gpu=drm --zero-copy-shm` asks the virtio-GPU device for the udmabuf
   zero-copy shared-memory fast path: a guest `wl_shm` client's pool is imported
   as a guest blob that carries a host-side handle, so the host compositor reads
@@ -506,20 +514,24 @@ For ordinary source-built cang usage, prefer `nix build .#cang`, which compiles
 libkrun's Rust API from the fork revisions the flake pins as its `libkrun-src`
 and `libkrunfw-src` inputs (grafted into `deps/` by
 `nix/pkgs/workspace-src.nix`), so the build needs no submodules - locally, in
-CI, or through `github:`. Use `nix build .#cang-prebuilt` only for the explicit
+CI, or through `github:`. libkrun's GPU dependency `rutabaga_gfx` is the third
+such fork: cang's workspace manifest patches it to the checkout at
+`deps/rutabaga_gfx` (the fork carries `VIRGL_RENDERER_USE_VIDEO`, the flag
+`--gpu=drm` needs for VA-API video), and `rutabaga-gfx-src` is the flake input
+that supplies that tree. Use `nix build .#cang-prebuilt` only for the explicit
 pinned release-asset packaging path with the same wrapper-free helper layout, or
 the published `ghcr.io/<repo-owner>/cang` image. `nix build .#cang-dev` is the
 same host package built against a locally compiled libkrunfw kernel; point
 either target at fork work in the checkout with
 `--override-input libkrun-src "git+file://$PWD/deps/libkrun"` (or
-`libkrunfw-src`). The `libkrunfw-src` input follows the fork's `cang` branch, its
+`libkrunfw-src`, or `rutabaga-gfx-src`). The `libkrunfw-src` input follows the fork's `cang` branch, its
 newest kernel line (linux-7.2.7 + linux-hardened); the fork's `cang-lts` branch
 keeps the LTS kernel line (linux-6.12.109), which is also the line that still
 carries its arm64 patches. Each line publishes its own permanent release
 (`v5.6.2-cang.<n>` and `v<version>-cang-lts.<n>`), and `nix/pins.nix` pins
 x86_64 from the newest line while aarch64 and riscv64 come from the LTS line -
-see `docs/maintenance.md`. In-tree `cargo` builds still read the `deps/libkrun`
-and `deps/libkrunfw` submodules, so clone with
+see `docs/maintenance.md`. In-tree `cargo` builds still read the `deps/libkrun`,
+`deps/libkrunfw` and `deps/rutabaga_gfx` submodules, so clone with
 `git submodule update --init --recursive` for those.
 
 ---

@@ -34,6 +34,11 @@ const VIRGLRENDERER_USE_VIDEO: u32 = 1 << 11;
 // The venus renderer runs in the sandboxed render server (RENDER_SERVER is
 // respected by venus but ignored by virgl), while vrend runs in-process for
 // GL and VA-API video (USE_EGL + USE_VIDEO with a get_drm_fd callback).
+// USE_VIDEO reaches virglrenderer through libkrun's set_use_video and the
+// rutabaga flag of the same name; with it vrend initializes libva on the
+// render node and advertises the host's profiles to the guest, so the guest's
+// virtio_gpu VA driver reports the host's H.264/HEVC/VP9/AV1/JPEG set instead
+// of VAProfileNone.
 // THREAD_SYNC enables a background vrend-sync thread that retires GL fences
 // independently of the guest's command submission. This is required for video
 // decode (which blocks synchronously on the decode fence) — without it, the

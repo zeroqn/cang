@@ -31,13 +31,16 @@ host's DRM node, not the guest kernel.
 |---|---|---|
 | Vulkan | RADV NAVI33 (native) | **venus** — `Virtio-GPU Venus (AMD Radeon RX 7600M XT (RADV NAVI33))`, `DRIVER_ID_MESA_VENUS` |
 | EGL/GL | radeonsi 4.6 (native) | **virgl/vrend** — `virgl (AMD Radeon RX 7600M XT (radeonsi, navi33, ACO, DRM 3...))`, GL 4.6, GLES 3.2 |
-| VA-API | H.264/HEVC/VP9/AV1 decode + H.264/HEVC/AV1 encode | **`VAProfileNone` only** (no codecs) |
+| VA-API | H.264/HEVC/VP9/AV1 decode + H.264/HEVC/AV1 encode | H.264/HEVC/VP9/AV1/JPEG decode + H.264/HEVC encode, through the vrend video path (was `VAProfileNone` only before that path was enabled — see `docs/vaapi-video-investigation.md`) |
 | native context capset | n/a (client of the machine below) | **not advertised**: cap set ids 1, 2, 4, 5 (virgl, virgl2, venus, cross-domain); id 6 (DRM) absent |
 
-So Vulkan and GL are accelerated in the guest (through virgl/venus translation,
-not native context); **video encode/decode is the one real gap**, and native
-context is not the way to close it on this host — the vrend video path is (see
-the earlier `docs/vaapi-video-investigation.md`, still stuck at its Blocker 2).
+So Vulkan and GL are accelerated in the guest through virgl/venus translation,
+not native context. Hardware video is the one capability native context would
+have delivered that needed another route, and it now comes from the *vrend video*
+path instead: `--gpu=drm` guests get the host's VA-API profiles and decode with
+them (the fix and its evidence are in `docs/vaapi-video-investigation.md`; the
+missing piece was rutabaga dropping cang's `VIRGL_RENDERER_USE_VIDEO` bit, not
+anything in the guest kernel).
 
 Native context *would* deliver the host's own stack, and would work on a host
 that has a real GPU node (the physical machine, or a cang host with the GPU

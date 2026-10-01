@@ -16,10 +16,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          # In-tree `cargo` resolves libkrun through `deps/libkrun`, so the
-          # submodule has to be in the checkout. The Nix builds do not: they
-          # compile the fork checkouts the flake pins as `libkrun-src` and
-          # `libkrunfw-src`.
+          # In-tree `cargo` resolves libkrun and its `rutabaga_gfx` dependency
+          # through the `deps/` submodules, so they have to be in the checkout.
+          # The Nix builds do not: they compile the fork checkouts the flake
+          # pins as `libkrun-src`, `libkrunfw-src` and `rutabaga-gfx-src`.
           submodules: recursive
 
       - name: Install Nix
@@ -41,10 +41,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          # In-tree `cargo` resolves libkrun through `deps/libkrun`, so the
-          # submodule has to be in the checkout. The Nix builds do not: they
-          # compile the fork checkouts the flake pins as `libkrun-src` and
-          # `libkrunfw-src`.
+          # In-tree `cargo` resolves libkrun and its `rutabaga_gfx` dependency
+          # through the `deps/` submodules, so they have to be in the checkout.
+          # The Nix builds do not: they compile the fork checkouts the flake
+          # pins as `libkrun-src`, `libkrunfw-src` and `rutabaga-gfx-src`.
           submodules: recursive
 
       - name: Install Nix
@@ -66,7 +66,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
       # No submodule checkout: the flake checks build the fork sources from the
-      # `libkrun-src`/`libkrunfw-src` inputs, not from `deps/`.
+      # `libkrun-src`/`libkrunfw-src`/`rutabaga-gfx-src` inputs, not from `deps/`.
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31

@@ -7,7 +7,10 @@ title: PR 822 zero-copy guest-handle fast path into the fork
 
 `cang` runs libkrun **PR 822**'s zero-copy `CREATE_GUEST_HANDLE` fast path end to
 end: `deps/libkrun` (the `zeroqn/libkrun` fork, branch `cang`, ABI-2 base) carries
-the VMM half against a **rev-pinned `magma-gpu/rutabaga_gfx` git dependency**
+the VMM half against a **rev-pinned `rutabaga_gfx` git dependency** (2026-10:
+libkrun's revision now names the `zeroqn/rutabaga_gfx` fork, and cang compiles
+the checkout at `deps/rutabaga_gfx` through a workspace `[patch]` - see
+`docs/maintenance.md`, "Updating the rutabaga_gfx fork")
 and is compiled into cang by cang's own rustc (it is not a released artifact -
 the submodule pointer is the pin, and cang's vendored-crate hashes move with
 it); `deps/libkrunfw` carries `CONFIG_UDMABUF=y` plus the virtio-gpu guest-side

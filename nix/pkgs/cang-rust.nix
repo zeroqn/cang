@@ -17,14 +17,16 @@ let
     SCCACHE_IGNORE_SERVER_IO_ERROR = "1";
   };
   # cang links libkrun's Rust API (crates/cang-libkrun), so libkrun's crates are
-  # part of cang's lock and have to be vendored. The graph is not crates.io-only
-  # - `rutabaga_gfx` comes from the fork's `magma-gpu` git rev - and it vendors
-  # `ffier` twice at one name-version, which `importCargoLock` cannot express -
-  # so it vendors with `fetchCargoVendor`; a libkrun bump refreshes this hash in
-  # the same commit as the submodule pointer and the `libkrun-src` input.
+  # part of cang's lock and have to be vendored. The graph's packages that do not
+  # come from crates.io are path dependencies on the `deps/` checkouts (libkrun,
+  # plus `rutabaga_gfx` and its `magma-gpu` through the workspace `[patch]`), so
+  # the vendored set is what is left over from the registry, produced by
+  # `fetchCargoVendor` running `cargo vendor` over this tree. A libkrun or
+  # rutabaga bump refreshes this hash in the same commit as the submodule
+  # pointers and the matching flake inputs.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-ZAQ/exNGE2tkN/IbthrK9zc/8Xc9WQJx7/19Jw0R3ps=";
+    hash = "sha256-sdXp23UcFn0PCmzxzkmeg2gX7GHwLYSFNyh4kw8OSBQ=";
   };
 
   # Building libkrun is what needs clang/libclang (krun-display and krun-input

@@ -12,6 +12,7 @@ const IMAGE_CHECKS_NIX: &str = include_str!("../../../nix/image/checks.nix");
 const NIX_STORE_DB_CHECK_NIX: &str = include_str!("../../../nix/image/nix-store-db-check.nix");
 const PINS_NIX: &str = include_str!("../../../nix/pins.nix");
 const WORKSPACE_SRC_NIX: &str = include_str!("../../../nix/pkgs/workspace-src.nix");
+const CARGO_TOML: &str = include_str!("../../../Cargo.toml");
 const SECCOMP_JSON_NIX: &str =
     include_str!("../../../nix/pkgs/container-lib-policy-seccomp-json.nix");
 const CANG_RUST_NIX: &str = include_str!("../../../nix/pkgs/cang-rust.nix");
@@ -156,8 +157,11 @@ fn fork_sources_are_flake_inputs_grafted_into_the_workspace() {
     for required in [
         "libkrun-src = {",
         "libkrunfw-src = {",
+        "rutabaga-gfx-src = {",
         "url = \"github:zeroqn/libkrun/cang\";",
         "url = \"github:zeroqn/libkrunfw/cang\";",
+        "url = \"github:zeroqn/rutabaga_gfx/cang\";",
+        "rutabagaGfxSrc = rutabaga-gfx-src;",
         "flake = false;",
         "workspaceSrc = import ./nix/pkgs/workspace-src.nix {",
     ] {
@@ -171,8 +175,18 @@ fn fork_sources_are_flake_inputs_grafted_into_the_workspace() {
     for required in [
         "cp -r --no-preserve=mode,ownership ${libkrunSrc} $out/deps/libkrun",
         "cp -r --no-preserve=mode,ownership ${libkrunfwSrc} $out/deps/libkrunfw",
+        "cp -r --no-preserve=mode,ownership ${rutabagaGfxSrc} $out/deps/rutabaga_gfx",
     ] {
         assert!(WORKSPACE_SRC_NIX.contains(required), "missing {required}");
+    }
+    // libkrun's `rutabaga_gfx` dependency is patched to the checkout cang grafts
+    // in, so both builds and the lock use `deps/rutabaga_gfx` rather than a
+    // revision fetched from GitHub (the fork carries VIRGL_RENDERER_USE_VIDEO).
+    for required in [
+        "[patch.\"https://github.com/zeroqn/rutabaga_gfx\"]",
+        "rutabaga_gfx = { path = \"deps/rutabaga_gfx\" }",
+    ] {
+        assert!(CARGO_TOML.contains(required), "missing {required}");
     }
 }
 

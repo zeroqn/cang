@@ -23,6 +23,11 @@ pub(in crate::guest_init) const PROXY_BIN: &str = "wl-cross-domain-proxy";
 // SwiftShader with zero GPU-process crashes.
 const MESA_ENV: &[(&str, &str)] = &[
     ("LIBGL_DRIVERS_PATH", "/usr/lib/cang-mesa-runtime/lib/dri"),
+    // libva searches only /run/opengl-driver/lib/dri and /usr/lib*/dri by
+    // default; the driver it needs (virtio_gpu_drv_video.so, the guest side of
+    // vrend's VA-API video) lives in the mesa runtime directory, so without
+    // this a VA-API client fails in va_openDriver() with no driver found.
+    ("LIBVA_DRIVERS_PATH", "/usr/lib/cang-mesa-runtime/lib/dri"),
     (
         "__EGL_VENDOR_LIBRARY_FILENAMES",
         "/usr/lib/cang-mesa-runtime/share/glvnd/egl_vendor.d/50_mesa.json",
@@ -246,6 +251,14 @@ mod tests {
         // software device (GPU process abort, no WebGL renderer).
         assert!(MESA_ENV.iter().any(|(name, _)| *name == "VK_ICD_FILENAMES"));
         assert!(!MESA_ENV.iter().any(|(name, _)| *name == "VK_DRIVER_FILES"));
+        // VA-API needs both the driver directory (LIBVA_DRIVERS_PATH, since
+        // libva has no default path for the mesa runtime) and the DRM node,
+        // which is why this rides with the --gpu=drm env block.
+        assert!(
+            MESA_ENV
+                .iter()
+                .any(|(name, _)| *name == "LIBVA_DRIVERS_PATH")
+        );
         assert!(std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none());
 
         for (name, _) in MESA_ENV {

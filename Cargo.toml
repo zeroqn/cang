@@ -43,5 +43,16 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter", "ansi"] }
 vt100 = "0.16"
 
+# libkrun's GPU device depends on `rutabaga_gfx`, which pins the fork differently
+# for cang than upstream does: the fork carries `VIRGL_RENDERER_USE_VIDEO`, the
+# flag cang asks for through `--gpu=drm` (see docs/vaapi-video-investigation.md).
+# cang compiles the checkout at `deps/rutabaga_gfx` (a submodule, grafted into a
+# Nix build by nix/pkgs/workspace-src.nix) rather than the revision libkrun's own
+# manifest names, so a local patch to the video path needs no fork commit and no
+# re-fetch - the same shape as `deps/libkrun`. libkrun's revision stays the
+# fallback for a build of the fork on its own.
+[patch."https://github.com/zeroqn/rutabaga_gfx"]
+rutabaga_gfx = { path = "deps/rutabaga_gfx" }
+
 [profile.release]
 lto = "thin"

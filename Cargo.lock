@@ -867,7 +867,6 @@ checksum = "b0d28e293f2b8c9d2b2d1c0193bd3c1cbdc0d2cf396888dc01162f7cf9d6c3f3"
 [[package]]
 name = "magma-gpu"
 version = "0.1.85"
-source = "git+https://github.com/magma-gpu/rutabaga_gfx?rev=ec60ee117687414880590207067934d6aea24c35#ec60ee117687414880590207067934d6aea24c35"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1132,7 +1131,6 @@ dependencies = [
 [[package]]
 name = "rutabaga_gfx"
 version = "0.1.85"
-source = "git+https://github.com/magma-gpu/rutabaga_gfx?rev=ec60ee117687414880590207067934d6aea24c35#ec60ee117687414880590207067934d6aea24c35"
 dependencies = [
  "cfg-if",
  "libc",

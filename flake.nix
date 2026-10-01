@@ -26,6 +26,19 @@
       url = "github:zeroqn/libkrunfw/cang";
       flake = false;
     };
+
+    # libkrun's GPU device depends on `rutabaga_gfx`, which libkrun pins to this
+    # fork: it carries `VIRGL_RENDERER_USE_VIDEO` (bit 11), the flag cang's
+    # `--gpu=drm` asks for and upstream's `VirglRendererFlags` does not have.
+    # cang compiles the checkout at `deps/rutabaga_gfx` through a `[patch]` in the
+    # workspace manifest, so the same submodule/input split as libkrun applies:
+    # keep this revision equal to the pointer in `.gitmodules`, and use
+    # `--override-input rutabaga-gfx-src "git+file://$PWD/deps/rutabaga_gfx"` for
+    # a local patch.
+    rutabaga-gfx-src = {
+      url = "github:zeroqn/rutabaga_gfx/cang";
+      flake = false;
+    };
   };
 
   outputs =
@@ -36,6 +49,7 @@
       headless,
       libkrun-src,
       libkrunfw-src,
+      rutabaga-gfx-src,
 
     }:
     let
@@ -108,6 +122,7 @@
             src = self;
             libkrunSrc = libkrun-src;
             libkrunfwSrc = libkrunfw-src;
+            rutabagaGfxSrc = rutabaga-gfx-src;
           };
           wl-cross-domain-proxy = pkgs.callPackage ./nix/wl-cross-domain-proxy.nix { };
           renderServerEnv = import ./nix/lib/render-server-env.nix {

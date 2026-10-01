@@ -3,14 +3,17 @@
 ## Build outputs
 
 Source builds of the host package compile libkrun's Rust API from the fork
-checkouts the flake pins as its `libkrun-src` and `libkrunfw-src` inputs, kept in
-`flake.lock`; `nix/pkgs/workspace-src.nix` grafts them into `deps/` of the
-workspace source, so a Nix build needs no submodules - not from a local
-checkout, not in CI, and not for a `github:` consumer. The `deps/libkrun` and
-`deps/libkrunfw` submodules stay for in-tree `cargo` builds, so a fresh checkout
-still wants `git submodule update --init --recursive` before `cargo build`. A
-local fork edit goes to the input instead of the checkout:
-`nix build .#cang --override-input libkrun-src "git+file://$PWD/deps/libkrun"`.
+checkouts the flake pins as its `libkrun-src`, `libkrunfw-src` and
+`rutabaga-gfx-src` inputs, kept in `flake.lock`; `nix/pkgs/workspace-src.nix`
+grafts them into `deps/` of the workspace source, so a Nix build needs no
+submodules - not from a local checkout, not in CI, and not for a `github:`
+consumer. The `deps/libkrun`, `deps/libkrunfw` and `deps/rutabaga_gfx` submodules
+stay for in-tree `cargo` builds (the workspace `[patch]` points libkrun's
+`rutabaga_gfx` dependency at the third one), so a fresh checkout still wants
+`git submodule update --init --recursive` before `cargo build`. A local fork edit
+goes to the input instead of the checkout:
+`nix build .#cang --override-input libkrun-src "git+file://$PWD/deps/libkrun"`
+(or `rutabaga-gfx-src`, `libkrunfw-src`).
 
 - `.#cang`: compile the workspace Rust host package with `$out/bin/cang` as a
   raw dynamic ELF. libkrun is *compiled in* from the `libkrun-src` input grafted

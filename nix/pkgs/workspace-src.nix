@@ -3,8 +3,11 @@
 #
 # `crates/cang-libkrun` depends on libkrun by path inside `deps/libkrun` (cang
 # links libkrun's Rust API, so libkrun has to be compiled by cang's own rustc),
-# and `deps/libkrunfw` is the fork checkout a local kernel build reads. Both are
-# Git submodules, and a flake's own source cannot carry submodule contents:
+# `deps/libkrunfw` is the fork checkout a local kernel build reads, and
+# `deps/rutabaga_gfx` is the fork checkout the workspace `[patch]` points
+# libkrun's `rutabaga_gfx` dependency at (the fork carries
+# `VIRGL_RENDERER_USE_VIDEO`, which upstream lacks). All three are Git
+# submodules, and a flake's own source cannot carry submodule contents:
 # `inputs.self.submodules = true` does not either - Nix records
 # `submodules = true` in the ref a downstream `flake.lock` writes for `github:`
 # flakes and that scheme then rejects it with "input attribute 'submodules' not
@@ -24,6 +27,7 @@
   src,
   libkrunSrc,
   libkrunfwSrc,
+  rutabagaGfxSrc,
 }:
 pkgs.runCommand "cang-workspace-source"
   {
@@ -33,8 +37,9 @@ pkgs.runCommand "cang-workspace-source"
   }
   ''
     cp -r --no-preserve=mode,ownership ${src}/. $out/
-    rm -rf $out/deps/libkrun $out/deps/libkrunfw
+    rm -rf $out/deps/libkrun $out/deps/libkrunfw $out/deps/rutabaga_gfx
     cp -r --no-preserve=mode,ownership ${libkrunSrc} $out/deps/libkrun
     cp -r --no-preserve=mode,ownership ${libkrunfwSrc} $out/deps/libkrunfw
+    cp -r --no-preserve=mode,ownership ${rutabagaGfxSrc} $out/deps/rutabaga_gfx
     chmod -R u+w $out
   ''

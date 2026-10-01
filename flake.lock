@@ -60,11 +60,11 @@
     "libkrun-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790746767,
-        "narHash": "sha256-1Ime4VzkuaY9x9LsD65Ta/QhiI04yENhEAKH9zBh0BE=",
+        "lastModified": 1790825595,
+        "narHash": "sha256-aLtwZuyVcDDpnxAttUcna6GCq0TX3aEhl8betinozzI=",
         "owner": "zeroqn",
         "repo": "libkrun",
-        "rev": "710f3d69eea636e22eec7d86532a3677e1fc2acc",
+        "rev": "2855f4d126be253191408478a33877225c0f1654",
         "type": "github"
       },
       "original": {
@@ -220,7 +220,8 @@
         "libkrun-src": "libkrun-src",
         "libkrunfw-src": "libkrunfw-src",
         "nixpkgs": "nixpkgs_3",
-        "nixpkgs-unstable": "nixpkgs-unstable"
+        "nixpkgs-unstable": "nixpkgs-unstable",
+        "rutabaga-gfx-src": "rutabaga-gfx-src"
       }
     },
     "rust-overlay": {
@@ -242,6 +243,23 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rutabaga-gfx-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790825541,
+        "narHash": "sha256-5idyMkTma39FVJU1QGpMA4/IcqafNrukr0Spa2RLVko=",
+        "owner": "zeroqn",
+        "repo": "rutabaga_gfx",
+        "rev": "d8479a1edb560228a55a4e6fd5817145c39e99d9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "zeroqn",
+        "ref": "cang",
+        "repo": "rutabaga_gfx",
         "type": "github"
       }
     },

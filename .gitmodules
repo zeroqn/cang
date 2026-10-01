@@ -6,3 +6,7 @@
 	path = deps/libkrunfw
 	url = https://github.com/zeroqn/libkrunfw.git
 	branch = cang
+[submodule "deps/rutabaga_gfx"]
+	path = deps/rutabaga_gfx
+	url = https://github.com/zeroqn/rutabaga_gfx.git
+	branch = cang

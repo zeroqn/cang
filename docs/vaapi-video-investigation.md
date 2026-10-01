@@ -1,9 +1,10 @@
 # VA-API hardware video in the cang guest — investigation log
 
-Status: **blocked at Blocker 2**. Goal: make `vainfo`/`mpv --hwdec` report working
-hardware video codecs inside the cang `--gpu=drm` guest without breaking the
-headless Chromium Vulkan path. Nothing in this branch has been verified end-to-end;
-the launcher flag change in particular is UNVERIFIED.
+Status: **resolved**. `--gpu=drm` guests now get the host's hardware VA-API
+profiles and decode with them (verified live — see Resolution). The Blocker 1/2
+narrative further down is the pre-fix history, written in the libkrun `dlopen`
+era (`dynamic.rs`, mentioned in Blocker 1, no longer exists: cang links libkrun's
+Rust API now).
 
 ## Symptoms
 
@@ -14,6 +15,74 @@ the launcher flag change in particular is UNVERIFIED.
   `h264: Failed setup for format vaapi: hwaccel initialisation returned error`.
 - Host virglrenderer is built with `-Dvideo=true -Dvenus=true` and links libva 2.23.0;
   guest Mesa contains virgl video symbols. Both sides are video-capable in principle.
+
+## Resolution
+
+Root cause: the request never reached the renderer. cang sets
+`VIRGL_RENDERER_USE_VIDEO` (`1 << 11`) in its virtio-gpu virgl flags word, and
+libkrun's GPU device code had no bit for it either — but the drop that mattered
+was in rutabaga: `VirglRendererFlags` stopped at `VIRGLRENDERER_DRM` (`1 << 10`)
+and `RutabagaBuilder` had no setter for the video bit, so `virgl_renderer_init`
+never received it, vrend never called `virgl_video_init`/`vaInitialize`, and the
+guest's virtio-gpu VA driver was told the device has no video caps — hence
+`VAProfileNone` and nothing else. Blocker 1 is moot under the Rust-API binding.
+Blocker 2 was the render-node fd: `get_drm_fd` hands out an `O_RDWR` fd, and
+`vaInitialize` then succeeds inside the VM worker (its `libva:` and
+`VA-API version:` lines appear in the worker log).
+
+The fix has three parts:
+
+- `zeroqn/rutabaga_gfx`, branch `cang` (`d8479a1`): add
+  `VIRGLRENDERER_USE_VIDEO`, `VirglRendererFlags::use_video` and
+  `RutabagaBuilder::set_use_video`.
+- `zeroqn/libkrun`, branch `cang` (`2855f4d1`): pin rutabaga_gfx at that rev and
+  forward cang's bit with `set_use_video`.
+- cang guest-init: export `LIBVA_DRIVERS_PATH=/usr/lib/cang-mesa-runtime/lib/dri`
+  for `--gpu=drm`. libva's default search paths (`/run/opengl-driver/lib/dri`,
+  `/usr/lib*/dri`) do not include the mesa runtime directory, so without it
+  `va_openDriver()` finds no driver and `vaInitialize` fails before any of the
+  above matters.
+
+Verified live (cang 0.11.2, libkrun v2.0.0-cang.5, libkrunfw 7.2.7-hardened1, a
+`--gpu=drm` guest on a host whose render node is a NAVI33 AMD GPU):
+
+- `vainfo` in the guest reports the host's profile set:
+  `VAProfileH264ConstrainedBaseline`/`Main`/`High` (VLD + EncSlice),
+  `VAProfileHEVCMain`/`Main10` (VLD + EncSlice), `VAProfileVP9Profile0`/`Profile2`
+  (VLD), `VAProfileAV1Profile0` (VLD), `VAProfileJPEGBaseline` (VLD) — instead of
+  `VAProfileNone` alone.
+- `ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128` in the guest:
+  `Reinit context ... pix_fmt: vaapi`, output stream `vaapi(...)`, 30 frames, 0
+  decode errors; with `-hwaccel_output_format vaapi` the frames stay in VAAPI
+  surfaces. Decode throughput is at parity with software decode in this nested VM
+  (13 fps vs 11 fps on a 1080p clip) — what the flag buys is the codec path, not
+  speed through three stacked virtio-gpu layers.
+- No regression: venus Vulkan (`DRIVER_ID_MESA_VENUS`) and virgl GL 4.6 are
+  unchanged. If the sandboxed render server fails to start, the whole backend
+  falls back to 2D and the guest loses virgl, venus *and* video, so a video probe
+  always proves the venus path too.
+- **Encode does not work yet.** `vainfo` advertises `VAEntrypointEncSlice` for
+  H.264/HEVC (the host's profiles), and `ffmpeg -c:v h264_vaapi`/`hevc_vaapi`
+  through `-vaapi_device` runs to completion and writes a file, but the result is
+  not a bitstream: the whole 87510-byte output of a 30-frame 640x360 encode is
+  one access unit ("missing picture in access unit with size 87510"), and both
+  software and VA-API decode of it fail. The control shows the paths around it:
+  software `libx264` in the guest decodes back fine (so the guest's VA *decoder*
+  and the container plumbing are fine), and the *host*'s identical
+  `h264_vaapi` command (the same vrend→libva encode, one nesting level up)
+  produces a stream that software-decodes cleanly. So what is broken is the
+  guest's read-back of the coded buffer through the vrend video path — an
+  upstream virglrenderer/Mesa-virtio question, not a cang flag. Decode is the
+  half of VA-API this change enables; encode needs its own investigation before
+  it is advertised to users.
+
+Two probe traps worth remembering: a guest `ffmpeg` under the managed PTY stops
+with `SIGTTOU` unless `-nostdin` is passed, which looks exactly like a hung
+hardware decode; and a *debug* `cang` (`target/debug/cang`) cannot start the
+render server because the render-server seccomp policy path resolves from the
+binary's package prefix — set
+`CANG_RENDER_SERVER_POLICY=<cang>/share/cang/seccomp/render-server.json` when
+probing a non-package build.
 
 ## Blocker 1 — libva.so.2 undefined symbol `vaGetDisplayDRM` (FIXED)
 

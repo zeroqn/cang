@@ -69,9 +69,14 @@ refreshes two vendor hashes plus `Cargo.lock` - see
 The fork's `ffier` dependency is only for the C bindings its release pipeline
 generates: `krun-init-blob` declares it optionally and the `ffi` feature enables
 it, so cang's graph contains no `ffier` at all (2026-10, fork `0847b562`; before
-that it was compiled here as an unused dependency). Cang's lock still reaches
-outside crates.io for the GPU stack (`rutabaga_gfx` at the fork's `magma-gpu`
-rev), so the vendor helper stays.
+that it was compiled here as an unused dependency). The GPU stack still needs a fork
+outside crates.io - libkrun pins `rutabaga_gfx` to `zeroqn/rutabaga_gfx` because
+cang's `VIRGL_RENDERER_USE_VIDEO` request needs a flag upstream does not expose -
+but cang compiles it the same way it compiles libkrun: the `deps/rutabaga_gfx`
+submodule, selected by a workspace `[patch]` and grafted from the
+`rutabaga-gfx-src` input in a Nix build, so cang's lock records it as a path (see
+[the maintenance procedure](../maintenance.md#updating-the-rutabaga_gfx-fork)).
+The vendor helper stays.
 
 The published release asset stays a bare neutral ELF (ADR 0005), but it now
 carries `libvirglrenderer.so.1` as a `DT_NEEDED`, so a consumer that is not Nix

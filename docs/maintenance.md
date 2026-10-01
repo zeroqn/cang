@@ -93,6 +93,46 @@ A libkrun update is therefore:
    mismatches first.
 5. Re-verify with a live boot and the Chromium GPU smoke, not just a green build.
 
+### Updating the rutabaga_gfx fork
+
+libkrun's GPU device is what asks rutabaga for the virglrenderer flags, so cang's
+`VIRGL_RENDERER_USE_VIDEO` request (`--gpu=drm`'s VA-API video) only reaches
+virglrenderer if rutabaga exposes the bit. Upstream `magma-gpu/rutabaga_gfx`
+stops at `VIRGLRENDERER_DRM`, so the dependency is the `zeroqn/rutabaga_gfx` fork
+branch `cang`: upstream `main` plus `VIRGL_RENDERER_USE_VIDEO`,
+`VirglRendererFlags::use_video` and `RutabagaBuilder::set_use_video`.
+
+cang compiles it the way it compiles libkrun - from a checkout in `deps/`, not
+from the revision libkrun's own manifest names:
+
+- `deps/rutabaga_gfx` is a **submodule** of the fork (branch `cang`). It is what
+  an in-tree `cargo` build compiles, through the
+  `[patch."https://github.com/zeroqn/rutabaga_gfx"]` block in the workspace
+  manifest, and what cang's `Cargo.lock` records (the patched packages carry no
+  source).
+- `rutabaga-gfx-src` is the **flake input** a Nix build compiles: the revision
+  arrives in `flake.lock`, and `nix/pkgs/workspace-src.nix` grafts it into
+  `deps/rutabaga_gfx` for the same reason libkrun is an input (a flake's own
+  source cannot carry submodule contents).
+
+Three references name a rutabaga revision and move together: the
+`deps/rutabaga_gfx` **submodule pointer**, the `rutabaga-gfx-src` **input**, and
+the rev in `deps/libkrun/src/devices/Cargo.toml` (twice: `[dependencies]` and
+`[target.'cfg(target_os = "linux")'.dependencies]`). That last one is libkrun's
+own default, used by the fork's own builds and rolling releases, so it must stay
+at a commit that has the flag even though cang's build patches over it.
+
+A rutabaga update is therefore: rebase and push the fork's `cang` branch, fetch
+the submodule and check out the same commit (`git -C deps/rutabaga_gfx fetch &&
+git -C deps/rutabaga_gfx checkout <sha>`), `git add deps/rutabaga_gfx`, move
+libkrun's rev to that commit as a libkrun fork commit and follow "Updating the
+libkrun fork" above, then `nix flake update rutabaga-gfx-src`, refresh
+`Cargo.lock` and the `cargoDeps` vendor hash. `krunInitCargoDeps` does not move:
+the musl init blob's lock has no rutabaga. A *local* rutabaga patch needs no fork
+commit and no hash refresh - the in-tree `cargo` build already reads the
+submodule, and `--override-input rutabaga-gfx-src
+"git+file://$PWD/deps/rutabaga_gfx"` covers a Nix build.
+
 ### Re-basing the libkrunfw guest kernel
 
 `deps/libkrunfw` bundles a kernel whose base is two variables in the `Makefile`
