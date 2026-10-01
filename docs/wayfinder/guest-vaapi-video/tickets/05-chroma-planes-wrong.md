@@ -156,3 +156,38 @@ path that both namespaces share. Also note `/dev/shm/chroma-debug.log` is owned 
 the VM's mapped uid in a sticky directory, so a host-side `rm` silently fails and
 an old file can be mistaken for fresh output - which is how the first null reading
 of the per-row dump happened.
+
+## The transfer is clean: the loss is inside the encode
+
+With the process question settled (the VM worker and the render server both map
+`.../lib/libvirglrenderer.so.1` from the build under test, and the debug file is
+visible from the host at `/dev/shm/chroma-dbg2.log`), the per-row dump answers the
+question it was built for. Encoding solid red, **every sampled row of both planes
+matches, source and destination, with no zero bytes**:
+
+```
+plane 0: 320x240 pitch 512 off 0      fmt 0x20203852 res 320x240
+  row   0/30/60/90/120/150/180/210: src=51515151 zeros 0/320 | dst=51515151 zeros 0/320
+plane 1: 320x240 pitch 512 off 131072 fmt 0x38385247 res 160x120
+  row   0/15/30/45/60/75/90/105:    src=5af05af0 zeros 0/320 | dst=5af05af0 zeros 0/320
+```
+
+`51` = Y 81, `5a f0` = U 90 / V 240 (BT.601 red): the guest's source resource and
+the encoder's VA surface hold exactly the right picture, on both planes, on every
+sampled row. So *neither* the EGL import (as attempt 1 already showed) *nor* the
+blit loses anything, and the two plane-layout suspicions are dead.
+
+What the encoder then writes is still wrong, and the shape of the damage says the
+fault is in the coding parameters rather than in the data: on the decoded frame,
+the chroma is correct in ~40% of samples with `0x00` in ~26%, scattered over the
+whole plane rather than aligned to rows or to a clean block grid (zero-U fraction
+per 8x8 cell of the chroma plane: the first row of cells is clean, the rest ranges
+0.05 to 0.79).
+
+That points at what vrend tells the encoder about the picture: the
+`VAEncPictureParameterBufferH264`/slice fields vrend renders itself (the chroma QP
+and prediction fields are the ones that would do exactly this), against the same
+fields in a native encode. The next experiment is the one that found the packed
+headers: refresh the host-side libva trace of the guest path
+(`LIBVA_TRACE` in the launcher) and diff its picture/slice parameter fields
+against the host control's trace for the same content.
