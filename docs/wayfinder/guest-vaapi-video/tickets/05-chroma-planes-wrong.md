@@ -522,3 +522,43 @@ one for `ENCODE_BITSTREAM`. If both are flushed but only `BEGIN_FRAME` reaches t
 host, the encode command is lost between the guest's virtio-gpu submit and cang's
 vrend (rutabaga/libkrun), which is where cang can act; if `ENCODE_BITSTREAM` is
 never flushed at all, the loss is in mesa's own virgl context.
+
+## Reinterpretation: the guest's "encoded" file is ffmpeg's own headers plus unencoded memory
+
+Two facts, each checked twice, force a different reading of everything above.
+
+1. **A control marker in the *upload* path is silent in the current build** - and
+   the reason is mine, not the host's: the marker went into
+   `sync_dmabuf_to_video_buffer` (the *decode* direction), because my anchor matched
+   the first of two identical tails in `vrend_video.c`. So the host-side sink
+   question is still open, but the earlier *successful* row dump (placed properly
+   inside `sync_video_buffer_to_dmabuf` during `enc27`) does prove the sink works and
+   that the **upload half of the encode path runs**.
+2. **The SPS in the guest's file proves nothing about the host.** ffmpeg's
+   `h264_vaapi` builds SPS/PPS itself and puts them in `avctx->extradata`, which the
+   `-f h264` muxer writes into the output. The earlier claim that the client's SPS
+   bytes in the stream could only come from the host's raw-header submission is
+   therefore wrong.
+
+Put together with the measurements already in this ticket - the guest enters mesa's
+virgl encode path per frame, the host's upload runs, but no host encoder-parameter
+fill, codec creation or encode completion ever runs - the consistent reading is:
+
+- the guest's encode command reaches the host, whose upload half executes;
+- the encode itself does **not** execute on the host, so the coded buffer the guest
+  reads back is **not an encoded picture**;
+- what the guest's `ffmpeg` then writes is its own extradata plus that unencoded
+  coded-buffer memory - which explains every observation at once: the size anomaly
+  (31 kB for ten frames of a flat colour), the chroma "damage" (~26% zero samples,
+  scattered), the luma that matches the native encode to six decimals (it *is* the
+  input surface's luma), and why the guest-side driver choice changes the outcome
+  (it decides the coded-buffer path and the profile negotiation).
+
+If that is right, the defect is not in the parameter fields at all: it is that the
+host's encode step is skipped after the upload, i.e. in
+`vrend_video_encode_bitstream` (`src/vrend/vrend_video.c`) or in the codec/buffer
+handle lookups it performs before reaching `virgl_video_encode_bitstream`.
+
+Next (small): markers at the entry and each early return of
+`vrend_video_encode_bitstream`, printing the handles it was given and the lookup
+results, with the upload-path marker as a live control in the same build.
