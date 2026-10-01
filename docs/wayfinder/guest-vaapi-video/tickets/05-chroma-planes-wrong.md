@@ -65,3 +65,34 @@ comparison against the source from now on.
   upstream report if not.
 - Verification: the guest's PSNR/SSIM against the source matching the host's
   (chroma within ~1 dB), the bitrate gap closed, luma unchanged.
+
+## Attempt 1, 2026-10-01: the per-plane EGL format is not it
+
+Hypothesis: `sync_video_buffer_to_dmabuf` describes every plane with
+`dmabuf->planes[i].drm_format`, which is the *layer's* fourcc, so the NV12 chroma
+plane would be imported as "NV12 plane 0" (one byte per pixel) while its pitch is
+two - half of every row copied, the rest stale. That is the plane's format mix-up
+the struct invites (`fill_video_dma_buf` sets `plane->drm_format =
+desc->layers[i].drm_format` for every plane).
+
+Implemented as `virglrenderer-encode-chroma.patch`: a `plane_layout_for()`
+helper returning the per-plane single-plane fourcc and geometry (NV12 -> R8 +
+GR88, P010 -> R16 + GR1616, planar YUV -> R8 with the right subsampling, packed
+formats unchanged), used in both `sync_video_buffer_to_dmabuf` and
+`sync_dmabuf_to_video_buffer`.
+
+Measured in the same guest with the same probe: **bit-identical results** - QP 26
+size 3 979 917 B and PSNR `y:28.126378 u:15.926191 v:15.642029`, exactly the
+values before the patch, at every QP. So the chroma damage is *not* in that EGL
+import (whatever the correct per-plane description is, this is not the fault).
+The patch is not carried.
+
+What that leaves, in order of suspicion: the guest's own upload of its VA surface
+into the virgl texture the host blits from (a guest-side transfer, in cang's
+mesa build, so patchable here), the blit's source extent (`res->base.width0`,
+`res->base.height0` for a plane resource), or the plane's `res_handle` selection
+when the guest uses one resource for a multi-plane surface. The next step is
+instrumentation rather than another hypothesis: read back the source texture and
+the destination plane in `sync_video_buffer_to_dmabuf` (a debug-only build) and
+compare the bytes against a synthetic chroma pattern in the guest, which names
+the side that loses the chroma.
