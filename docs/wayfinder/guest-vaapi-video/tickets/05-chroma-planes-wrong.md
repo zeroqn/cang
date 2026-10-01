@@ -251,3 +251,45 @@ dump is in place, in the order they would explain a chroma-specific loss:
 - `chroma_qp_index_offset`, `second_chroma_qp_index_offset`, `pic_order_cnt_lsb`
   and `frame_num` are deliberately left 0 (both parameter structures *are*
   `memset` first, so they are zeros rather than stack garbage).
+
+## The dump is built, loaded, and never runs
+
+A working dump was built after fixing the brace surgery (the compile errors above
+were mine, not the code's) and it writes to `/dev/shm/h264params.log` directly -
+the channel the per-row dump proved. Then, in a cleaned-up run (no stale VMs) with
+that build:
+
+```
+cang: /nix/store/9ixc0n6ds7073dahg0k29l6yxd0kkp27-cang-0.11.2/bin/cang
+console: encode exit=0 size=1006        (the guest's encode succeeds)
+/dev/shm/h264params.log: No such file or directory
+```
+
+while the same run's processes map exactly that build's library, and the library
+contains the dump's strings:
+
+```
+pid 479225 virgl_render_se lib=.../crn5siv1vn0axm7ardr4ml8gm1aq7hc1-virglrenderer-1.3.0 H264PIC=1
+pid 479242 cang            lib=.../crn5siv1vn0axm7ardr4ml8gm1aq7hc1-virglrenderer-1.3.0 H264PIC=1
+```
+
+`h264_fill_enc_picture_param` and `h264_fill_enc_slice_param` are called
+unconditionally from `h264_encode_render_picture`/`h264_encode_render_slice`
+(`src/vrend/virgl_video.c:1697-1713`, the same function that submits the raw
+headers), so **the guest's H.264 encode does not go through
+`h264_encode_bitstream` at all** - which contradicts the assumption this ticket has
+been built on. The raw-header patch of ticket 02 changed the guest's output
+(SPS/PPS appeared, and the stream became decodable), so *something* in that path
+does run; the two facts have to be reconciled before any parameter-level
+conclusion is drawn.
+
+Next, in this order:
+
+1. instrument the entry points around it - `virgl_video_create_codec` (which
+   profile/entrypoint the guest asks for), `virgl_video_encode_bitstream` and the
+   CCMD dispatch in `vrend_decode.c` - with the same direct file write, to see
+   which of them run for a guest encode;
+2. if none of them do, the guest's encode is being served somewhere else entirely
+   and the search moves to the guest side (mesa's virtio_gpu VA driver, or whether
+   the guest's `ffmpeg` really used `h264_vaapi` against the venus/virgl device);
+3. only then read the parameters and diff them against the native trace.
