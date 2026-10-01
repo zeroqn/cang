@@ -22,8 +22,8 @@ buffer. cang now carries one patch per side of that wire extension (host:
 `.#virglrenderer`; guest: the image-local `cang-va-runtime` VA driver) and a
 `--gpu=drm` guest's H.264 and HEVC encodes software-decode cleanly. The encoder
 entrypoint is still advertised while every encoder-attribute query in the guest
-is 0, and the first ~5 frames of a stream still encode a surface that does not
-hold the frame.
+is 0, and the first ~5 frames of a stream still encode a black surface - both are
+now charted as tickets 03 and 04.
 
 ## Notes
 
@@ -53,13 +53,23 @@ hold the frame.
 
 ## Not yet specified
 
-- The ~5-frame warm-up in the host's input copy (`vrend_video.c:210/283`): the
-  first frames are still encoded from a surface that does not hold the frame now
-  that encoding itself works. Needs its own ticket.
-- Whether the encoder entrypoint should stay advertised while every
-  `PIPE_VIDEO_CAP_ENC_*` in the guest is 0 (the caps gap is item 2 of ticket 02).
 - Client-level hardware video in the guest (mpv `--hwdec=auto` picking VA-API,
   Chromium `<video>` decode) - not measured; may deserve its own map.
+- Whether to offer the ticket 02 wire extension upstream to virglrenderer and
+  mesa now that both halves are proven in-tree.
+
+## Open tickets
+
+- [The first frames of a guest encode are black](tickets/03-first-frames-are-black.md):
+  every encoder context in a `--gpu=drm` guest reads a zeroed surface for its
+  first ~5 frames (the opening I-frame decodes 100% black), while the same
+  command on the host carries content from frame 0. The candidate is the host's
+  input copy, `vrend_video.c:283` -> `:210`, which never passes the surface's
+  modifier to the EGL import.
+- [The guest's encoder attribute queries are all zero](tickets/04-encode-attribute-queries-are-zero.md):
+  `virgl_get_video_param` implements decode caps only, and the caps wire
+  structure has no encoder-attribute fields, so the host's answers cannot reach
+  the guest - a completeness gap behind the advertised `EncSlice` entrypoint.
 
 ## Out of scope
 

@@ -388,9 +388,14 @@ The negative control is section 3: with the host patch alone (guest driver
 unpatched) the same command produced the parameter-set-less stream, and with the
 guest patch alone nothing would submit the headers - both halves are needed.
 
-Two behaviours from section 5 and section 6 are unchanged and still open: the
-first ~5 frames (287/18/18/18/18 then 14227 ...) encode a surface that does not
-hold the frame, and no `PIPE_VIDEO_CAP_ENC_*` reaches the guest.
+Two behaviours from section 5 and section 6 are unchanged and now charted as
+their own tickets: the first ~5 frames of every encoder context encode a black
+surface - decoding the run above shows `frame:0..4 pblack:100`, `frame:5..
+pblack:12`, and the host control shows no such warm-up - and no
+`PIPE_VIDEO_CAP_ENC_*` reaches the guest. See
+[`tickets/03-first-frames-are-black.md`](../tickets/03-first-frames-are-black.md)
+and
+[`tickets/04-encode-attribute-queries-are-zero.md`](../tickets/04-encode-attribute-queries-are-zero.md).
 
 ### End-to-end through the built image
 
