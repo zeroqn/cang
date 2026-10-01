@@ -191,3 +191,27 @@ fields in a native encode. The next experiment is the one that found the packed
 headers: refresh the host-side libva trace of the guest path
 (`LIBVA_TRACE` in the launcher) and diff its picture/slice parameter fields
 against the host control's trace for the same content.
+
+## The trace took a different channel than expected
+
+Capturing what vrend *submits* to the driver needs a working trace, and
+`LIBVA_TRACE` is not it: libva's tracer works for a native client (the host
+control's trace is written, and shows the native picture parameters for a solid
+red frame - `pic_init_qp = 26`, `pic_fields = 0x10b` i.e. CABAC and the 8x8
+transform on, `idr_pic_flag`/`reference_pic_flag` set, both chroma QP offsets 0,
+and 5 packed-header pairs) but never produces a file for the guest path, because
+cang hands the render server a curated environment and libva's tracer is not in
+it. `VIRGL_LOG_LEVEL`/`VIRGL_LOG_FILE` *are* passed through - proven by the
+`virgl_debug` output written from `enc_render_raw_headers` in earlier runs - so
+vrend's own VA submission has to be logged from vrend's code through that
+channel, not through libva.
+
+For the record, the same solid-red frame costs **291 bytes** on the host and
+**1019 bytes** in the guest (3 frames each), i.e. the guest's encoder is 3.5x
+larger on the simplest possible content - the same order as the 2.4x measured on
+real video.
+
+Next: a `virgl_debug` print of the fields vrend fills into
+`VAEncPictureParameterBufferH264`/`VAEncSliceParameterBufferH264` in
+`h264_encode_bitstream`, read through `VIRGL_LOG_FILE`, diffed against the native
+trace above.
