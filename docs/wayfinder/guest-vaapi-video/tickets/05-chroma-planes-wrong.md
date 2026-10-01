@@ -621,3 +621,46 @@ the guest's marker (the guest side is the reliable channel) and the context id a
 host's dispatch, then compare with the context that carries the working decode. If the
 encode lands on a context cang never wires to a video context, the fix belongs in
 cang's render-server/context setup, not in virglrenderer's parameter code.
+
+## The guest flushes the whole video command set; the host sees none of it
+
+With markers on the **guest's** flush path (`virgl_flush_eq` in mesa's
+`virgl_context.c`, which hands `cbuf` to the winsys) and in mesa's video-codec
+creation, a three-frame encode (solid red, CQP 26, `-bf 0`, the marked driver
+shipped through the shared workspace) shows the complete command sequence leaving the
+guest, all on one virgl context:
+
+```
+GUESTCODEC handle=14 profile=11 entry=4 chroma=1 w=320 h=240
+GUESTFLUSH ctx=0x5c3d6880000 cdw=1056 video=2 ids=53 55          (CREATE_VIDEO_CODEC, CREATE_VIDEO_BUFFER)
+GUESTFLUSH ctx=0x5c3d6880000 cdw=1044 video=4 ids=56 57 60 61    (DESTROY/CREATE_VIDEO_BUFFER, BEGIN_FRAME, ENCODE_BITSTREAM, END_FRAME)
+GUESTFLUSH ctx=0x5c3d6880000 cdw=1038 video=3 ids=57 60 61
+GUESTFLUSH ctx=0x5c3d6880000 cdw=1038 video=3 ids=57 60 61
+GUESTFLUSH ctx=0x5c3d6880000 cdw=1074 video=5 ids=54 56 56 56 56  (teardown)
+```
+
+(ids from `virgl_protocol.h`: 53 `CREATE_VIDEO_CODEC`, 55/56
+`CREATE_VIDEO_BUFFER`/`DESTROY_VIDEO_BUFFER`, 57 `BEGIN_FRAME`, 60
+`ENCODE_BITSTREAM`, 61 `END_FRAME`.) Three frames, three `57 60 61` groups, one
+context pointer throughout, and the codec creation in the same stream.
+
+So the guest does not merely *choose* the virgl VA path (the earlier `GUESTMARK`), it
+**submits the entire encode protocol to virtio-gpu**. On the host, by contrast, no
+video entry point has ever executed in any run measured here, and the earlier
+dispatch-site sink printed nothing. Whatever the truth about my host-side sinks, the
+guest-side evidence now pins the loss to the gap between the guest's virtio-gpu
+submit and vrend's video context - the layer cang owns (libkrun's virtio-gpu device /
+rutabaga / the render server's context setup), not virglrenderer's or mesa's
+parameter handling.
+
+That is also the first point in this ticket where the defect may be **cang's own**
+rather than an upstream one, so the next measurements are about that layer:
+
+1. a marker at the very top of the chain - `virgl_renderer_submit_cmd` (or cang's
+   equivalent entry for a virtio-gpu submit) - to see whether the commands arrive at
+   the renderer at all, before any vrend code;
+2. make the render server's own output visible (cang's per-task helper logs, or a
+   cang log level that forwards the child's stderr), because a CCMD that reaches
+   vrend but has no handler produces `failed to dispatch %s: -22` from
+   `vrend_decode_block`, which is exactly the message that would settle this in one
+   run without any patch.
