@@ -744,3 +744,30 @@ not the transport: the next step is to read cang's context-creation policy (whic
 guest context becomes a vrend context versus a venus one, and what the guest's
 encoder requests) and to check the guest side for which screen/context mesa's VA
 driver picks for an encode versus a decode.
+
+## Which context kind is it? The design says, the marker could not
+
+cang's own GPU setup documents the intended split
+(`crates/cang/src/runtime/vm/libkrun/launcher.rs:32-51`): `VIRGLRENDERER_VENUS_FLAGS`
+= `USE_EGL | THREAD_SYNC | VENUS | RENDER_SERVER | DRM | USE_VIDEO`, with the comment
+that *the venus renderer runs in the sandboxed render server (RENDER_SERVER is
+respected by venus but ignored by virgl), while vrend runs in-process for GL and VA-API
+video (USE_EGL + USE_VIDEO with a get_drm_fd callback)*. So both context kinds exist in
+one renderer, and the guest's per-context capset decides which handler a context gets -
+which is exactly what determines whether its video CCMDs are handled.
+
+To read that capset, a marker was added to rutabaga's context creation
+(`deps/rutabaga_gfx/src/virgl_renderer.rs::create_context`, logging `ctx_id`,
+`context_init` and `context_init & RUTABAGA_CONTEXT_INIT_CAPSET_ID_MASK`), the cang
+worktree was built with it and a full encode+decode guest run was made: **no log file
+appeared**. That is itself the answer to why: the rutabaga instance that serves a cang
+VM is **libkrun's**, and `deps/libkrun` is grafted from the flake input by
+`nix/pkgs/workspace-src.nix`, so an edit to the worktree's `deps/rutabaga_gfx` - or to
+`deps/libkrun` itself - is not what gets compiled. The marker must go into the libkrun
+fork (or the local-source build path) instead.
+
+With that, the chain for this ticket is: guest -> submits the whole video protocol;
+renderer front door -> receives it on ctx=1; vrend -> handles only ctx=2. What is still
+unproven is *which capset* ctx=1 was created with - venus (the external render server)
+or virgl (vrend) - and that one datum decides whether the fix belongs in cang's
+context/capset wiring or in the libkrun fork's context creation.
