@@ -87,10 +87,12 @@ Verified live (cang 0.11.2, libkrun v2.0.0-cang.5, libkrunfw 7.2.7-hardened1, a
   encode now starts with an SPS/PPS/SEI (H.264: `00 00 00 01 67 64 0c 1e ...`,
   `... 01 68 ...`, `... 01 06 ...`) and software-decodes with exit 0, HEVC starts
   with a VPS/SPS/PPS (`00 00 00 01 40 01 ...`, `... 42 01 ...`) and decodes
-  cleanly too, and the guest's VA *decode* path is unaffected. Two gaps remain: no
+  cleanly too, and the guest's VA *decode* path is unaffected. One gap remains: no
   `PIPE_VIDEO_CAP_ENC_*` reaches the guest (the encoder is advertised while every
-  encoder-attribute query is still 0), and frames 1-5 of a stream encode a
-  surface that does not hold the frame yet. Details and raw evidence:
+  encoder-attribute query is still 0). The opening frames used to come out black
+  in every encoder context; that was a second host-side defect (the upload blits
+  and the VA encode share memory with nothing ordering them, fixed by a
+  `glFinish()` in the upload path - see ticket 03). Details and raw evidence:
   `docs/wayfinder/guest-vaapi-video/tickets/02-encode-coded-buffer-readback.md`
   and its `notes/02-encode-coded-buffer-evidence.md`.
 

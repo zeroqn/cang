@@ -1,0 +1,20 @@
+diff -ruN a/src/vrend/vrend_video.c b/src/vrend/vrend_video.c
+--- a/src/vrend/vrend_video.c	2026-10-01 17:29:53.085564964 +0800
++++ b/src/vrend/vrend_video.c	2026-10-01 17:30:29.641760781 +0800
+@@ -266,6 +266,16 @@
+     glBindTexture(GL_TEXTURE_2D, 0);
+     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+ 
++    /* The blits above write the picture into the buffer the VA encoder reads,
++     * but the two only share memory: nothing orders the GL commands against the
++     * VA submission that follows in virgl_video_begin_frame() ->
++     * vaBeginPicture. Without this wait the encoder starts on a buffer whose
++     * copy has not executed yet - in a guest that is the opening frames of every
++     * encoder context, and they come out black - until the accumulated GL work
++     * happens to be complete by the time the encode is submitted. Upstream has
++     * no wait here either (no glFinish/glFlush in src/vrend/vrend_video.c). */
++    glFinish();
++
+     return 0;
+ }
+ 

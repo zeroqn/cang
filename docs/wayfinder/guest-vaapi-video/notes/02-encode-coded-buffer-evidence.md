@@ -431,3 +431,43 @@ Repo gates run alongside it: `cargo test -p cang-guest-init` (299 passed),
 `cargo test -p cang-repository-tests` (48 passed), `cargo fmt --check`, and
 `nix build .#container` (which runs the image's wrapper-contract and
 Nix-DB-metadata checks).
+
+## 10. The black opening frames, and the fix
+
+Section 5's "the first frames do not carry the input" turned out to be a second,
+independent host-side defect with a one-line fix, and it was found by contrasting
+the guest stream against the same command on the host:
+
+- guest, 10-frame testsrc 640x360 H.264: per-frame coded sizes
+  `287, 18, 18, 18, 18, 14227, ...`, and
+  `ffmpeg -vf blackframe=amount=0:threshold=32` reports `pblack:100` for frames
+  0-4 (the opening I-frame is contentless) and `pblack:12` from frame 5;
+- host control (same command, same render node, no vrend):
+  `31, 8, 162, 5030, ...` with `pblack:12` on every frame;
+- the pattern is per encoder context, not per guest: three encodes in one guest
+  run (black, testsrc, white) share `97, 17, 17, 17, 17, ...`.
+
+Mechanism: `virgl_video_begin_frame` calls `encode_upload_picture` and then
+`vaBeginPicture` (`src/vrend/virgl_video.c:905`), and the upload
+(`vrend_video.c:283` -> `:210`) only *blits* with GL - `glCopyTexSubImage2D` into
+a buffer that the VA engine reads from. Nothing ordered the GL commands against
+the VA submission (`grep glFinish\|glFlush src/vrend/vrend_video.c` finds none;
+no `origin/main` commit after 1.3.0 touches the file), so the encoder read the
+buffer before the copy had executed, and after a few frames the accumulated GL
+work happened to be complete in time.
+
+Fix - `nix/pkgs/patches/virglrenderer-encode-upload-fence.patch`, a `glFinish()`
+at the end of `sync_video_buffer_to_dmabuf`. Same probe, same guest, patched
+cang:
+
+```
+h264 per-frame: 14530 3081 3417 3084 2968 2970 3209 2929 3223 2999
+h264 blackframe: frame:0 pblack:12 ... frame:5 pblack:12      (was pblack:100)
+hevc per-frame: 29797 6753 6500 6207 6503 5862 6001 6568 5949 6351
+in-guest software decode: exit 0 for both; guest VA decode: exit 0
+```
+
+The fix is host-side, so the image is unchanged. The missing B-frames are a
+separate defect: the fence changed them not at all (the guest's stream is
+`type:I`/`type:P`, the host control `type:B`).
+

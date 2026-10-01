@@ -22,8 +22,9 @@ buffer. cang now carries one patch per side of that wire extension (host:
 `.#virglrenderer`; guest: the image-local `cang-va-runtime` VA driver) and a
 `--gpu=drm` guest's H.264 and HEVC encodes software-decode cleanly. The encoder
 entrypoint is still advertised while every encoder-attribute query in the guest
-is 0, and the first ~5 frames of a stream still encode a black surface - both are
-now charted as tickets 03 and 04.
+is 0 (charted as ticket 04), and ticket 03's black opening frames are fixed too:
+the host's upload blits and the VA encode share memory but nothing ordered them,
+so a `glFinish()` in the upload path now ships with `.#virglrenderer`.
 
 ## Notes
 
@@ -49,10 +50,14 @@ now charted as tickets 03 and 04.
 <!-- one line per closed ticket, gist plus link -->
 
 - [Enable the vrend VA-API video path (decode)](tickets/01-enable-vrend-video-decode.md): the request died in rutabaga, which never carried `VIRGL_RENDERER_USE_VIDEO`, so `virgl_renderer_init` never enabled vrend's video path; the fork carries the bit, libkrun forwards it with `set_use_video`, guest-init exports `LIBVA_DRIVERS_PATH`, and the guest then reports the host's profiles and decodes into VAAPI surfaces.
+- [The first frames of a guest encode are black](tickets/03-first-frames-are-black.md): the host's upload blits the picture into the buffer the VA encoder reads, and only the two sharing memory ties them together - `vrend_video.c:283` -> `:210` then `virgl_video_begin_frame` -> `vaBeginPicture` with no wait, so the opening frames encoded a buffer whose copy had not run (100% black). A `glFinish()` at the end of the upload fixes it; verified by the same probe before and after.
 - [Where the guest VA-API encode loses its bitstream](tickets/02-encode-coded-buffer-readback.md): not in the read-back - an interposed `vaMapBuffer` in the VM worker returns exactly the bytes the guest's `ffmpeg` writes. The host's own VA encode was the break: virglrenderer 1.3.0 submitted no packed parameter sets (`src/vrend/virgl_video.c:1440`) and left the H.264 sequence parameter buffer's geometry/level/flags zero (`src/vrend/virgl_video.c:1243`), over wire structs with no fields for them (`src/virgl_video_hw.h:150-171`). Fixed by the two patches described in the ticket's Resolution; verified by software-decoding a guest H.264 and HEVC encode.
 
 ## Not yet specified
 
+- Why the guest's stream has no B-frames (`type:I`/`type:P` only) where the host
+  control emits `type:B` - some picture-type configuration does not cross the
+  wire; discovered while charting ticket 03 and unaffected by its fence.
 - Client-level hardware video in the guest (mpv `--hwdec=auto` picking VA-API,
   Chromium `<video>` decode) - not measured; may deserve its own map.
 - Whether to offer the ticket 02 wire extension upstream to virglrenderer and
@@ -60,12 +65,6 @@ now charted as tickets 03 and 04.
 
 ## Open tickets
 
-- [The first frames of a guest encode are black](tickets/03-first-frames-are-black.md):
-  every encoder context in a `--gpu=drm` guest reads a zeroed surface for its
-  first ~5 frames (the opening I-frame decodes 100% black), while the same
-  command on the host carries content from frame 0. The candidate is the host's
-  input copy, `vrend_video.c:283` -> `:210`, which never passes the surface's
-  modifier to the EGL import.
 - [The guest's encoder attribute queries are all zero](tickets/04-encode-attribute-queries-are-zero.md):
   `virgl_get_video_param` implements decode caps only, and the caps wire
   structure has no encoder-attribute fields, so the host's answers cannot reach

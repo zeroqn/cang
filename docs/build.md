@@ -94,8 +94,9 @@ goes to the input instead of the checkout:
   [the maintenance procedure](maintenance.md#updating-the-libkrun-fork).
 - `.#virglrenderer`: the nixpkgs `virglrenderer` with this repo's host-side
   patches (`virglrenderer-enum-26.patch`,
-  `virglrenderer-gbm-layout-linear-modifier.patch` and
-  `virglrenderer-encode-raw-headers.patch`, applied by the overlay in
+  `virglrenderer-gbm-layout-linear-modifier.patch`,
+  `virglrenderer-encode-raw-headers.patch` and
+  `virglrenderer-encode-upload-fence.patch`, applied by the overlay in
   `nix/lib/systems.nix`). Host-side only: cang links `libvirglrenderer.so.1`
   and the `virgl_render_server` helper is symlinked from this package, so the
   cang packages already ship it; downstream flakes that build their own host

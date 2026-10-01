@@ -58,9 +58,9 @@ rootless Podman tooling for development.
   `--gpu=drm` Mesa environment. Encode works too: `ffmpeg -c:v h264_vaapi` and
   `-c:v hevc_vaapi` produce streams a decoder reads, because cang carries the
   two halves of the encode fix (the host half in its `virglrenderer`, the guest
-  half in the image's VA driver - see `docs/vaapi-video-investigation.md`). Two
-  gaps remain: an encoder-attribute query is still 0 in the guest, and the first
-  frames of a stream encode a surface that does not hold the frame yet.
+  half in the image's VA driver - see `docs/vaapi-video-investigation.md`). One
+  gap remains: an encoder-attribute query is still 0 in the guest, so an encoder
+  picks its settings from defaults.
 - `cang --gpu=drm --zero-copy-shm` asks the virtio-GPU device for the udmabuf
   zero-copy shared-memory fast path: a guest `wl_shm` client's pool is imported
   as a guest blob that carries a host-side handle, so the host compositor reads

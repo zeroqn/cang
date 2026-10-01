@@ -1,9 +1,9 @@
 ---
 label: wayfinder:research
 title: The first frames of a guest encode are black
-status: open
+status: closed
 blocked_by: []
-claimed_by:
+claimed_by: bob + pi session (2026-10-01)
 ---
 
 ## Question
@@ -49,3 +49,41 @@ guest's VA surface and the host's encoder?
   encoder's VA surface pool being created lazily - or whether upstream owns it,
   in which case a guest encode should at least report the loss.
 - Whether the missing B-frames are the same defect.
+
+## Resolution
+
+The upload writes the picture into the buffer the VA encoder reads, and the two
+only share memory: `vrend_video_enocde_upload_picture` ->
+`sync_video_buffer_to_dmabuf` (`virglrenderer-1.3.0/src/vrend/vrend_video.c:283`
+-> `:210`) issues its `glCopyTexSubImage2D`s, and `virgl_video_begin_frame`
+(`src/vrend/virgl_video.c:905`) calls `vaBeginPicture` immediately afterwards
+with nothing ordering the GL commands against the VA submission. So the encoder
+started on a buffer whose copy had not executed yet - black - until, a few frames
+in, the accumulated GL work happened to be complete by the time the encode was
+submitted. Upstream has no wait in that path either (no `glFinish`/`glFlush` in
+`src/vrend/vrend_video.c`, and no `origin/main` commit after `virglrenderer-1.3.0`
+touches it). It is also encode-only by construction: the decode direction writes
+and is read by the guest through later GL commands in the same context, while
+the encode crosses from GL to the VA engine.
+
+Fixed by `nix/pkgs/patches/virglrenderer-encode-upload-fence.patch`: a
+`glFinish()` after the blits at the end of `sync_video_buffer_to_dmabuf`. It is a
+full pipeline wait per encoded frame - correctness first; a fence would be the
+cheaper shape if this ever shows up in a profile.
+
+Verified in a `--gpu=drm` guest (10-frame testsrc 640x360, image VA driver,
+patched cang, same probe before and after):
+
+| | per-frame coded sizes | blackframe |
+| --- | --- | --- |
+| before | `287, 18, 18, 18, 18, 14227, 3064, ...` | `frame:0..4 pblack:100` |
+| after | `14530, 3081, 3417, 3084, 2968, 2970, 3209, ...` | `frame:0.. pblack:12` |
+
+HEVC behaves the same (`179, 22, 22, ...` -> `29797, 6753, 6500, ...`), both
+streams still software-decode with exit 0, and the guest's VA decode path is
+unaffected. The host half of the fix ships with `.#virglrenderer`, so the image
+itself is unchanged.
+
+The missing B-frames are a different defect: the fence changed them not at all -
+the guest's stream is still `type:I`/`type:P` where the host control emits
+`type:B`, so some picture-type configuration does not cross the wire.

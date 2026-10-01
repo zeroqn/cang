@@ -34,6 +34,7 @@ let
                     ../pkgs/patches/virglrenderer-enum-26.patch
                     ../pkgs/patches/virglrenderer-gbm-layout-linear-modifier.patch
                     ../pkgs/patches/virglrenderer-encode-raw-headers.patch
+                    ../pkgs/patches/virglrenderer-encode-upload-fence.patch
                   ];
                 });
               }
