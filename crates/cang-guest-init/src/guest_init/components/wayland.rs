@@ -27,7 +27,17 @@ const MESA_ENV: &[(&str, &str)] = &[
     // default; the driver it needs (virtio_gpu_drv_video.so, the guest side of
     // vrend's VA-API video) lives in the mesa runtime directory, so without
     // this a VA-API client fails in va_openDriver() with no driver found.
-    ("LIBVA_DRIVERS_PATH", "/usr/lib/cang-mesa-runtime/lib/dri"),
+    //
+    // The VA runtime comes first on purpose. Both directories provide
+    // virtio_gpu_drv_video.so, but only the one in the VA runtime is built from
+    // mesa source and carries the guest half of the vrend encode fix; the mesa
+    // runtime's copy (the image's prebuilt mesa, which also serves GL and
+    // Vulkan) is the fallback for anything that resolves the driver after the
+    // VA runtime directory is gone.
+    (
+        "LIBVA_DRIVERS_PATH",
+        "/usr/lib/cang-va-runtime/dri:/usr/lib/cang-mesa-runtime/lib/dri",
+    ),
     (
         "__EGL_VENDOR_LIBRARY_FILENAMES",
         "/usr/lib/cang-mesa-runtime/share/glvnd/egl_vendor.d/50_mesa.json",
@@ -242,7 +252,12 @@ mod tests {
 
         for (name, value) in MESA_ENV {
             assert_eq!(std::env::var(name).as_deref(), Ok(*value));
-            assert!(value.starts_with("/usr/lib/cang-mesa-runtime"));
+            // Everything points into the image's mesa runtime, except the VA
+            // driver search path, which starts at the patched VA runtime.
+            assert!(
+                value.starts_with("/usr/lib/cang-mesa-runtime")
+                    || value.starts_with("/usr/lib/cang-va-runtime")
+            );
         }
         // The ICD pin must use VK_ICD_FILENAMES and never VK_DRIVER_FILES: the
         // loader gives VK_DRIVER_FILES precedence over the VK_ICD_FILENAMES that
@@ -254,10 +269,16 @@ mod tests {
         // VA-API needs both the driver directory (LIBVA_DRIVERS_PATH, since
         // libva has no default path for the mesa runtime) and the DRM node,
         // which is why this rides with the --gpu=drm env block.
-        assert!(
-            MESA_ENV
-                .iter()
-                .any(|(name, _)| *name == "LIBVA_DRIVERS_PATH")
+        // The VA driver has to be the patched one, so the VA runtime directory
+        // comes before the mesa runtime directory in the search path.
+        let va_paths = MESA_ENV
+            .iter()
+            .find(|(name, _)| *name == "LIBVA_DRIVERS_PATH")
+            .expect("LIBVA_DRIVERS_PATH in MESA_ENV")
+            .1;
+        assert_eq!(
+            va_paths,
+            "/usr/lib/cang-va-runtime/dri:/usr/lib/cang-mesa-runtime/lib/dri"
         );
         assert!(std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none());
 

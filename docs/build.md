@@ -93,13 +93,25 @@ goes to the input instead of the checkout:
   pointer - see
   [the maintenance procedure](maintenance.md#updating-the-libkrun-fork).
 - `.#virglrenderer`: the nixpkgs `virglrenderer` with this repo's host-side
-  patches (`virglrenderer-enum-26.patch` and
-  `virglrenderer-gbm-layout-linear-modifier.patch`, applied by the overlay in
+  patches (`virglrenderer-enum-26.patch`,
+  `virglrenderer-gbm-layout-linear-modifier.patch` and
+  `virglrenderer-encode-raw-headers.patch`, applied by the overlay in
   `nix/lib/systems.nix`). Host-side only: cang links `libvirglrenderer.so.1`
   and the `virgl_render_server` helper is symlinked from this package, so the
   cang packages already ship it; downstream flakes that build their own host
   vrend/libkrun stack should consume this output instead of nixpkgs'
-  `virglrenderer`.
+  `virglrenderer`. The encode patch is the host half of the guest VA-API encode
+  fix - it submits the guest client's packed parameter sets to the host's VA
+  driver - and needs the image-local guest driver described below.
+- The guest's VA-API driver is not a flake output: it is image-local. The
+  image's mesa is a prebuilt binary drop that cannot be patched, so
+  `nix/lib/systems.nix` builds `mesaVaApi` (nixpkgs' mesa with only the `virgl`
+  gallium driver, plus `mesa-virgl-encode-raw-headers.patch`), `nix/image/layers.nix`
+  exposes it as the `cang-va-runtime` driver directory and the image links that at
+  `/usr/lib/cang-va-runtime`, which guest-init puts first in
+  `LIBVA_DRIVERS_PATH`. It is the guest half of the host `virglrenderer`
+  encode patch above, and needs that patch on the host side; the image's GL and
+  Vulkan keep using the pinned prebuilt mesa.
 - `.#podman`: the nixpkgs Podman package, re-exported for downstream flakes and
   for the image, which ships it with the nixpkgs `crun` runtime.
 - `.#container-lib-policy-seccomp-json`: install the pinned

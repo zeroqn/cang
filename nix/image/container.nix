@@ -150,6 +150,7 @@ let
       mkdir -p ./usr/lib
       ln -s ${pkgs.mesa} ./usr/lib/cang-mesa-runtime
       ln -s ${pkgs.mesa} ./usr/lib/cang-software-renderer
+      ln -s ${layers.vaApiRuntime} ./usr/lib/cang-va-runtime
       ln -s ${pkgs.fontconfig.out} ./usr/lib/cang-fontconfig
       ${pkgs.lib.optionalString (rioBin != null) ''
         cp ${rioBin}/share/terminfo/r/rio ./home/dev/.terminfo/r/rio

@@ -55,10 +55,12 @@ rootless Podman tooling for development.
   the guest's `virtio_gpu` VA driver advertises the host's hardware profiles, so
   `vainfo` lists H.264/HEVC/VP9/AV1/JPEG and `ffmpeg -hwaccel vaapi` decodes with
   it. guest-init exports `LIBVA_DRIVERS_PATH` for that driver as part of the
-  `--gpu=drm` Mesa environment. Decode is what that path provides so far: the
-  encode entrypoints `vainfo` also lists run but emit a stream nothing can
-  decode, and the reason is upstream in the vrend video path
-  (see `docs/vaapi-video-investigation.md`).
+  `--gpu=drm` Mesa environment. Encode works too: `ffmpeg -c:v h264_vaapi` and
+  `-c:v hevc_vaapi` produce streams a decoder reads, because cang carries the
+  two halves of the encode fix (the host half in its `virglrenderer`, the guest
+  half in the image's VA driver - see `docs/vaapi-video-investigation.md`). Two
+  gaps remain: an encoder-attribute query is still 0 in the guest, and the first
+  frames of a stream encode a surface that does not hold the frame yet.
 - `cang --gpu=drm --zero-copy-shm` asks the virtio-GPU device for the udmabuf
   zero-copy shared-memory fast path: a guest `wl_shm` client's pool is imported
   as a guest blob that carries a host-side handle, so the host compositor reads

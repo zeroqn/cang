@@ -1,0 +1,167 @@
+diff -ruN a/src/gallium/drivers/virgl/virgl_video.c b/src/gallium/drivers/virgl/virgl_video.c
+--- a/src/gallium/drivers/virgl/virgl_video.c	2026-10-01 16:02:58.874345856 +0800
++++ b/src/gallium/drivers/virgl/virgl_video.c	2026-10-01 16:30:25.036708144 +0800
+@@ -71,6 +71,7 @@
+ #include "util/u_video.h"
+ #include "util/u_memory.h"
+ #include "util/macros.h"
++#include "util/u_dynarray.h"
+ 
+ #include "virgl_screen.h"
+ #include "virgl_resource.h"
+@@ -192,6 +193,35 @@
+     return 0;
+ }
+ 
++/* Forward the client's packed parameter sets (SPS/PPS/VPS/SEI) and slice
++ * headers to virglrenderer. A native VA driver takes its SPS/PPS from these
++ * packed headers - radeonsi has no other source for them - so the backend has
++ * to submit them to its own VA driver for the coded buffer to come out as a
++ * decodable bitstream. */
++static void fill_enc_raw_headers(uint32_t *num_raw_headers,
++                                 struct virgl_enc_raw_header *raw_headers,
++                                 uint8_t *data,
++                                 const struct util_dynarray *headers)
++{
++    uint32_t offset = 0, count = 0;
++
++    util_dynarray_foreach(headers, struct pipe_enc_raw_header, header) {
++        if (count >= VIRGL_ENC_MAX_RAW_HEADERS ||
++            header->size > VIRGL_ENC_RAW_HEADER_DATA_SIZE - offset)
++            break;
++        raw_headers[count].type = header->type;
++        raw_headers[count].is_slice = header->is_slice;
++        raw_headers[count].offset = offset;
++        raw_headers[count].size = header->size;
++        if (header->size)
++            memcpy(data + offset, header->buffer, header->size);
++        offset += header->size;
++        count++;
++    }
++
++    *num_raw_headers = count;
++}
++
+ static int fill_h264_enc_picture_desc(const struct pipe_picture_desc *desc,
+                                       union virgl_picture_desc *vdsc)
+ {
+@@ -939,9 +969,27 @@
+     struct virgl_video_codec *vcdc = virgl_video_codec(codec);
+     struct virgl_video_buffer *vbuf = virgl_video_buffer(target);
+ 
+-    if (codec->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE)
++    if (codec->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE) {
+         fill_enc_picture_desc(picture, &vcdc->desc);
+ 
++        /* The VA client appends its packed parameter sets to the picture
++         * description after vaBeginPicture, so remember where they are and
++         * copy them when the frame is actually encoded. */
++        switch (u_reduce_video_profile(picture->profile)) {
++        case PIPE_VIDEO_FORMAT_MPEG4_AVC:
++            vcdc->enc_raw_headers =
++                &((struct pipe_h264_enc_picture_desc *)picture)->raw_headers;
++            break;
++        case PIPE_VIDEO_FORMAT_HEVC:
++            vcdc->enc_raw_headers =
++                &((struct pipe_h265_enc_picture_desc *)picture)->raw_headers;
++            break;
++        default:
++            vcdc->enc_raw_headers = NULL;
++            break;
++        }
++    }
++
+     virgl_encode_begin_frame(vcdc->vctx, vcdc, vbuf);
+ }
+ 
+@@ -1026,6 +1074,28 @@
+     struct pipe_transfer *xfer = NULL;
+     void *ptr;
+ 
++    /* Forward the client's packed parameter sets before the description goes
++     * over the wire. They are only complete now: the VA client renders them
++     * after vaBeginPicture. */
++    if (vcdc->enc_raw_headers) {
++        switch (u_reduce_video_profile(codec->profile)) {
++        case PIPE_VIDEO_FORMAT_MPEG4_AVC:
++            fill_enc_raw_headers(&vcdc->desc.h264_enc.num_raw_headers,
++                                 vcdc->desc.h264_enc.raw_headers,
++                                 vcdc->desc.h264_enc.raw_header_data,
++                                 vcdc->enc_raw_headers);
++            break;
++        case PIPE_VIDEO_FORMAT_HEVC:
++            fill_enc_raw_headers(&vcdc->desc.h265_enc.num_raw_headers,
++                                 vcdc->desc.h265_enc.raw_headers,
++                                 vcdc->desc.h265_enc.raw_header_data,
++                                 vcdc->enc_raw_headers);
++            break;
++        default:
++            break;
++        }
++    }
++
+     /* Transfer picture desc */
+     vres = virgl_resource(vcdc->desc_buffers[vcdc->cur_buffer]);
+     vs->vws->resource_wait(vs->vws, vres->hw_res);
+diff -ruN a/src/gallium/drivers/virgl/virgl_video.h b/src/gallium/drivers/virgl/virgl_video.h
+--- a/src/gallium/drivers/virgl/virgl_video.h	2026-10-01 16:30:24.874586170 +0800
++++ b/src/gallium/drivers/virgl/virgl_video.h	2026-10-01 16:30:25.033702145 +0800
+@@ -50,6 +50,11 @@
+     struct virgl_context *vctx;
+     union virgl_picture_desc desc;
+ 
++    /* Live encode picture description of the current frame, so the client's
++     * packed parameter sets (appended to it while the frame is being built) can
++     * be copied into the virgl picture description at encode time. */
++    const struct util_dynarray *enc_raw_headers;
++
+     uint32_t bs_size;                   /* size of data in bs_buffer */
+     uint32_t cur_buffer;                /* index of current bs/desc buffer */
+     struct pipe_resource *bs_buffers[VIRGL_VIDEO_CODEC_BUF_NUM];
+diff -ruN a/src/virtio/virtio-gpu/virgl_video_hw.h b/src/virtio/virtio-gpu/virgl_video_hw.h
+--- a/src/virtio/virtio-gpu/virgl_video_hw.h	2026-10-01 16:02:58.867604248 +0800
++++ b/src/virtio/virtio-gpu/virgl_video_hw.h	2026-10-01 16:08:35.621416650 +0800
+@@ -218,6 +218,21 @@
+    uint8_t  reserved[3];
+ };
+ 
++/* Raw (client-supplied) NAL/OBU headers for the encode path. The guest's VA
++ * client already hands its packed parameter sets (SPS/PPS/VPS/SEI) and slice
++ * headers to its own driver; virglrenderer forwards the bytes verbatim so the
++ * host driver can use them exactly as it would a native VA client's packed
++ * headers (which is the only source of SPS/PPS for drivers such as radeonsi). */
++#define VIRGL_ENC_MAX_RAW_HEADERS 8
++#define VIRGL_ENC_RAW_HEADER_DATA_SIZE 2048
++
++struct virgl_enc_raw_header {
++    uint32_t type;      /* nal_unit_type / obu_type */
++    uint32_t is_slice;  /* slice or frame header */
++    uint32_t offset;    /* offset into raw_header_data */
++    uint32_t size;      /* bytes at offset */
++};
++
+ struct virgl_h264_enc_picture_desc
+ {
+    struct virgl_base_picture_desc base;
+@@ -258,6 +273,10 @@
+    uint8_t  enable_vui;
+ 
+    uint32_t ltr_index;
++
++   uint32_t num_raw_headers;
++   struct virgl_enc_raw_header raw_headers[VIRGL_ENC_MAX_RAW_HEADERS];
++   uint8_t raw_header_data[VIRGL_ENC_RAW_HEADER_DATA_SIZE];
+ };
+ 
+ 
+@@ -531,6 +550,10 @@
+    uint8_t  picture_type; /* see enum pipe_h2645_enc_picture_type */
+    uint8_t  not_referenced;
+    uint8_t  reserved[2];
++
++   uint32_t num_raw_headers;
++   struct virgl_enc_raw_header raw_headers[VIRGL_ENC_MAX_RAW_HEADERS];
++   uint8_t raw_header_data[VIRGL_ENC_RAW_HEADER_DATA_SIZE];
+ };
+ 
+ struct virgl_mpeg4_picture_desc

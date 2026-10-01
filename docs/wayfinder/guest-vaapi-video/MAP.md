@@ -12,10 +12,18 @@ stream any decoder accepts - all of it through the vrend video path, with the
 wiring owned by cang, libkrun's fork and the rutabaga_gfx fork, and no user
 environment setup.
 
-**Status (2026-10-01): decode reached, encode open.** Decode was enabled by
-carrying cang's `VIRGL_RENDERER_USE_VIDEO` through the rutabaga_gfx fork and
-libkrun's fork plus a guest-init `LIBVA_DRIVERS_PATH` (ticket 01); encode runs
-and writes bytes that are not a bitstream, and where it breaks is ticket 02.
+**Status (2026-10-01): decode works, encode fixed and verified.** Decode
+was enabled by carrying cang's `VIRGL_RENDERER_USE_VIDEO` through the rutabaga_gfx
+fork and libkrun's fork plus a guest-init `LIBVA_DRIVERS_PATH` (ticket 01).
+Encode was root-caused and fixed by ticket 02: the guest's coded-buffer read-back
+is faithful, and the stream the host hands over was already broken because cang's
+vrend submitted no packed parameter sets and a zeroed H.264 sequence parameter
+buffer. cang now carries one patch per side of that wire extension (host:
+`.#virglrenderer`; guest: the image-local `cang-va-runtime` VA driver) and a
+`--gpu=drm` guest's H.264 and HEVC encodes software-decode cleanly. The encoder
+entrypoint is still advertised while every encoder-attribute query in the guest
+is 0, and the first ~5 frames of a stream still encode a surface that does not
+hold the frame.
 
 ## Notes
 
@@ -41,12 +49,15 @@ and writes bytes that are not a bitstream, and where it breaks is ticket 02.
 <!-- one line per closed ticket, gist plus link -->
 
 - [Enable the vrend VA-API video path (decode)](tickets/01-enable-vrend-video-decode.md): the request died in rutabaga, which never carried `VIRGL_RENDERER_USE_VIDEO`, so `virgl_renderer_init` never enabled vrend's video path; the fork carries the bit, libkrun forwards it with `set_use_video`, guest-init exports `LIBVA_DRIVERS_PATH`, and the guest then reports the host's profiles and decodes into VAAPI surfaces.
+- [Where the guest VA-API encode loses its bitstream](tickets/02-encode-coded-buffer-readback.md): not in the read-back - an interposed `vaMapBuffer` in the VM worker returns exactly the bytes the guest's `ffmpeg` writes. The host's own VA encode was the break: virglrenderer 1.3.0 submitted no packed parameter sets (`src/vrend/virgl_video.c:1440`) and left the H.264 sequence parameter buffer's geometry/level/flags zero (`src/vrend/virgl_video.c:1243`), over wire structs with no fields for them (`src/virgl_video_hw.h:150-171`). Fixed by the two patches described in the ticket's Resolution; verified by software-decoding a guest H.264 and HEVC encode.
 
 ## Not yet specified
 
-- Whether the encode path's caps query matters once encode produces a valid
-  bitstream at all: in the guest only, ffmpeg logs "driver does not advertise
-  encoder features" and guesses defaults for `hevc_vaapi`.
+- The ~5-frame warm-up in the host's input copy (`vrend_video.c:210/283`): the
+  first frames are still encoded from a surface that does not hold the frame now
+  that encoding itself works. Needs its own ticket.
+- Whether the encoder entrypoint should stay advertised while every
+  `PIPE_VIDEO_CAP_ENC_*` in the guest is 0 (the caps gap is item 2 of ticket 02).
 - Client-level hardware video in the guest (mpv `--hwdec=auto` picking VA-API,
   Chromium `<video>` decode) - not measured; may deserve its own map.
 

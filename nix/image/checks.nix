@@ -400,6 +400,13 @@ let
         grep -F 'pkgs.mesa' ${layersSourceFile}
         grep -F './usr/lib/cang-mesa-runtime' ${containerSourceFile}
         grep -F 'ln -s ${"$"}{pkgs.mesa} ./usr/lib/cang-mesa-runtime' ${containerSourceFile}
+        # The guest's VA-API driver has to be the patched libgallium, not the
+        # prebuilt mesa's: libva opens the drv_video.so from LIBVA_DRIVERS_PATH.
+        test -f ${layers.vaApiRuntime}/dri/virtio_gpu_drv_video.so
+        test -f ${layers.vaApiRuntime}/lib/libgallium.so
+        grep -F 'pkgs.mesaVaApi' ${layersSourceFile}
+        grep -F './usr/lib/cang-va-runtime' ${containerSourceFile}
+        grep -F 'ln -s ${"$"}{layers.vaApiRuntime} ./usr/lib/cang-va-runtime' ${containerSourceFile}
         grep -F './usr/lib/cang-software-renderer' ${containerSourceFile}
         grep -F 'ln -s ${"$"}{pkgs.mesa} ./usr/lib/cang-software-renderer' ${containerSourceFile}
         grep -F 'pkgs.fontconfig' ${layersSourceFile}

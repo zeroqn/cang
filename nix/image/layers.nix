@@ -395,6 +395,17 @@ let
     mkdir -p "$out/usr/bin"
     ln -s ${pkgs.coreutils}/bin/env "$out/usr/bin/env"
   '';
+  # The guest's VA-API driver: libva opens `virtio_gpu_drv_video.so` from
+  # LIBVA_DRIVERS_PATH, and that driver is libgallium. The image's mesa is a
+  # prebuilt binary drop with no patch able to reach it, so the guest driver
+  # comes from pkgs.mesaVaApi (nixpkgs mesa built from source with this repo's
+  # guest-side vrend encode patch) instead.
+  vaApiRuntime = pkgs.runCommand "cang-va-runtime" { } ''
+    mkdir -p "$out/lib" "$out/dri"
+    ln -s ${pkgs.mesaVaApi}/lib/libgallium-${pkgs.mesaVaApi.version}.so "$out/lib/libgallium.so"
+    ln -s ../lib/libgallium.so "$out/dri/virtio_gpu_drv_video.so"
+  '';
+
   binInterpreterCompat = pkgs.runCommand "cang-bin-interpreter-compat" { } ''
     mkdir -p "$out/bin"
     ln -s ${pkgs.bashInteractive}/bin/sh "$out/bin/sh"
@@ -417,6 +428,7 @@ let
     ++ [
       browserImageLayer
       pkgs.mesa
+      vaApiRuntime
       pkgs.fontconfig.out
       pkgs.perf
       pkgs.strace
@@ -601,6 +613,7 @@ in
 {
   inherit
     agentImageLayer
+    vaApiRuntime
     cangImageLayeringPipeline
     cangImageMaxLayers
     browserImageLayer

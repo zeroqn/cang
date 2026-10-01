@@ -1,7 +1,8 @@
 # VA-API hardware video in the cang guest — investigation log
 
 Status: **resolved**. `--gpu=drm` guests now get the host's hardware VA-API
-profiles and decode with them (verified live — see Resolution). The Blocker 1/2
+profiles, decode with them, and encode decodable H.264/HEVC (verified live — see
+Resolution). The Blocker 1/2
 narrative further down is the pre-fix history, written in the libkrun `dlopen`
 era (`dynamic.rs`, mentioned in Blocker 1, no longer exists: cang links libkrun's
 Rust API now).
@@ -37,11 +38,14 @@ The fix has three parts:
   `RutabagaBuilder::set_use_video`.
 - `zeroqn/libkrun`, branch `cang` (`2855f4d1`): pin rutabaga_gfx at that rev and
   forward cang's bit with `set_use_video`.
-- cang guest-init: export `LIBVA_DRIVERS_PATH=/usr/lib/cang-mesa-runtime/lib/dri`
+- cang guest-init: export
+  `LIBVA_DRIVERS_PATH=/usr/lib/cang-va-runtime/dri:/usr/lib/cang-mesa-runtime/lib/dri`
   for `--gpu=drm`. libva's default search paths (`/run/opengl-driver/lib/dri`,
   `/usr/lib*/dri`) do not include the mesa runtime directory, so without it
   `va_openDriver()` finds no driver and `vaInitialize` fails before any of the
-  above matters.
+  above matters. The first directory is the image's own VA driver build (see the
+  encode paragraph below); the second, the prebuilt mesa runtime, is the
+  fallback.
 
 Verified live (cang 0.11.2, libkrun v2.0.0-cang.5, libkrunfw 7.2.7-hardened1, a
 `--gpu=drm` guest on a host whose render node is a NAVI33 AMD GPU):
@@ -61,20 +65,34 @@ Verified live (cang 0.11.2, libkrun v2.0.0-cang.5, libkrunfw 7.2.7-hardened1, a
   unchanged. If the sandboxed render server fails to start, the whole backend
   falls back to 2D and the guest loses virgl, venus *and* video, so a video probe
   always proves the venus path too.
-- **Encode does not work yet.** `vainfo` advertises `VAEntrypointEncSlice` for
-  H.264/HEVC (the host's profiles), and `ffmpeg -c:v h264_vaapi`/`hevc_vaapi`
-  through `-vaapi_device` runs to completion and writes a file, but the result is
-  not a bitstream: the whole 87510-byte output of a 30-frame 640x360 encode is
-  one access unit ("missing picture in access unit with size 87510"), and both
-  software and VA-API decode of it fail. The control shows the paths around it:
-  software `libx264` in the guest decodes back fine (so the guest's VA *decoder*
-  and the container plumbing are fine), and the *host*'s identical
-  `h264_vaapi` command (the same vrend→libva encode, one nesting level up)
-  produces a stream that software-decodes cleanly. So what is broken is the
-  guest's read-back of the coded buffer through the vrend video path — an
-  upstream virglrenderer/Mesa-virtio question, not a cang flag. Decode is the
-  half of VA-API this change enables; encode needs its own investigation before
-  it is advertised to users.
+- **Encode works now.** It did not in the first cut: `vainfo` advertised
+  `VAEntrypointEncSlice` for H.264/HEVC (the host's profiles), and
+  `ffmpeg -c:v h264_vaapi`/`hevc_vaapi` through `-vaapi_device` ran to completion
+  and wrote a file, but the file was not a bitstream — the whole 87510-byte
+  output of a 30-frame 640x360 encode was one access unit ("missing picture in
+  access unit with size 87510") that no decoder accepted. The coded-buffer
+  read-back was the first suspicion and was **not** where it broke: interposing
+  `vaMapBuffer` inside the VM worker showed cang's vrend receiving exactly the
+  bytes the guest's `ffmpeg` writes. The break was one layer above: cang's vrend
+  submitted no packed parameter sets at all (the source of a stream's
+  SPS/PPS/SEI) and left the H.264 sequence parameter buffer's geometry, level and
+  `log2` fields zero, so radeonsi handed back one parameter-set-less "NAL" per
+  frame. Both halves are now fixed and carried in this repo:
+  `virglrenderer-encode-raw-headers.patch` on the host side (in `.#virglrenderer`,
+  so every cang package has it) and `mesa-virgl-encode-raw-headers.patch` on the
+  guest side, which the image builds into its own VA driver
+  (`/usr/lib/cang-va-runtime`) because the image's mesa is a prebuilt binary drop
+  no patch can reach.
+  Verified live 2026-10-01 in a `--gpu=drm` guest: a 10-frame 640x360 `testsrc`
+  encode now starts with an SPS/PPS/SEI (H.264: `00 00 00 01 67 64 0c 1e ...`,
+  `... 01 68 ...`, `... 01 06 ...`) and software-decodes with exit 0, HEVC starts
+  with a VPS/SPS/PPS (`00 00 00 01 40 01 ...`, `... 42 01 ...`) and decodes
+  cleanly too, and the guest's VA *decode* path is unaffected. Two gaps remain: no
+  `PIPE_VIDEO_CAP_ENC_*` reaches the guest (the encoder is advertised while every
+  encoder-attribute query is still 0), and frames 1-5 of a stream encode a
+  surface that does not hold the frame yet. Details and raw evidence:
+  `docs/wayfinder/guest-vaapi-video/tickets/02-encode-coded-buffer-readback.md`
+  and its `notes/02-encode-coded-buffer-evidence.md`.
 
 Two probe traps worth remembering: a guest `ffmpeg` under the managed PTY stops
 with `SIGTTOU` unless `-nostdin` is passed, which looks exactly like a hung

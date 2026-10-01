@@ -1,0 +1,217 @@
+diff -ruN a/src/virgl_video_hw.h b/src/virgl_video_hw.h
+--- a/src/virgl_video_hw.h	2026-10-01 16:02:58.856068425 +0800
++++ b/src/virgl_video_hw.h	2026-10-01 16:05:08.548757975 +0800
+@@ -218,6 +218,21 @@
+    uint8_t  reserved[3];
+ };
+ 
++/* Raw (client-supplied) NAL/OBU headers for the encode path. The guest's VA
++ * client already hands its packed parameter sets (SPS/PPS/VPS/SEI) and slice
++ * headers to its own driver; virglrenderer forwards the bytes verbatim so the
++ * host driver can use them exactly as it would a native VA client's packed
++ * headers (which is the only source of SPS/PPS for drivers such as radeonsi). */
++#define VIRGL_ENC_MAX_RAW_HEADERS 8
++#define VIRGL_ENC_RAW_HEADER_DATA_SIZE 2048
++
++struct virgl_enc_raw_header {
++   uint32_t type;      /* nal_unit_type / obu_type */
++   uint32_t is_slice;  /* slice or frame header */
++   uint32_t offset;    /* offset into raw_header_data */
++   uint32_t size;      /* bytes at offset */
++};
++
+ struct virgl_h264_enc_picture_desc
+ {
+    struct virgl_base_picture_desc base;
+@@ -258,6 +273,10 @@
+    uint8_t  enable_vui;
+ 
+    uint32_t ltr_index;
++
++   uint32_t num_raw_headers;
++   struct virgl_enc_raw_header raw_headers[VIRGL_ENC_MAX_RAW_HEADERS];
++   uint8_t raw_header_data[VIRGL_ENC_RAW_HEADER_DATA_SIZE];
+ };
+ 
+ 
+@@ -531,6 +550,10 @@
+    uint8_t  picture_type; /* see enum pipe_h2645_enc_picture_type */
+    uint8_t  not_referenced;
+    uint8_t  reserved[2];
++
++   uint32_t num_raw_headers;
++   struct virgl_enc_raw_header raw_headers[VIRGL_ENC_MAX_RAW_HEADERS];
++   uint8_t raw_header_data[VIRGL_ENC_RAW_HEADER_DATA_SIZE];
+ };
+ 
+ struct virgl_mpeg4_picture_desc
+diff -ruN a/src/vrend/virgl_video.c b/src/vrend/virgl_video.c
+--- a/src/vrend/virgl_video.c	2026-10-01 16:02:58.861868087 +0800
++++ b/src/vrend/virgl_video.c	2026-10-01 16:29:22.135243556 +0800
+@@ -1246,28 +1246,40 @@
+                             const struct virgl_h264_enc_picture_desc *desc,
+                             VAEncSequenceParameterBufferH264 *param)
+ {
+-    (void)codec;
+     (void)source;
+ 
+     //seq_parameter_set_id;
+-    param->level_idc = codec->level;
+-    //intra_period;
++    /* The wire protocol carries no level, so keep the client's when it sent one
++     * and otherwise pick a level that covers the frames this encoder accepts. */
++    param->level_idc = codec->level ? codec->level : 51;
++    param->intra_period = desc->intra_idr_period;
+     param->intra_idr_period = desc->intra_idr_period;
+-    //ip_period;
++    param->ip_period = 1;
+     //bits_per_second;
+     param->max_num_ref_frames = codec->max_references;
+-    //picture_width_in_mbs;
+-    //picture_height_in_mbs;
++    param->picture_width_in_mbs = (codec->width + 15) / 16;
++    param->picture_height_in_mbs = (codec->height + 15) / 16;
+ 
+     /* seq_fields.bits */
+-    //seq_fields.bits.chroma_format_idc
+-    //seq_fields.bits.frame_mbs_only_flag
++    /* The pipe chroma format enum matches VA's chroma_format_idc numbering for
++     * 4:0:0 / 4:2:0 / 4:2:2 / 4:4:4. */
++    switch (codec->chroma_format) {
++    case PIPE_VIDEO_CHROMA_FORMAT_400:
++    case PIPE_VIDEO_CHROMA_FORMAT_422:
++    case PIPE_VIDEO_CHROMA_FORMAT_444:
++        param->seq_fields.bits.chroma_format_idc = codec->chroma_format;
++        break;
++    default: /* 4:2:0, and 4:4:0 has no H.264 representation */
++        param->seq_fields.bits.chroma_format_idc = 1;
++        break;
++    }
++    param->seq_fields.bits.frame_mbs_only_flag = 1;
+     //seq_fields.bits.mb_adaptive_frame_field_flag
+     //seq_fields.bits.seq_scaling_matrix_present_flag
+-    //seq_fields.bits.direct_8x8_inference_flag
+-    //seq_fields.bits.log2_max_frame_num_minus4
++    param->seq_fields.bits.direct_8x8_inference_flag = 1;
++    param->seq_fields.bits.log2_max_frame_num_minus4 = 4;
+     ITEM_SET(&param->seq_fields.bits, &desc->seq, pic_order_cnt_type);
+-    //seq_fields.bit.log2_max_pic_order_cnt_lsb_minus4
++    param->seq_fields.bits.log2_max_pic_order_cnt_lsb_minus4 = 4;
+     //seq_fields.bit.delta_pic_order_always_zero_flag
+ 
+     //bit_depth_luma_minus8;
+@@ -1566,6 +1578,94 @@
+     return 0;
+ }
+ 
++/* Map a raw header's NAL unit type onto the packed header type the VA driver
++ * expects. Mesa's VA frontend re-derives the NAL type from the bytes, so this
++ * is only there to keep the buffers a native client would have submitted. */
++static VAEncPackedHeaderType enc_raw_header_va_type(uint32_t type, bool hevc)
++{
++   if (hevc) {
++      switch (type) {
++      case 32: /* VPS */
++      case 33: /* SPS */
++         return VAEncPackedHeaderSequence;
++      case 34: /* PPS */
++         return VAEncPackedHeaderPicture;
++      default:
++         return VAEncPackedHeaderRawData;
++      }
++   }
++
++   switch (type) {
++   case 7: /* SPS */
++      return VAEncPackedHeaderSequence;
++   case 8: /* PPS */
++      return VAEncPackedHeaderPicture;
++   case 1:  /* non-IDR slice */
++   case 5:  /* IDR slice */
++      return VAEncPackedHeaderSlice;
++   default:
++      return VAEncPackedHeaderRawData;
++   }
++}
++
++/* Forward the client's parameter sets (SPS/PPS/VPS/SEI) and slice headers to
++ * the VA driver as packed header buffers. The host driver writes the SPS/PPS
++ * itself from the parsed parameter sets (radeonsi has no other source for
++ * them), so without this the coded buffer holds slice data with no picture
++ * headers around it. */
++static int enc_render_raw_headers(struct virgl_video_codec *codec,
++                                  uint32_t num_raw_headers,
++                                  const struct virgl_enc_raw_header *raw_headers,
++                                  const uint8_t *data,
++                                  bool hevc)
++{
++   virgl_debug("encode raw headers: %u\n", num_raw_headers);
++
++   for (uint32_t i = 0; i < num_raw_headers; i++) {
++      const struct virgl_enc_raw_header *header = &raw_headers[i];
++      VAEncPackedHeaderParameterBuffer param;
++      VABufferID param_buf, data_buf;
++      VAStatus va_stat;
++
++      /* The guest is expected to be the matching build, but a stale tail in a
++       * short descriptor must not become a bogus packed header: only accept
++       * entries that are in range and start with a NAL start code. */
++      if (header->size < 4 ||
++          header->offset > VIRGL_ENC_RAW_HEADER_DATA_SIZE ||
++          header->size > VIRGL_ENC_RAW_HEADER_DATA_SIZE - header->offset)
++         continue;
++      if (!((data[header->offset] == 0x00 && data[header->offset + 1] == 0x00 &&
++             data[header->offset + 2] == 0x01) ||
++            (header->size >= 5 &&
++             data[header->offset + 1] == 0x00 && data[header->offset + 2] == 0x00 &&
++             data[header->offset + 3] == 0x01)))
++         continue;
++
++      memset(&param, 0, sizeof(param));
++      param.type = enc_raw_header_va_type(header->type, hevc);
++      param.bit_length = header->size * 8;
++      param.has_emulation_bytes = 1;
++
++      vaCreateBuffer(va_dpy, codec->va_ctx, VAEncPackedHeaderParameterBufferType,
++                     sizeof(param), 1, &param, &param_buf);
++      vaCreateBuffer(va_dpy, codec->va_ctx, VAEncPackedHeaderDataBufferType,
++                     header->size, 1, (void *)&data[header->offset], &data_buf);
++
++      va_stat = vaRenderPicture(va_dpy, codec->va_ctx, &param_buf, 1);
++      if (VA_STATUS_SUCCESS == va_stat)
++         va_stat = vaRenderPicture(va_dpy, codec->va_ctx, &data_buf, 1);
++      vaDestroyBuffer(va_dpy, param_buf);
++      vaDestroyBuffer(va_dpy, data_buf);
++
++      if (VA_STATUS_SUCCESS != va_stat) {
++         virgl_error("render encode raw header failed, err = 0x%x\n", va_stat);
++         return -1;
++      }
++   }
++
++   return 0;
++}
++
+ static int h264_encode_bitstream(
+                             struct virgl_video_codec *codec,
+                             struct virgl_video_buffer *source,
+@@ -1576,6 +1676,9 @@
+     }
+ 
+     h264_encode_render_picture(codec, source, desc);
++    if (desc->num_raw_headers && desc->num_raw_headers <= VIRGL_ENC_MAX_RAW_HEADERS)
++        enc_render_raw_headers(codec, desc->num_raw_headers, desc->raw_headers,
++                               desc->raw_header_data, false);
+     h264_encode_render_slice(codec, source, desc);
+ 
+     return 0;
+@@ -2280,6 +2383,9 @@
+     }
+ 
+     h265_encode_render_picture(codec, source, desc);
++    if (desc->num_raw_headers && desc->num_raw_headers <= VIRGL_ENC_MAX_RAW_HEADERS)
++        enc_render_raw_headers(codec, desc->num_raw_headers, desc->raw_headers,
++                               desc->raw_header_data, true);
+     h265_encode_render_slice(codec, source, desc);
+ 
+     return 0;
