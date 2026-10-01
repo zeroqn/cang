@@ -562,3 +562,27 @@ handle lookups it performs before reaching `virgl_video_encode_bitstream`.
 Next (small): markers at the entry and each early return of
 `vrend_video_encode_bitstream`, printing the handles it was given and the lookup
 results, with the upload-path marker as a live control in the same build.
+
+## Where the host's own error messages went
+
+Before adding more markers, one channel question matters. cang's per-VM task logs
+(`<state-root>/cang/workspace/tasks/<task>/helper.stdout.log`) do capture the guest's
+console and libva messages - the old ones contain
+`libva info: Trying to open /run/opengl-driver/lib/dri/virtio_gpu_drv_video.so` plus
+`krun_devices::virtio::fs` lookups - which would make vrend's own `virgl_error`
+output (e.g. `%s: feedback res %d not found` in `vrend_video_encode_bitstream`,
+`profiles not matched` in `virgl_video_encode_bitstream`) readable for free.
+
+My probe runner does not produce those directories: nothing under the state root has
+been written in the last three hours, so the probes run without cang's task-log
+capture and the host's messages are not collected anywhere I have looked. Either the
+next probe should go through the same managed path the harness uses (to inherit those
+logs), or the markers have to stay in-library.
+
+The next marker is decided either way: `vrend_video_encode_bitstream`
+(`src/vrend/vrend_video.c:801-844`) has four early returns - codec/buffer lookup,
+`feed_res`, `desc_res`, `dest_res` - each printing a `virgl_error`, and only the last
+line reaches `virgl_video_encode_bitstream`. Marking its entry and each return (with
+the handle values and lookup results) names the line that drops the guest's encode,
+with a correctly placed upload-path marker (`sync_video_buffer_to_dmabuf`, not the
+decode twin that my anchor matched last time) as a live control in the same build.
