@@ -215,3 +215,39 @@ Next: a `virgl_debug` print of the fields vrend fills into
 `VAEncPictureParameterBufferH264`/`VAEncSliceParameterBufferH264` in
 `h264_encode_bitstream`, read through `VIRGL_LOG_FILE`, diffed against the native
 trace above.
+
+## Instrumenting vrend's VA submission: what the dump can and cannot read
+
+The dump has to live in vrend's own code and be read through `VIRGL_LOG_FILE`
+(libva's tracer never reaches the render server). Two attempts to build it failed
+to compile, and the errors are themselves informative about the wire structs:
+
+- `virgl_h264_enc_picture_desc` has **no** `num_ref_frames` and **no** `pps`
+  member.
+- Its `seq` member, `virgl_h264_enc_seq_param`, carries only
+  `enc_constraint_set_flags`, the four cropping offsets, `pic_order_cnt_type`,
+  `num_temporal_layers` and the VUI fields - **no geometry and no
+  `chroma_format_idc`**, which is exactly what ticket 02 found when it had to
+  fill those from the codec instead.
+
+So a working dump reads the picture side from the desc's own fields
+(`quant_i_frames`/`quant_p_frames`/`quant_b_frames`, `frame_num`,
+`pic_order_cnt`, `picture_type`, `not_referenced`,
+`num_ref_idx_l0_active_minus1`/`_l1_`, `num_slice_descriptors`) and the sequence
+side from the **codec** (`codec->width`/`height`/`chroma_format`/`level`/
+`max_references` - the same values the host patch writes into the VA sequence
+buffer), then it has to drop the `(void)codec` line.
+
+Reading the fill code for the dump turned up four things worth checking once the
+dump is in place, in the order they would explain a chroma-specific loss:
+
+- `param->CurrPic.picture_id = get_enc_ref_pic(codec, desc->frame_num)` while
+  `source` is ignored outright (`(void)source`) - the encoder is told the picture
+  is a *reference-list* surface, not the surface the upload wrote into;
+- only the *last* entry of `desc->slices_descriptors` becomes a VA slice, so a
+  frame the client slices into several pieces is encoded as one;
+- `transform_8x8_mode_flag` is left 0 while the native client sets it
+  (`pic_fields = 0x10b`), and `deblocking_filter_control_present_flag` likewise;
+- `chroma_qp_index_offset`, `second_chroma_qp_index_offset`, `pic_order_cnt_lsb`
+  and `frame_num` are deliberately left 0 (both parameter structures *are*
+  `memset` first, so they are zeros rather than stack garbage).
