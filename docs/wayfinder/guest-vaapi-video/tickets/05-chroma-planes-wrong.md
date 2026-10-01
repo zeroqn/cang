@@ -488,3 +488,37 @@ and the `VIRGL_CCMD_*` ids it emits for the video commands) and whatever rutabag
 libkrun does with them. The next marker belongs there, on the guest side where the
 output is easy to read, together with the corresponding host-side CCMD dispatch in
 `vrend_decode.c` (which the earlier plan already called for).
+
+## Video CCMDs at the host dispatch: nothing (with a caveat)
+
+The dispatch site in `src/vrend/vrend_decode.c:2098`
+(`ret = decode_table[cmd](gdctx->grctx, buf, len);`) got a sink that prints every
+video CCMD it dispatches - all eight of `CREATE_VIDEO_CODEC`, `DESTROY_VIDEO_CODEC`,
+`CREATE_VIDEO_BUFFER`, `DESTROY_VIDEO_BUFFER`, `BEGIN_FRAME`, `DECODE_BITSTREAM`,
+`ENCODE_BITSTREAM`, `END_FRAME` - through the three-sink writer
+(`stderr` + `/tmp/vrendcmds.log` + `/dev/shm/vrendcmds.log`), and the build's library
+was confirmed to carry it. A guest encode with that build produced nothing:
+
+```
+encode exit=0 size=1006
+/dev/shm/vrendcmds.log: No such file or directory
+/tmp/vrendcmds.log:     No such file or directory
+console: 0 VIDEOCMD lines
+```
+
+Read one way, the guest's `VIRGL_CCMD_ENCODE_BITSTREAM` never reaches vrend's
+dispatch. Read the other, the host-side sink is simply not writable from whichever
+process dispatches - which is *not* excluded, because the only host-side write that
+has ever been observed worked from a function in `vrend_video.c`
+(`sync_video_buffer_to_dmabuf`) while every marker in `virgl_video.c` and
+`vrend_decode.c` has been silent, and the guest-side channel (where `GUESTMARK`
+writes to stderr on every frame) is the only one proved reliable.
+
+The discriminating measurement is therefore on the **guest** side, at the
+flush/submit boundary (`virgl_context_flush` -> `vs->vws->submit_cmd` in mesa's
+virgl driver), with two markers: one for a CCMD known to work from earlier evidence
+(`BEGIN_FRAME`, whose handler's callee wrote the one host-side file ever seen) and
+one for `ENCODE_BITSTREAM`. If both are flushed but only `BEGIN_FRAME` reaches the
+host, the encode command is lost between the guest's virtio-gpu submit and cang's
+vrend (rutabaga/libkrun), which is where cang can act; if `ENCODE_BITSTREAM` is
+never flushed at all, the loss is in mesa's own virgl context.
