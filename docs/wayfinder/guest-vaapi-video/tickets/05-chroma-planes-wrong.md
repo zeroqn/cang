@@ -130,3 +130,29 @@ texture whose real layout is the VA surface's (pitch 512, chroma offset 131072).
 Next: dump the whole destination plane (per-row modes) in the same debug build to
 see *which* rows are stale, which decides between the copy's extent and the
 driver's view of the imported texture.
+
+## Instrumentation snag (2026-10-01)
+
+The debug read-back that produced the row-0 dump and the per-row variant of the
+same code behave differently in ways the code cannot explain, and it matters for
+the next attempt:
+
+- The first debug build (`cang-dbg`, virglrenderer `5f4wbv...`) wrote its lines to
+  `/dev/shm/chroma-debug.log` on every frame.
+- Three rebuilt variants (including one that writes a *unique* file name and
+  `fprintf(stderr, ...)` at the top of the block) executed no debug code at all:
+  no file, no stderr marker in the console log, while the guest's encode still ran
+  and the stream is the same size.
+- Each build's `libexec/cang-helpers/virgl_render_server` symlink points at its own
+  `virglrenderer` store path, and the per-row format string is present in the
+  later build's `lib/libvirglrenderer.so.1`.
+
+So the process that runs vrend's video path in a given run is not simply "the
+virglrenderer this cang was built with", and the first instrumented build is not
+proof of where the bytes went. Before trusting any further read-back, find the
+process: instrument a place that cannot move (the guest-visible side of the wire,
+or cang's own video glue rather than vrend), or log through cang's logger and a
+path that both namespaces share. Also note `/dev/shm/chroma-debug.log` is owned by
+the VM's mapped uid in a sticky directory, so a host-side `rm` silently fails and
+an old file can be mistaken for fresh output - which is how the first null reading
+of the per-row dump happened.
