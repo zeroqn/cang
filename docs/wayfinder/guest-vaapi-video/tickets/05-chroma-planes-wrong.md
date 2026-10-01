@@ -378,3 +378,42 @@ Next measurement (one run, no new code): during a guest encode, print for *every
 process in the tree `/proc/PID/maps` filtered for `virglrenderer|libkrun`, plus
 whether `/proc/PID/root/dev/shm/h264params.log` exists in *its* view - that
 distinguishes (1) from (2) directly.
+
+## The host does not hand the encoded bitstream over either
+
+The marked build was extended with a marker in
+`vrend_video_encode_completed` (`src/vrend/vrend_video.c`) - the function that
+copies the encoder's per-frame `coded_bufs`/`coded_sizes` into the guest's buffer
+and sends the `virgl_video_encode_feedback` - plus the existing parameter and
+entry-point markers (verified present in the loaded library:
+`ENCBITSTREAM`/`NEWCODEC`/`PIC fn_h264` all `grep`-hit in
+`b3zwksrhz1i1b2ilq3v5ib2pp56dd57c-virglrenderer-1.3.0`, which the run's processes do
+map). Result, with the guest's encode succeeding (`encode exit=0 size=1006`):
+
+```
+/dev/shm/vrendenc.log:  No such file or directory
+/dev/shm/vrendmark.log: No such file or directory
+```
+
+`/dev/shm` *is* writable for the process that owns the video path - the render
+server's environment already writes there (`MESA_SHADER_CACHE_DIR=/dev/shm/mesa-cache`)
+- so this is not a denied write: **the host's vrend does not encode this stream**.
+Combined with the A/B on the guest's driver (patched driver -> client's SPS and a
+decodable stream; prebuilt driver -> the parameter-set-less stream), the picture is
+now: the *guest-side* driver decides the outcome, the *vrend* video code (create
+codec, encode dispatch, parameter filling, encode completion) never runs, and the
+upload path is the only marked host code that has ever written a file.
+
+The next measurement therefore has to be on the **guest** side, where a marker is
+cheap and its output lands in the shared workspace: instrument the guest's
+`virgl_video_encode_bitstream`/`fill_h264_enc_*` (cang's `mesaVaApi` build) and see
+whether the guest's VA client takes the virgl VA path at all, or whether its
+`virtio_gpu_drv_video.so` reaches the host through the DRM native context / venus
+route instead (which would explain host-grade luma, the chroma damage, and the
+absence of every vrend marker).
+
+Incidental, not part of this ticket: one `nix build .#cang` in this round failed on
+`guest_init::components::podman::service::tests::rootless_info_verification_times_out_and_reaps_child`
+(`assertion failed: err.to_string().contains("timed out")`) and passed on an
+immediate retry - a load-sensitive test, worth knowing about when the machine is
+busy with builds.
