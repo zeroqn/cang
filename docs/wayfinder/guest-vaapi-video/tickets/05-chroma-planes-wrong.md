@@ -692,3 +692,55 @@ whether the command reaches the renderer at all before any vrend code.
 Also worth checking there, cheaply: whether the *decode* path's CCMDs do arrive (the
 decoder demonstrably works), which would show the transport carrying video commands
 in general and the encode ones being dropped specifically.
+
+## The encode lands on a context that is not vrend's
+
+Two markers at the renderer's own layers, each verified in the built library, settle
+the previous section's question and reverse its conclusion.
+
+**The commands do arrive.** A marker at the top of `virgl_renderer_submit_cmd`
+(`src/virglrenderer.c`, the renderer's front door, running in the VM worker where the
+sink is known to work) logs every submit that contains a video CCMD:
+
+```
+RECV ctx=1 ndw=1056 video=2 ids=53 55      <- the guest's encode
+RECV ctx=1 ndw=1044 video=4 ids=56 57 60 61
+RECV ctx=1 ndw=1038 video=3 ids=57 60 61
+RECV ctx=1 ndw=1038 video=3 ids=57 60 61
+RECV ctx=1 ndw=1074 video=5 ids=54 56 56 56 56
+RECV ctx=2 ndw=1039 video=2 ids=53 57       <- the VA decode
+RECV ctx=2 ndw=1035 video=2 ids=59 61
+```
+
+So the transport is *not* losing anything, and the guest's `VIRGL_CCMD_ENCODE_BITSTREAM`
+(60) really does reach the renderer.
+
+**But it never reaches vrend.** A marker at the top of
+`vrend_decode_ctx_submit_cmd` (`src/vrend/vrend_decode.c:2049`, the submit callback
+vrend installs on its own contexts, `ctx->submit_cmd` at 2152) logs only the *decode*
+context:
+
+```
+SUB ctx=2 ndw=1139 video=1 ids=55
+SUB ctx=2 ndw=1038 video=2 ids=53 57
+SUB ctx=2 ndw=1035 video=2 ids=59 61
+SUB ctx=2 ndw=1055 video=1 ids=55
+SUB ctx=2 ndw=1029 video=1 ids=57
+SUB ctx=2 ndw=1035 video=2 ids=59 61
+   ... and 247 more, all ctx=2
+```
+
+Every encode submit in the same run is `ctx=1`, and **no `ctx=1` buffer ever reaches
+vrend's decode context**. Combined with the guest-side evidence (the guest's marker is
+in mesa's *virgl* VA driver, so the guest is submitting virgl CCMDs) the reading is
+that the guest's encode traffic is sent on a host context that is **not backed by
+vrend** - `--gpu=drm` gives the guest more than one context kind (vrend for GL/virgl,
+venus for Vulkan), and the context the VA encoder used is the non-vrend one, whose
+submit drops or ignores the video CCMDs. The decode path, on ctx 2, is vrend's and
+works.
+
+That makes the defect **cang's context wiring**, not virglrenderer's parameters and
+not the transport: the next step is to read cang's context-creation policy (which
+guest context becomes a vrend context versus a venus one, and what the guest's
+encoder requests) and to check the guest side for which screen/context mesa's VA
+driver picks for an encode versus a decode.
