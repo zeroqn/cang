@@ -664,3 +664,31 @@ rather than an upstream one, so the next measurements are about that layer:
    vrend but has no handler produces `failed to dispatch %s: -22` from
    `vrend_decode_block`, which is exactly the message that would settle this in one
    run without any patch.
+
+## Why the host-side markers were silent, and which ones to trust
+
+A `VIREND_DEBUG`/`VIRGL_LOG_FILE` run (unpatched cang, `VREND_DEBUG=cmd`, the log
+pointed at both the shared workspace and `/dev/shm`) produced no log file at all,
+which fits the rest of the picture: every host-side marker placed in **cang's render
+server** has been silent, while the one host-side marker that ever wrote a file
+(`/dev/shm/chroma-debug.log`) came from the **VM worker** (uid 165536, whose
+`/dev/shm` is the host's - the per-row dump). The render server's own `/dev/shm` is
+not the host's, so a marker there can vanish without the code being skipped.
+
+The measurements that therefore still stand:
+
+- the **guest** flushes the whole video command set (53/55/56/57/60/61) to
+  virtio-gpu, on one virgl context;
+- the **VM worker** (the process whose `/dev/shm` is the host's, and where a sink is
+  known to work) dispatched no video CCMD in the dispatch-site run, and no encode
+  entry point in the brace-counted run - while the guest's encoder completed.
+
+So the loss is between the guest's virtio-gpu submit and vrend's video context, i.e.
+in the transport cang owns (libkrun's virtio-gpu device / rutabaga / the context and
+capability setup), and the next marker belongs at that layer's entry -
+`virgl_renderer_submit_cmd`, which runs in the worker where the sink works - to see
+whether the command reaches the renderer at all before any vrend code.
+
+Also worth checking there, cheaply: whether the *decode* path's CCMDs do arrive (the
+decoder demonstrably works), which would show the transport carrying video commands
+in general and the encode ones being dropped specifically.
