@@ -586,3 +586,38 @@ line reaches `virgl_video_encode_bitstream`. Marking its entry and each return (
 the handle values and lookup results) names the line that drops the guest's encode,
 with a correctly placed upload-path marker (`sync_video_buffer_to_dmabuf`, not the
 decode twin that my anchor matched last time) as a live control in the same build.
+
+## Correctly placed markers: the host's encode handler is never entered
+
+`vrend_video_encode_bitstream` was marked by *brace-counting* from its signature (not
+by an anchor guess), so the placements are verified: an entry marker after the two
+handle lookups, one inside each of the three `virgl_error` branches, and one directly
+before the call into `virgl_video_encode_bitstream`. The upload tail
+(`sync_video_buffer_to_dmabuf`, the twin that has written a file before - verified at
+line 269, immediately before its `return 0;`) was marked as a live control, and so was
+`vrend_video_create_codec`. A guest encode with that build:
+
+```
+encode exit=0 size=1006
+/dev/shm/ctl-upload.log:  MISSING
+/dev/shm/ctl-codec.log:   MISSING
+/dev/shm/ctl-encode.log:  MISSING
+```
+
+So in this run **no host video entry point executed at all** - not even the upload
+callback - while the guest's encoder ran to completion. Two readings, and the second
+now becomes the working hypothesis:
+
+- the video CCMDs (`CREATE_VIDEO_CODEC`, `CREATE_VIDEO_BUFFER`, `BEGIN_FRAME`,
+  `ENCODE_BITSTREAM`, `END_FRAME`) are lost between the guest's virtio-gpu submit and
+  vrend's video context;
+- and since the *decode* path demonstrably works end to end on the same transport
+  (ticket 01), the loss is not the transport as such but something that distinguishes
+  the encode path from the decode path - the most likely candidate being **which
+  virgl context the guest submits them to**.
+
+That is directly testable and cheap: print `ctx`/context id and the codec handle in
+the guest's marker (the guest side is the reliable channel) and the context id at the
+host's dispatch, then compare with the context that carries the working decode. If the
+encode lands on a context cang never wires to a video context, the fix belongs in
+cang's render-server/context setup, not in virglrenderer's parameter code.
