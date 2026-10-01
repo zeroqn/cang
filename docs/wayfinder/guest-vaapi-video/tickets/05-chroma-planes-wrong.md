@@ -417,3 +417,37 @@ Incidental, not part of this ticket: one `nix build .#cang` in this round failed
 (`assertion failed: err.to_string().contains("timed out")`) and passed on an
 immediate retry - a load-sensitive test, worth knowing about when the machine is
 busy with builds.
+
+## Correction: the guest *does* take the virgl VA path
+
+A marker placed on the **guest** side - in mesa's own
+`virgl_video_encode_bitstream` (`src/gallium/drivers/virgl/virgl_video.c:1016`,
+the function that copies the picture description onto the virgl wire and calls
+`virgl_encode_encode_bitstream`), written to stderr and shipped to the guest as a
+per-run driver directory in the shared workspace (`mesa-gm/dri`, the same
+mechanism the earlier driver A/B used) - **fires immediately**:
+
+```
+GUESTMARK encbitstream profile=11 picture_type=3 fnum=0 qp_i=26 qp_p=0 qp_b=0 ndesc=1 idr_period=120 chroma=2 w=320 h=240
+GUESTMARK encbitstream profile=11 picture_type=0 fnum=1 qp_i=26 qp_p=26 qp_b=0 ndesc=1 idr_period=120 chroma=2 w=320 h=240
+```
+
+(profile 11 = `PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH`, picture type 3 = IDR,
+chroma 2 = 4:2:0, one slice descriptor.) The same probe with the image's
+`cang-va-runtime` driver logs no marker, as expected.
+
+So the guest's VA client goes through mesa's **virgl** VA path and puts the encode
+on the virgl wire - not through a DRM native context or a venus route - which
+means the host's vrend *must* handle it. That reverses the previous section's
+conclusion: the silent host markers are an **instrumentation** problem, not
+evidence that the host does not encode. The independent evidence agrees: the
+image's driver produces a stream carrying the *client's* SPS bytes, and nothing but
+the host's raw-header submission (ticket 02's host patch) can put those into the
+encoded stream.
+
+What remains is to find a sink that works from the host's render-server process (the
+same `fprintf(stderr, ...)` that works in the guest, plus `/tmp` and `/dev/shm`
+variants, in one build), then read the parameter fields and diff them against the
+native trace. The earlier `/dev/shm`-only marker in `virgl_video.c` was written by a
+process that either is not the one encoding or cannot write there - which of the two
+is settled by the three-sink build.
