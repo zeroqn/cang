@@ -335,3 +335,46 @@ The next candidates, in order:
    directly and never touch vrend;
 3. `vrend_decode.c`'s CCMD dispatch, to see which video CCMDs are even handled in
    this build (a marker per case, rather than per function).
+
+## The guest-side driver decides the stream, and the encoder process is found
+
+Two measurements from this round, both reproducible.
+
+**A/B on `LIBVA_DRIVERS_PATH` inside one guest** (same command, 10 frames, CQP 26,
+`-bf 0`):
+
+| driver dir | size | first bytes | decode |
+| --- | --- | --- | --- |
+| `/usr/lib/cang-va-runtime/dri` (image's patched driver) | 31 666 | `00 00 00 01 67 64 0c 1e ...` (SPS) | exit 0 |
+| `/usr/lib/cang-mesa-runtime/lib/dri` (prebuilt driver) | 31 468 | `00 00 00 01 00 88 80 4f ...` (no SPS) | exit 69, "Format h264 detected only with low score" |
+
+So the guest-side half of the ticket-02 fix is what makes the stream carry the
+client's parameter sets; with the unpatched driver the same command still produces
+the parameter-set-less stream this ticket started from.
+
+**The process that holds the GL/VA driver during a guest encode** (sampling
+`/proc/*/maps` every 2 s through a run):
+
+```
+t=2..12 pid=497066 uid=165536 comm=cang libs=libgallium-26.1.8.so libLLVM.so.21.1
+    /dev/shm: chroma-dbg2.log chroma-debug.log libpod_rootless_lock_1000 ... va-codedbuf
+```
+
+i.e. a `cang` process inside the user namespace (uid 165536), with the *same*
+`/dev/shm` the host sees - not the uid-1000 render server, and not a private mount.
+That is exactly the combination under which the dump should have written its file,
+so the "no dump" result above and this measurement together mean the *encode-time*
+video code being executed is not the one reached by the marker I placed; two
+explanations remain, and they are testable in one run:
+
+1. the video path runs in the render server's *sandboxed* child and its `/dev/shm`
+   write is denied by the sandbox (my code ignores `fopen` failure - a bad habit
+   here), in which case the dump has to go through a channel the sandbox allows;
+2. a second copy of the video code is being executed - the candidate is
+   `libkrun.so` (whose closure includes `virglrenderer`, and whose own
+   `virglrenderer` would carry the video code without my marker).
+
+Next measurement (one run, no new code): during a guest encode, print for *every*
+process in the tree `/proc/PID/maps` filtered for `virglrenderer|libkrun`, plus
+whether `/proc/PID/root/dev/shm/h264params.log` exists in *its* view - that
+distinguishes (1) from (2) directly.
