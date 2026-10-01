@@ -451,3 +451,40 @@ variants, in one build), then read the parameter fields and diff them against th
 native trace. The earlier `/dev/shm`-only marker in `virgl_video.c` was written by a
 process that either is not the one encoding or cannot write there - which of the two
 is settled by the three-sink build.
+
+## The guest enters the virgl encode path and the host still runs no video code
+
+A three-sink marker build (a `vrendmark()` helper writing to `stderr`, `/tmp` and
+`/dev/shm`, used in `h264_fill_enc_picture_param`, `virgl_video_create_codec`,
+`virgl_video_encode_bitstream` and `vrend_video_encode_completed`) was run with a
+sampler that, for every process mapping any virglrenderer, records the library path,
+whether *that file* contains the marker strings, and whether the marker file exists
+in that process's **own** `/dev/shm` and `/tmp`:
+
+```
+t=10 pid=981676 uid=1000   comm=virgl_render_se lib=.../0gwv0i09...-virglrenderer-1.3.0 marked=1 ownshm=0 owntmp=0
+t=10 pid=981377 uid=1000   comm=cang            lib=.../0gwv0i09...-virglrenderer-1.3.0 marked=1 ownshm=0 owntmp=0
+t=10 pid=981690 uid=165536 comm=cang            lib=.../0gwv0i09...-virglrenderer-1.3.0 marked=1 ownshm=0 owntmp=0
+   (three more uid-165536 cang workers, same library, same zeros)
+```
+
+with the guest's encode succeeding, the host sinks empty, and no marker in the
+console log. So the library that runs *is* the marked one (`marked=1`), no process
+has a private copy of the sink, and no host video hook executes.
+
+Together with the guest-side marker, the chain is now:
+
+- the **guest** enters mesa's `virgl_video_encode_bitstream` on every frame
+  (`GUESTMARK ... profile=11 picture_type=3 ...`) - the marker sits at the *top* of
+  that function, so what it proves is that the guest's VA client *chooses* the virgl
+  VA path, not that the command reaches the host;
+- the **host** runs none of the code that would consume such a command.
+
+So the encode command (or the codec creation before it) is being lost or rejected
+between the guest's virgl context and cang's vrend, while the guest still receives a
+plausible stream carrying the client's SPS - which means the last unexamined link is
+the **guest-side submission itself**: mesa's virgl context (`virgl_encode_send_cmd`
+and the `VIRGL_CCMD_*` ids it emits for the video commands) and whatever rutabaga /
+libkrun does with them. The next marker belongs there, on the guest side where the
+output is easy to read, together with the corresponding host-side CCMD dispatch in
+`vrend_decode.c` (which the earlier plan already called for).
