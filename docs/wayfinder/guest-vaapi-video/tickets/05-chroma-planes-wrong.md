@@ -1416,3 +1416,45 @@ named candidates for the fix - give each plane its own geometry in
 surface's own layout explicit (`VASurfaceAttribExternalBuffers`). The next session should
 pick one, patch it, and use the size sweep (chroma PSNR 42-49 dB is the host's number) as
 the acceptance test.
+
+## The `vaDeriveImage` view is not the encoder's layout (tested twice, second time cleanly)
+
+The offset override was retried with the earlier patch's bugs removed - `vaDeriveImage`'s
+result used only when the call succeeded, `vaDestroyImage` only then, and the override
+applied **only to the write path** (the encoder's upload, `VIRGL_VIDEO_DMABUF_WRITE_ONLY`)
+rather than to every export - and the size sweep still fails:
+
+| size | luma PSNR | chroma PSNR |
+| --- | --- | --- |
+| 176x144 | **16.8** (was 44.4) | 5.4 / 5.6 |
+| 320x240 | 44.1 | 6.0 / 6.2 |
+| 640x480 | **22.7** (was 49.8) | 6.3 / 6.4 |
+
+So `vaDeriveImage`'s offsets are **not** the layout the encoder reads: making the write
+follow them damages the luma too, which the exported layout does not. That closes the
+offset line of attack (two attempts, the second without the first's bugs) and, more
+importantly, **weakens the previous section's "key finding"**: the 122880-versus-131072
+disagreement is a property of two *different views of the surface*, not evidence about
+which one the encoder uses. The one thing both attempts agree on is that the export's
+geometry is the one GL and the encoder share for plane 0, and that changing plane 1's
+description without changing the encoder's is worse than leaving it.
+
+**Where this leaves the ticket.** The chroma is still destroyed with the signatures
+recorded (half the source's horizontal period, a blocky compressed vertical ramp, zeroed
+row tails, luma bit-identical), and four fix candidates have now been tested and refuted:
+passing the plane modifiers, per-plane formats/geometry, the export-offset override (twice),
+and the `vaDeriveImage` layout. Every measurement so far has been made *inside* cang's
+process tree with 10-minute Nix builds between iterations, which is the wrong loop for this
+last question.
+
+Next session, one step, deliberately outside that loop: a **minimal host-side reproducer**
+- a small C program that does exactly what vrend does (driver-allocated NV12 surface,
+`vaExportSurfaceHandle` with `SEPARATE_LAYERS|WRITE_ONLY`, `eglCreateImage` with
+`EGL_DMA_BUF_PLANE0_FD/OFFSET/PITCH_EXT` for each plane, a GL blit of a known pattern into
+each plane texture, then `vaBeginPicture`/sequence/picture/slice/`vaEndPicture`/
+`vaSyncSurface`/`vaMapBuffer(coded)`) and decodes its own output. If the chroma damage
+reproduces there, the defect is in vrend's pattern and iterations drop from ten minutes to
+seconds, with the acceptance test being the same PSNR comparison; if it does not reproduce,
+cang's configuration (the render server, the wayland/venus environment, the sandbox) is
+implicated and the same program can be run under cang's render-server environment to find
+what differs.
