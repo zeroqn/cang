@@ -262,9 +262,27 @@ for any client that imports decoded frames into a GPU surface.
 
 One open question this leaves: with GBM fixed, chromium's `vaapi_wrapper.cc` `GetHandle()`
 failure line **disappeared** (0 vaapi lines in the run, where every earlier run had exactly
-one), but that is the absence of a failure, not proof of hardware decode - the next run
-repeats this configuration with `--vmodule=vaapi_video_decoder=3,vaapi_wrapper=3` and a
-CPU-time contrast to get a positive signal.
+one), but that is the absence of a failure, not proof of hardware decode.
+
+That follow-up run (GBM fixed, dmabufs on, `--vmodule=vaapi_video_decoder=3,vaapi_wrapper=3`,
+features on vs off) gives a *partial* positive signal and a clear negative one:
+
+```
+hw rc=124 cpu_ticks=474  frames=556 dropped=9   VaapiVideoDecoder():            (constructed)
+sw rc=124 cpu_ticks=347  frames=574 dropped=8   VaapiVideoDecoder(): / ~VaapiVideoDecoder():  (built, then destroyed)
+```
+
+- the VA-API decoder is now **constructed** in the features-on arm (before this fix the run
+  never got that far), and in the features-off arm it is built and immediately destroyed;
+- but the **CPU cost is not lower** with the feature on (474 vs 347 ticks for the same 46 s of
+  1080p30, i.e. slightly higher), so the decode is not actually being offloaded yet, and no
+  `VaapiVideoDecoder::Initialize` success line appears.
+
+So: presentation is now GPU-backed (dmabufs over Waypipe) and chromium's VA-API decoder is at
+least instantiated; the remaining gap is the decoder's own initialisation. With GBM in place
+the interop precondition is met, so this is the right point to re-test with a client that
+states its choice outright (`mpv --hwdec=vaapi`, which needs the image-layer decision) or to
+instrument chromium's VA-API initialisation path directly.
 
 Practical notes for that pass: the runner is `/home/dev/cang/disk/nctx/run-wg.sh`-shaped
 (host weston + host waypipe client + `cang --gpu=drm --alloc hardened --mem 4 --seccomp=off
