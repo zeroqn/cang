@@ -298,10 +298,41 @@ archive was loaded into the hermetic store, and the guest now resolves
   venus dma-buf/format-modifier wall that the chromium work already recorded, before any
   decode happens. A GL video output (`--vo=gpu --gpu-api=opengl`) is the way around it.
 - the decode-only arms (`--vo=null`) exit 0 but produced **empty logs** and no
-  `Using hardware decoding` line, so they are inconclusive: mpv's messages did not reach the
-  redirected stdout in that probe. The oracle to use next is mpv's own
-  `--log-file=/workspace/...` (with `--hwdec=vaapi-copy` for a decode-only comparison), which
-  does not depend on stdout plumbing.
+  `Using hardware decoding` line, so they were inconclusive: mpv's messages did not reach the
+  redirected stdout in that probe. Reading them through mpv's own `--log-file` fixed that.
+
+### Client-level hardware video works in the guest
+
+With the GBM fix in place and mpv reading its own log file, a `--gpu=drm --waypipe` guest
+decodes 1920x1080 H.264 on the GPU and **presents VA-API surfaces**:
+
+```
+copy-null  --hwdec=vaapi-copy --vo=null           rc=0 hwdec=1  Using hardware decoding (vaapi-copy).
+sw-null    --hwdec=no          --vo=null           rc=0 hwdec=0
+gl-hw      --hwdec=vaapi       --vo=gpu --gpu-api=opengl
+                                                   rc=0 hwdec=1  Using hardware decoding (vaapi).
+                                                   VO: 1920x1080 vaapi[yuv420p]
+```
+
+The third line is the one that matters: mpv's video output reports the frames arriving as
+**`vaapi[...]`** surfaces, i.e. the full client path - decode on the guest's VA-API device
+through vrend's render server, surface import, and presentation over the Waypipe display - is
+GPU-side. (CPU ticks are not a useful metric for the `-copy` variants, which copy back to
+system memory by design; mpv's own statement plus the `VO:` format is the signal.)
+
+Requirements, both now in place: the guest needs `GBM_BACKENDS_PATH` (the earlier sections),
+and **mpv's default Vulkan video output must be avoided** - `vo=gpu` with the default
+`--gpu-api=auto` picks Vulkan and aborts on the venus wall
+(`vkr: failed to query resource props: invalid res_id 15`), while `--gpu-api=opengl` (virgl)
+presents normally. That is the combination to document for media clients in a cang guest:
+
+```
+mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl <file>
+```
+
+This closes the map's destination question for mpv. Chromium remains the outlier: it
+instantiated its VA-API decoder after the GBM fix but still does not offload (its
+`GetHandle()`/pre-sandbox initialisation path, a chromium-internal question).
 
 Practical notes for that pass: the runner is `/home/dev/cang/disk/nctx/run-wg.sh`-shaped
 (host weston + host waypipe client + `cang --gpu=drm --alloc hardened --mem 4 --seccomp=off
