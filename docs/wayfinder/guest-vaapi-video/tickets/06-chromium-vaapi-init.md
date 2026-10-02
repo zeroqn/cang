@@ -47,3 +47,33 @@ A `--gpu=drm` guest Chromium run that decodes the 1920x1080 clip with hardware
 decode engaged - a positive signal from Chromium itself (decoder-initialisation
 log line or an actual CPU reduction against the features-off control), not the
 absence of the fallback line.
+
+## Additional evidence (2026-10-02, displayed runs)
+
+- **Chromium never initialises libva at all** in a displayed (`--ozone-platform=wayland`,
+  host weston + `cang --waypipe`) run with `--enable-features=VaapiVideoDecoder,
+  VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks`: zero `libva` messages in the log, zero
+  `VideoDecoderFallback` lines, zero `PreSandboxInitialization` lines. The GPU process does
+  hold 7 open `/dev/dri/*` descriptors, so it opens DRM nodes - but for GL/EGL, not VA-API.
+- The flags that target the pre-sandbox device scan (`--hardware-video-device-path=`,
+  `--render-node-override=`, `--enable-primary-node-access-for-vkms-testing`) change nothing
+  observable: no libva messages, same fallback behaviour. CPU for the same 20 s of 1080p30
+  did drop (base 426 ticks, override 243, devpath 295), which is suggestive but not a
+  positive signal - it needs a decoder-level confirmation.
+- Chromium 154's own feature definitions (`media/base/media_switches.cc`) show VA-API decode
+  enabled by default on Linux (`kAcceleratedVideoDecodeLinux` = "AcceleratedVideoDecoder",
+  default-on with `USE_VAAPI`; `kAcceleratedVideoDecodeLinuxGL` default-on), so the gate is
+  not the feature flag - it is whichever GPU-feature/GPU-info decision precedes
+  `VaapiVideoDecoder`.
+- The pre-sandbox device scan in `media/gpu/vaapi/vaapi_wrapper.cc` (154.0.8037.57) skips
+  **non-PCI** devices and, when `gpu_info` is supplied, requires the device's
+  `vendor_id`/`device_id` to equal `gpu_info->active_gpu()`'s. In this guest the DRM device
+  is virtio (vendor 0x1af4) while the GPU the browser sees through venus is the host AMD part
+  (0x1002) - a mismatch that would leave `drm_fd_` invalid and produce exactly the
+  `GetHandle()` message seen in the headless runs. That is the hypothesis to test next, and
+  the `--hardware-video-device-path` switch is the way to bypass the scan.
+
+Next instrument: `--vmodule=video_decoder_pipeline=3,vaapi_video_decoder=3,gpu_init=3` with
+`--log-level=0`, grepping for the decoder-selection lines (which decoder Chromium builds for
+the config), plus an in-guest `ffmpeg` control using the *image's* ffmpeg path rather than a
+host store path (the host path silently produced no output in the last probe).

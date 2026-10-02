@@ -397,6 +397,13 @@ and presentation all GPU-side. The GL video output is required: mpv's default
 Vulkan output hits the venus wall of ticket 07. `--hwdec=no` reports no hardware
 decode, so the A/B attribution is real.
 
+The change is also verified against the repository's own acceptance harness: the
+`tools/chromium-cang-smoke` waypipe mode run against the patched cang and guest-init
+reports `VERDICT: PASS` on every check (version, chromium-rc, webgl-vulkan, webgl-png,
+waypipe-transport, venus-presenting, frame-presented, renderer-on-frame,
+control-no-frame) and logs `gbm_backends_path=/usr/lib/cang-mesa-runtime/lib/gbm` in its
+presenting-mode line, so the guest now presents with GBM available and nothing regressed.
+
 ## Out of scope
 
 - DRM native context (guest-native RADV/radeonsi over amdgpu): ruled out for this
