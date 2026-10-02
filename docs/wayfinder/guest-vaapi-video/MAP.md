@@ -68,6 +68,38 @@ where the encoder did not look - chroma ruined, luma untouched). See
 - Whether to offer the ticket 02 wire extension upstream to virglrenderer and
   mesa now that both halves are proven in-tree.
 
+## Client-level video: first measurement (2026-10-02)
+
+`tools/chromium-cang-smoke`'s launch shape is required for chromium to run at all in the
+guest (`--alloc hardened`, or it segfaults on startup - and this is *not* affected by the
+ticket 05 fix: the WebGL control page passes with the patched build). With that, chromium
+154 plays a real 1920x1080 H.264 file from `~/cang/*.mp4` (a 20 s clip) in a `--gpu=drm`
+guest: `readyState=4`, `videoWidth=1920`, frames decoded.
+
+**Hardware decode does not engage**, though, and the reason is chromium-internal:
+
+```
+media/gpu/vaapi/vaapi_wrapper.cc:1755 GetHandle(): Either VADisplayStateSingleton::
+PreSandboxInitialization() hasn't been called or that method failed
+Histogram: Media.VideoDecoderFallback.H264 recorded 1 samples
+```
+
+- identical with `--enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks`
+  (the fallback happens before any of that matters) and with the features disabled, so the
+  run is a software-decode playback today;
+- the same guest decodes VA-API fine through ffmpeg (ticket 01's evidence, re-checked in
+  ticket 05), so the gap is chromium's own VA-API bring-up, not the guest's driver;
+- `--use-angle=vulkan` makes the video element *stall* outright (`readyState=0`), which is
+  the same ANGLE/vulkan wall the chromium smoke documents for drawing.
+
+Next, cheapest first: run chromium with the variants that give the GPU process a display
+(`--ozone-platform=headless` with `--use-gl=egl`, `--in-process-gpu`), check whether
+`VADisplayStateSingleton::PreSandboxInitialization` needs the render node opened before the
+GPU sandbox (and whether `--disable-gpu-sandbox --no-sandbox` is enough), and add a client
+that reports its decoder choice explicitly - mpv `--hwdec=vaapi` is the natural one and is
+*not* in the image, so either add it to the image layers or ship its closure through the
+shared workspace the way the guest mesa build was shipped.
+
 ## Open tickets
 
 - ~~[The guest encode's chroma planes are wrong](tickets/05-chroma-planes-wrong.md)~~ -
