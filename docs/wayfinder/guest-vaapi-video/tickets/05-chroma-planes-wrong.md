@@ -1299,3 +1299,40 @@ encoder actually reads (the surface's chroma as the *driver* maps it, through a
 driver-visible read rather than a GL read) for this synthetic input, and compare it
 against the plane GL wrote. One of the two will show the stretched pattern, and that
 identifies the side to fix.
+
+## The write and the driver's own mapping disagree about the chroma offset
+
+A build that (a) dumps the encoder's surface plane through GL right after the upload,
+with `glFinish()`, and (b) maps the *same* surface through `vaSyncSurface` +
+`vaDeriveImage` + `vaMapBuffer` and dumps the same row, gives both views at once for the
+synthetic checkerboard encode:
+
+```
+GL      plane=0 res=320x240 row0=100010001000…   (Y=16, uniform - correct)
+GL      plane=1 res=160x120 row0=3cc83cc8…       (U=60, V=200 - the source's values)
+SFC2    sfc=1 planes=2 pitch0=512 pitch1=512 off0=0 off1=122880 row0=0000…0000   (all zero)
+```
+
+So the picture *is* in the surface as GL sees it (plane 1 holds the source's U/V pair),
+while the driver's own mapping reports the chroma plane at offset **122880** and finds
+**zeros** there, and the export that the GL write went through put the chroma at
+**131072**. The two views are 8192 bytes apart - sixteen chroma rows, exactly the distance
+between `pitch * height` (122880) and the export's 64 KiB-aligned offset. This is the
+first hard evidence that the plane GL writes and the plane the driver reports are not the
+same memory region, and it matches the symptom precisely: plane 0's offset agrees (0), so
+luma is bit-identical, and plane 1's does not, so chroma is destroyed.
+
+It also explains why the earlier "override the export offsets with the derived ones"
+experiment broke the encode outright (4.9 dB for both planes, ~350-byte files): the
+derived offsets are a *third* view (a linearised mapping), not the encoder's, so forcing
+the write to them moves the picture somewhere the driver's surface does not consider part
+of the plane.
+
+Next, and narrow: make all three views agree for plane 1 on this surface. The candidates,
+in the order worth testing: create the surface so its own layout is the exported one
+(`VASurfaceAttribExternalBuffers` with an explicitly sized/aligned buffer, or
+`VASurfaceAttribDRMFormatModifier` so the export need not re-align), or stop exporting
+and import for the upload (write through the driver's own mapping, at the cost of a
+GPU->CPU->GPU copy), or find which of the two offsets the encoder actually uses by
+encoding a plane-1 image that is *zero in one region and written in another* (a
+deliberate discriminator that does not depend on the driver's internals).
