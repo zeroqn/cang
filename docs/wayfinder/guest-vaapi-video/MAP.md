@@ -157,12 +157,44 @@ video in this guest needs a display/compositor, which the image does not have.**
 interop path (decoded surface -> GL/compositor), and that needs weston or equivalent to be
 present.
 
-The next step is therefore a small image decision, not more probe work: add a compositor
-(and optionally mpv) to the image layers, then run the same two probes - chromium with the
-VA-API features on, and `mpv --hwdec=vaapi --vo=gpu` - against a real display, and score
-them by the absence of `Media.VideoDecoderFallback.H264` and the presence of `Using hardware
-decoding (vaapi)`. ffmpeg's VA-API decode in the guest already works (ticket 01), so what
-remains to prove is exactly the interop half.
+### The displayed route works: host weston + host waypipe + `cang --waypipe`
+
+No image change is needed after all. The chromium smoke's waypipe shape runs the
+compositor **on the host** (`weston --backend=headless --renderer=gl --socket=cang-video`)
+with a host `waypipe client` on a socket, and passes that socket to the guest as
+`cang … --waypipe=<socket>`; guest-init then exports a Wayland display
+(`WAYLAND_DISPLAY=cang-waypipe-0`, `XDG_RUNTIME_DIR=/run/user/1000`) and chromium uses it.
+A first displayed probe with that shape changed the picture immediately:
+
+```
+--- wayland  rc=124 secs=61  fallbacks=0
+    VIDEOPROBE t12000 readyState=4 wh=1920x1080 t=11.14 frames=339 dropped=15
+    VIDEOPROBE t20000 readyState=4 wh=1920x1080 t=19.14 frames=578 dropped=23
+--- egl      rc=124 secs=61  fallbacks=0
+    VIDEOPROBE t20000 readyState=4 wh=1920x1080 t=19.73 frames=595 dropped=18
+```
+
+- **the fallback is gone**: `Media.VideoDecoderFallback.H264` does not appear in either
+  displayed run, where every headless run produced exactly one;
+- the video plays at ~30 fps with ~4% dropped frames at 1920x1080 (against a stalled
+  element, `readyState=0`, in the headless runs);
+- **but hardware decode is still not proven**: chromium's own
+  `media/gpu/vaapi/vaapi_wrapper.cc:1755 GetHandle()` failure is still logged, and no
+  `VaapiVideoDecoder`/`GpuVideoDecode` initialisation line appears in either mode, so the
+  decode may well still be software with the fallback simply not logged on this path.
+
+**The measurement that settles it** is a CPU-time contrast between the features-on and
+features-off runs under the same display (hardware 1080p30 decode holds a few percent of a
+vCPU; software decode holds a core), plus `--vmodule=vaapi_video_decoder=3,media=2` to catch
+chromium naming its decoder. A first attempt at that contrast was defeated by its own
+probe (a broken `/proc/<pid>/stat` tick sum returning 0 for both arms, and the page's
+`console.log` lines not reaching stderr in the backgrounded run), so it needs one more pass
+with the counter fixed and the page driven in the foreground.
+
+Practical notes for that pass: the runner is `/home/dev/cang/disk/nctx/run-wg.sh`-shaped
+(host weston + host waypipe client + `cang --gpu=drm --alloc hardened --mem 4 --seccomp=off
+--landlock=off --waypipe=<socket> --guest-init …`), weston must use `--debug` for
+screenshots, and the guest's chromium needs `--alloc=hardened` or it segfaults at startup.
 
 ## Open tickets
 
