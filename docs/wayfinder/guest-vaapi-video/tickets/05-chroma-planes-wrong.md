@@ -771,3 +771,38 @@ renderer front door -> receives it on ctx=1; vrend -> handles only ctx=2. What i
 unproven is *which capset* ctx=1 was created with - venus (the external render server)
 or virgl (vrend) - and that one datum decides whether the fix belongs in cang's
 context/capset wiring or in the libkrun fork's context creation.
+
+## Both contexts are vrend - the "wrong context kind" hypothesis is dead
+
+A marker inside virglrenderer's own `virgl_renderer_context_create_with_flags`
+(`src/virglrenderer.c`, logging `ctx_id`, the flags and
+`ctx_flags & VIRGL_RENDERER_CONTEXT_FLAG_CAPSET_ID_MASK`; verified present in the
+built library, unlike the earlier attempt in rutabaga) gives the capsets for a full
+encode-then-decode guest run:
+
+```
+CTX id=1 flags=0x2 capset=2 name=ffmpeg     <- the encode
+CTX id=1 flags=0x2 capset=2 name=ffmpeg
+CTX id=2 flags=0x2 capset=2 name=ffmpeg     <- the decode
+```
+
+`capset=2` is `VIRTGPU_DRM_CAPSET_VIRGL2`, which `virgl_renderer_context_create_with_flags`
+routes to `vrend_renderer_context_create` - so **both the encode's context and the
+decode's are vrend contexts**, and the previous section's reading ("the encode lands on
+a context that is not vrend's") is wrong. The asymmetry has to be explained elsewhere:
+
+- the earlier dispatch-site marker was placed by a text anchor whose patch was never
+  confirmed in the built library, and the brace-counted markers in
+  `vrend_video_encode_bitstream` never fired even though the decode's sibling
+  `vrend_decode_decode_bitstream` demonstrably runs - so the video *dispatch* is where
+  the next verified marker belongs, not the context creation;
+- in the run whose submits were logged, every video-bearing buffer was `ctx=2`
+  including the encode-flavoured ones (`53 57` = CREATE_VIDEO_CODEC + BEGIN_FRAME,
+  `55` = CREATE_VIDEO_BUFFER) - i.e. the guest's two processes did not consistently
+  land on ctx 1 and ctx 2 in the order assumed, which is another reason to stop
+  reasoning from the ids and instrument the dispatch.
+
+Next: a dispatch marker with verified placement and a confirmed patch (log the CCMD
+name, its length and the handler's return value for ids 53..61 in
+`vrend_decode_block`), which says in one run whether the encode CCMD reaches
+`vrend_decode_encode_bitstream` and what it returns.
