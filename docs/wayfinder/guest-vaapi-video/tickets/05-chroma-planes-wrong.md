@@ -1235,3 +1235,27 @@ for the same frame (both sides of `vrend_video_encode_completed`), for 5-10 fram
 real content, and compare them by NAL. If they match, the encoder's own output is
 already chroma-damaged and the search returns to the driver with a much sharper
 reproduction (one guest encode, one host encode, same command, differing only in chroma).
+
+## The stream metadata matches, so the decoder is not misreading the chroma
+
+`ffprobe` on the guest's and the host's 320x240 streams reports identical stream
+metadata - `High` profile, level 13, `yuv420p`, `tv` range, `chroma_location=left` - so
+the SPS/PPS are not telling a decoder to treat the chroma differently, and the damage is
+inside the slice data rather than in the parameter sets. That eliminates the
+"stream says something different about chroma" family, which was the last cheap
+explanation left after the layout experiments.
+
+Two discriminators remain, both host-side and both cheap, and they separate
+"vrend's parameter set drives the damage" from "the guest path drives it":
+
+1. **Re-drive the native encoder with vrend's parameters** - the same content on the
+   host, but with `transform_8x8_mode_flag` and `deblocking_filter_control_present_flag`
+   cleared and `max_references`/level set to vrend's values (a small libva client, or
+   ffmpeg's `-flags +ildct`-style knobs where they exist). If the host then produces
+   scrambled chroma too, the defect is in what vrend fills and the fix is local to
+   `virgl_video.c`'s parameter filling; if the host stays clean, the guest path is at
+   fault and the coded-buffer handover is the next place to look.
+2. **Compare the coded-buffer handover frame by frame** - `vrend_video_encode_completed`
+   copies the driver's `coded_bufs`/`coded_sizes` into the guest's resource, and ticket
+   02 checked exactly one frame of one encode. Dumping both sides for 5-10 frames of real
+   content turns "the encoder's output was already damaged" into a measurement.
