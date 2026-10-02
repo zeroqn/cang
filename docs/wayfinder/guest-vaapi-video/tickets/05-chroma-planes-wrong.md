@@ -930,3 +930,60 @@ early returns (`!cdc || !src` is the only one with no `virgl_error`) and
 `virgl_video_encode_bitstream`'s entry; root the build; verify every marker string in
 the rooted `libvirglrenderer.so.1`; run the `-y` probe; then read the fields and diff
 them against the native trace.
+
+## Verified fixture: parameters are sane and the encoder's input is clean
+
+With the diagnostic build **rooted** and every marker string confirmed in the loaded
+`libvirglrenderer.so.1` (`vrpmx…` / `k9l76g…`), and the encode verified to run
+(`-y`, fresh 1 KiB output, three frames), the two tables are finally readable.
+
+Parameters for the three-frame solid-red encode (320x240, CQP 26, `-bf 0`), one line
+per frame:
+
+```
+PARPIC src_sfc=1 curr=2 qp=26 qp_chroma=0 qp_chroma2=0 l0=0 l1=0 ndesc=1 fnum=0
+       qi=26 qp_p=0 ptype=3 notref=0 idr=1 ref=1 cabac=1 x8=0 db=0
+       codec w=320 h=240 chroma=1 level=0 maxref=16 prof=11
+PARPIC src_sfc=6 curr=9  … fnum=1 qi=26 qp_p=26 ptype=0 idr=0 ref=1
+PARPIC src_sfc=7 curr=10 … fnum=2 qi=26 qp_p=26 ptype=0 idr=0 ref=1
+```
+
+So: QP 26 as requested, chroma QP offsets 0 (as native), IDR then P with correct
+`reference_pic_flag`, CABAC on, 4:2:0, full 320x240, `num_slice_descriptors = 1`. The
+only deltas from the native control are `transform_8x8_mode_flag = 0` (native 1),
+`deblocking_filter_control_present_flag = 0` (native 1), `level_idc` 51 because
+`codec->level` is 0 (native 30) and `max_references = 16` (native 2) - all of which
+affect *compression*, none of which can zero a chroma sample.
+
+`src_sfc != curr` is not a defect: vrend uploads the guest's surface into its own
+reference-ring surface and encodes that, which is a legitimate design.
+
+The upload's per-plane view, for the same run (per-row dump through GL):
+
+```
+plane 0: 320x240 pitch 512 off 0      fmt 0x20203852 (R8)   res 320x240
+  row 0/30/60/90/120/150/180/210: src=51515151 zeros 0/320 | dst=51515151 zeros 0/320
+plane 1: 320x240 pitch 512 off 131072 fmt 0x38385247 (GR88) res 160x120
+  row 0/15/30/45/60/75/90/105:    src=5af05af0 zeros 0/320 | dst=5af05af0 zeros 0/320
+```
+
+(`51` = Y 81, `5a f0` = U 90 / V 240, BT.601 red.) So the encoder's destination
+surface holds exactly the right luma **and** the right chroma, with no zeros, on every
+sampled row of both planes.
+
+**What that eliminates and what it leaves.** The parameters are sane and the surface
+the encoder reads is clean *as seen through GL* - while the decoded stream's chroma is
+~28 dB worse with ~26% zero samples scattered over the plane. The two views are both
+GL read-backs, so a disagreement between **GL's view of the buffer and the DMA view the
+VA encoder reads** would be invisible to this dump, and that is now the working
+hypothesis (a plane pitch/offset/layout disagreement, e.g. chroma read with the luma
+plane's 512-byte pitch or the wrong plane offset: `plane 1` shows `dl 320x240` while its
+resource is `160x120`, the same shape mismatch the per-plane-format attempt found
+harmless for the *format*).
+
+The decisive experiment is spatial: encode a frame whose **chroma varies across the
+picture** (left half U=90/V=240, right half a different pair, built with a filter), then
+decode the guest's stream and look at *where* each chroma value lands. A pitch or offset
+disagreement puts them at the wrong columns/rows or duplicates them, which names the
+line; if instead the chroma is uniform noise, the fault is inside the encode's chroma
+prediction and the search returns to the driver.
