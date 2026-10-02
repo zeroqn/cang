@@ -1071,3 +1071,35 @@ derivation), and the `sequence` buffer's first bytes differ from the native clie
 offsets 1, 20 and 29 (`guest 33/10/49` vs `host 0d/01/09`) - those are inside the SPS
 payload region and could be the level/VUI/cropping the guest's client chose, which the
 encoder's chroma handling could in principle key off.
+
+## The guest-dmabuf import carries a tiled modifier, and passing it changes nothing
+
+A debug build logged the import of every guest dma-buf plane with its modifier and
+passed it through (`EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT`, `nattrs=9`):
+
+```
+IMPORT plane=0 fmt=0x20203852 modifier=0x18601b04 pitch=256 off=0     wh=176x144 nattrs=9 src=tiled
+IMPORT plane=1 fmt=0x38385247 modifier=0x18601b04 pitch=512 off=65536 wh=176x144 nattrs=9 src=tiled
+IMPORT plane=0 fmt=0x20203852 modifier=0x18601b04 pitch=512 off=0      wh=320x240 nattrs=9 src=tiled
+IMPORT plane=1 fmt=0x38385247 modifier=0x18601b04 pitch=512 off=131072 wh=320x240 nattrs=9 src=tiled
+```
+
+So the buffers really are tiled (`0x18601b04`), the plane offsets are 64 KiB-aligned
+rather than `pitch * height` (65536 for 176x144, 131072 for 320x240), and the modifier
+*is* now handed to the EGL import - and the size sweep with that build returns
+**bit-identical results** to before it (same PSNR to six decimals, same file sizes:
+4934 / 19087 / 39954 / 79551 / 178951). The guest-dmabuf import is therefore not the
+place where the chroma is lost.
+
+That sharpens the remaining hole: the *other* EGL import on this path is vrend's own
+**VA-surface** import (`vaExportSurfaceHandle` -> `export_video_dma_buf` ->
+`fill_video_dma_buf` in `virgl_video.c`, consumed when the video buffer's plane
+textures are created), where the exported surface's modifier is recorded but the
+importing side must honour it the same way before GL writes through it - which is what
+all the GL-visible dumps in this ticket have measured as "correct", because both the
+dump and the writer go through the same (possibly linear) view.
+
+Next, in order: (1) log the modifier on the VA-surface export/import pair in
+`virgl_video.c` and pass it through there; (2) the still-untested missing
+`VAEncMiscParameterBuffer`, since it is the one structural difference in the VA
+submission and none of the memory-layout candidates has moved the needle.
