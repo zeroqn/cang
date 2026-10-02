@@ -1153,3 +1153,44 @@ Also still open from the VA buffer diff, both cheap and both quality-only: vrend
 `deblocking_filter_control_present_flag` and `transform_8x8_mode_flag` at 0 where the
 native client sets both (the byte-level picture-buffer diff shows the deblocking bit
 differing at offset 629), and it submits no `VAEncMiscParameterBuffer` at all.
+
+## The direction of the encode upload needs checking
+
+Reading `vrend_video.c` and `virgl_video.c` together turns up a structural question that
+fits the symptom better than anything else so far.
+
+- `virgl_video_create_buffer` creates the encoder's surface as a **driver-allocated VA
+  surface** (`vaCreateSurfaces(va_dpy, format, w, h, &sfc, 1, NULL, 0)`), i.e. its layout
+  is the driver's own and no client strides are involved.
+- `vrend_video_create_buffer` then gives that buffer one GL texture/framebuffer per
+  plane, each tied to a **guest resource handle** (`plane->res_handle = res_handles[i]`).
+- The encode upload callback (`encode_upload_picture` in `virgl_video.c`) exports *the
+  VA surface itself* (`export_video_dma_buf(buffer, VIRGL_VIDEO_DMABUF_WRITE_ONLY)`) and
+  hands that dma-buf to `vrend_video_enocde_upload_picture`, which calls
+  `sync_video_buffer_to_dmabuf(buf, dmabuf)`.
+- `sync_video_buffer_to_dmabuf` imports that image and then blits it into
+  `res = vrend_renderer_ctx_res_lookup(plane->res_handle)` - i.e. **into the guest's
+  resource**, which for the encode path is the client's own VA surface, not vrend's.
+
+So on this read the encode's "upload" copies *out of* the (still empty) vrend VA surface
+*into* the guest's resource, while the encoder later encodes `source->buffer` - vrend's
+VA surface. That would leave the encoder reading a surface the picture was never written
+into, which is consistent with "the plane the encoder walks is not the plane GL wrote"
+but *not* with the luma being bit-identical to the host's, so one of the following is
+true and has to be established by instrumenting rather than reading:
+
+1. the two functions are named from the guest's perspective and I have the direction
+   backwards - then the write does land in vrend's surface and the chroma loss is
+   inside the driver's read of it;
+2. the guest's VA surface and vrend's VA surface are the *same* memory in this
+   configuration (e.g. the guest's resource is imported as the surface's backing), in
+   which case the blit is a no-op-ish copy and the chroma damage is elsewhere again;
+3. the blit really is the wrong way round and the picture reaches the encoder through
+   some other path (the luma evidence suggests something writes the surface correctly).
+
+Next instrument, one build: log the handles and GL ids on both sides of the encode
+upload - `plane->res_handle`, `res->gl_id`, `plane->texture`, and the surface id
+(`buf->buffer->va_sfc`) - plus, right before `vaBeginPicture`, read back one row of the
+surface's luma and chroma through the plane textures and print them. That answers both
+"who wrote where" and "what does the encoder's surface hold at encode time" in one run,
+which is the measurement this ticket has been missing.
