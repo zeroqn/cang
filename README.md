@@ -95,8 +95,15 @@ rootless Podman tooling for development.
   Without `--gpu=drm`, Waypipe uses `--no-gpu`; OpenGL/EGL clients use Mesa
   llvmpipe and Vulkan clients use Mesa lavapipe on the guest CPU. With
   `--gpu=drm`, Waypipe keeps GPU support enabled and clients inherit the DRM
-  Mesa environment. Waypipe remains mutually exclusive with `--wayland` and
-  requires the cang image's guest `waypipe` binary.
+  Mesa environment: guest-init points `GBM_BACKENDS_PATH` at the image's Mesa
+  runtime, so a client can allocate GBM buffers and Waypipe carries the frames
+  as dma-bufs instead of shared memory. GPU video clients work on that path -
+  `mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl` reports hardware decoding and a
+  `vaapi[yuv420p]` video output. mpv's default Vulkan video output (and
+  `--use-angle=vulkan` in a Wayland client) instead fails on venus dma-buf
+  format-modifier imports, so use the GL path for presenting clients.
+  Waypipe remains mutually exclusive with `--wayland` and requires the cang
+  image's guest `waypipe` binary.
 - Linux Landlock enabled in the host kernel for default `cang` task launches.
   Ordinary launches use host-side Landlock `relax` mode by default; use
   `--landlock=all` for stricter TCP bind handling,

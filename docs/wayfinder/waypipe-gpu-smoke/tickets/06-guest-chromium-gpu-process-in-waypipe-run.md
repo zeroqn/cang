@@ -116,3 +116,20 @@ was passing `--enable-features=Vulkan` (Vulkan for the display compositor, which
 `VkSurfaceKHR` ozone-wayland does not implement). With `--use-angle=vulkan` *without* that
 feature, the guest GPU process runs cleanly and uses venus. Details and evidence in the new
 ticket; the GBM/dri finding here stands and is in fact required for the accelerated run.
+
+## Follow-on closed (2026-10-02): `GBM_BACKENDS_PATH` is now in `MESA_ENV`
+
+The product follow-on this ticket listed - "add `GBM_BACKENDS_PATH` to `MESA_ENV` in
+guest-init (a genuine gap: the guest's GBM backends are unreachable)" - is done
+(`crates/cang-guest-init/src/guest_init/components/wayland.rs`, with a unit-test
+assertion). Verified in a live `--gpu=drm --waypipe` guest: `MESA-LOADER: failed to open
+dri` disappears (3+ per run to 0) and a presenting client's buffers travel as **dma-bufs
+instead of `wl_shm`** (24 dmabuf buffer creations in the host waypipe log, where the same
+probe previously produced none). So the second half of this ticket's finding is closed, and
+the "keep the presenting run on the shm/software path" advice above no longer applies: the
+guest can now allocate GBM buffers, and presentation over the dmabuf transport works.
+
+The other follow-on (waypipe's dmabuf import against virtio-gpu/venus format modifiers)
+remains open, and is now reproduced independently by mpv: its default Vulkan video output
+aborts with `vkr: failed to query resource props: invalid res_id 15` /
+`vkGetMemoryResourcePropertiesMESA resulted in CS error`.

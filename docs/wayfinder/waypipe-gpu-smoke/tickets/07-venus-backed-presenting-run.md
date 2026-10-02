@@ -58,3 +58,14 @@ Rendering is GPU-accelerated; the **transfer is not zero-copy** (`wl_shm` copy) 
 is blocked. Closing that gap means fixing modifier negotiation between the guest (venus/
 virtio-gpu) and the host compositor's dmabuf feedback - real work, and not required for this
 map's transport baseline.
+
+## Update (2026-10-02): the test-time `GBM_BACKENDS_PATH` override is no longer needed
+
+This run needed `GBM_BACKENDS_PATH` supplied by hand. guest-init now exports it as part of the
+`--gpu=drm` Mesa environment (`crates/cang-guest-init/src/guest_init/components/wayland.rs`),
+so the accelerated run works without the override, and with dmabufs enabled on the waypipe
+client the guest's frames travel as dma-bufs (24 buffer creations in the host waypipe log,
+none before the fix). The dmabuf-blocked recipe recorded in this ticket therefore has a
+working alternative now, though the modifier wall noted there is still real for Vulkan
+clients: mpv's default Vulkan video output aborts on it (`vkr: failed to query resource
+props: invalid res_id 15`).

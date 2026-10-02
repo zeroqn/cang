@@ -85,5 +85,13 @@ image provides Mesa software rendering for this path: OpenGL/EGL applications
 use llvmpipe and Vulkan applications use lavapipe on the guest CPU. When
 `--gpu=drm` is also selected, guest-init omits Waypipe's `--no-gpu`, does not
 force the software-renderer environment, and preserves the DRM-scoped Mesa
-OpenGL/EGL and Vulkan discovery paths. `--waypipe` remains mutually exclusive
-with `--wayland`.
+OpenGL/EGL and Vulkan discovery paths, including `GBM_BACKENDS_PATH`
+(`/usr/lib/cang-mesa-runtime/lib/gbm`). The frame transfer is then dma-buf
+rather than shared memory: a client that allocates GBM buffers presents them
+without a copy, and `ffmpeg`/`mpv` played through the display reach the guest's
+hardware VA-API path. For a media client, `mpv --hwdec=vaapi --vo=gpu
+--gpu-api=opengl` reports `Using hardware decoding (vaapi)` and a
+`vaapi[yuv420p]` video output; the GL video output is required because mpv's
+default Vulkan output (and `--use-angle=vulkan` in Chromium) hits venus dma-buf
+format-modifier failures. `--waypipe` remains mutually exclusive with
+`--wayland`.
