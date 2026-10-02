@@ -1259,3 +1259,43 @@ Two discriminators remain, both host-side and both cheap, and they separate
    copies the driver's `coded_bufs`/`coded_sizes` into the guest's resource, and ticket
    02 checked exactly one frame of one encode. Dumping both sides for 5-10 frames of real
    content turns "the encoder's output was already damaged" into a measurement.
+
+## A synthetic checkerboard: the guest's chroma is structured, but not a transform of the source's
+
+A source with a known chroma pattern (16x16 luma-block checkerboard, U = 200/60, luma
+constant 16, three frames, ffv1) was encoded in the guest and decoded; the U value per
+16x16 luma block reads:
+
+```
+SOURCE                             GUEST
+..##..##..##..##..##               ################....
+..##..##..##..##..##               ################....
+##..##..##..##..##..               ................####
+##..##..##..##..##..               ................####
+..##..##..##..##..##               ################....
+..##..##..##..##..##               ################....
+##..##..##..##..##..               ................####
+##..##..##..##..##..               ................####
+```
+
+Two things are clear. The guest's chroma is **not noise and not a constant** - it is a
+regular two-level pattern with the *same values* the source used, so the encoder did read
+*some* chroma image - and its **vertical period is the source's** (four block rows before
+the inversion) while its **horizontal structure is collapsed**: sixteen "high" blocks
+followed by four "low", i.e. a period of 20 blocks = the full 160-sample chroma row,
+where the source alternates every two blocks.
+
+Fitting simple transforms - guest(x, y) = source(x / k, y + dy) for k in {1,2,4,8,16,32}
+and dy in 0..3, plus horizontal shifts - finds nothing: the best residual stays ~86 (an
+unrelated image is ~100). So the guest's chroma is neither the source's chroma nor the
+source's luma (that is uniform here, and the guest's is not) nor a scaled/shifted copy of
+either.
+
+That is a much sharper target than "chroma PSNR is low": a *structured* chroma image whose
+vertical period matches and whose horizontal structure is stretched to the width of the
+plane. The next step is to model it properly rather than guess: dump the plane the
+encoder actually reads (the surface's chroma as the *driver* maps it, through a
+`vaDeriveImage`/`vaMapBuffer` copy taken after `vaSyncSurface`, which is a
+driver-visible read rather than a GL read) for this synthetic input, and compare it
+against the plane GL wrote. One of the two will show the stretched pattern, and that
+identifies the side to fix.
