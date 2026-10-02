@@ -806,3 +806,55 @@ Next: a dispatch marker with verified placement and a confirmed patch (log the C
 name, its length and the handler's return value for ids 53..61 in
 `vrend_decode_block`), which says in one run whether the encode CCMD reaches
 `vrend_decode_encode_bitstream` and what it returns.
+
+## Two invalidated measurements, and the one that now stands
+
+**A stale-output trap invalidated two runs.** The probes reused fixed output paths
+(`/workspace/enc35.h264`) and their runner's `rm -f` pattern did not match the file, so
+ffmpeg exited immediately with `File '/workspace/enc35.h264' already exists. Exiting.`
+and the console's `size=1019` was the *stale* file. The capset reading and the
+dispatch reading below were both first taken in such a run, where **no encode happened
+at all** - only the decode step, which is exactly what those logs showed. Probes now
+pass `-y` and the runner removes the exact output path.
+
+**With the encode verified to run** (`-y`, fresh 1 KiB file, guest log reporting three
+frames, exit 0):
+
+```
+CTX id=1 flags=0x2 capset=2 name=ffmpeg      <- vrend (VIRGL2)
+CTX id=2 flags=0x2 capset=2 name=ffmpeg      <- vrend
+DISP ctx=1 cmd=44 END_TRANSFERS len=1023 ret=0   (first for ctx)
+DISP ctx=2 cmd=44 END_TRANSFERS len=1023 ret=0   (first for ctx)
+DISP ctx=2 cmd=55 CREATE_VIDEO_BUFFER len=7 ret=0
+DISP ctx=2 cmd=53 CREATE_VIDEO_CODEC len=8 ret=0
+DISP ctx=2 cmd=57 BEGIN_FRAME len=2 ret=0
+DISP ctx=2 cmd=59 DECODE_BITSTREAM len=5 ret=0   <- the decode
+DISP ctx=2 cmd=61 END_FRAME len=2 ret=0
+   ... and the same 55/57/59/61 cycle, all ctx=2, ~40 times
+```
+
+So: every context is `VIRGL2` -> vrend (the earlier "not vrend's context" reading is
+dead), the decode's video CCMDs dispatch normally on ctx=2, and **no `60
+ENCODE_BITSTREAM` is dispatched on any context** while the encode process runs and
+writes output. The encode's context (ctx=1) dispatches only `END_TRANSFERS`.
+
+That also settles the front-door question: the earlier `RECV` lines that showed video
+ids on ctx=1 were **false positives** - the scanner walked a 1024-dword transfer
+buffer whose payload happens to contain bytes in 53..61 (the same parse on ctx=2 is
+genuine because those buffers really are command streams). The encode's video CCMDs
+therefore never arrive at the renderer at all, which puts the loss in the guest's
+submit or in the host's virtio-gpu device, *before* virglrenderer.
+
+**The guest submit path to instrument next**: not `src/virtio/vdrm/vdrm_virtgpu.c`
+(a marker there never fired, for the decode either) but
+`src/gallium/winsys/virgl/drm/virgl_drm_winsys.c:954`
+`virgl_drm_winsys_submit_cmd` -> `drmIoctl(DRM_IOCTL_VIRTGPU_EXECBUFFER)` at :985 -
+the path mesa's virgl winsys actually uses. Marking it (the buffer's video CCMD ids
+and the ioctl result, to stderr) decides whether the encode's command buffer is
+submitted and accepted in the guest, or dropped there.
+
+Incidental but worth knowing: a guest driver built without ticket 02's guest-side
+patch (a plain nixpkgs mesa plus only a diagnostic patch) writes 830 bytes for the same
+three-frame solid-red encode where the image's patched driver writes 1019 - i.e. two
+different, both non-empty, minimal streams; the sizes are not a useful signal on their
+own.
