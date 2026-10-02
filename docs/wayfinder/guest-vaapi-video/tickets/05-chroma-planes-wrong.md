@@ -1336,3 +1336,46 @@ and import for the upload (write through the driver's own mapping, at the cost o
 GPU->CPU->GPU copy), or find which of the two offsets the encoder actually uses by
 encoding a plane-1 image that is *zero in one region and written in another* (a
 deliberate discriminator that does not depend on the driver's internals).
+
+## Three views of the chroma plane, three different contents
+
+Working the synthetic checkerboard through all three viewpoints at once (GL after the
+upload with `glFinish`, the driver's own `vaDeriveImage` mapping, and the decoded
+stream) shows they do not agree, and the disagreement has a shape:
+
+```
+source chroma row 0 : 60 x16 then 200 x16 ...      (16-sample period)
+GL view of the surface's plane 1 : 3c c8 repeated   (U=60,V=200 - *uniform*, no pattern)
+driver mapping of plane 1        : 00 00 ... (offset 122880)
+decoded guest chroma row 0       : 60 60 60 60 | 200 200 200 200 | 60 60 60 60 ... and 0s at the row tail
+```
+
+Three observations, each measured:
+
+- the decoded guest chroma has **half the source's horizontal period** (transitions every
+  4 samples where the source has them every 8 in this render) and its **row tails are
+  zero** - the signature of a plane read with a *finer* horizontal density than it was
+  written with, plus a read past the written region;
+- the GL view of the surface's plane 1 is **uniform** where the source is patterned,
+  which says the blit did not put this source's chroma there at all (for the *real* video
+  source of the earlier sections it did - rows matched - so this is another
+  inconsistency, not a contradiction of the earlier measurement);
+- the driver's own mapping reports plane 1 at a *different* offset (122880) from the
+  export the write used (131072) and reads zeros there.
+
+So the previous section's "the write and the driver's mapping disagree about the chroma
+offset" is part of a bigger picture: for this surface the chroma plane has **three
+inconsistent descriptions**, and each candidate fix has to make all three coincide. The
+concrete next tests, in the cheapest-first order recorded for the next session:
+
+1. re-run the *real-content* case with the same three dumps (the GL view matched the
+   source there, so it isolates the offset question from this synthetic-input oddity);
+2. encode a chroma image that is **uniform along x within each written row but different
+   between rows**, which distinguishes "half-density along x" from "row shift" without
+   relying on the pattern being visible in both;
+3. if the offset is confirmed as the only disagreement for real content, fix it in the
+   one place all three views share: the exported surface's plane description
+   (`export_video_dma_buf`/`fill_video_dma_buf`), by giving each plane its own geometry
+   instead of the whole-buffer one, since `plane 1` is described as `dl 320x240` while its
+   resource is `160x120` - the one field-level oddity that has appeared in every dump
+   since the beginning of this ticket.
