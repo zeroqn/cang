@@ -987,3 +987,44 @@ decode the guest's stream and look at *where* each chroma value lands. A pitch o
 disagreement puts them at the wrong columns/rows or duplicates them, which names the
 line; if instead the chroma is uniform noise, the fault is inside the encode's chroma
 prediction and the search returns to the driver.
+
+## Not a size limit: the chroma is destroyed at every size, luma is bit-identical
+
+The obvious "is the picture too small for the AMD encoder" question is answered by a
+size sweep with the *same* command and content on both sides (10 frames of `testsrc`,
+CQP 26, `-bf 0`, `-lavfi psnr` of the encoded stream against the source):
+
+| size | guest PSNR y / u / v | host control y / u / v | guest bytes | host bytes |
+| --- | --- | --- | --- | --- |
+| 176x144 | 44.442958 / **5.718897** / **5.759051** | 44.442958 / 42.445101 / 41.429851 | 4 934 | 3 792 |
+| 320x240 | 44.091405 / **6.486577** / **6.612471** | 44.091405 / 45.218977 / 45.499747 | 19 087 | 6 019 |
+| 640x480 | 49.843129 / **6.397063** / **6.567003** | 49.843129 / 47.260841 / 47.132959 | 39 954 | 8 473 |
+| 1280x720 | 51.187132 / **7.324610** / **7.175346** | 51.187132 / 48.305424 / 48.085073 | 79 551 | 13 807 |
+| 1920x1080 | 50.696566 / **7.647622** / **7.649542** | 50.696566 / 49.491349 / 48.406070 | 178 951 | 20 216 |
+
+Three things fall out:
+
+- **luma is identical to six decimals at every size** - the guest's encoder produces
+  exactly the host's luma, so the encode itself, the parameters vrend fills and the
+  surface's luma are all correct;
+- **chroma is ~35-40 dB worse at every size**, from 176x144 to 1920x1080, so it is not
+  a minimum-size or alignment limit of the AMD encoder;
+- the guest's bitrate is **3x (176x144) to 9x (1920x1080) the host's** - the bytes are
+  being spent on the chroma damage.
+
+A frame-level look at the chroma plane of the guest's 640x480 stream against the
+source shows the same thing structurally: the guest's U/V is mostly the source's value
+(128 for the grey pattern) with the pattern's colour boundary in the wrong place, and a
+horizontal-shift search over +-24 chroma samples finds no shift that aligns them
+(mean |delta| stays ~100 at every offset) - so the chroma is not displaced (a plain
+offset error) but replaced by something else over a large part of the picture.
+
+With the earlier sections (params sane, encoder surface clean *as seen through GL*,
+submission chain intact), the loss is now pinned to the step between the GL-written
+surface and the encoder's own read of it. The instrument for that is a libva buffer
+diff of the worker's VA submission against a native encode's: a `vaMapBuffer`
+interposer works (`CODED` segments are logged for both sides), but `vaCreateBuffer` is
+not being interposed in either process (no `BUF` lines), so the parameter buffers'
+payloads are still unread - `LD_DEBUG=bindings` on the native control is the one
+command that says why (a bindings report shows which definition `vaCreateBuffer`
+resolves to) and is the next step.
