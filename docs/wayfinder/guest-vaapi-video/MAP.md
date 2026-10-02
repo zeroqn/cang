@@ -368,6 +368,34 @@ screenshots, and the guest's chromium needs `--alloc=hardened` or it segfaults a
   counts, per-slice lists plus active counts) before the attribute can be
   advertised. The prize, measured on the host for the same real content:
   1 671 174 B at `-bf 0` vs 1 123 666 B with B-frames, i.e. 33%.
+- [Chromium's VA-API decoder instantiates but does not offload](tickets/06-chromium-vaapi-init.md):
+  with the guest's VA-API stack proven working (`ffmpeg`, `mpv`), Chromium is the
+  remaining client that does not use it - twelve flag combinations and four guest
+  runs all fall back, and after the GBM fix the decoder object is constructed but
+  the CPU cost is unchanged and no initialisation-success line appears. Scoped to
+  Chromium's own `VADisplayStateSingleton`/pre-sandbox path.
+- [Venus dma-buf format-modifier imports block Vulkan-presenting clients](tickets/07-venus-dmabuf-format-modifiers.md):
+  `mpv`'s default Vulkan video output aborts (`vkr: failed to query resource
+  props: invalid res_id 15`, `vkGetMemoryResourcePropertiesMESA resulted in CS
+  error`) where `--gpu-api=opengl` presents fine - the same modifier wall the
+  chromium smoke records for `--use-angle=vulkan`. The transport half is fixed
+  (GBM buffers now travel as dma-bufs), so what remains is venus's import/query.
+
+## Client-level video works with mpv (2026-10-02)
+
+The map's destination is now met for a media client. With `GBM_BACKENDS_PATH` in
+guest-init's `MESA_ENV` (Waypipe carries dma-bufs instead of `wl_shm`) and with
+`mpv-unwrapped` added to the image's agent layer, a `--gpu=drm --waypipe` guest runs
+
+```
+mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl <file>
+```
+
+and reports `Using hardware decoding (vaapi)` with a video output of
+`1920x1080 vaapi[yuv420p]` - decode through vrend's render server, surface import
+and presentation all GPU-side. The GL video output is required: mpv's default
+Vulkan output hits the venus wall of ticket 07. `--hwdec=no` reports no hardware
+decode, so the A/B attribution is real.
 
 ## Out of scope
 
