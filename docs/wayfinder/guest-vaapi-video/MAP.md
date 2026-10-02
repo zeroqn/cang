@@ -284,6 +284,25 @@ the interop precondition is met, so this is the right point to re-test with a cl
 states its choice outright (`mpv --hwdec=vaapi`, which needs the image-layer decision) or to
 instrument chromium's VA-API initialisation path directly.
 
+### mpv is now in the image - and its default video output hits the venus wall
+
+`mpv-unwrapped` joined `agentImagePackages` (`nix/image/layers.nix`), the container built, the
+archive was loaded into the hermetic store, and the guest now resolves
+`/nix/store/...-cang-agent-layer/bin/mpv` (v0.41.0). Two results from the first runs:
+
+- **mpv's default `vo=gpu` aborts in the guest** (`rc=134`), in both the `--hwdec=vaapi` and
+  `--hwdec=no` arms, with the render server reporting
+  `vkr: failed to query resource props: invalid res_id 15` /
+  `vkGetMemoryResourcePropertiesMESA resulted in CS error` /
+  `ring_submit_cmd: vn_dispatch_command failed` - i.e. mpv's Vulkan path lands on the same
+  venus dma-buf/format-modifier wall that the chromium work already recorded, before any
+  decode happens. A GL video output (`--vo=gpu --gpu-api=opengl`) is the way around it.
+- the decode-only arms (`--vo=null`) exit 0 but produced **empty logs** and no
+  `Using hardware decoding` line, so they are inconclusive: mpv's messages did not reach the
+  redirected stdout in that probe. The oracle to use next is mpv's own
+  `--log-file=/workspace/...` (with `--hwdec=vaapi-copy` for a decode-only comparison), which
+  does not depend on stdout plumbing.
+
 Practical notes for that pass: the runner is `/home/dev/cang/disk/nctx/run-wg.sh`-shaped
 (host weston + host waypipe client + `cang --gpu=drm --alloc hardened --mem 4 --seccomp=off
 --landlock=off --waypipe=<socket> --guest-init …`), weston must use `--debug` for
