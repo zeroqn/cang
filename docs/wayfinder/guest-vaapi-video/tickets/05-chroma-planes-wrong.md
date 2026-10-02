@@ -1194,3 +1194,44 @@ upload - `plane->res_handle`, `res->gl_id`, `plane->texture`, and the surface id
 surface's luma and chroma through the plane textures and print them. That answers both
 "who wrote where" and "what does the encoder's surface hold at encode time" in one run,
 which is the measurement this ticket has been missing.
+
+## Two layout fixes tested and refuted: the modifiers, and the plane offsets
+
+**Modifiers (tested).** A build that passes each plane's modifier to the EGL import
+(`EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT`) produced **bit-identical** output - same PSNR
+to six decimals, same file sizes - so the import's missing modifier is not the defect,
+even though the buffers really are tiled (`0x18601b04`).
+
+**Plane offsets (tested, and worse).** Logging the export against what the driver
+reports through `vaDeriveImage` for the same surface shows a real disagreement:
+
+```
+OFFS plane=1 export=131072 derived=122880 pitch=512/512 sfc=1     (320x240)
+OFFS plane=1 export=65536  derived=36864  pitch=512/256 sfc=1     (176x144)
+```
+
+- and aligning the two by rewriting the exported plane offsets with the derived ones
+**breaks the encode outright**: luma and chroma PSNR both fall to ~4.9 dB at every size
+(against 44-51 dB luma / 6-8 dB chroma before), with much smaller files. So the
+exported DMA-BUF geometry *is* the geometry GL and the encoder agree on, and the
+`vaDeriveImage` view is a different access path rather than the driver's encode layout.
+Both layout hypotheses are now dead by measurement, not by argument.
+
+**What that leaves.** Every layer of the encode - transport, context, dispatch,
+parameters, submission contents, surface contents through GL and through the exported
+DMA-BUF, size, modifiers, offsets - has now been measured, and the chroma is still
+destroyed while the luma is bit-identical to a native encode. The one viewpoint still
+unmeasured is the **output side of the VA encoder as vrend consumes it**: the coded
+buffer's segments are copied into the guest's resource in
+`vrend_video_encode_completed` (`vrend_video.c`) with its own size/stride handling, and
+nothing in this ticket has ever compared *those* bytes against what the native client's
+`vaMapBuffer` returns for the same content. The ticket-02 evidence checked exactly one
+frame of one encode (3-frame run, frame 0 identical) - which is too small a sample to
+rule out a per-frame or per-plane defect there, and the chroma damage is exactly the
+kind of thing a partially-copied coded buffer produces.
+
+Next: dump the coded buffer the driver produced and the bytes vrend hands to the guest
+for the same frame (both sides of `vrend_video_encode_completed`), for 5-10 frames of
+real content, and compare them by NAL. If they match, the encoder's own output is
+already chroma-damaged and the search returns to the driver with a much sharper
+reproduction (one guest encode, one host encode, same command, differing only in chroma).
