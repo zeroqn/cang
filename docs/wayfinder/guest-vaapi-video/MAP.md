@@ -183,13 +183,32 @@ A first displayed probe with that shape changed the picture immediately:
   `VaapiVideoDecoder`/`GpuVideoDecode` initialisation line appears in either mode, so the
   decode may well still be software with the fallback simply not logged on this path.
 
-**The measurement that settles it** is a CPU-time contrast between the features-on and
-features-off runs under the same display (hardware 1080p30 decode holds a few percent of a
-vCPU; software decode holds a core), plus `--vmodule=vaapi_video_decoder=3,media=2` to catch
-chromium naming its decoder. A first attempt at that contrast was defeated by its own
-probe (a broken `/proc/<pid>/stat` tick sum returning 0 for both arms, and the page's
-`console.log` lines not reaching stderr in the backgrounded run), so it needs one more pass
-with the counter fixed and the page driven in the foreground.
+**Correction (measured, same round): the displayed run is still software decode.** A
+features-on vs features-off contrast under that display gives the same playback rate in both
+arms - 574 and 592 frames decoded in 40 s of the same 1920x1080 clip, 0 fallback lines each -
+and chromium's `GetHandle()` failure is still logged with no decoder-initialisation line, so
+the fallback *message* is simply not emitted on the displayed path; the decode did not change.
+
+**And there is a structural reason for that, which is the real finding of this round:** the
+waypipe shape the smoke uses runs with **`-n` (`--no-gpu`)**, i.e. the guest's buffers travel
+as `wl_shm` and the presented surface has no GPU buffers at all (the smoke's own comment: with
+dmabuf enabled "the presenting Chromium GPU process still aborts and never paints"). VA-API
+decode needs to *import* its frames into a GL/GPU surface, so on a shm-only display path
+hardware decode cannot engage no matter which feature flags are used.
+
+So the shape of the remaining work is now clear and it is not a flag question:
+
+- **client-level hardware video needs GPU buffers in the guest's display path** - either the
+  waypipe **dmabuf** path (currently broken: the presenting chromium GPU process aborts,
+  see `docs/graphics-audio.md`), or a **compositor inside the guest** (weston in the image,
+  rendering through the guest's virgl/venus GL) with chromium/mpv talking to that local
+  compositor;
+- the compositor-in-the-guest route is the one that keeps `--gpu=drm`'s GPU in the loop, and
+  it is the minimal image change that makes the interop half testable (`weston` + `mpv-unwrapped`
+  in the agent tooling layer, ~600 MB, since the image already carries 244 of mpv's 261
+  closure paths);
+- until then, the guest's *decode* half is proven (ffmpeg VA-API, ticket 01) and the
+  *presentation* half is proven only in software (this round).
 
 Practical notes for that pass: the runner is `/home/dev/cang/disk/nctx/run-wg.sh`-shaped
 (host weston + host waypipe client + `cang --gpu=drm --alloc hardened --mem 4 --seccomp=off
