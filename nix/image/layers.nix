@@ -331,6 +331,11 @@ let
     doltPrebuilt
     beadsPrebuilt
     freshPrebuilt
+    # A media client that reports its own decoder choice (`Using hardware
+    # decoding (vaapi)`), which is the only unambiguous oracle for whether the
+    # guest's VA-API path is used: chromium instantiates its VA-API decoder but
+    # reports neither success nor failure at default verbosity.
+    pkgs.mpv-unwrapped
   ]
   ++ pkgs.lib.optional (herdrPrebuilt != null) herdrPrebuilt
   ++ pkgs.lib.optional (montyPrebuilt != null) montyPrebuilt;
