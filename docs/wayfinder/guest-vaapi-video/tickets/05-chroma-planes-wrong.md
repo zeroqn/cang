@@ -858,3 +858,41 @@ patch (a plain nixpkgs mesa plus only a diagnostic patch) writes 830 bytes for t
 three-frame solid-red encode where the image's patched driver writes 1019 - i.e. two
 different, both non-empty, minimal streams; the sizes are not a useful signal on their
 own.
+
+## Correction: the encode does reach vrend and dispatches cleanly
+
+The previous two sections are wrong, and the cause is methodological: **each
+diagnostic build carried one marker, and several of those runs used the stale-output
+probe** (no `-y`, a fixed path that already existed), so "no marker fired" meant "no
+encode happened". With *both* host markers in one build and the encode verified to run:
+
+- the **front door** (`virgl_renderer_submit_cmd`) receives the encode's buffers on
+  ctx=1, with `ndw` values **identical to what the guest's winsys submitted**
+  (`1131/1047/1056/1044/1038/1038/1074` carrying `55`, `53 55`, `56 57 60 61`,
+  `57 60 61` x2, `54 56 56 56 56`) - so the RECV parse was genuine after all, and the
+  guest-to-renderer transport loses nothing;
+- the **dispatcher** (`vrend_decode_block`) shows
+  `DEP: ctx=1 cmd=60 ENCODE_BITSTREAM len=5 ret=0` **nine times**, alongside
+  `CREATE_VIDEO_CODEC`/`CREATE_VIDEO_BUFFER`/`BEGIN_FRAME`/`END_FRAME` and, for the
+  decode, `DECODE_BITSTREAM` - **all `ret=0`**, on vrend contexts created with
+  `capset=2` (`VIRGL2`).
+
+And on the guest side, a marker in the path mesa's virgl winsys actually uses
+(`src/gallium/winsys/virgl/drm/virgl_drm_winsys.c:954 virgl_drm_winsys_submit_cmd`,
+`drmIoctl(DRM_IOCTL_VIRTGPU_EXECBUFFER)` at :985 - *not* `vdrm_virtgpu.c`, whose marker
+never fired even for the decode) shows the whole encode protocol being submitted with
+`valid=1`: `ids=55`, `53 55`, `56 57 60 61`, `57 60 61` x2, `54 56 56 56 56` for three
+frames, and 516 video-bearing submits for the decode control.
+
+So the chain is intact end to end - guest VA driver -> virgl winsys -> kernel ->
+host virtio-gpu -> renderer front door -> vrend dispatch -> the VA encode - and the
+chroma/bitrate defect is where this ticket started: **inside what vrend tells the VA
+encoder**. The next build puts the parameter markers (`h264_fill_enc_picture_param`,
+`h264_encode_bitstream`) and the dispatch marker in one build, runs the *verified*
+probe (`-y`, fresh output), and reads the fields to diff against the native trace.
+
+Method notes for whoever continues: one marker per build makes a silent marker
+uninterpretable; every probe must overwrite its output (`-y`) and the console must
+report the size *and* that the file is fresh; and a marker's absence only counts after
+the same build is shown to be the one running (check the string in the loaded library,
+not just in the patch file).
