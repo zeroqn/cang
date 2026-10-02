@@ -896,3 +896,37 @@ uninterpretable; every probe must overwrite its output (`-y`) and the console mu
 report the size *and* that the file is fresh; and a marker's absence only counts after
 the same build is shown to be the one running (check the string in the loaded library,
 not just in the patch file).
+
+## Where the fixture work stands, and two build traps that wasted runs
+
+The submission chain is now measured end to end and intact: the guest's VA driver is
+mesa's virgl one (marker in `virgl_video.c` fired), the guest's winsys submits the whole
+video protocol (`GUESTSUBMIT2`, `valid=1`, with the same `ndw` values the host's front
+door receives), and vrend's dispatcher runs `cmd=60 ENCODE_BITSTREAM len=5 ret=0` nine
+times for a three-frame encode. So the defect is once again **inside the encode's
+parameters/surface handling**, and the fixture that would name it is the parameter dump
+in `h264_fill_enc_picture_param` / `virgl_video_encode_bitstream`.
+
+Two traps kept that fixture from ever being read, both about *proving the marker is in
+the running build* rather than in the patch file:
+
+- **Unrooted diagnostic builds vanish.** `nix build … --no-link` leaves no GC root, so
+  the diagnostic cang and its `virglrenderer` can be collected between a run and the
+  check - which is why several `grep` verifications came back empty and why
+  `nix path-info -r` on the build now returns nothing for virgl. Diagnostic builds
+  should be rooted (`-o <state-root>/diag-cang`) and the check done on the rooted
+  output.
+- **`nix-store -qR` is not available in these shells** (only `nix` is), so the closure
+  must be read with `nix path-info -r`, and the marker string checked in
+  `<virglrenderer>/lib/libvirglrenderer.so.1` - the *loaded* library. When that check
+  was finally made properly it showed that the two virglrenderer paths carrying the
+  dispatch marker are both from *old* builds, i.e. the marker this ticket has been
+  reasoning from was present in the library that dispatched, but the newer
+  parameter/call-path markers were never confirmed in a library at all.
+
+With those two fixed, the sequence to finish the diagnosis is short: build once with
+the dispatch marker plus markers on `vrend_video_encode_bitstream`'s entry, each of its
+early returns (`!cdc || !src` is the only one with no `virgl_error`) and
+`virgl_video_encode_bitstream`'s entry; root the build; verify every marker string in
+the rooted `libvirglrenderer.so.1`; run the `-y` probe; then read the fields and diff
+them against the native trace.
