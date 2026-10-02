@@ -1103,3 +1103,53 @@ Next, in order: (1) log the modifier on the VA-surface export/import pair in
 `virgl_video.c` and pass it through there; (2) the still-untested missing
 `VAEncMiscParameterBuffer`, since it is the one structural difference in the VA
 submission and none of the memory-layout candidates has moved the needle.
+
+## What the damage actually looks like: real chroma, spatially scrambled
+
+Decoding the guest's and the host's 320x240 encode of the same source and comparing
+the chroma planes frame by frame gives a much more specific picture than "chroma PSNR
+is low":
+
+```
+source  U row0[:16] = 128 128 128 128 128 128 128 128 128 128 128 128 128 128 128 128
+host    U row0[:16] = 128 128 128 128 128 128 128 128 128 128 128 128 128 128 128 128
+guest   U row0[:16] = 129 129 129 130 128 127  89  87 240 240 240 240  16  16  16  16
+```
+
+The guest's chroma holds **real chroma values** - grey (128-130), then a saturated bar
+pair (89/87), then 240s, then 16s - i.e. it is a colour pattern with sharp transitions,
+but the transitions sit at the wrong places and at the wrong spacing (a few samples
+apart where the source's bars are far apart). It is not noise and not a constant, and
+`testsrc`'s bars are exactly where a spatial rearrangement would show up.
+
+Cross-checks rule out the simple explanations:
+
+| comparison (frame 2, chroma plane) | mean abs delta |
+| --- | --- |
+| guest vs source chroma | 100.3 |
+| guest vs host chroma (same encoder, same command) | 100.1 |
+| guest vs source luma (2x2 sampled, best of 4 alignments) | 96.0 |
+| guest vs source chroma of frames 0..4 (any other frame) | 100.0-100.2 |
+| guest vs guest or source luma of any frame | 97.0 |
+| host vs source chroma | 0.74 |
+
+So the guest's chroma is not the source's chroma, not the host's, not the luma, and not
+another frame's - it is related to the picture only in that it contains plausible chroma
+values. Together with everything else measured in this ticket (inputs correct through
+GL, parameters near-identical, submission near-identical, modifiers now passed with no
+effect at all), the remaining mechanism is a **stride/plane-geometry disagreement inside
+the driver's own view of the surface** - the plane the encoder walks row by row is not
+the plane GL wrote, in a way that compresses/shifts the pattern rather than zeroing it.
+
+Next instrument, and it targets exactly that: log the VA surface vrend creates for the
+encoder (`vaCreateSurfaces` attributes: pixel format, memory type, and any
+`VASurfaceAttribExternalBuffers` strides/offsets/pitches, plus the resulting surface's
+own attributes) and compare them with what a native client's surface has. If vrend hands
+the driver the *guest's* strides (512-byte pitch, 64 KiB-aligned plane offsets) while
+the driver's chroma walk assumes its own, that is the line to fix - and it also explains
+why every GL-visible dump has looked correct.
+
+Also still open from the VA buffer diff, both cheap and both quality-only: vrend leaves
+`deblocking_filter_control_present_flag` and `transform_8x8_mode_flag` at 0 where the
+native client sets both (the byte-level picture-buffer diff shows the deblocking bit
+differing at offset 629), and it submits no `VAEncMiscParameterBuffer` at all.
