@@ -210,6 +210,34 @@ So the shape of the remaining work is now clear and it is not a flag question:
 - until then, the guest's *decode* half is proven (ffmpeg VA-API, ticket 01) and the
   *presentation* half is proven only in software (this round).
 
+### Why the dmabuf path is not used: the guest has no GBM backend
+
+With the host `waypipe client` run **without** `-n` (dmabufs enabled - note the guest side
+already omits `--no-gpu` whenever `--gpu=drm` is set, per `docs/graphics-audio.md`), the guest
+still presents its window as a **`wl_shm` buffer**: the host waypipe log shows
+`create_buffer(wl_buffer#...)` and no dmabuf buffers, while both sides do negotiate
+(`Connected waypipe-server may use dmabufs: true`). The reason is in the guest's chromium log,
+identically with `--use-angle=vulkan`, `--use-angle=gl` and the default GL:
+
+```
+MESA-LOADER: failed to open dri: /run/opengl-driver/lib/gbm/dri_gbm.so:
+  cannot open shared object file (search paths /run/opengl-driver/lib/gbm, ...)
+```
+
+i.e. the guest's mesa searches a *host-shaped* GBM path (`/run/opengl-driver/lib/gbm`) that
+does not exist in the guest, so no GBM backend loads, chromium cannot allocate a dmabuf-backed
+buffer, and presentation falls back to shm. That is a cang guest-wiring gap of exactly the kind
+the VA-API driver path already had (an env var pointing into the guest's own runtime), and it
+is the concrete next step: check whether the image ships `dri_gbm.so` at all (the prebuilt
+mesa runtime's `lib/gbm`, or `libgallium`'s), and either point `GBM_BACKENDS_PATH` at wherever
+it lives or add it to the image's mesa runtime, then re-run this test and confirm dmabuf
+buffers on the host side.
+
+Note also that VA-API did **not** engage in any of these runs (the `GetHandle()` failure is
+still logged, one line per run, in every mode): that failure is local to the guest's chromium
+and display-independent, so fixing GBM may or may not be enough for it - the two are separate
+questions, and the GBM one is now the concrete, checkable one.
+
 Practical notes for that pass: the runner is `/home/dev/cang/disk/nctx/run-wg.sh`-shaped
 (host weston + host waypipe client + `cang --gpu=drm --alloc hardened --mem 4 --seccomp=off
 --landlock=off --waypipe=<socket> --guest-init …`), weston must use `--debug` for
