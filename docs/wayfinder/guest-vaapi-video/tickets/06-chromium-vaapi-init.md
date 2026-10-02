@@ -77,3 +77,54 @@ Next instrument: `--vmodule=video_decoder_pipeline=3,vaapi_video_decoder=3,gpu_i
 `--log-level=0`, grepping for the decoder-selection lines (which decoder Chromium builds for
 the config), plus an in-guest `ffmpeg` control using the *image's* ffmpeg path rather than a
 host store path (the host path silently produced no output in the last probe).
+
+## Instrument: a libva interposer (and what it proved)
+
+`valog2.so` is a tiny `LD_PRELOAD` shim that logs a constructor line per process (so a
+silent log can be distinguished from a shim that never loaded) plus `vaInitialize`,
+`vaCreateConfig` (profile and entrypoint), `vaCreateContext` and `vaCreateBuffer`. It is
+built with the repo's devshell gcc and dropped in the workspace, so the guest can preload
+it. In one `--gpu=drm --waypipe` guest:
+
+```
+mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl   shim loaded in 2 processes, 5 VA-API calls
+      vaCreateConfig profile=7 entrypoint=1 attrs=0 -> 0      (H264High / VLD)
+chromium (VA-API features on)                  shim loaded in 12 processes, 0 VA-API calls
+chromium (features off)                        shim loaded in 12 processes, 0 VA-API calls
+```
+
+So the shim reaches every Chromium process and **Chromium never calls `vaInitialize`** - not
+headless, not on Wayland, with `VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks`
+*or* the 154 names `AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL`, with
+`--ignore-gpu-blocklist`, `--use-gl=egl`, `--use-angle=gl|vulkan`, `--in-process-gpu`, or
+with the sandbox on or off. The earlier "chromium maps libva/libgallium" observation was a
+false lead: `libgallium` is mesa's *GL* driver too, so its presence in the GPU process says
+nothing about VA-API.
+
+## Correction: the host behaves identically, so this is not the guest
+
+The same binary with the same flags on the **host** (real AMD render node) also produces zero
+VA-API calls and the same `vaapi_wrapper.cc:1755 GetHandle(): Either
+VADisplayStateSingleton::PreSandboxInitialization() hasn't been called or that method failed`
+line. The guest is therefore not the differentiator: this chromium build/configuration does
+not reach VA-API on real hardware either, while `mpv` and `ffmpeg` in the same guest do.
+
+What that rules in and out:
+
+- nixpkgs only forces `use_vaapi = false` on **aarch64**
+  (`pkgs/applications/networking/browsers/chromium/common.nix:1128`), and Chromium's own GN
+  default is `is_linux && (ozone_platform_x11 || ozone_platform_wayland) && x86/x64/arm64`
+  (`media/gpu/args.gni`) - so on this host's x86_64 the build should have VA-API compiled in;
+- the pre-sandbox device scan in `vaapi_wrapper.cc` (`drmGetDevices2` -> skip non-PCI, then
+  require the device's vendor/device to match `gpu_info->active_gpu()`, then `LoadDrmFD`)
+  runs *after* whatever decides to call it, and the message says it "hasn't been called or
+  ... failed";
+- so the gate is the call site of `VaapiWrapper::PreSandboxInitialization` in the GPU
+  process's init, which is the thing to read next (it is not in
+  `gpu/ipc/service/gpu_init.cc` in 154).
+
+Next, cheapest first: run the host chromium with `--hardware-video-device-path=/dev/dri/renderD128`
+and the interposer (if libva calls appear, the scan/gpu_info is the blocker even on the host);
+then find the `VaapiWrapper::PreSandboxInitialization` caller and its condition. Only after
+that is it worth asking whether cang should ship a VA-API-enabled Chromium in the image -
+which would be an image-level decision, not a guest fix.

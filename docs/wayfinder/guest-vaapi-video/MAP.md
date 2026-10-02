@@ -368,7 +368,10 @@ screenshots, and the guest's chromium needs `--alloc=hardened` or it segfaults a
   counts, per-slice lists plus active counts) before the attribute can be
   advertised. The prize, measured on the host for the same real content:
   1 671 174 B at `-bf 0` vs 1 123 666 B with B-frames, i.e. 33%.
-- [Chromium's VA-API decoder instantiates but does not offload](tickets/06-chromium-vaapi-init.md):
+- [Chromium's VA-API decoder instantiates but does not offload](tickets/06-chromium-vaapi-init.md)
+  (**narrowed: not the guest** - a libva interposer shows Chromium never calls `vaInitialize`
+  in the guest *or* on the host with the same binary and flags, while `mpv` in the same guest
+  makes real VA-API calls; the gate is Chromium's own GPU-init decision, not cang's guest):
   with the guest's VA-API stack proven working (`ffmpeg`, `mpv`), Chromium is the
   remaining client that does not use it - twelve flag combinations and four guest
   runs all fall back, and after the GBM fix the decoder object is constructed but
