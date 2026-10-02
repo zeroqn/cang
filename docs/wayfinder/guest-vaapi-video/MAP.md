@@ -26,6 +26,14 @@ is 0 (charted as ticket 04), and ticket 03's black opening frames are fixed too:
 the host's upload blits and the VA encode share memory but nothing ordered them,
 so a `glFinish()` in the upload path now ships with `.#virglrenderer`.
 
+**Ticket 05's chroma defect is fixed too (2026-10-02).** The guest's H.264/HEVC encode
+now matches the host control's PSNR to six decimals at 176x144 through 1920x1080, because
+vrend's video surface is allocated with a linear DRM modifier instead of the driver's
+default tiling (the plane import is linear, so a tiled surface made GL write the picture
+where the encoder did not look - chroma ruined, luma untouched). See
+`tickets/05-chroma-planes-wrong.md` and the reproducer in
+`notes/repro-egl-import.c`.
+
 ## Notes
 
 - Domain: the `--gpu=drm` vrend video path - cang's virgl flags word
@@ -62,7 +70,10 @@ so a `glFinish()` in the upload path now ships with `.#virglrenderer`.
 
 ## Open tickets
 
-- [The guest encode's chroma planes are wrong](tickets/05-chroma-planes-wrong.md):
+- ~~[The guest encode's chroma planes are wrong](tickets/05-chroma-planes-wrong.md)~~ -
+  **done (2026-10-02)**: vrend's video surface is now allocated with a linear DRM
+  modifier (`nix/pkgs/patches/virglrenderer-linear-surface.patch`), and the guest's
+  encode matches the host's PSNR to six decimals at every size. Original report:
   the guest's H.264 stream decodes cleanly and its luma PSNR matches the host's to
   six decimals, but chroma PSNR is ~28 dB worse (15.6 vs 43.6 dB) and the encode
   spends ~2.4x the bits of the same command on the host at the same QP (measured

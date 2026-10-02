@@ -103,6 +103,30 @@ render server because the render-server seccomp policy path resolves from the
 binary's package prefix — set
 `CANG_RENDER_SERVER_POLICY=<cang>/share/cang/seccomp/render-server.json` when
 probing a non-package build.
+### The encode's chroma planes (fixed 2026-10-02)
+
+The guest's encode used to carry host-identical luma and chroma ~28-40 dB worse than the
+host control's at every size, spending 3-9x the bits. Root cause, found with a host-side
+reproducer (`docs/wayfinder/guest-vaapi-video/notes/repro-egl-import.c`, seconds per
+iteration): vrend's VA video surface was allocated with the driver's default **tiled** DRM
+modifier, while the plane-by-plane EGL import of its exported DMA-BUF carries no modifier
+and is therefore linear - so GL wrote the picture into a linear view of a tiled buffer and
+the encoder read the tiled layout. Only the chroma plane showed it, because plane 0 starts
+at offset 0 under both layouts.
+
+Fix: `nix/pkgs/patches/virglrenderer-linear-surface.patch` makes `virgl_video_create_buffer`
+ask libva for `DRM_FORMAT_MOD_LINEAR` (with the old call as a fallback). With it, a live
+`--gpu=drm` guest's encode matches the host's PSNR to six decimals at 176x144, 320x240,
+640x480, 1280x720 and 1920x1080, bitrates within 12 bytes (the encoder-identification SEI),
+and guest VA-API decode is unchanged. Details and the full table:
+`docs/wayfinder/guest-vaapi-video/tickets/05-chroma-planes-wrong.md`.
+
+Two instrument lessons from that hunt: `vaDeriveImage` is **not** a read of the surface (it
+returned zeros for every write); `vaGetImage` is (it is a semantic copy-out in the driver's
+own layout), and it is what the reproducer uses as its oracle. And a whole family of plausible
+fixes (plane modifiers on the import, plane offsets, pitch, image width) is inert by
+construction once the surface itself is what has to change.
+
 
 ## Blocker 1 — libva.so.2 undefined symbol `vaGetDisplayDRM` (FIXED)
 
