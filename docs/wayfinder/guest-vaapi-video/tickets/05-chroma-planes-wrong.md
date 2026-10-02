@@ -1028,3 +1028,46 @@ not being interposed in either process (no `BUF` lines), so the parameter buffer
 payloads are still unread - `LD_DEBUG=bindings` on the native control is the one
 command that says why (a bindings report shows which definition `vaCreateBuffer`
 resolves to) and is the next step.
+
+## The VA buffer diff: everything matches except a missing rate-control buffer
+
+A libva interposer that logs every `vaCreateBuffer` payload (the earlier shim missed
+them because it checked the *decode-era* type numbers - the encode types are 22
+sequence, 23 picture, 24 slice, 25/26 packed header, 27 misc, from libva's `va.h`) was
+run on both sides for the same content and command (testsrc 320x240, 3 frames, CQP 26,
+`-bf 0`): `LD_PRELOAD` for the native control, and as a `DT_NEEDED` of a `patchelf`'d
+cang for the worker (whose `/dev/shm` is the host's, so its log could be read).
+
+Buffer types and sizes are identical on both sides - `22:1132`, `23:648`, `25:28`,
+`26:{29|37, 8, 150|162, 8|9}`, `24:3140` - **except that the working native client
+creates one `type=27` (`VAEncMiscParameterBuffer`, 28 bytes, rate control) and the
+worker creates none at all**; that is the only structural difference. The payload diffs
+in the common buffers are surface-id/POC-shaped and benign (`ReferenceFrames[i]`
+picture ids, `frame_idx`, `TopFieldOrderCnt`, and `VA_PICTURE_H264_INVALID` vs 0 in
+`RefPicList0[0].flags`), plus a handful of QP-region bytes in the picture buffer's tail
+(offsets 620/629 of 648).
+
+So vrend's VA submission is a faithful, near-identical reconstruction of what the native
+client sends - with no rate-control buffer - and the encoder nevertheless produces
+correct luma and destroyed chroma. That leaves the *memory* the encoder reads: the
+export path (`export_video_dma_buf` -> `vaExportSurfaceHandle` ->
+`fill_video_dma_buf`) *does* record each plane's `modifier`
+(`desc->objects[i].drm_format_modifier`), but the import path
+(`sync_video_buffer_to_dmabuf`) imports each plane with `EGL_DMA_BUF_PLANE0_FD/OFFSET/
+PITCH_EXT` only and **never passes a modifier**, so GL blits into a linear view of a
+tiled buffer while the VA engine reads it with the modifier - a "GL sees it right, the
+engine sees something else" split, which is exactly what every dump in this ticket has
+shown (input surface correct through GL, chroma destroyed in the encoded stream).
+
+Next: print the modifiers and the EGL attribute list on both sides of that path (one
+debug build, no VM change), then either pass the modifier on import
+(`EGL_DMA_BUF_PLANE*_MODIFIER_{LO,HI}_EXT`) or make both sides linear, and re-run the
+size sweep expecting the guest's chroma PSNR to reach the host's.
+
+Also worth keeping in view, since it is the same "the engine's view of memory differs"
+family: the missing `VAEncMiscParameterBuffer` may matter for chroma even if luma looks
+right (the driver would fall back to its defaults for the rate-control/chroma-QP
+derivation), and the `sequence` buffer's first bytes differ from the native client's at
+offsets 1, 20 and 29 (`guest 33/10/49` vs `host 0d/01/09`) - those are inside the SPS
+payload region and could be the level/VUI/cropping the guest's client chose, which the
+encoder's chroma handling could in principle key off.
