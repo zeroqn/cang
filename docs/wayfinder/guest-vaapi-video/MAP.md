@@ -92,13 +92,49 @@ Histogram: Media.VideoDecoderFallback.H264 recorded 1 samples
 - `--use-angle=vulkan` makes the video element *stall* outright (`readyState=0`), which is
   the same ANGLE/vulkan wall the chromium smoke documents for drawing.
 
-Next, cheapest first: run chromium with the variants that give the GPU process a display
-(`--ozone-platform=headless` with `--use-gl=egl`, `--in-process-gpu`), check whether
-`VADisplayStateSingleton::PreSandboxInitialization` needs the render node opened before the
-GPU sandbox (and whether `--disable-gpu-sandbox --no-sandbox` is enough), and add a client
-that reports its decoder choice explicitly - mpv `--hwdec=vaapi` is the natural one and is
-*not* in the image, so either add it to the image layers or ship its closure through the
-shared workspace the way the guest mesa build was shipped.
+### The flag matrix (12 runs) and what it says
+
+The chromium in the image *has* VA-API (the real ELF,
+`…-ungoogled-chromium-unwrapped-154.0.8037.57/libexec/chromium/chromium`, contains
+`vaInitialize`, `VaapiVideoDecoder`, `VaapiIgnoreDriverChecks`,
+`AcceleratedVideoDecodeLinuxGL` and `AcceleratedVideoDecodeLinux`, and the wrapper puts
+libva on `LD_LIBRARY_PATH`), so the feature names are known. Every combination tried still
+produced exactly one `Media.VideoDecoderFallback.H264` and no VA-API initialisation:
+
+| variant (all `--headless=new --alloc=hardened --ignore-gpu-blocklist`) | result |
+| --- | --- |
+| no feature flags (baseline) | fallback, `GetHandle()` failure |
+| `VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks` | identical |
+| `AcceleratedVideoDecodeLinuxGL,VaapiIgnoreDriverChecks` | identical |
+| `AcceleratedVideoDecodeLinux,VaapiIgnoreDriverChecks` | identical |
+| all of the above names at once | identical |
+| `--use-angle=gl` / `--use-gl=egl` | identical (`--use-gl=egl` also breaks GL init) |
+| `--in-process-gpu` | identical |
+| `--disable-gpu-sandbox` removed, guest run as the non-root user | identical (sandbox does initialise) |
+| `--disable-features=Vulkan` | identical |
+
+Every failure is the same line:
+`media/gpu/vaapi/vaapi_wrapper.cc:1755 GetHandle(): Either
+VADisplayStateSingleton::PreSandboxInitialization() hasn't been called or that method
+failed`.
+
+**Reading of it:** the missing step is chromium's *pre-sandbox* VA-API initialisation, which
+its GPU-init path performs to open the VA device before the sandbox is applied - and in
+headless mode that path (and the GL display a VA-API frame import needs) is not set up. The
+guest is not the problem: the same guest decodes VA-API through ffmpeg, and the WebGL control
+page passes with the patched cang build (so the ticket 05 fix does not disturb chromium).
+
+**Next test, with a reason:** give chromium a display - the harness already has the pieces
+(`tools/chromium-cang-smoke`'s `--weston`/`--waypipe` modes, `--ozone-platform=wayland`, a
+weston headless backend) - and keep the VA-API features on, then check for the absence of
+`Media.VideoDecoderFallback.H264`. If that engages, the combination to document is "displayed
+chromium + `VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks`", not a
+headless one.
+
+Also worth adding as a second client: mpv `--hwdec=vaapi` reports its decoder choice
+explicitly (`Using hardware decoding (vaapi)`) and is *not* in the image - add it to the image
+layers, or ship its closure through the shared workspace the way the guest mesa build was
+shipped (a host-store `mpv-with-scripts-0.41.0` is already built for that).
 
 ## Open tickets
 
