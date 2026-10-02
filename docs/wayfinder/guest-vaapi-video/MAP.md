@@ -238,6 +238,34 @@ still logged, one line per run, in every mode): that failure is local to the gue
 and display-independent, so fixing GBM may or may not be enough for it - the two are separate
 questions, and the GBM one is now the concrete, checkable one.
 
+### Fixed: `GBM_BACKENDS_PATH` (and the dmabuf path now engages)
+
+`crates/cang-guest-init/src/guest_init/components/wayland.rs`'s `MESA_ENV` now exports
+`GBM_BACKENDS_PATH=/usr/lib/cang-mesa-runtime/lib/gbm` (with a unit-test assertion, so
+removing it fails the crate's tests). The image already ships `dri_gbm.so` at exactly that
+path, so this is a guest-init-only change - no image rebuild.
+
+Verified in a live `--gpu=drm --waypipe` guest (host weston + host `waypipe client` with
+dmabufs enabled), same probe as before:
+
+```
+GBM_BACKENDS_PATH=/usr/lib/cang-mesa-runtime/lib/gbm
+/usr/lib/cang-mesa-runtime/lib/gbm/dri_gbm.so            (149824 bytes, present)
+MESA-LOADER gbm failures: 0        (was 3+ per run)
+guest: VIDEOPROBE t20000 readyState=4 wh=1920x1080 t=18.46 frames=557 dropped=10
+host waypipe client: dmabuf create_params/create_immed = 12, wl_shm_pool = 4   (was 0 dmabuf)
+```
+
+So the guest now allocates GBM buffers, chromium presents them, and **Waypipe carries them as
+dma-bufs** instead of `wl_shm` - the dmabuf presentation path works, which is the precondition
+for any client that imports decoded frames into a GPU surface.
+
+One open question this leaves: with GBM fixed, chromium's `vaapi_wrapper.cc` `GetHandle()`
+failure line **disappeared** (0 vaapi lines in the run, where every earlier run had exactly
+one), but that is the absence of a failure, not proof of hardware decode - the next run
+repeats this configuration with `--vmodule=vaapi_video_decoder=3,vaapi_wrapper=3` and a
+CPU-time contrast to get a positive signal.
+
 Practical notes for that pass: the runner is `/home/dev/cang/disk/nctx/run-wg.sh`-shaped
 (host weston + host waypipe client + `cang --gpu=drm --alloc hardened --mem 4 --seccomp=off
 --landlock=off --waypipe=<socket> --guest-init …`), weston must use `--debug` for

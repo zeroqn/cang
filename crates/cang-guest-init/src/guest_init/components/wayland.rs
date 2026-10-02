@@ -46,6 +46,12 @@ const MESA_ENV: &[(&str, &str)] = &[
         "VK_ICD_FILENAMES",
         "/usr/lib/cang-mesa-runtime/share/vulkan/icd.d/virtio_icd.x86_64.json",
     ),
+    // libgbm loads its backend (dri_gbm.so) from GBM_BACKENDS_PATH; without it
+    // mesa searches the path its build was configured with
+    // (`/run/opengl-driver/lib/gbm`, a host path that does not exist in the
+    // guest), fails with `MESA-LOADER: failed to open dri`, and every client
+    // falls back to wl_shm - so a Waypipe guest never presents GPU buffers.
+    ("GBM_BACKENDS_PATH", "/usr/lib/cang-mesa-runtime/lib/gbm"),
 ];
 const DRI_DIR: &str = "/dev/dri";
 const ROOT_UID: u32 = 0;
@@ -266,6 +272,17 @@ mod tests {
         // software device (GPU process abort, no WebGL renderer).
         assert!(MESA_ENV.iter().any(|(name, _)| *name == "VK_ICD_FILENAMES"));
         assert!(!MESA_ENV.iter().any(|(name, _)| *name == "VK_DRIVER_FILES"));
+        // libgbm must be told where the image's mesa keeps its backend: the
+        // prebuilt runtime's compiled-in default is /run/opengl-driver/lib/gbm,
+        // a host path that does not exist in the guest, and every client that
+        // allocates a GBM buffer (chromium's Wayland presentation, Waypipe's
+        // dmabuf transport) otherwise falls back to wl_shm.
+        let gbm = MESA_ENV
+            .iter()
+            .find(|(name, _)| *name == "GBM_BACKENDS_PATH")
+            .expect("GBM_BACKENDS_PATH in MESA_ENV")
+            .1;
+        assert_eq!(gbm, "/usr/lib/cang-mesa-runtime/lib/gbm");
         // VA-API needs both the driver directory (LIBVA_DRIVERS_PATH, since
         // libva has no default path for the mesa runtime) and the DRM node,
         // which is why this rides with the --gpu=drm env block.
