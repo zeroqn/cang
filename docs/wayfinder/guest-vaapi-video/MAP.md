@@ -131,10 +131,38 @@ weston headless backend) - and keep the VA-API features on, then check for the a
 chromium + `VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks`", not a
 headless one.
 
-Also worth adding as a second client: mpv `--hwdec=vaapi` reports its decoder choice
-explicitly (`Using hardware decoding (vaapi)`) and is *not* in the image - add it to the image
-layers, or ship its closure through the shared workspace the way the guest mesa build was
-shipped (a host-store `mpv-with-scripts-0.41.0` is already built for that).
+### mpv shipped through the workspace: three dead ends, and what they say
+
+The idea was to avoid an image change by shipping mpv's closure through the shared
+workspace (the trick that worked for the guest mesa build). Measured, in order:
+
+- **the closure is nearly all present already**: `nix path-info -r` of
+  `mpv-0.41.0` lists 261 paths and the guest has **244** of them at the *same* store
+  paths (both sides use the same nixpkgs), so only **17** paths are missing - lua,
+  mujs, libplacebo, libdovi, rubberband, uchardet, shaderc/glslang, libcaca, freefont,
+  libxpresent, libxscrnsaver, vamp-sdk, xorgproto - and shipping those is cheap
+  (~600 MB in the workspace);
+- **the guest's `/nix/store` is read-only**, so the obvious fix - symlinking the shipped
+  paths back into `/nix/store/<same-name>` - cannot work;
+- **rewriting the rpath does not rescue it either**: patchelf'ing every shipped ELF (99
+  files) with an rpath carrying both the workspace and the store path for all 261 closure
+  entries still ends in `libplacebo.so.360: cannot open shared object file`, i.e. the
+  loader is not honouring an rpath of ~1000 entries (the same run with a 33-entry rpath
+  got as far as the next library, so the list itself is the problem, not the paths).
+
+So hand-shipping a large closure into the guest is the wrong mechanism here, and the
+honest conclusion is the one the chromium result already pointed at: **client-level hardware
+video in this guest needs a display/compositor, which the image does not have.** mpv with
+`--vo=null` would decode without one - but the interesting part of a client-level test is the
+interop path (decoded surface -> GL/compositor), and that needs weston or equivalent to be
+present.
+
+The next step is therefore a small image decision, not more probe work: add a compositor
+(and optionally mpv) to the image layers, then run the same two probes - chromium with the
+VA-API features on, and `mpv --hwdec=vaapi --vo=gpu` - against a real display, and score
+them by the absence of `Media.VideoDecoderFallback.H264` and the presence of `Using hardware
+decoding (vaapi)`. ffmpeg's VA-API decode in the guest already works (ticket 01), so what
+remains to prove is exactly the interop half.
 
 ## Open tickets
 
