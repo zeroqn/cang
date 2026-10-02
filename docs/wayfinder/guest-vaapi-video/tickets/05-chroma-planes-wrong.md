@@ -1458,3 +1458,60 @@ seconds, with the acceptance test being the same PSNR comparison; if it does not
 cang's configuration (the render server, the wayland/venus environment, the sandbox) is
 implicated and the same program can be run under cang's render-server environment to find
 what differs.
+
+## Host-side reproduction in seconds (the instrument that ends the 10-minute loop)
+
+`notes/repro-egl-import.c` is a 300-line standalone reproducer that does *exactly* what
+vrend does and nothing else:
+
+1. `vaCreateSurfaces(VA_RT_FORMAT_YUV420, W, H, ...)` (a driver-allocated NV12 surface);
+2. `vaExportSurfaceHandle(..., VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+   VA_EXPORT_SURFACE_SEPARATE_LAYERS | VA_EXPORT_SURFACE_WRITE_ONLY, ...)`;
+3. one EGL image per plane with `EGL_LINUX_DRM_FOURCC_EXT` = that layer's fourcc,
+   `EGL_WIDTH/HEIGHT = W/(i+1), H/(i+1)`, `EGL_DMA_BUF_PLANE0_FD/OFFSET/PITCH_EXT`
+   (and, in `eglmod`, the modifier) - vrend's attribute set verbatim;
+4. a known pattern (luma 16 constant, chroma a vertical ramp) written through each
+   EGL-image texture with `glTexSubImage2D`;
+5. a read-back through **`vaGetImage`**, which is the instrument this ticket was missing:
+   it is a *semantic copy-out* of the surface in the driver's own layout, unlike
+   `vaDeriveImage`, whose mapping returned zeros for every write in this whole
+   investigation (so `vaDeriveImage` is not a reliable read of the surface - an
+   incidental correction of this session).
+
+Build and run (host, seconds per iteration; `mode` is `cpu`, `egl` or `eglmod`, optional
+argv[2] = chroma pitch, argv[3] = chroma EGL_WIDTH):
+
+```
+nix develop path:$PWD --command gcc -O1 -Wall -o repro repro-egl-import.c \
+  -I<nixpkgs libva-dev>/include -I<nixpkgs libepoxy-dev>/include -I<nixpkgs libglvnd-dev>/include \
+  -L<nixpkgs libva>/lib -L<nixpkgs libepoxy>/lib -lva -lva-drm -lepoxy -ldl \
+  -Wl,-rpath,<libva>/lib:<libepoxy>/lib:/run/opengl-driver/lib
+LIBVA_DRIVERS_PATH=/run/opengl-driver/lib/dri EGL_PLATFORM=surfaceless ./repro egl
+```
+
+**Result: the defect reproduces host-side, outside the VM, in seconds.** With
+`mode=cpu` (the pattern written through `vaDeriveImage`, i.e. the driver's own offsets) the
+chroma ramp comes back perfect:
+
+```
+row 4: 128 22 | row 8: 128 29 | row 12: 128 36 | row 16: 128 42 | row 20: 128 49 | row 28: 128 62
+```
+
+With `mode=egl` (vrend's way: the write goes through an EGL image of the *exported*
+dma-buf) the same pattern comes back damaged in exactly the guest's manner:
+
+```
+row 4: 128 16 | row 8: 128 22 | row 12: 128 22 | row 16: 128 17 | row 20: 0 0 | row 24: 128 24 | row 28: 0 0
+```
+
+- values repeated/stale, patches of **zeros**, no monotone ramp - "structured but wrong",
+  the same shape as the guest's stream;
+- luma (`plane 0`) is unaffected in every mode - again matching the guest.
+
+Two attribute probes already run against it, both cheap: passing the modifier
+(`eglmod`) changes nothing, and the chroma pitch (argv[2] = 320/512) changes nothing,
+while the chroma **`EGL_WIDTH`** *does* change the damage's shape (argv[3] = 160 keeps the
+zero rows, 256/320 removes them but the values stay wrong) - so the search space is now
+`EGL_WIDTH/HEIGHT/FORMAT` and the per-plane vs per-buffer split, explored at seconds per
+iteration instead of ten minutes per Nix build. This is the loop the next session should
+be in, and `notes/repro-egl-import.c` is the entry point.
