@@ -1515,3 +1515,56 @@ zero rows, 256/320 removes them but the values stay wrong) - so the search space
 `EGL_WIDTH/HEIGHT/FORMAT` and the per-plane vs per-buffer split, explored at seconds per
 iteration instead of ten minutes per Nix build. This is the loop the next session should
 be in, and `notes/repro-egl-import.c` is the entry point.
+
+## RESOLVED: vrend allocated the surface tiled, the plane import is linear
+
+The host-side reproducer (`notes/repro-egl-import.c`) narrowed this to the plane-by-plane
+EGL import in a few minutes, after every in-VM experiment had failed to move the needle.
+Its decisive comparison, all in one program on one surface, read back through `vaGetImage`
+(the driver's semantic copy-out):
+
+| surface allocation | what a pattern written through the exported plane's EGL image reads back as |
+| --- | --- |
+| default (tiled, export modifier `0x200000018601b04`, chroma offset 131072) | `16 16 22 22 17 0 24 0 19 19 26 26 21 0 27 0 176 176 …` - scrambled, with zero rows |
+| `VASurfaceAttribDRMFormatModifiers` = `DRM_FORMAT_MOD_LINEAR` (modifier 0, chroma offset 122880) | `16 22 29 36 42 49 56 62 69 76 82 89 96 102 109 116 122 …` - **the same ramp the CPU path writes** |
+
+So the mechanism is: vrend asks libva for a video surface, AMD allocates it with a tiled
+modifier, vrend exports it as a DMA-BUF and imports each plane with
+`EGL_DMA_BUF_PLANE0_FD/OFFSET/PITCH_EXT` **without a modifier** - so GL writes through a
+linear view while the encoder reads the tiled layout, and the picture lands where the
+encoder does not look. Luma is unaffected only because plane 0 starts at offset 0 under
+both layouts; the chroma plane is where it shows.
+
+Fix: `nix/pkgs/patches/virglrenderer-linear-surface.patch` - `virgl_video_create_buffer`
+creates the surface with `VASurfaceAttribDRMFormatModifiers` = `DRM_FORMAT_MOD_LINEAR`
+(falling back to the old call if the driver refuses). Wired into
+`nix/lib/systems.nix`; no guest-side change.
+
+**Verified in a live `--gpu=drm` guest** with the patched `.#cang`, same command and
+content on both sides (10 frames of `testsrc`, CQP 26, `-bf 0`, `-lavfi psnr`):
+
+| size | guest luma / chroma | host control luma / chroma | guest bytes | host bytes |
+| --- | --- | --- | --- | --- |
+| 176x144 | 44.442958 / **42.445101 / 41.429851** | 44.442958 / 42.445101 / 41.429851 | 3 780 | 3 792 |
+| 320x240 | 44.091405 / **45.218977 / 45.499747** | 44.091405 / 45.218977 / 45.499747 | 6 007 | 6 019 |
+| 640x480 | 49.843129 / **47.260841 / 47.132959** | 49.843129 / 47.260841 / 47.132959 | 8 461 | 8 473 |
+| 1280x720 | 51.187132 / **48.305424 / 48.085073** | 51.187132 / 48.305424 / 48.085073 | 13 795 | 13 807 |
+| 1920x1080 | 50.696566 / **49.491349 / 48.406070** | 50.696566 / 49.491349 / 48.406070 | 20 204 | 20 216 |
+
+The guest now matches the host **bit-for-bit in quality metrics at every size**, and the
+bitrates differ by 12 bytes (the encoder-identification SEI). Guest VA-API *decode* is
+unchanged (`va-decode exit=0` on the same build), so the linear allocation is safe for the
+decode path too.
+
+**Why every earlier experiment missed it** (all now explained): passing the modifier on the
+*import* cannot help because the surface itself is what must be linear - the driver
+allocates what it is asked for and the import is a linear view of it; the offset, pitch and
+width probes were all adjusting that same import; `vaDeriveImage` is not a read of the
+surface at all (it returned zeros for every write in this investigation); and the
+"signatures" (half horizontal period, blocky ramp, zeroed row tails) are exactly what a
+tiled-vs-linear mismatch produces on a patterned picture.
+
+Ticket 05 is done. What remains on this map: ticket 04 (B-frames and the other
+encoder-attribute queries, which needs the wire extension), the deferred product question
+about what the encoder entrypoint advertises now that encode is correct, and the
+upstream offers.

@@ -1,0 +1,39 @@
+diff -ruN a/src/vrend/virgl_video.c b/src/vrend/virgl_video.c
+--- a/src/vrend/virgl_video.c	2026-10-02 17:38:21.462827934 +0800
++++ b/src/vrend/virgl_video.c	2026-10-02 17:39:00.982949599 +0800
+@@ -850,8 +850,33 @@
+     if (!buffer)
+         return NULL;
+ 
+-    va_stat = vaCreateSurfaces(va_dpy, format,
+-                               args->width, args->height, &sfc, 1, NULL, 0);
++    /* The buffer is written through its exported DMA-BUF: vrend imports each
++     * plane as an EGL image and blits the picture into it with GL, while the
++     * encoder reads the surface itself. That only lines up when the surface is
++     * allocated linearly - a tiled modifier makes the GL view (linear, because
++     * the plane import carries no modifier) and the encoder's view disagree, so
++     * the chroma plane ends up written where the encoder does not read it
++     * (correct luma, scrambled chroma). Ask for a linear modifier explicitly. */
++    {
++        uint64_t linear_mod = 0; /* DRM_FORMAT_MOD_LINEAR */
++        VADRMFormatModifierList modlist = { 1, &linear_mod };
++        VASurfaceAttrib sattrs[1] = {
++            {
++                .type = VASurfaceAttribDRMFormatModifiers,
++                .flags = VA_SURFACE_ATTRIB_SETTABLE,
++                .value.type = VAGenericValueTypePointer,
++                .value.value.p = &modlist,
++            },
++        };
++
++        va_stat = vaCreateSurfaces(va_dpy, format,
++                                   args->width, args->height, &sfc, 1, sattrs, 1);
++    }
++    if (VA_STATUS_SUCCESS != va_stat) {
++        virgl_error("linear surface unsupported, falling back\n");
++        va_stat = vaCreateSurfaces(va_dpy, format,
++                                   args->width, args->height, &sfc, 1, NULL, 0);
++    }
+     if (VA_STATUS_SUCCESS != va_stat) {
+         free(buffer);
+         return NULL;
