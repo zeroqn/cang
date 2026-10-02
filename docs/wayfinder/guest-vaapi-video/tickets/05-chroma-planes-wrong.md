@@ -1379,3 +1379,40 @@ concrete next tests, in the cheapest-first order recorded for the next session:
    instead of the whole-buffer one, since `plane 1` is described as `dl 320x240` while its
    resource is `160x120` - the one field-level oddity that has appeared in every dump
    since the beginning of this ticket.
+
+## A vertical chroma ramp: the encoder reads a displaced, compressed window
+
+A source whose chroma is a pure vertical ramp (U constant 128, V = 16 + 200*Y/240, luma
+constant 16) isolates the *vertical* behaviour from the horizontal, and the decoded
+guest stream shows a consistent story:
+
+```
+src   V rows 0..12   : 16 16 17 18 19 20 21 21 22 23 24 25 26   (smooth ramp)
+guest V rows 0..12   : 17 17 17 17 17 17 16 16 17 19 19 19 19   (blocky, near-flat)
+src   V rows 108..119: 106 106 107 ... 115
+guest V rows 108..119: 101 101 101 100 99 98 98 98 0 0 0 0      (ramp then zeros)
+```
+
+Three properties, all measured: the ramp's *shape* survives but is **quantised into
+blocks of 4-6 rows**, it **flattens/compresses** (reaching ~101 where the source reaches
+~115), and the **last rows are zero** - i.e. the encoder read a window of the chroma plane
+that is displaced relative to what was written and that runs off the end of it. The
+running-sum models (as-is, decimated by 2, repeated, shifted by 16 rows) all leave
+residuals 27-46 against a smooth ramp, so no single row shift or decimation fits either;
+the displacement is a byte-level window offset, not an integer row move.
+
+Combined with the horizontal result (the checkerboard came back with half the source's
+period) and the two mapping results (the GL/export write at chroma 131072, the driver's
+own mapping reporting 122880 and reading zeros), the chroma plane is written and read
+through **different windows in both directions**, and the only thing all views agree on
+is plane 0 at offset 0 - which is why the luma is bit-identical and every chroma
+measurement is damaged.
+
+This is where the ticket stands after this session: the defect is localised to the
+chroma plane's window/geometry as seen by the encoder, with three reproducible signatures
+(half horizontal period, blocky compressed vertical ramp, zeroed row tails) and three
+named candidates for the fix - give each plane its own geometry in
+`fill_video_dma_buf`, stop routing the upload through the exported dma-buf, or make the
+surface's own layout explicit (`VASurfaceAttribExternalBuffers`). The next session should
+pick one, patch it, and use the size sweep (chroma PSNR 42-49 dB is the host's number) as
+the acceptance test.
