@@ -417,3 +417,53 @@ presenting-mode line, so the guest now presents with GBM available and nothing r
   only.
 - VA-API in `--waypipe --software-renderer` mode: llvmpipe ships no VA-API
   driver, so there is nothing to enable there.
+
+## Chromium in a cang guest today (2026-10-03): the combination, and what is blocked
+
+Use this shape (works headless and through the host-side weston + `cang --waypipe` display):
+
+```
+chromium --no-sandbox --disable-gpu-sandbox --alloc=hardened --ozone-platform=wayland \
+         --ignore-gpu-blocklist [--use-angle=vulkan]
+```
+
+- `--alloc=hardened` is **required** or Chromium segfaults at startup in the guest;
+- without it the page renders with virgl/GL: WebGL works, video plays (software decode) and the
+  Waypipe transport carries dma-bufs since the `GBM_BACKENDS_PATH` fix;
+- `--use-angle=vulkan` adds venus and is the only configuration in which Chromium's VA-API path
+  is enabled at all, but it makes the GPU process **crash-loop** (9 restarts in a 50 s run,
+  ticket 07) - playback survives it, drawing is unreliable.
+
+**Hardware video decode in Chromium does not work yet** even though the whole guest-side chain
+does: Chromium dlopens `libva.so.2`, `libva-drm.so.2` and the image's patched
+`/usr/lib/cang-va-runtime/dri/virtio_gpu_drv_video.so`, calls `vaInitialize` successfully, and
+enumerates every profile/entrypoint/config/surface-attribute the driver offers (NV12 and a
+DRM-PRIME memory type included) - then its decoder creation fails with `DecoderStatus::205`
+(`kFailedToCreateDecoder`) and no decode context is ever created (ticket 06). For hardware video
+in a cang guest today, use **`mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl`**, which is proven
+end to end.
+
+## Chromium in a cang guest today (2026-10-03): the combination, and what is blocked
+
+Use this shape (works headless and through the host-side weston + `cang --waypipe` display):
+
+```
+chromium --no-sandbox --disable-gpu-sandbox --alloc=hardened --ignore-gpu-blocklist
+         --ozone-platform=wayland [--use-angle=vulkan]
+```
+
+- `--alloc=hardened` is **required** or Chromium segfaults at startup in the guest;
+- without the Vulkan flag the page renders with virgl/GL: WebGL works, video plays (software
+  decode) and the Waypipe transport carries dma-bufs since the `GBM_BACKENDS_PATH` fix;
+- `--use-angle=vulkan` adds venus and is the only configuration in which Chromium's VA-API
+  path is enabled at all, but it makes the GPU process **crash-loop** (9 restarts in a 50 s
+  run, ticket 07) - playback survives it, drawing is unreliable.
+
+**Hardware video decode in Chromium does not work yet** even though the whole guest-side chain
+does: Chromium dlopens `libva.so.2`, `libva-drm.so.2` and the image's patched
+`/usr/lib/cang-va-runtime/dri/virtio_gpu_drv_video.so`, calls `vaInitialize` successfully, and
+enumerates every profile/entrypoint/config/surface-attribute the driver offers (NV12 and a
+DRM-PRIME memory type included) - then its decoder creation fails with `DecoderStatus::205`
+(`kFailedToCreateDecoder`) and no decode context is ever created (ticket 06). For hardware
+video in a cang guest today, use **`mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl`**, which is
+proven end to end.
