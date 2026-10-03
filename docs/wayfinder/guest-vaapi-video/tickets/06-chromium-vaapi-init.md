@@ -239,3 +239,41 @@ config probing and surface creation.) Next instrument: Chromium's decoder-select
 of `VaapiVideoDecoder::Initialize` returns early.
 
 **Ticket 06 status: the guest is cleared; the gap is Chromium's own post-probe decoder setup.**
+
+## The precise failure: `DecoderStatus::205` = `kFailedToCreateDecoder`
+
+Chromium names its own failure once the logging is raised (`--v=1 --log-level=0`):
+
+```
+ERROR:media/mojo/services/mojo_video_decoder_service.cc:290] DecoderStatus::205
+```
+
+`media/base/decoder_status.h` defines 205 as **`kFailedToCreateDecoder`** (in the "reasons for
+failing to initialize" block: 200 `kUnsupportedProfile`, 201 `kUnsupportedCodec`, 202
+`kUnsupportedConfig`, 204 `kCantChangeCodec`, **205 `kFailedToCreateDecoder`**, 206
+`kTooManyDecoders`). So the GPU-process video-decoder factory refuses to build a decoder (or the
+decoder's own initialize fails) even though VA-API is initialised and the profiles/entrypoints
+probe clean.
+
+Arm matrix in the guest (all `--ozone-platform=wayland`, all with the VA-API feature names):
+
+| arm | `DecoderStatus` | `vaCreateContext` | `vaBeginPicture` | frames/20 s |
+| --- | --- | --- | --- | --- |
+| `--use-angle=vulkan` | 205 | 0 | 0 | 438 |
+| `--use-angle=vulkan --disable-gpu-driver-bug-workarounds` | 205 | 0 | 0 | 438 |
+| `--use-angle=vulkan` + `UseMojoVideoDecoder` | 205 | 0 | 0 | 429 |
+| `--use-angle=vulkan --disable-features=UseChromeOSDirectVideoDecoder` | (none) | 0 | 0 | 436 |
+| plain GL | (none) | 0 | 0 | 569 |
+
+Either the decoder is refused with 205 or the software path is taken silently; in no arm does a
+VA-API decode context appear. The failure is therefore after VA-API initialisation and config
+probing and before surface/context creation - i.e. inside Chromium's decoder creation
+(`GpuVideoDecodeAcceleratorFactory`/`VaapiVideoDecoder::Initialize`), with the VA-API stack
+itself proven healthy in the same guest by `mpv` (341 buffers, `vaCreateConfig profile=7
+entrypoint=1`).
+
+Next step (kept for the next session): the `vawrap` witness extended to every VA-API entry point
+in the decoder's initialisation order (`vaCreateSurfaces`, `vaExportSurfaceHandle`,
+`vaDeriveImage`, `vaSyncSurface`), so the *last* VA call before the refusal is visible, plus
+Chromium's `--vmodule=vaapi_video_decoder=3,gpu_video_decode_accelerator_factory=3` output at
+`--log-level=0`.
