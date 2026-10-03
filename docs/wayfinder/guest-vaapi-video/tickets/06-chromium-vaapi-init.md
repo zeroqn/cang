@@ -165,3 +165,39 @@ Next instrument, then: interpose `dlopen`/`dlsym` (to see whether chromium opens
 which symbols it asks for), and compare against a chromium run on hardware whose DRM node is
 the same device the browser reports as active - which this development VM cannot provide, so
 that comparison needs a genuinely bare-metal AMD host.
+
+## The gate is the GL backend - and the oracles are weaker than they look
+
+`--use-angle=vulkan` (venus) is what flips Chromium's VA-API path on:
+
+| arm (guest, `--gpu=drm --waypipe`) | `GetHandle()`/PreSandbox error | mediaCapabilities `powerEfficient` (H264/HEVC) | `prefer-hardware` |
+| --- | --- | --- | --- |
+| default GL | yes | false | false |
+| `--use-angle=gl` | - | false | false |
+| `--use-gl=egl` | - | false | false |
+| `--use-angle=swiftshader` | - | false | false |
+| **`--use-angle=vulkan`** | **no** | **true (H264 High, HEVC)** | true/false |
+| `--use-angle=vulkan --disable-gpu` | - | false | false |
+
+The same A/B on the development VM (also virtio) behaves identically, so the guest is not the
+variable - Chromium's VA-API availability is decided by its GPU/GL information, and only the
+Vulkan/ANGLE backend (venus) makes it consider hardware decode available. Playback through
+that arm works in a waypipe guest (`readyState=4`, 1920x1080, ~434 frames in 20 s, ~3%
+dropped) even though the same configuration makes the GPU process crash-loop (9 restarts,
+ticket 07's venus wall) - the video element survives it.
+
+**But neither oracle proves the decode is really VA-API:**
+
+- `powerEfficient=true` survives `LIBVA_DRIVERS_PATH=/nonexistent`, so it is not a probe of the
+  VA driver at all;
+- `prefer-hardware` disagrees with it between runs (it is an advisory hint);
+- the `LD_PRELOAD` interposer is invisible to Chromium (it dlopens libva), and the render
+  server's own log is not reachable either: `VIRGL_LOG_LEVEL`/`VIRGL_LOG_FILE` do not reach the
+  render server (its environment is curated), and the render server's `/dev/shm` is not the
+  host's nor the guest's, so a log written there is invisible to both.
+
+So the honest state of ticket 06 is: **Chromium in a `--gpu=drm` guest enables its VA-API path
+only under `--use-angle=vulkan`, and whether that path actually decodes on the GPU is still
+unproven.** The instrument that would settle it, and the next step here: extend the interposer
+to `dlopen`/`dlsym` (log which library and which symbols Chromium asks for, then call through
+so behaviour is unchanged), which works regardless of how libva is loaded.
