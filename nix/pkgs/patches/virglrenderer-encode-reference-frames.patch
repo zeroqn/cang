@@ -1,0 +1,65 @@
+diff -ruN a/src/vrend/virgl_video.c b/src/vrend/virgl_video.c
+--- a/src/vrend/virgl_video.c	2026-10-03 12:25:20.641155639 +0800
++++ b/src/vrend/virgl_video.c	2026-10-03 12:25:21.103079823 +0800
+@@ -111,6 +111,7 @@
+    VAConfigID  va_cfg;
+    struct virgl_video_buffer *buffer;
+    struct virgl_video_buffer *ref_pic_list[32]; /* Enc: reference pictures */
++   uint32_t ref_pic_poc[32];                    /* Enc: their picture-order counts */
+    VABufferID  va_coded_buf;                    /* Enc: VACodedBuffer */
+    void *opaque;                                /* User opaque data */
+ };
+@@ -1102,15 +1103,52 @@
+ 
+     /* CurrPic */
+     param->CurrPic.picture_id = get_enc_ref_pic(codec, desc->frame_num);
++    codec->ref_pic_poc[desc->frame_num % ARRAY_SIZE(codec->ref_pic_poc)] = desc->pic_order_cnt;
+     //CurrPic.frame_idx;
+     //CurrPic.flags;
+     param->CurrPic.TopFieldOrderCnt = desc->pic_order_cnt;
+     //CurrPic.BottomFieldOrderCnt;
+ 
+-    /* ReferenceFrames */
++    /* ReferenceFrames: the DPB the slice's RefPicList0/1 entries resolve
++     * against. vrend used to leave every entry invalid, so a driver had no
++     * reference to mark even when the client's lists named one - which is why
++     * enabling B-frames made the stream larger instead of smaller. Fill it from
++     * the client's own lists, with the picture-order count vrend recorded for
++     * that surface when it encoded it. */
+     for (i = 0; i < ARRAY_SIZE(param->ReferenceFrames); i++)
+         h264_init_picture(&param->ReferenceFrames[i]);
+ 
++    {
++        unsigned n = 0, r;
++        const uint32_t l0 = desc->num_ref_idx_l0_active_minus1 + 1;
++        const uint32_t l1 = desc->num_ref_idx_l1_active_minus1 + 1;
++
++        for (r = 0; r < l0 && n < ARRAY_SIZE(param->ReferenceFrames); r++) {
++            VASurfaceID id = get_enc_ref_pic(codec, desc->ref_idx_l0_list[r]);
++
++            if (id == VA_INVALID_ID)
++                continue;
++            param->ReferenceFrames[n].picture_id = id;
++            param->ReferenceFrames[n].flags = VA_PICTURE_H264_SHORT_TERM_REFERENCE;
++            param->ReferenceFrames[n].TopFieldOrderCnt =
++                param->ReferenceFrames[n].BottomFieldOrderCnt =
++                    codec->ref_pic_poc[desc->ref_idx_l0_list[r] % ARRAY_SIZE(codec->ref_pic_poc)];
++            n++;
++        }
++        for (r = 0; r < l1 && n < ARRAY_SIZE(param->ReferenceFrames); r++) {
++            VASurfaceID id = get_enc_ref_pic(codec, desc->ref_idx_l1_list[r]);
++
++            if (id == VA_INVALID_ID)
++                continue;
++            param->ReferenceFrames[n].picture_id = id;
++            param->ReferenceFrames[n].flags = VA_PICTURE_H264_SHORT_TERM_REFERENCE;
++            param->ReferenceFrames[n].TopFieldOrderCnt =
++                param->ReferenceFrames[n].BottomFieldOrderCnt =
++                    codec->ref_pic_poc[desc->ref_idx_l1_list[r] % ARRAY_SIZE(codec->ref_pic_poc)];
++            n++;
++        }
++    }
++
+     /* coded_buf */
+     param->coded_buf = codec->va_coded_buf;
+ 

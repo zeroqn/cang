@@ -1,0 +1,53 @@
+diff -ruN a/src/virgl_hw.h b/src/virgl_hw.h
+--- a/src/virgl_hw.h	2026-10-01 17:53:07.256113421 +0800
++++ b/src/virgl_hw.h	2026-10-01 17:53:19.199247314 +0800
+@@ -746,7 +746,15 @@
+         uint32_t supports_interlaced:1;
+         uint32_t prefers_interlaced:1;
+         uint32_t max_temporal_layers:8;
+-        uint32_t reserved:20;
++        /* Encoder attributes. VA-API clients (ffmpeg's VAAPI encoder among them)
++         * build their GOP from VAConfigAttribEncMaxRefFrames, whose value is a
++         * past-reference count in the low 16 bits and a future-reference count in
++         * the high 16 - the future count is what allows B-frames. The virgl caps
++         * had no place for the host driver's answer, so a guest client always saw
++         * 0 there and fell back to P-frames only. */
++        uint32_t max_past_references:8;
++        uint32_t max_future_references:8;
++        uint32_t reserved:4;
+ };
+ 
+ /*
+diff -ruN a/src/vrend/virgl_video.c b/src/vrend/virgl_video.c
+--- a/src/vrend/virgl_video.c	2026-10-01 17:53:07.262072408 +0800
++++ b/src/vrend/virgl_video.c	2026-10-01 17:53:19.206019520 +0800
+@@ -639,6 +639,7 @@
+ {
+     VAConfigID cfg;
+     VASurfaceAttrib *attrs;
++    VAConfigAttrib max_ref_attr = { VAConfigAttribEncMaxRefFrames, 0 };
+     unsigned i, num_attrs;
+ 
+     /* FIXME: default values */
+@@ -656,8 +657,21 @@
+     vcaps->prefers_interlaced = 0;
+     vcaps->max_temporal_layers = 0;
+ 
++    vcaps->max_past_references = 0;
++    vcaps->max_future_references = 0;
++
+     vaCreateConfig(va_dpy, profile, entrypoint, NULL, 0, &cfg);
+ 
++    /* The VA client asks for this one directly (VAConfigAttribEncMaxRefFrames),
++     * and its upper half - the future references - is what decides whether the
++     * client may use B-frames at all. */
++    if (VA_STATUS_SUCCESS == vaGetConfigAttributes(va_dpy, profile, entrypoint,
++                                                   &max_ref_attr, 1) &&
++        max_ref_attr.value != VA_ATTRIB_NOT_SUPPORTED) {
++        vcaps->max_past_references = max_ref_attr.value & 0xffff;
++        vcaps->max_future_references = (max_ref_attr.value >> 16) & 0xffff;
++    }
++
+     vaQuerySurfaceAttributes(va_dpy, cfg, NULL, &num_attrs);
+     attrs = calloc(num_attrs, sizeof(VASurfaceAttrib));
+     if (!attrs)

@@ -1,0 +1,37 @@
+diff -ruN a/src/gallium/drivers/virgl/virgl_screen.c b/src/gallium/drivers/virgl/virgl_screen.c
+--- a/src/gallium/drivers/virgl/virgl_screen.c	2026-10-01 17:53:07.272754650 +0800
++++ b/src/gallium/drivers/virgl/virgl_screen.c	2026-10-01 17:53:19.206247456 +0800
+@@ -156,6 +156,13 @@
+          return vcaps ? vcaps->max_macroblocks : 0;
+       case PIPE_VIDEO_CAP_MAX_TEMPORAL_LAYERS:
+          return vcaps ? vcaps->max_temporal_layers : 0;
++      /* VA wants a past-reference count in the low 16 bits and a
++       * future-reference count in the high 16 (VAConfigAttribEncMaxRefFrames);
++       * a zero future count makes a VA client fall back to P-frames only. */
++      case PIPE_VIDEO_CAP_ENC_MAX_REFERENCES_PER_FRAME:
++         return vcaps ? (uint32_t)vcaps->max_past_references |
++                         ((uint32_t)vcaps->max_future_references << 16)
++                      : 0;
+       default:
+          return 0;
+    }
+diff -ruN a/src/virtio/virtio-gpu/virgl_hw.h b/src/virtio/virtio-gpu/virgl_hw.h
+--- a/src/virtio/virtio-gpu/virgl_hw.h	2026-10-01 17:53:07.267387655 +0800
++++ b/src/virtio/virtio-gpu/virgl_hw.h	2026-10-01 17:53:19.202623672 +0800
+@@ -746,7 +746,15 @@
+         uint32_t supports_interlaced:1;
+         uint32_t prefers_interlaced:1;
+         uint32_t max_temporal_layers:8;
+-        uint32_t reserved:20;
++        /* Encoder attributes. VA-API clients (ffmpeg's VAAPI encoder among them)
++         * build their GOP from VAConfigAttribEncMaxRefFrames, whose value is a
++         * past-reference count in the low 16 bits and a future-reference count in
++         * the high 16 - the future count is what allows B-frames. The virgl caps
++         * had no place for the host driver's answer, so a guest client always saw
++         * 0 there and fell back to P-frames only. */
++        uint32_t max_past_references:8;
++        uint32_t max_future_references:8;
++        uint32_t reserved:4;
+ };
+ 
+ /*

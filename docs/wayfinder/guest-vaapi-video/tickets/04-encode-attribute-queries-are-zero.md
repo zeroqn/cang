@@ -93,3 +93,36 @@ diffing what the host's VA submission carries for a B frame against what vrend
 submits (the method that found the packed headers). Until that lands, the
 attribute should not be advertised: forwarding it alone makes a guest encode
 1.5x bigger.
+
+## First implementation attempt (2026-10-03): caps land, the DPB fill hangs the encoder
+
+The reverted caps patches were recovered from scratch and a third patch written for the piece the
+caps alone cannot deliver: vrend leaves every `VAEncPictureParameterBufferH264.ReferenceFrames`
+entry invalid, so a driver has no DPB to mark and a B-frame's future reference cannot be predicted
+from - the reason a caps-only build made streams *larger* instead of smaller. The new host patch
+(`nix/pkgs/patches/virglrenderer-encode-reference-frames.patch`) tracks each ring slot's
+picture-order count (`ref_pic_poc[32]`, set when that frame is encoded) and fills `ReferenceFrames`
+from the client's own `ref_idx_l0_list`/`ref_idx_l1_list` plus the active counts.
+
+Measured, guest `--gpu=drm`, 6 frames of testsrc 320x240 (45 s cap per arm):
+
+| build | `-bf 0` | `-bf 2` |
+| --- | --- | --- |
+| caps + reference-frames | **hangs** (rc=124; a 20 s 640x360 encode never finished either) | - |
+| caps only | 4659 B in 2 s, rc=0 | 16895 B in 1 s, rc=0 |
+
+So the caps forwarding is sound (and the encoder stays healthy), while the DPB fill as written
+stalls the encoder outright - even for `-bf 0`, which never asks for a future reference. The
+patch is therefore **not wired** in `nix/lib/systems.nix` (it stays in-tree, unwired, with the
+reason recorded here), and the caps patch is.
+
+Next attempt, in order: (1) fill `ReferenceFrames` only for references whose POC vrend actually
+recorded (a `known` flag per ring slot) and never with a stale/zero POC; (2) set `frame_idx`
+alongside `picture_id`, since VA's DPB entry carries both; (3) if the stall persists, check
+whether the *guest* client's `ref_idx_*_list` values are frame numbers or surface ids - vrend
+treats them as frame numbers (`get_enc_ref_pic(codec, frame_num)`), and a mismatch there would
+create surfaces per reference and confuse the driver's DPB.
+
+Measurement still to take once a non-stalling DPB exists: the real-content bitrate against the
+host control on the same command (`~/cang` clip, 640x360, QP 26) - the host's own numbers are
+1 671 174 B at `-bf 0` and 1 123 666 B with B-frames, i.e. the 33% prize this ticket is after.

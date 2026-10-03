@@ -27,6 +27,10 @@ let
                 mesaVaApi = prev.mesa.overrideAttrs (old: {
                   patches = (old.patches or [ ]) ++ [
                     ../pkgs/patches/mesa-virgl-encode-raw-headers.patch
+                    # The guest half of the encoder-attribute forwarding: without
+                    # it a VA client in the guest sees a zero reference count and
+                    # falls back to P-frames only.
+                    ../pkgs/patches/mesa-virgl-encode-caps.patch
                   ];
                 });
                 virglrenderer = prev.virglrenderer.overrideAttrs (old: {
@@ -36,6 +40,10 @@ let
                     ../pkgs/patches/virglrenderer-encode-raw-headers.patch
                     ../pkgs/patches/virglrenderer-encode-upload-fence.patch
                     ../pkgs/patches/virglrenderer-linear-surface.patch
+                    # The host half of the encoder-attribute forwarding, plus the
+                    # DPB fill that makes a B-frame's references resolvable.
+                    ../pkgs/patches/virglrenderer-encode-caps.patch
+                    # (bisect: temporarily disabled) ../pkgs/patches/virglrenderer-encode-reference-frames.patch
                   ];
                 });
               }
