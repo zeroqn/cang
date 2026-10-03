@@ -277,3 +277,46 @@ in the decoder's initialisation order (`vaCreateSurfaces`, `vaExportSurfaceHandl
 `vaDeriveImage`, `vaSyncSurface`), so the *last* VA call before the refusal is visible, plus
 Chromium's `--vmodule=vaapi_video_decoder=3,gpu_video_decode_accelerator_factory=3` output at
 `--log-level=0`.
+
+## The full VA-API call inventory: enumeration only, and nothing is missing on the driver side
+
+Extending the witness to the whole decode-init surface (`vaQueryConfigProfiles`,
+`vaQueryConfigEntrypoints`, `vaGetConfigAttributes`, `vaCreateConfig`,
+`vaQuerySurfaceAttributes`, `vaDestroyConfig`, `vaCreateSurfaces`, `vaCreateContext`,
+`vaCreateBuffer`, `vaBeginPicture`, `vaEndPicture`, `vaRenderPicture`, `vaSyncSurface`,
+`vaMapBuffer`, `vaDeriveImage`, `vaExportSurfaceHandle`, `vaTerminate`) and logging every call
+**in order** for a 20 s 1080p playback in a `--gpu=drm --waypipe` guest gives:
+
+```
+152 vaQuerySurfaceAttributes   152 vaCreateConfig   152 vaDestroyConfig
+148 vaQueryConfigEntrypoints   112 vaGetConfigAttributes    4 vaInitialize
+ 64 dlsym  15 LOADED  12 DLOPEN   4 vaQueryVendorString  4 vaTerminate
+  0 vaCreateSurfaces   0 vaCreateContext   0 vaCreateBuffer
+  0 vaBeginPicture     0 vaEndPicture      0 vaRenderPicture   0 vaSyncSurface
+
+tail: ... vaQueryConfigEntrypoints profile=32 -> 0 n=1
+      vaQueryConfigEntrypoints profile=-1 -> 0 n=1
+      vaGetConfigAttributes profile=-1 entry=10 -> 0
+      vaCreateConfig profile=-1 entry=10 attrs=1 -> 0
+      vaQuerySurfaceAttributes -> 0 n=33 / n=23
+      vaCreateConfig profile=-1 entry=10 attrs=0 -> 0
+      vaDestroyConfig -> 0 (x2)   vaTerminate -> 0
+```
+
+So Chromium's VA-API use is **pure capability enumeration** (every profile x entrypoint, plus
+the surface-attribute table) and then it destroys the configs and terminates the display - it
+never creates a surface, a context, a buffer or a picture. The refusal happens between "the
+config probes succeed" and "create surfaces", which is Chromium's own decoder-creation logic.
+
+**The driver side is not the gap.** The surface-attribute table the guest's driver returns
+(`vaQuerySurfaceAttributes -> n=24`, identical for `mpv`'s decode config) advertises
+`PixelFormat` NV12 (`0x3231564e`), NV21, I420, P010/P012/P016, Y800, YUY2, 422V, 444P, RGBP,
+RGBAP, RGBX/ARGB/XRGB/BGRX/ABGR variants and a `MemoryType` of `0x68000001` - so both the
+format Chromium wants for H.264 decode and a DRM-PRIME memory type are offered. Nothing in the
+VA-API capability surface explains `kFailedToCreateDecoder`.
+
+That closes the investigation this ticket can do from inside cang: the guest, the driver, the
+VA-API library and the vrend path are all healthy (mpv decodes hardware-accelerated in the same
+guest), and the remaining defect is inside Chromium's decoder creation, which needs either
+upstream knowledge of that code path or a Chromium built with decoder logging that this official
+build does not emit at any `--vmodule` tried.
