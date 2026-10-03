@@ -126,3 +126,37 @@ create surfaces per reference and confuse the driver's DPB.
 Measurement still to take once a non-stalling DPB exists: the real-content bitrate against the
 host control on the same command (`~/cang` clip, 640x360, QP 26) - the host's own numbers are
 1 671 174 B at `-bf 0` and 1 123 666 B with B-frames, i.e. the 33% prize this ticket is after.
+
+## Second measurement round (2026-10-03): the hangs, and which patch causes them
+
+All verification was moved into bounded probes: 6 frames of testsrc 320x240 (`tiny`) versus the 20 s
+640x360 clip (`real`), 45-240 s caps per arm, one `PROBE` line per arm so a stall still yields data,
+and the whole run delegated to a sub-agent so the parent stays responsive.
+
+| build | tiny `-bf 0` / `-bf 2` | real `-bf 0` |
+| --- | --- | --- |
+| caps + DPB (`virglrenderer-encode-reference-frames.patch`) | **hangs** | - |
+| caps only | 4659 B / 16895 B, rc=0, 2 s / 1 s | **hangs at `frame= 0`** |
+| **no caps, no DPB (old cang) + the same new image** | - | **hangs at `frame= 0`** |
+
+The third row is the decisive one: the *unmodified* cang binary plus the image built in this round
+stalls exactly the same way, so the guest-side half in the image (`mesa-virgl-encode-caps.patch`) is
+implicated independently of the host patches. The guest's own `ffmpeg` log for the stalled arm shows
+the encoder accepted the configuration and then sat at `frame= 0` for two and a half minutes - the
+first picture never completes - and the stall is uninterruptible (the arm's own `timeout` never fires,
+the outer one kills the VM). The 6-frame testsrc arms pass, so it is the material (640x360 H.264
+source), not the frame count.
+
+A second, structural defect in the guest half as written: against an **unpatched** host it reads
+`vcaps->max_past_references`/`max_future_references`, which on that host are still `reserved` bits -
+i.e. whatever the host happened to leave there. A wire field that can be read as garbage by a patched
+peer talking to an unpatched one is the wrong design, and it is exactly the old-cang case measured
+above.
+
+**State after this round:** all three patches (host caps, guest caps, host DPB) are unwired in
+`nix/lib/systems.nix` and kept in-tree with these reasons; cang and the image are being rebuilt
+without them and the real-content encode re-verified, so the repository returns to the known-good
+baseline. The B-frame work needs a different shape: the caps must be negotiated so an unpatched peer
+cannot misread them (a new caps field with a version/flag, or the value carried in the existing
+`reserved` bits only when a feature bit says so), and the DPB fill must use only picture-order counts
+vrend actually recorded, with `frame_idx` set alongside `picture_id`.

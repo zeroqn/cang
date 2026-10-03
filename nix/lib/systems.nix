@@ -27,10 +27,12 @@ let
                 mesaVaApi = prev.mesa.overrideAttrs (old: {
                   patches = (old.patches or [ ]) ++ [
                     ../pkgs/patches/mesa-virgl-encode-raw-headers.patch
-                    # The guest half of the encoder-attribute forwarding: without
-                    # it a VA client in the guest sees a zero reference count and
-                    # falls back to P-frames only.
-                    ../pkgs/patches/mesa-virgl-encode-caps.patch
+                    # NOTE: mesa-virgl-encode-caps.patch is deliberately NOT
+                    # wired: with it the guest sees non-zero reference counts
+                    # (or, against an unpatched host, whatever sits in the
+                    # structure's reserved bits) and real-content encodes hang at
+                    # frame 0. Kept in-tree for the next attempt; see
+                    # docs/wayfinder/guest-vaapi-video/tickets/04-*.md
                   ];
                 });
                 virglrenderer = prev.virglrenderer.overrideAttrs (old: {
@@ -40,10 +42,12 @@ let
                     ../pkgs/patches/virglrenderer-encode-raw-headers.patch
                     ../pkgs/patches/virglrenderer-encode-upload-fence.patch
                     ../pkgs/patches/virglrenderer-linear-surface.patch
-                    # The host half of the encoder-attribute forwarding, plus the
-                    # DPB fill that makes a B-frame's references resolvable.
-                    ../pkgs/patches/virglrenderer-encode-caps.patch
-                    # (bisect: temporarily disabled) ../pkgs/patches/virglrenderer-encode-reference-frames.patch
+                    # NOTE: virglrenderer-encode-caps.patch and
+                    # virglrenderer-encode-reference-frames.patch are deliberately
+                    # NOT wired: together with the guest half they hang
+                    # real-content encodes at frame 0 (and the DPB fill hangs even
+                    # a 6-frame testsrc encode). Kept in-tree for the next
+                    # attempt; see tickets/04-*.md
                   ];
                 });
               }
