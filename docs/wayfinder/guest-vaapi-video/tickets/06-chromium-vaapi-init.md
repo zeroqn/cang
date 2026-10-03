@@ -201,3 +201,41 @@ only under `--use-angle=vulkan`, and whether that path actually decodes on the G
 unproven.** The instrument that would settle it, and the next step here: extend the interposer
 to `dlopen`/`dlsym` (log which library and which symbols Chromium asks for, then call through
 so behaviour is unchanged), which works regardless of how libva is loaded.
+
+## Resolved by instrument: Chromium does reach VA-API in the guest - and then stops
+
+`vawrap.so` interposes `dlopen` and `dlsym` and hands Chromium *wrappers* for the VA-API entry
+points (`vaInitialize`, `vaCreateConfig`, `vaCreateContext`, `vaCreateSurfaces`,
+`vaBeginPicture`, `vaEndPicture`, `vaRenderPicture`), which is the only way to see a client
+that dlopens libva instead of linking it. Run in a `--gpu=drm --waypipe` guest with plain
+Chromium flags (`--ozone-platform=wayland`, `--alloc=hardened`, the VA-API feature names), on a
+20 s 1920x1080 H.264 clip:
+
+```
+DLOPEN libva.so.2 -> ok
+DLOPEN libva-drm.so.2 -> ok
+DLOPEN /usr/lib/cang-va-runtime/dri/virtio_gpu_drv_video.so -> ok     <- the image's patched VA driver
+vaInitialize -> 0 (1.23)                                              x4 (vulkan arm) / x1 (default)
+vaCreateConfig profile=6|7|13|19|21|32 entrypoint=1 (VLD)         -> 0    x2 each
+vaCreateConfig profile=6|7|13           entrypoint=6 (EncSlice)   -> 0    x6 each
+playback: readyState=4, 1920x1080, 427-564 frames in 20 s, ~2% dropped
+```
+
+So **Chromium in the guest initialises VA-API on the guest's own patched driver and probes
+configurations** - the earlier "never calls `vaInitialize`" reading was an artefact of the
+`LD_PRELOAD` instrument, and the guest is not blocking anything. What it does **not** do is
+decode: `vaCreateContext`, `vaCreateSurfaces`, `vaBeginPicture`, `vaRenderPicture` are all
+**zero**, so the picture playing in these runs is decoded in software. The `vaCreateConfig`
+probe storm is exactly what makes `mediaCapabilities` flip `powerEfficient` around, which is
+why that oracle was unreliable.
+
+The remaining question is therefore precise and chromium-internal: after probing profiles and
+entrypoints, why does Chromium not create a decode context and submit pictures for a video it
+says it supports? (Its `VaapiVideoDecoder` object is constructed and then destroyed - visible as
+`VaapiVideoDecoder():` / `~VaapiVideoDecoder():` in the log - so the rejection happens between
+config probing and surface creation.) Next instrument: Chromium's decoder-selection logging
+(`--vmodule=video_decoder_pipeline=3,media=3,vaapi_video_decoder=3 --log-level=0`) plus the
+`vawrap` witness extended to `vaExportSurfaceHandle`/`vaDeriveImage`, which will show which step
+of `VaapiVideoDecoder::Initialize` returns early.
+
+**Ticket 06 status: the guest is cleared; the gap is Chromium's own post-probe decoder setup.**
