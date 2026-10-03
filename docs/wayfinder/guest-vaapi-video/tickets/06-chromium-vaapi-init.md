@@ -128,3 +128,40 @@ and the interposer (if libva calls appear, the scan/gpu_info is the blocker even
 then find the `VaapiWrapper::PreSandboxInitialization` caller and its condition. Only after
 that is it worth asking whether cang should ship a VA-API-enabled Chromium in the image -
 which would be an image-level decision, not a guest fix.
+
+## Correction (2026-10-03): the interposer is dlopen-blind, and this host is a virtio VM
+
+Two corrections to the section above, both material:
+
+1. **The development environment is not real hardware.** It is itself a QEMU/KVM virtual
+   machine (`systemd-detect-virt` = `kvm`, DMI `Standard PC (Q35 + ICH9, 2009)` / `QEMU`)
+   whose only DRM device is **virtio-pci** (`/sys/class/drm/card1/device/vendor = 0x1af4`,
+   driver `virtio-pci`); the "AMD Radeon RX 7600M XT" name that appears in the compositor
+   and WebGL strings arrives through venus passthrough. So "the host behaves identically"
+   means "two virtio environments behave identically", not "real AMD hardware behaves the
+   same". The vendor-mismatch hypothesis below is therefore still very much alive, and it
+   applies to *both* environments equally.
+2. **`LD_PRELOAD` cannot see Chromium's libva calls.** Chromium dlopens libva: the binary
+   references `libva.so`/`libva.so.` by name, has no `libva` entry in `DT_NEEDED`, and
+   resolves `vaInitialize`, `vaCreateConfig`, `vaGetDisplayDRM` and `vaCreateSurfaces` with
+   `dlsym`. A preloaded definition of those symbols is bypassed by a `dlsym` on a dlopen'd
+   handle, so the "0 VA-API calls" figure for Chromium is **not evidence** - only the mpv /
+   ffmpeg numbers are, because those link libva normally.
+
+What still stands after the correction:
+
+- with the default configuration, chromium's GPU process logs
+  `vaapi_wrapper.cc:1755 GetHandle(): Either VADisplayStateSingleton::PreSandboxInitialization()
+  hasn't been called or that method failed`, and **`--hardware-video-device-path=` and
+  `--render-node-override=` both silence it** - the scan in
+  `VADisplayStateSingleton::PreSandboxInitialization` (skip non-PCI, then require the DRM
+  device's vendor/device to equal `gpu_info->active_gpu()`) is what fails by default, in this
+  VM and in the cang guest alike, and both switches set `drm_fd_` directly;
+- libva's *own* logging is dlopen-proof, and with `LIBVA_MESSAGING_LEVEL=1` a chromium run
+  (device-path switch included) emits **no `libva` messages at all** - so satisfying the scan
+  is not by itself enough for chromium to initialise VA-API here.
+
+Next instrument, then: interpose `dlopen`/`dlsym` (to see whether chromium opens libva and
+which symbols it asks for), and compare against a chromium run on hardware whose DRM node is
+the same device the browser reports as active - which this development VM cannot provide, so
+that comparison needs a genuinely bare-metal AMD host.
