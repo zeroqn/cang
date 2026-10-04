@@ -111,6 +111,11 @@ Measured, guest `--gpu=drm`, 6 frames of testsrc 320x240 (45 s cap per arm):
 | caps + reference-frames | **hangs** (rc=124; a 20 s 640x360 encode never finished either) | - |
 | caps only | 4659 B in 2 s, rc=0 | 16895 B in 1 s, rc=0 |
 
+(2026-10-04: the parenthetical "a 20 s 640x360 encode never finished either" in the first row is
+confounded with the host-side `-bf 0` hang documented in the next section and is *not* evidence
+against the DPB patch; the testsrc `-bf 0` hang in the same row is not confounded - testsrc with
+`-bf 0` completes on the host - and remains attributable to the patch.)
+
 So the caps forwarding is sound (and the encoder stays healthy), while the DPB fill as written
 stalls the encoder outright - even for `-bf 0`, which never asks for a future reference. The
 patch is therefore **not wired** in `nix/lib/systems.nix` (it stays in-tree, unwired, with the
@@ -139,22 +144,26 @@ and the whole run delegated to a sub-agent so the parent stays responsive.
 | caps only | 4659 B / 16895 B, rc=0, 2 s / 1 s | **hangs at `frame= 0`** |
 | **no caps, no DPB (old cang) + the same new image** | - | **hangs at `frame= 0`** |
 
-The third row is the decisive one: the *unmodified* cang binary plus the image built in this round
-stalls exactly the same way, so the guest-side half in the image (`mesa-virgl-encode-caps.patch`) is
-implicated independently of the host patches. The guest's own `ffmpeg` log for the stalled arm shows
-the encoder accepted the configuration and then sat at `frame= 0` for two and a half minutes - the
-first picture never completes - and the stall is uninterruptible (the arm's own `timeout` never fires,
-the outer one kills the VM). The 6-frame testsrc arms pass, so it is the material (640x360 H.264
-source), not the frame count.
+**Retraction (2026-10-04): the trigger is `-bf 0` on the host, not the patches.** The three rows above
+were all produced by `probe-bf5.sh`, which passes `-bf 0`. The same 640x360 clip encoded by a plain
+host `ffmpeg`, with no cang involved at all, hangs identically: `-vaapi_device /dev/dri/renderD128 -i
+clip360.mp4 -vf format=nv12,hwupload -c:v h264_vaapi -qp 26 -bf 0` never returns - 0 bytes, `frame= 0`
+throughout, the process spins CPU, SIGTERM at 120 s is ignored and only SIGKILL ends it. Isolation on
+the same clip: no flag -> rc=0, 13 430 B; `-qp 26` -> rc=0, 7 542 B; `-bf 1` -> rc=0, 13 430 B;
+**`-bf 0` -> hangs**; `-bf 0` with a lavfi `testsrc2` source -> rc=0; `-bf 0` with a raw nv12 input ->
+rc=0. The hang therefore needs `-bf 0` *and* a decoded (mp4) input, and it reproduces without cang.
 
-A second, structural defect in the guest half as written: against an **unpatched** host it reads
-`vcaps->max_past_references`/`max_future_references`, which on that host are still `reserved` bits -
-i.e. whatever the host happened to leave there. A wire field that can be read as garbage by a patched
-peer talking to an unpatched one is the wrong design, and it is exactly the old-cang case measured
-above.
+That also matters for what "host" means here: `/dev/dri/renderD128` on this machine is virtio-gpu
+(`vendor 0x1af4 device 0x1050`), i.e. the machine is itself a VM whose own VA encode runs through
+mesa's virgl VA driver. The row "no caps, no DPB (old cang) + the same new image" and the row "caps
+only hangs on real content" are both the host's `-bf 0` hang seen end-to-end through the guest - the
+guest arms added nothing to it. **The claim that the guest-side caps half is implicated is withdrawn**;
+the guest arms must be re-measured with `-bf 1` (`probe-bf7.sh`). The `-bf`-free design objection
+below - a patched peer reading `reserved` bits of an unpatched one - still stands on its own.
 
 **State after this round:** all three patches (host caps, guest caps, host DPB) are unwired in
-`nix/lib/systems.nix` and kept in-tree with these reasons; cang and the image are being rebuilt
+`nix/lib/systems.nix` (the caps+DPB wiring is on hold until the `-bf`-free re-measurement settles
+whether the forwarding is sound); cang and the image are being rebuilt
 without them and the real-content encode re-verified, so the repository returns to the known-good
 baseline. The B-frame work needs a different shape: the caps must be negotiated so an unpatched peer
 cannot misread them (a new caps field with a version/flag, or the value carried in the existing

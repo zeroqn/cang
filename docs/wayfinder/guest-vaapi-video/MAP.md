@@ -41,6 +41,10 @@ where the encoder did not look - chroma ruined, luma untouched). See
   to virglrenderer 1.3.0's `vrend_video`/`virgl_video`, plus the guest's mesa
   `virtio_gpu_drv_video.so` and the host's libva on the render node.
 - Skills worth consulting: `diagnosing-bugs`, `research`, `domain-modeling`.
+- Measurement hazards that have already produced wrong conclusions once:
+  `notes/encode-measurement-hazards.md` - `-bf 0` with a decoded input hangs every ffmpeg on
+  this host (virtio-gpu render node), and a hung arm leaves a spinning VM that SIGTERM does
+  not stop. Use `-bf 1`, `timeout -k`, and kill leftovers between arms.
 - Evidence base: `docs/vaapi-video-investigation.md` (Resolution and the encode
   finding). The live-run logs and the hermetic podman store the probes used live
   outside the repo, on the host btrfs disk.

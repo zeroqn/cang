@@ -123,6 +123,16 @@ goes to the input instead of the checkout:
   aardvark-dns, passt, and docker-compose, and Nix formatting tooling such as
   `nixfmt`.
 
+Keep a GC root for any image you build and load: an unrooted `nix build` output
+that `podman load` has consumed is not protected, so `nix-collect-garbage` can
+delete the layer store paths that the image's `/usr/lib/cang-*` symlinks point
+into. The loaded image keeps working from the podman graph while the guest
+silently falls back to the next `LIBVA_DRIVERS_PATH` entry - with a dangling
+`/usr/lib/cang-va-runtime` the guest's VA driver loses cang's encode patch and
+every `h264_vaapi` encode stalls at `frame= 0`. Build with
+`nix build .#container -o <path outside the store>` and keep that symlink
+(see `docs/wayfinder/guest-vaapi-video/notes/encode-measurement-hazards.md`).
+
 ## Nix store / DB diagnostics
 
 `nix build .#container` depends on a static image metadata linter before running
