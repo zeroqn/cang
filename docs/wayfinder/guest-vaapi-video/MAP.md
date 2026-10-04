@@ -372,6 +372,7 @@ screenshots, and the guest's chromium needs `--alloc=hardened` or it segfaults a
   counts, per-slice lists plus active counts) before the attribute can be
   advertised. The prize, measured on the host for the same real content:
   1 671 174 B at `-bf 0` vs 1 123 666 B with B-frames, i.e. 33%.
+- [The guest VA encode hangs in CQP mode on complex 640x360 content](tickets/08-cqp-encode-hangs.md): with the guest VA driver finally in the image, a 640x360 clip stalls under `-qp` (26 and 45) while the same clip under a bitrate cap, the same pixels at 320x240, and any lavfi content at 640x360 all encode. Corrects the assumption behind the earlier encode measurements: until 2026-10-04 the loaded image had no `/usr/lib/cang-va-runtime` layer, so every ticket 04/05 number was taken with the pinned prebuilt mesa on the old wire format.
 - [Chromium's VA-API decoder instantiates but does not offload](tickets/06-chromium-vaapi-init.md)
   (**the guest is cleared**: a dlopen/dlsym witness shows Chromium *does* initialise VA-API
   on the guest's patched driver and probe profiles/entrypoints, but never creates a decode

@@ -1,3 +1,8 @@
+> **2026-10-04 - the caps regression verdict is also void as to the driver:** the 1.5x bitrate regression that
+> justified leaving the caps patches unwired was measured with the guest running the pinned prebuilt mesa (the
+> image had no `/usr/lib/cang-va-runtime`), i.e. an unpatched guest driver against a patched host. Re-measure
+> before relying on it. See ticket 08.
+
 ---
 label: wayfinder:research
 title: The guest's encoder attribute queries are all zero (and cost B-frames)

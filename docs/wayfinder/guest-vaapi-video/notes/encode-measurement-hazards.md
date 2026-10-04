@@ -91,3 +91,19 @@ while storing a blob in `$TMPDIR`) before this combination worked:
 After the successful load the run to compare against is: `Loaded image: localhost/cang:latest`
 (id `60c470a1a2e3`, 8.88 GB), guest `ls -l /usr/lib/cang-va-runtime/dri/virtio_gpu_drv_video.so`
 resolving to `../lib/libgallium.so`.
+
+## 6. A cleanup step is as dangerous as a run (2026-10-04)
+
+The per-run cleanup `podman unshare rm -rf <state>/cang/workspace/tasks/workspace-*` deletes **every**
+task directory, so a run that finishes while another VM is still alive kills that VM's rootfs out from
+under it. Observed twice: a delegated child's arm died mid-encode, and several otherwise inexplicable
+"the guest produced no output at all" runs are consistent with the same cause (the guest's first
+command never printed). Scope cleanup to the run's own task directory, or run it only when
+`ps -eo args | grep -c '[c]ang internal libkrun'` is 0.
+
+Related: a run's outer `timeout` must be generous enough to cover cang re-ingesting a freshly loaded
+image. After `podman load`, the first VM run spends ~5-7 minutes ingesting before the guest's first
+line appears, which a 420 s cap cuts off before any arm runs. Use 900 s.
+
+Same family of trap as the stale-log one: check `ls -l` on the console log's mtime and size before
+believing - or reporting - its contents.

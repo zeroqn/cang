@@ -1,0 +1,42 @@
+# 08 - the guest VA encode hangs in CQP mode on complex 640x360 content
+
+Status: open. Measured 2026-10-04 with the image that finally ships the guest VA driver
+(`localhost/cang:latest` id `60c470a1a2e3`, `/usr/lib/cang-va-runtime/dri/virtio_gpu_drv_video.so ->
+../lib/libgallium.so` confirmed in-guest by the probe's own `PROBE driver:` line). All arms below are
+one VM, `--gpu=drm`, `h264_vaapi`, `-bf 0`, 30 frames of the same 640x360 clip, 60 s in-guest cap
+(`timeout -k 5 60`, SIGKILL) - a stall is `rc=137`, 0 bytes, `frame= 0` for the whole cap.
+
+| arm | input | encode args | result |
+| --- | --- | --- | --- |
+| `qp26-va` | clip360.mp4 | `-qp 26` | **stall** |
+| `qp45-va` | clip360.mp4 | `-qp 45` | **stall** |
+| `bitrate-va` | clip360.mp4 | `-b:v 200k -maxrate 250k -bufsize 500k` | **ok, 41 548 B, 30 frames** |
+| `ffv1-va` | clip360's first 30 frames re-coded losslessly (ffv1), 640x360 | `-qp 26` | **stall** |
+| `ffv1-small-va` | the same pixels scaled to 320x240 | `-qp 26` | **ok, 21 449 B** |
+| `testsrc-va` | lavfi testsrc2 640x360 | `-qp 26` | **ok, 48 570 B** |
+| `black-va` / `white-va` | lavfi flat colour 640x360 | `-qp 26` | **ok, 442 B / 437 B** |
+| `trans-va` | clip360 re-encoded in-guest by libx264 | `-qp 26` | **stall** |
+| `tagged-va` | testsrc2 mp4 tagged tv/bt709 | `-qp 26` | **ok, 139 232 B** |
+| `mp4-soft` | clip360.mp4 | libx264 | **ok, 599 frames** (control) |
+
+What the table says:
+
+- not the container, the stream, the colour metadata or the decoder: the clip's own pixels re-coded
+  losslessly (ffv1) stall just the same, and a locally generated mp4 of the same geometry and frame
+  count is fine;
+- not the size alone: testsrc2 at the same 640x360 encodes, and the clip's pixels at 320x240 encode;
+- it is **content x size in constant-QP mode**: complex 640x360 content stalls under `-qp`
+  (both 26 and 45), while the same content at the same size under a **bitrate cap** encodes fine.
+
+That points at the rate-control path rather than at buffer sizing (an earlier reading): a capped
+bitrate works, `-qp` does not, and the failing arms hang *inside the encoder* with no output at all.
+
+Consequence for the older evidence: every ticket 05 measurement (PSNR, the 2.4x bitrate, the chroma
+error) and every ticket 04 caps measurement were taken while the loaded image had no
+`/usr/lib/cang-va-runtime` layer at all, i.e. while the guest was silently running the pinned prebuilt
+mesa on the *old* wire format. Those measurements must be re-taken before they are used again; the
+"caps forwarding regresses bitrate 1.5x" verdict in ticket 04 is among them.
+
+Next: instrument what reaches the host in the failing `-qp` case (the vrend parameter dump, logged to
+the shared workspace so the render server's private /dev/shm cannot hide it) and compare it with the
+working bitrate arm and with the host's own `-qp` control, which succeeds on the same content.

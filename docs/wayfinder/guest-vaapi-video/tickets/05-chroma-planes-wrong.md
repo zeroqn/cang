@@ -1,3 +1,9 @@
+> **2026-10-04 - every measurement below is void as to the driver:** until this day the loaded image carried no
+> `/usr/lib/cang-va-runtime` layer, so the guest was silently running the pinned prebuilt mesa (old wire format)
+> instead of cang's `mesaVaApi`. See ticket 08 and `notes/encode-measurement-hazards.md` section 4. The chroma
+> question must be re-measured against the fixed image, and the `-qp` arms it used do not even complete on
+> complex 640x360 content (ticket 08), so a bitrate-capped comparison is needed.
+
 ---
 label: wayfinder:research
 title: The guest encode's chroma planes are wrong
