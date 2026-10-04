@@ -79,3 +79,22 @@ Next step for a full root cause: instrument the guest's mesa `virgl_video.c`/VA 
 build of `pkgs.mesaVaApi` plus an image rebuild) to see which buffer or fence `vaRenderPicture` is
 waiting on. Until then the practical workaround is a bitrate cap (`-b:v`, `-maxrate`, `-bufsize`),
 which encodes the same content successfully.
+
+## Upstream virglrenderer main does not fix it (2026-10-04)
+
+A cang built against **virglrenderer main HEAD** (`aafa9bd234a43c31004ec768ce000b21cf7b99ca`, the
+commit that prompted the question - it is only `venus: fix the vulkan_metal.h include on macOS`)
+behaves byte-for-byte like the pinned 1.3.0:
+
+| arm | 1.3.0 (baseline) | upstream main |
+| --- | --- | --- |
+| `-qp 45` | rc=137, 0 B, frame 0 | rc=137, 0 B, frame 0 |
+| `-b:v 200k -maxrate 250k -bufsize 500k` | rc=0, 41 548 B, 30 frames | rc=0, 41 548 B, 30 frames |
+| `-qp 26` | rc=137, 0 B, frame 0 | rc=137, 0 B, frame 0 |
+
+All five wired cang patches apply cleanly to that revision (the raw-header wire patch included, so the
+patched host and the guest image stay compatible), nixpkgs' own
+`1001-virglrenderer-amdgpu-Use-inttypes-format-defines.patch` is already upstream and must be dropped,
+and main's `venus-protocol` meson wrap needs vendoring. Upstream's only vrend-video commits since
+1.3.0 are `956b034f` (P210 format, decode), `c71b72b2` (iov refactor) and three `vrend_decode.c`
+commits - nothing in the encode path. **Do not chase a virglrenderer bump for this defect.**
