@@ -151,3 +151,26 @@ anchored on the same lines: `virgl_encode_begin_frame(vcdc->vctx, vcdc, vbuf);`,
 shared workspace (`LIBVA_DRIVERS_PATH=/workspace/vadrv`, with
 `virtio_gpu_drv_video.so -> <store>/lib/libgallium-26.1.8.so`) - no image rebuild needed, and the
 guest can read store paths because it shares the host store.
+
+## Why the driver cannot be injected through the workspace (2026-10-04)
+
+The marker build itself works: overriding `src` with a `runCommand` that copies `${pkgs.mesa.src}`,
+applies cang's raw-headers patch and inserts `fprintf(stderr, "CMARK …")` markers (asserted inside the
+derivation: `grep -c CMARK` must be >= 3) produces a `libgallium-26.1.8.so` that demonstrably carries
+the markers (`grep -rl 'CMARK begin_frame'` finds it; note `strings` is not on PATH here, which made an
+earlier `strings | grep -c` read as "no markers" when they were present all along).
+
+But pointing the guest at it fails structurally: `LIBVA_DRIVERS_PATH=/workspace/vadrv` with
+`virtio_gpu_drv_video.so -> /nix/store/<new mesa>/lib/libgallium-26.1.8.so` makes the guest's
+`vaInitialize` fail (`Failed to initialise VAAPI connection: -1`). The guest's `/nix/store` is the
+**image's** store, not the host's live store - cang's `ffmpeg` path works in the guest only because the
+image ships that closure. A newly built mesa's store path does not exist inside the guest, and its
+absolute rpath dependencies cannot be bind-mounted in.
+
+So instrumenting the guest driver requires **building the marks into the image**: mark `mesaVaApi`
+(`src` override via the proven `runCommand` route, with the `patches` list untouched so cang's own
+patch still applies in the patch phase and the sed anchors stay pristine lines such as
+`virgl_encode_begin_frame(vcdc->vctx, vcdc, vbuf);`, `/* Transfer picture desc */`,
+`vs->vws->resource_wait(vs->vws, vres->hw_res);`), `nix build .#container`, `podman load`, then run the
+CQP arm and read the `CMARK` lines from the arm's log. The image's mesa must be rebuilt afterwards
+without the markers.
