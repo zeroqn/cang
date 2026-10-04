@@ -122,3 +122,32 @@ Next step, with the anchors already worked out (all verified to exist in the pat
   never signals.
 - build it without touching the flake:
   `nix build --impure --expr 'let pkgs = import (builtins.getFlake "github:NixOS/nixpkgs/<rev from flake.lock>") {}; in pkgs.mesa.overrideAttrs (old: { patches = (old.patches or []) ++ [ /home/dev/cang/cang/nix/pkgs/patches/mesa-virgl-encode-raw-headers.patch ]; postPatch = <markers>; })' -o <root>`
+
+## Last finding of the round: a userspace condvar wait in the main thread (2026-10-04)
+
+Extending the guest-side shim to interpose `pthread_cond_wait` / `pthread_cond_timedwait` /
+`pthread_cond_clockwait` (logging a backtrace on each entry) shows the guest's **main** ffmpeg thread
+sitting in `pthread_cond_timedwait` on a single condvar, returning `110` (ETIMEDOUT) every ~0.5 s, at
+the moment the shim's `vaRenderPicture` is still in progress. No other thread uses a condvar at all.
+Combined with the ioctl trace (no `EXECBUFFER` in the whole stalled arm) and the idle host, this says
+the guest blocks in a **userspace wait on a condvar/fence inside the VA driver's `vaRenderPicture`**,
+with nothing ever submitted to the host - not a GPU wait, not a host-side block.
+
+(Note: the backtrace's innermost non-shim frame is `ffmpeg+0x3a441`; libgallium has no unwind
+information, so frames between the shim and ffmpeg are missing. It cannot yet be said whether the
+condvar belongs to mesa's virgl winsys submission path or to ffmpeg itself.)
+
+### Attempted marker build, and the recipe to redo it
+
+`nix build --impure --expr 'pkgs.mesa.overrideAttrs (old: { patches = … ++ [raw-headers patch]; postPatch = "…substituteInPlace…"; })'`
+builds and produces a usable `libgallium-26.1.8.so`, and `overrideAttrs` + `postPatch` demonstrably
+runs (a probe `postPatch = "echo MARKER-OK"` shows up), but the `substituteInPlace --replace-fail`
+edits did **not** reach the compiled object (`strings libgallium-26.1.8.so | grep CMARK` = 0) even
+though the build reported success. **Redo the markers with a real patch file** (like cang's own mesa
+patch, which is visibly applied - the build log prints `patching file src/gallium/drivers/virgl/virgl_video.c`),
+anchored on the same lines: `virgl_encode_begin_frame(vcdc->vctx, vcdc, vbuf);`,
+`/* Transfer picture desc */`, `vs->vws->resource_wait(vs->vws, vres->hw_res);`, plus a marker in
+`src/gallium/winsys/virgl/drm/virgl_drm_winsys.c` around its fence wait. Inject the result through the
+shared workspace (`LIBVA_DRIVERS_PATH=/workspace/vadrv`, with
+`virtio_gpu_drv_video.so -> <store>/lib/libgallium-26.1.8.so`) - no image rebuild needed, and the
+guest can read store paths because it shares the host store.
