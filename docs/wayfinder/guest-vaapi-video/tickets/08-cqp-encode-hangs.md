@@ -98,3 +98,27 @@ patched host and the guest image stay compatible), nixpkgs' own
 and main's `venus-protocol` meson wrap needs vendoring. Upstream's only vrend-video commits since
 1.3.0 are `956b034f` (P210 format, decode), `c71b72b2` (iov refactor) and three `vrend_decode.c`
 commits - nothing in the encode path. **Do not chase a virglrenderer bump for this defect.**
+
+## Falsified since: the upload fence, and the next step (2026-10-04)
+
+A cang built with `virglrenderer-encode-upload-fence.patch` **unwired** still stalls in CQP
+(`-qp 45` and `-qp 26` both rc=137, 0 B, frame 0; the bitrate arm completes, 37 565 B rather than
+41 548 B - the fence does change the picture, which is why it stays wired). So the `glFinish` fence
+is not the cause either, and the defect is in the guest's VA driver or in the guest/host video
+protocol, not in any patch cang carries.
+
+Next step, with the anchors already worked out (all verified to exist in the patched tree):
+
+- instrument the **guest's** mesa (`pkgs.mesaVaApi`) rather than rebuilding the image: build a marked
+  driver and point the probe's `LIBVA_DRIVERS_PATH` at a directory in the shared workspace, so no
+  image rebuild or `podman load` is needed (`LIBVA_DRIVERS_PATH=/workspace/vadrv` with
+  `libgallium-<ver>.so` plus a `virtio_gpu_drv_video.so -> ../lib/libgallium.so` symlink).
+- mark, via `postPatch` + `substituteInPlace --replace-fail` (no source tree needed):
+  `virgl_video.c`'s `virgl_encode_begin_frame(vcdc->vctx, vcdc, vbuf);` and
+  `vs->vws->resource_wait(vs->vws, vres->hw_res);`; markers go to stderr, which the probe already
+  captures into `/workspace/<arm>.log`.
+- the same driver tree can also carry a `virgl_drm_winsys` marker around the fence wait, which is the
+  prime suspect: the guest waits with no syscall in flight, i.e. likely on a syncobj/fence the host
+  never signals.
+- build it without touching the flake:
+  `nix build --impure --expr 'let pkgs = import (builtins.getFlake "github:NixOS/nixpkgs/<rev from flake.lock>") {}; in pkgs.mesa.overrideAttrs (old: { patches = (old.patches or []) ++ [ /home/dev/cang/cang/nix/pkgs/patches/mesa-virgl-encode-raw-headers.patch ]; postPatch = <markers>; })' -o <root>`
