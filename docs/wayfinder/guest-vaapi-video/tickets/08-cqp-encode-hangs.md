@@ -194,3 +194,38 @@ what the shim showed (it stops after `RENDER n=10`, with no `EXECBUFFER` and eve
 The next marks belong in `src/gallium/frontends/va/` (picture/buffer/surface handlers) and on
 `virgl_resource_wait` / the winsys fence wait, which are the entry points reachable before
 `begin_frame`.
+
+## Narrowed to one call: the first H.264 packed-header *data* buffer (2026-10-05)
+
+Markers built into the image (same `src`-override route; the image ran the marked driver, confirmed by
+the probe's `PROBE driver:` line) traced the encode buffer list of the stalling CQP arm against the
+working bitrate arm. `CMARK` markers were placed at: the entry of `vlVaHandleEncBufferType`, inside
+`vlVaRenderPicture`'s loop (after the buffer lookup, and after the encode dispatch), and in the H.264
+packed-header parser.
+
+Stalling arm (`-qp 26`, 30 frames, killed at 60 s):
+
+```
+CMARK loop i=0        CMARK encbuf type=22   CMARK after enc type=22 status=0
+CMARK loop i=1        CMARK encbuf type=27   CMARK after enc type=27 status=0
+CMARK loop i=2        CMARK encbuf type=23   CMARK after enc type=23 status=0
+CMARK loop i=3        CMARK encbuf type=25   CMARK after enc type=25 status=0
+CMARK loop i=4        CMARK encbuf type=26   <-- and nothing further
+```
+
+Working arm (`-b:v 200k -maxrate 250k -bufsize 500k`) runs the same sequence to `i=9` and then
+dispatches type 24 (the slice) for every frame - 30 frames, 10 578 B.
+
+So the guest blocks **inside the handler for the first `VAEncPackedHeaderDataBufferType`
+(`vlVaHandleVAEncPackedHeaderDataBufferTypeH264`, i.e. the 40-byte SPS data buffer)**, with every
+previous buffer returning success. `i=5` (the next packed-header *parameter* buffer) is never looked up.
+That is consistent with everything measured before: no `EXECBUFFER` leaves the guest, the shim stops at
+`RENDER n=10`, the host never sees a frame, and the host is idle while the guest is not making progress.
+
+Whether that handler is *spinning* (an unbounded `vl_vlc` loop in `parseEncSpsParamsH264` /
+`vlVaAddRawHeader`, both reached from `picture.c:465`/`picture_h264_enc.c:801`) or *blocked* on a
+userspace wait is the one question left; the next attempt should answer it with a real patch file
+rather than `sed`-injected markers, which proved brittle (a statement before the first `case` is
+dropped by `-O2`, and inserting into multi-line calls breaks the build). Cheap alternative that needs
+no image rebuild: run the arm under the guest's `strace -f -p` to see whether the stalled process makes
+any syscall at all (no syscalls over 60 s = a spin, not a wait).
