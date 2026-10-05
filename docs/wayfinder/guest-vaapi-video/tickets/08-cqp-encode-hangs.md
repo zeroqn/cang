@@ -229,3 +229,22 @@ rather than `sed`-injected markers, which proved brittle (a statement before the
 dropped by `-O2`, and inserting into multi-line calls breaks the build). Cheap alternative that needs
 no image rebuild: run the arm under the guest's `strace -f -p` to see whether the stalled process makes
 any syscall at all (no syscalls over 60 s = a spin, not a wait).
+
+## Spin or wait? (2026-10-05, strace inside the guest)
+
+`strace -f -p <ffmpeg> -o …` attached to the stalling CQP arm 10 s in and held for 4 s. Output: a
+*single* line, `rt_sigsuspend([], 8 <detached ...>)` (plus attach/detach notices), i.e. over four
+seconds the process entered one syscall and stayed in it. That is evidence *against* the "unbounded
+`vl_vlc` scan" reading (a spin would make no syscall at all and strace would show `???`/nothing), but
+it is not conclusive on its own: strace also reports the syscall a tracee is parked in at attach time,
+and an earlier shim run saw the same arm's main thread returning from `pthread_cond_timedwait` every
+~0.5 s. Both readings agree on the important part: the guest is **not** blocked on the host - nothing
+is submitted (`no EXECBUFFER`), the host is idle, and the stack never leaves the VA frontend's
+packed-header handling.
+
+So the handler either waits on a userspace primitive inside `parseEncSpsParamsH264` /
+`vlVaAddRawHeader`, or loops without syscalls in a way strace cannot see from a single attach. Next
+step is a code-level read of that parser (`vl_rbsp`/`vl_vlc` loops in
+`src/gallium/frontends/va/picture_h264_enc.c`) plus a host-side reproduction feeding the *exact* SPS
+bytes the CQP arm sends (the shim recorded them: `00 00 00 01 67 64 0c 1e ac 2b 40 50 17 fc b8 0b 50
+10 10 14 00 00 fa 00 03 6c a3 c2 01 0a 80`), which needs no VM at all.
