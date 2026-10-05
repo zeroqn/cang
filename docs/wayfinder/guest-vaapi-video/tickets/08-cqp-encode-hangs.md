@@ -523,3 +523,17 @@ during *valid* parses as well (the first at the end of every NAL, the second for
 `ue`), returning wrong field values. The next attempt should therefore bound the read *without*
 changing values - e.g. stop the search loop and let the caller's own RBSP-end handling decide - and
 must be validated against the working arm first, before the CQP arm.
+
+### Both RBSP-bound variants regress the working arm (2026-10-06)
+
+After the NAL-boundary hypothesis was refuted, a second, explicitly *value-preserving* variant was
+tried: keep the loop, stop only when nothing is left at all - `invalid_bits >= 32 && data >= end &&
+bytes_left == 0` (bytes exhausted *and* nothing buffered), in `vl_rbsp_ue`, in the slice parser's three
+`while (true)` loops and in the packed-header handler's outer scan. It behaves like the first variant:
+the CQP arm still hangs and the previously-working bitrate arm hangs too.
+
+So a bound that reads as value-preserving still changes what the parse produces - which means the
+divergence is not in *when* the loop stops but in what the parse reads on the way, and the next step
+must be an image built with **both** the patch and markers (per-guard hit counts plus the field values
+the parser writes), compared against the unpatched parse of the same buffer. Both patch variants stay
+in-tree and unwired; `nix/pkgs/patches/mesa-virgl-rbsp-bounds.patch` currently holds variant 2.
