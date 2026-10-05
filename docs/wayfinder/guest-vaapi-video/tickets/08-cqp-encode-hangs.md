@@ -314,3 +314,23 @@ shows no single field that separates the stalling arm from the working ones:
 Next step is therefore a standalone harness that carries the *whole* handler plus its parse helpers
 (they are ~200 lines) rather than a skeleton, or an instrumented mesa build with
 `-fsanitize=address,undefined` and an iteration counter in the parse helpers - both host-only.
+
+### What the host-side work ruled out (2026-10-05)
+
+With the exact 40/40/39-byte buffers, the faithful scan loop terminates (see above); the header sizes
+it computes are all sane (`31/32` then `9/8` bytes), so no `size - nal_start` underflow reaches
+`vlVaAddRawHeader`; and the parse helpers read by that handler are bounded - `parseEncSpsParamsH264`
+has no loop that the captured SPS can drive (its `poc_type` is 2, so the
+`num_ref_frames_in_pic_order_cnt_cycle` loop is never entered; the scaling-matrix branch returns
+early), and `vlVaAddRawHeader` (`picture.c:465`) is a simple bounded copy.
+
+So the *host* side of this defect is exhausted: nothing in the handler's own control flow explains a
+non-terminating loop for these buffers. What remains is measured only inside the guest - the handler
+is entered for the first `VAEncPackedHeaderDataBufferType` and never returns, the guest issues no
+`EXECBUFFER`, and the host is idle - and the one syscall strace caught in four seconds
+(`rt_sigsuspend([], 8)`) is more consistent with a *wait* than with a spin, so "userspace spin" should
+not be treated as established either.
+
+Next step, if this is picked up again: instrument the *guest's* parse helpers and
+`vl_rbsp_init` directly (one image round, the marker recipe works), or attach a debugger inside the
+guest, since the host-side reconstruction has now been tried and does not reproduce the hang.
