@@ -430,3 +430,43 @@ that remains is either one of those loops or a consequence of the patched parse 
 set the host cannot encode. The regression on the bitrate arm should be bisected the same way (it is
 either the `vl_rbsp_ue` bound changing a legitimate value, or the outer-scan bound truncating a
 buffer that the client legitimately delimits further on).
+
+## With the bounds wired, the hang moves to the host's vaRenderPicture (2026-10-06)
+
+Markers in `parseEncSliceParamsH264` plus the RBSP bounds show the guest side is **uncorked**:
+
+```
+CMARK slice first_mb=0
+CMARK slice done          <- the slice parse returns, frame after frame
+```
+
+No `l0/l1/marking loop enter` - those loops never run for this content - and the SPS/PPS/SEI buffers
+all complete. So the RBSP bounds genuinely fix the guest-side stall.
+
+The hang then reappears *one layer up*, on the **host**. Running the same arm with the host-side libva
+interposer (patched into cang's VM worker, watchdog armed at 20 s):
+
+```
+WATCHDOG fired during vaRenderPicture
+  ... libc epoll_wait ... cang(+0x3d110f) ...
+BEGIN=31  END=30  RENDER_in=193  RENDER_ret=5
+```
+
+The host's `vaRenderPicture` never returns, on an early frame, with the guest having submitted
+normally. That is a *different* defect from the one this ticket started with, and it is where the
+remaining CQP hang lives.
+
+Why the host would block once the guest parses differently: with the bounds, the guest's parse bails
+out early (that is what "stop at the end of the RBSP" means), so the parameter structs the guest's
+driver sends over the wire are the truncated/default ones - and the host's real VA driver then blocks
+on that inconsistent parameter set rather than encoding. That also explains the bitrate arm's
+regression: it is the same truncated-parameter path.
+
+So the next step is not "bound the parse" but "parse the buffer correctly": the packed-header data
+buffer is the client's own SPS+PPS, 40 bytes, and mesa's `packed_header_emulation_bytes` setting
+decides whether `vl_rbsp_init` strips emulation-prevention bytes before the field parse. With
+emulation bytes handled (`emu=1`) the stalling SPS decodes as an *HRD* parameter set
+(`nal_hrd=1, cpb_cnt_minus1=9`) while the working arms do not - so the question to answer next is
+whether `context->packed_header_emulation_bytes` is being set the way the client's
+`VAEncPackedHeaderParameterBuffer` asks for, and whether the parse is running off the end because of
+it. That is a small, checkable hypothesis, and it points at the parse rather than at the bounds.
