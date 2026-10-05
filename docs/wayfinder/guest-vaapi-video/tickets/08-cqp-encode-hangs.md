@@ -494,3 +494,32 @@ are wrong, which is why the host hangs instead of encoding.
 That makes the next step concrete: the SPS parse must not consume bits past the SPS NAL, which is what
 `vl_rbsp_init()`'s `vl_vlc_limit()` call is supposed to arrange for a NAL-terminated RBSP
 (`src/util/vl_rbsp.h`), and that limiting is the thing to check next.
+
+### Measured: the NAL-boundary limiting is fine, so that is not the fix (2026-10-06)
+
+`notes/08-rbsp-window.c` runs mesa's `vl_rbsp_init()` over the exact 40-byte packed-header data buffer
+(SPS+PPS) the stalling arm sends and reports the resulting window:
+
+```
+emu=1  RBSP window: data-data=12  end-data=31  bits_left=208  removed=0 escaped=16
+       profile=100 level=30 sps_id=0  chroma=1 bit_depth_luma_minus8=0 bit_depth_chroma_minus8=0
+emu=0  RBSP window: data-data=8   end-data=40   bits_left=280  removed=0 escaped=0
+```
+
+With emulation-byte handling on - which is what the client asks for (`VAEncPackedHeaderParameterBuffer`:
+bit_length 320, has_emulation_bytes 1, decoded above) - the RBSP ends at byte 31, i.e. at the start code
+of the **following** PPS, and the SPS fields decode sanely (High profile, level 30, sps_id 0,
+chroma_format_idc 1). So:
+
+- mesa's limiting already stops the SPS parse at its NAL boundary; **"limit the RBSP at the NAL
+  boundary" is not the fix**, and the truncated-parameter explanation of the host hang is refuted;
+- the earlier `nal_hrd=1, cpb_cnt_minus1=9` reading came from my hand-written field walk, not from
+  mesa's parser - it is an artifact and should not be used as evidence;
+- what remains established is the unbounded `vl_rbsp_ue()` read (proven), the guest stall it causes
+  (markers), and a *separate* host-side `vaRenderPicture` block that appears once the read is bounded.
+
+The most likely reason the bounds patch regresses the previously-working arm is that both guards fire
+during *valid* parses as well (the first at the end of every NAL, the second for a long-but-legal
+`ue`), returning wrong field values. The next attempt should therefore bound the read *without*
+changing values - e.g. stop the search loop and let the caller's own RBSP-end handling decide - and
+must be validated against the working arm first, before the CQP arm.
