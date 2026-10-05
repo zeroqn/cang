@@ -27,6 +27,13 @@ let
                 mesaVaApi = prev.mesa.overrideAttrs (old: {
                   patches = (old.patches or [ ]) ++ [
                     ../pkgs/patches/mesa-virgl-encode-raw-headers.patch
+                    # NOTE: mesa-virgl-rbsp-bounds.patch is deliberately NOT wired yet. It stops
+                    # vl_rbsp_ue()/the slice parser's `while (true)` loops/the packed-header scan
+                    # from running past the end of an RBSP - which is genuinely where the guest's
+                    # CQP encode stalls (proven host-side, and the markers show the parse then
+                    # progress from the SPS through to the IDR slice) - but with it wired the
+                    # previously-working bitrate arm hangs too, so it is not a safe fix as written.
+                    # See docs/wayfinder/guest-vaapi-video/tickets/08-cqp-encode-hangs.md
                     # NOTE: mesa-virgl-encode-caps.patch is deliberately NOT
                     # wired: with it the guest sees non-zero reference counts
                     # (or, against an unpatched host, whatever sits in the

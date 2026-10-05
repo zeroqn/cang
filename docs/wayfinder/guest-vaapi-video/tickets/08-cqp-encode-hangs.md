@@ -385,3 +385,48 @@ while (vl_vlc_bits_left(&rbsp->nal) > 0 && !vl_vlc_get_uimsbf(&rbsp->nal, 1)) {
 packed headers through the same code path, so it is worth sending upstream as well. Note that the
 client's own SPS/PPS still reach the host as packed headers (ticket 02's patch), so a truncated parse
 should not affect the encoded stream.
+
+## The instrumentation round's outcome, and the attempted fix (2026-10-06)
+
+Markers built into the image (the `src`-override route, committed as a note in this ticket) plus the
+host-side reproduction produced the following, in order:
+
+1. **Where the first stall is, confirmed in-guest.** Markers on the packed-header handler, its outer
+   scan loop, `vl_rbsp_init`, and the SPS/PPS parsers show the CQP arm stopping *inside*
+   `parseEncSpsParamsH264` for the first packed-header data buffer:
+
+   ```
+   CMARK encbuf type=22 / 27 / 23 / 25 / 26     (buffer dispatch: seq, misc, pic, packed-param, packed-data)
+   CMARK hdr size=40
+   CMARK iter 1
+   CMARK rbsp type=7                            (SPS)  -- and then nothing
+   ```
+
+   No `CMARK sps done`: the SPS parse never returns, the outer loop has iterated once, and
+   `vl_rbsp_init` returned. That matches the host-side measurements exactly (no `EXECBUFFER`, idle
+   host, one `rt_sigsuspend`).
+
+2. **A genuine, reproducible bug found and proven host-side** (`notes/08-vl-rbsp-ue-spin.c`):
+   `vl_rbsp_ue()` in `src/util/vl_rbsp.h` has no end-of-NAL check, so once the packed-header RBSP is
+   exhausted the reader consumes zeros forever. In a release build (`-DNDEBUG`, as mesa ships) the
+   call does not return at all; in a debug build the `vl_vlc_get_uimsbf` assertion fires. The same
+   shape exists three times in `parseEncSliceParamsH264` as unbounded `while (true)` loops over
+   client bitstream values (`modification_of_pic_nums_idc == 3`, `memory_management_control_operation
+   == 0`), each writing into a fixed 32-entry array.
+
+3. **The attempted fix, and why it is not wired.** `nix/pkgs/patches/mesa-virgl-rbsp-bounds.patch`
+   (kept in-tree, unwired) adds an RBSP-exhaustion check to `vl_rbsp_ue`, to those three
+   `while (true)` loops, and to the packed-header handler's outer scan (whose
+   `vl_vlc_bits_left()` underflows to a huge unsigned once the buffer is exhausted). With it the
+   markers show the parse **progressing further** - `sps done`, `pps done`, the SEI buffer, and the
+   IDR slice (`CMARK iter 4 / rbsp type=5`) - but the arm still hangs, and, decisively, the
+   **previously-working bitrate arm hangs too**. A fix that breaks the working case cannot be wired,
+   so it is unwired again (image rebuilt clean and the bitrate arm re-verified) and recorded here for
+   the next attempt.
+
+Next step, precisely bounded: instrument `parseEncSliceParamsH264` (entry, each of its three loops,
+and the return) *with* the RBSP bounds applied, and log the loop counters without a cap - the hang
+that remains is either one of those loops or a consequence of the patched parse leaving a parameter
+set the host cannot encode. The regression on the bitrate arm should be bisected the same way (it is
+either the `vl_rbsp_ue` bound changing a legitimate value, or the outer-scan bound truncating a
+buffer that the client legitimately delimits further on).

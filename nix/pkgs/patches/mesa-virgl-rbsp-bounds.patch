@@ -1,0 +1,13 @@
+--- a/src/util/vl_rbsp.h
++++ b/src/util/vl_rbsp.h
+@@ -153,6 +153,10 @@
+    vl_rbsp_fillbits(rbsp);
+    while (!vl_vlc_get_uimsbf(&rbsp->nal, 1)) {
+       ++bits;
++      if (rbsp->nal.data >= rbsp->nal.end && rbsp->nal.bytes_left == 0)
++         break;
++      if (bits >= 31)
++         break;
+       if (bits == 16)
+          vl_rbsp_fillbits(rbsp);
+    }
