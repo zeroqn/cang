@@ -334,3 +334,54 @@ not be treated as established either.
 Next step, if this is picked up again: instrument the *guest's* parse helpers and
 `vl_rbsp_init` directly (one image round, the marker recipe works), or attach a debugger inside the
 guest, since the host-side reconstruction has now been tried and does not reproduce the hang.
+
+## ROOT CAUSE: `vl_rbsp_ue()` reads past the end of the RBSP forever (2026-10-05)
+
+Proven host-side, no VM, with `notes/08-vl-rbsp-ue-spin.c` (mesa 26.1.8's own `vl_vlc.h`/`vl_rbsp.h`).
+
+`src/util/vl_rbsp.h`:
+
+```c
+static inline unsigned vl_rbsp_ue(struct vl_rbsp *rbsp)
+{
+   unsigned bits = 0;
+   vl_rbsp_fillbits(rbsp);
+   while (!vl_vlc_get_uimsbf(&rbsp->nal, 1)) {   /* no end-of-NAL check */
+      ++bits;
+      if (bits == 16)
+         vl_rbsp_fillbits(rbsp);
+   }
+   return (1 << bits) - 1 + vl_rbsp_u(rbsp, bits);
+}
+```
+
+Once the packed-header data buffer's RBSP is exhausted, `vl_rbsp_fillbits()` cannot add bits, the next
+bit reads as 0 forever, and `bits` increments without bound - the loop never terminates.
+`parseEncSpsParamsH264()` calls `vl_rbsp_ue()` for `seq_parameter_set_id` and many fields after it, so
+`vlVaRenderPicture()` never returns and the guest hangs: no syscalls, no `EXECBUFFER`, idle host -
+exactly what the guest-side measurements showed.
+
+Reproduction with the exact 40-byte buffer the stalling arm sends (SPS+PPS, recorded with the shim),
+consumed the way the parser does and then read further:
+
+- `-O2` (asserts on): `vl_vlc_get_uimsbf: Assertion 'vl_vlc_valid_bits(vlc) >= num_bits' failed`
+  (`src/util/vl_vlc.h:251`) - the reader has consumed past the end of the buffer;
+- `-O2 -DNDEBUG` (as mesa ships): `vl_rbsp_ue()` does not return at all - caught by a 3 s alarm, at
+  both emulation-byte settings.
+
+This also explains the arm matrix: whether the parse needs bits past the end of that buffer depends on
+the bytes. The stalling arm's High-profile constant-QP SPS walks off the end (markers: `CMARK rbsp
+type=7` then nothing, with `CMARK iter 1`, so the hang is inside `parseEncSpsParamsH264`); the Main
+profile SPS and the all-intra High SPS land exactly and succeed.
+
+Fix direction (upstream mesa, `src/util/vl_rbsp.h`): bound the readers, for example
+
+```c
+while (vl_vlc_bits_left(&rbsp->nal) > 0 && !vl_vlc_get_uimsbf(&rbsp->nal, 1)) {
+```
+
+(or clamp `bits`) in `vl_rbsp_ue()` and `vl_rbsp_se()`. Because the guest driver is built from
+`pkgs.mesaVaApi`, cang can carry this as a guest-side patch immediately - the host's own mesa parses
+packed headers through the same code path, so it is worth sending upstream as well. Note that the
+client's own SPS/PPS still reach the host as packed headers (ticket 02's patch), so a truncated parse
+should not affect the encoded stream.
