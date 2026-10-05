@@ -174,3 +174,23 @@ patch still applies in the patch phase and the sed anchors stay pristine lines s
 `vs->vws->resource_wait(vs->vws, vres->hw_res);`), `nix build .#container`, `podman load`, then run the
 CQP arm and read the `CMARK` lines from the arm's log. The image's mesa must be rebuilt afterwards
 without the markers.
+
+## The stall is *before* `virgl_encode_begin_frame` (2026-10-04, marked image)
+
+The marks were finally measured by building them into the image (temporary `src` override in
+`nix/lib/systems.nix`: copy `${old.src}`, `patch -p1 < mesa-virgl-encode-raw-headers.patch`, `sed` in
+`fprintf(stderr, "CMARK …")` at the anchors, assert `grep -c CMARK >= 3`, then `nix build .#container`,
+`podman load`, run). Guest confirmed the marked driver:
+`/nix/store/xanld3z3y94rq20a5vhgpr3s20b6q4d5-mesa-26.1.8/lib/libgallium-26.1.8.so`.
+
+| arm (5 frames, `-bf 0`) | result | CMARK lines in its log |
+| --- | --- | --- |
+| `-qp 26` (stalls) | rc=137, 0 B | **0** |
+| `-b:v 200k -maxrate 250k -bufsize 500k` | rc=0, 10 578 B | **40** (including `resource_wait enter/done` pairs) |
+
+So in the failing arm the guest never reaches `virgl_encode_begin_frame` -
+`vaRenderPicture` blocks *earlier* in the VA frontend's handling of the buffer list, which is exactly
+what the shim showed (it stops after `RENDER n=10`, with no `EXECBUFFER` and every host thread idle).
+The next marks belong in `src/gallium/frontends/va/` (picture/buffer/surface handlers) and on
+`virgl_resource_wait` / the winsys fence wait, which are the entry points reachable before
+`begin_frame`.
