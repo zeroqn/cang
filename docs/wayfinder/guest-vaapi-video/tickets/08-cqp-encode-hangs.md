@@ -470,3 +470,27 @@ emulation bytes handled (`emu=1`) the stalling SPS decodes as an *HRD* parameter
 whether `context->packed_header_emulation_bytes` is being set the way the client's
 `VAEncPackedHeaderParameterBuffer` asks for, and whether the parse is running off the end because of
 it. That is a small, checkable hypothesis, and it points at the parse rather than at the bounds.
+
+### The client's own packed-header parameter buffers (2026-10-06)
+
+Decoding the type-25 (`VAEncPackedHeaderParameterBuffer`) buffers captured for each arm settles what the
+*client* asks for:
+
+| arm | packed header | bit_length | bytes | has_emulation_bytes |
+| --- | --- | --- | --- | --- |
+| all arms | SPS (type 1) | 320 | 40 | 1 |
+| all arms | SEI (type 4) | 1200 | 150 | 1 |
+| all arms | PPS (type 3) | 64 | 8 | 1 |
+
+So `has_emulation_bytes = 1` is what ffmpeg asks for and what mesa honours, for every arm including the
+working ones - the flag is not the differentiator. What the table *does* show is that the *SPS* data
+buffer is 40 bytes while the SPS NAL itself is 27: the buffer contains the SPS **plus** the PPS that
+follows it (`00 00 00 01 67 …` then `00 00 00 01 68 …`). mesa's handler parses the whole buffer per NAL,
+and the SPS parse reads past the end of its own NAL into the following PPS bytes - which yields the
+nonsense sequence parameters (`nal_hrd = 1`, `cpb_cnt_minus1 = 9` in the emulation-byte walk) that the
+host's VA driver then blocks on. With the bounds wired the parse at least returns; the fields it returns
+are wrong, which is why the host hangs instead of encoding.
+
+That makes the next step concrete: the SPS parse must not consume bits past the SPS NAL, which is what
+`vl_rbsp_init()`'s `vl_vlc_limit()` call is supposed to arrange for a NAL-terminated RBSP
+(`src/util/vl_rbsp.h`), and that limiting is the thing to check next.
