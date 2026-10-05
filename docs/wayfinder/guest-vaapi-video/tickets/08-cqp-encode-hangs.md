@@ -290,3 +290,27 @@ So the skeleton is not faithful enough to claim the infinite loop: it omits `vl_
 …)` and the parse calls that follow, which advance the outer `vlc` between iterations. A faithful
 reproduction (that plus the parse helpers, `-DNDEBUG`, bounded iteration count) is the next step, and
 it is host-only work - no image rebuild, no VM.
+
+### Correction after the faithful copy (2026-10-05)
+
+Repeating the host-side work with the buffers extracted *exactly* from the shim's hex dump (40 B for
+the stalling arm and for `-g 1`, 39 B for the Main arm) and with the loop's `vl_rbsp_init(&rbsp, &vlc,
+~0, …)` call included - the piece the first skeleton left out - the outer scan loop **terminates**
+for all three buffers at both emulation-byte settings (2 iterations with emulation bytes on, 1 with
+them off, `bits_left` reaching 0). So the earlier "spins for all three" reading was an artifact of the
+incomplete skeleton, and the spin is *not* in the outer loop: it is inside the parse helpers that loop
+calls (`parseEncSpsParamsH264`, `parseEncPpsParamsH264`, `vlVaAddRawHeader`) or in `vl_rbsp_init`'s
+emulation-byte handling for the real context configuration.
+
+Decoding the SPS fields of the three buffers with mesa's own `vl_rbsp.h` (`notes/08-cqp-buffer-bytes.c`)
+shows no single field that separates the stalling arm from the working ones:
+
+| arm | profile | level | chroma | poc_type | max_num_ref | size |
+| --- | --- | --- | --- | --- | --- | --- |
+| `-qp 26` (stalls) | 100 | 30 | 1 | 2 | 1 | 640x368 |
+| `-g 1` (works) | 100 | 30 | 1 | 2 | 0 | 640x368 |
+| `-profile:v main` (works) | 77 | 30 | - | 2 | 1 | 640x368 |
+
+Next step is therefore a standalone harness that carries the *whole* handler plus its parse helpers
+(they are ~200 lines) rather than a skeleton, or an instrumented mesa build with
+`-fsanitize=address,undefined` and an iteration counter in the parse helpers - both host-only.
