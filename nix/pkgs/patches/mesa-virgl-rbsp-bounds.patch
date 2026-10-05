@@ -11,3 +11,41 @@
        if (bits == 16)
           vl_rbsp_fillbits(rbsp);
     }
+--- a/src/gallium/frontends/va/picture_h264_enc.c
++++ b/src/gallium/frontends/va/picture_h264_enc.c
+@@ -488,6 +488,8 @@
+       slice->ref_pic_list_modification_flag_l0 = vl_rbsp_u(rbsp, 1);
+       if (slice->ref_pic_list_modification_flag_l0) {
+          while (true) {
++            if (rbsp->nal.data >= rbsp->nal.end && rbsp->nal.bytes_left == 0)
++               break;
+             modification_of_pic_nums_idc = vl_rbsp_ue(rbsp);
+             if (modification_of_pic_nums_idc == 3)
+                break;
+@@ -510,6 +512,8 @@
+       slice->ref_pic_list_modification_flag_l1 = vl_rbsp_u(rbsp, 1);
+       if (slice->ref_pic_list_modification_flag_l1) {
+          while (true) {
++            if (rbsp->nal.data >= rbsp->nal.end && rbsp->nal.bytes_left == 0)
++               break;
+             modification_of_pic_nums_idc = vl_rbsp_ue(rbsp);
+             if (modification_of_pic_nums_idc == 3)
+                break;
+@@ -536,6 +540,8 @@
+          slice->adaptive_ref_pic_marking_mode_flag = vl_rbsp_u(rbsp, 1);
+          if (slice->adaptive_ref_pic_marking_mode_flag) {
+             while (true) {
++               if (rbsp->nal.data >= rbsp->nal.end && rbsp->nal.bytes_left == 0)
++                  break;
+                memory_management_control_operation = vl_rbsp_ue(rbsp);
+                if (memory_management_control_operation == 0)
+                   break;
+@@ -809,6 +815,8 @@
+    vl_vlc_init(&vlc, 1, (const void * const*)&data, &buf->size);
+ 
+    while (vl_vlc_bits_left(&vlc) > 0) {
++      if (vlc.data >= vlc.end && vlc.bytes_left == 0)
++         break;
+       /* search the first 64 bytes for a startcode */
+       for (int i = 0; i < 64 && vl_vlc_bits_left(&vlc) >= 24; ++i) {
+          if (vl_vlc_peekbits(&vlc, 24) == 0x000001)
