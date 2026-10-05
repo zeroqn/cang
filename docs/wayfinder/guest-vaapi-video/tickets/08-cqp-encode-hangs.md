@@ -248,3 +248,45 @@ step is a code-level read of that parser (`vl_rbsp`/`vl_vlc` loops in
 `src/gallium/frontends/va/picture_h264_enc.c`) plus a host-side reproduction feeding the *exact* SPS
 bytes the CQP arm sends (the shim recorded them: `00 00 00 01 67 64 0c 1e ac 2b 40 50 17 fc b8 0b 50
 10 10 14 00 00 fa 00 03 6c a3 c2 01 0a 80`), which needs no VM at all.
+
+## Which arms stall, and the host-side loop skeleton (2026-10-05)
+
+Varying the client's own configuration on the same clip, 5 frames, `-bf 0` (45 s in-guest cap):
+
+| arm | result |
+| --- | --- |
+| `-qp 26` (High, default GOP) | **stall** |
+| `-profile:v main -qp 26` | ok, 10 514 B |
+| `-profile:v baseline -qp 26` | rc=234 (ffmpeg refuses: baseline has no CABAC) |
+| `-level 4 -qp 26` | **stall** |
+| `-g 1 -qp 26` (all-intra) | ok, 32 514 B |
+| `-bf 1 -qp 26` | **stall** |
+| `-b:v 200k -maxrate 250k -bufsize 500k` | ok, 10 578 B |
+
+So the trigger is the *High-profile, reference-frame* configuration under constant-QP; the Main
+profile and the all-intra GOP both avoid it, as does bitrate mode.
+
+The packed-header *data* buffers those arms send (captured with the shim):
+
+```
+stall  (-qp 26, High, 40 B): 00000001 67640c1e ac2b4050 17fcb80b 50101014 0000fa00 036ca3c2 010a8000 000168ee 38b0
+ok     (-g 1,   High, 40 B): 00000001 67641c1e ac2b8140 5ff2e02d 40404050 00003e80 000e9b28 f08042a0 000168ee 38b0
+ok     (main,         39 B): 00000001 674d4c1e 95a0280b fe5c05a8 08080a00 0007d000 01d3651e 10085400 000168ee 3880
+```
+
+(The PPS tail `00000001 68ee38b0` is identical in all three; only the SPS differs.)
+
+A host-side skeleton of the handler's scan loop over mesa's own `vl_vlc.h`
+(`notes/08-cqp-loop-repro.c`, no VM needed) shows two things and proves nothing more:
+
+- with assertions on, the *stalling* SPS trips
+  `vl_vlc_peekbits: Assertion 'vl_vlc_valid_bits(vlc) >= num_bits || vlc->data >= vlc->end' failed`
+  (`src/util/vl_vlc.h:227`), i.e. the loop consumes past the end of the 40-byte buffer;
+- with `-DNDEBUG` it then iterates past 1e6 with `vl_vlc_bits_left()` underflowed to 3 750 968 912
+  (`= (unsigned)(32 - invalid_bits)` after `eatbits` ran past the end) - **but it does so for all
+  three buffers**, including the two that work in the VM.
+
+So the skeleton is not faithful enough to claim the infinite loop: it omits `vl_rbsp_init(&rbsp, &vlc,
+…)` and the parse calls that follow, which advance the outer `vlc` between iterations. A faithful
+reproduction (that plus the parse helpers, `-DNDEBUG`, bounded iteration count) is the next step, and
+it is host-only work - no image rebuild, no VM.
