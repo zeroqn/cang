@@ -27,12 +27,11 @@ let
                 mesaVaApi = prev.mesa.overrideAttrs (old: {
                   patches = (old.patches or [ ]) ++ [
                     ../pkgs/patches/mesa-virgl-encode-raw-headers.patch
-                    # NOTE: mesa-virgl-rbsp-bounds.patch is deliberately NOT wired. Two variants
-                    # (stop at the last byte; stop only when nothing is left at all, bytes and
-                    # buffered bits alike) both stop vl_rbsp_ue() spinning - and both make the
-                    # previously-working bitrate arm hang, so a bound that reads as value-preserving
-                    # still changes what the parse produces. Next: build the patch WITH markers to
-                    # see which guard fires and where the stream diverges from the unpatched parse.
+                    # NOTE: mesa-virgl-rbsp-bounds.patch is deliberately NOT wired. Three variants
+                    # (stop at the last byte; stop only when nothing is left; plus `return 0` and an
+                    # HRD-loop bound) all stop vl_rbsp_ue() spinning and all leave BOTH arms stalling
+                    # later - the bound uncorks the guest and exposes a second, downstream stall.
+                    # Next: mark the submission path with the bound wired to find that one.
                     # ../pkgs/patches/mesa-virgl-rbsp-bounds.patch
                     # NOTE: mesa-virgl-encode-caps.patch is deliberately NOT
                     # wired: with it the guest sees non-zero reference counts

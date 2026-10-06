@@ -537,3 +537,34 @@ divergence is not in *when* the loop stops but in what the parse reads on the wa
 must be an image built with **both** the patch and markers (per-guard hit counts plus the field values
 the parser writes), compared against the unpatched parse of the same buffer. Both patch variants stay
 in-tree and unwired; `nix/pkgs/patches/mesa-virgl-rbsp-bounds.patch` currently holds variant 2.
+
+### Third variant, same outcome - and what is now settled (2026-10-06)
+
+Variant 3 added the two things the analysis pointed at: `vl_rbsp_ue()` **returns 0** when nothing is
+left (instead of inventing a value out of consumed zero bits), and
+`parseEncHrdParamsH264`'s `for (i = 0; i <= hrd_params->cpb_cnt_minus1; ++i)` is bounded by
+`ARRAY_SIZE(hrd_params->bit_rate_value_minus1)` - that loop writes into **32-entry arrays** with an
+unbounded, client-controlled `cpb_cnt_minus1`, so it is an out-of-bounds write for corrupt or truncated
+input, and for a garbage `cpb_cnt_minus1` it is also effectively an infinite loop. The variant keeps the
+guard in the three slice-parser loops and in the packed-header handler's outer scan.
+
+Result: the CQP arm still stalls **and the previously-working bitrate arm stalls too** - the same
+outcome as variants 1 and 2.
+
+So the picture is:
+
+1. the *first* defect is proven - `vl_rbsp_ue()` has no end-of-NAL check and spins forever on the
+   client's packed header (`notes/08-vl-rbsp-ue-spin.c`, host-only reproduction);
+2. bounding it (any of the three variants) **uncorks the guest** - markers reach `CMARK slice done`
+   frame after frame - and then a **second, downstream stall** appears, on the host side: with the
+   bound wired, the host-side libva interposer shows `WATCHDOG fired during vaRenderPicture` with
+   `BEGIN=31 END=30` (frames are submitted, the host's driver then blocks);
+3. the HRD-loop bound is worth keeping as a correctness fix regardless (out-of-bounds write), and is
+   in the unwired patch;
+4. mesa's NAL-boundary limiting is *fine* (`notes/08-rbsp-window.c`), so the earlier
+   "truncated parameters" explanation of the host stall is withdrawn.
+
+Nothing is wired. The guest VA encode remains usable with a bitrate cap; constant-QP High-profile
+content hangs. The next session's first job is the second stall: with the RBSP bound wired, mark the
+submission path (guest winsys → host front door → vrend → host VA) to see exactly which call blocks,
+using the same shim/marker toolkit that found the first one.

@@ -6,7 +6,7 @@
        ++bits;
 +      if (rbsp->nal.invalid_bits >= 32 &&
 +          rbsp->nal.data >= rbsp->nal.end && rbsp->nal.bytes_left == 0)
-+         break;
++         return 0;
        if (bits == 16)
           vl_rbsp_fillbits(rbsp);
     }
@@ -42,6 +42,15 @@
                 memory_management_control_operation = vl_rbsp_ue(rbsp);
                 if (memory_management_control_operation == 0)
                    break;
+@@ -587,7 +596,7 @@
+    hrd_params->cpb_cnt_minus1 = vl_rbsp_ue(rbsp);
+    hrd_params->bit_rate_scale = vl_rbsp_u(rbsp, 4);
+    hrd_params->cpb_size_scale = vl_rbsp_u(rbsp, 4);
+-   for (i = 0; i <= hrd_params->cpb_cnt_minus1; ++i) {
++   for (i = 0; i <= hrd_params->cpb_cnt_minus1 && i < ARRAY_SIZE(hrd_params->bit_rate_value_minus1); ++i) {
+       hrd_params->bit_rate_value_minus1[i] = vl_rbsp_ue(rbsp);
+       hrd_params->cpb_size_value_minus1[i] = vl_rbsp_ue(rbsp);
+       hrd_params->cbr_flag[i] = vl_rbsp_u(rbsp, 1);
 @@ -809,6 +818,8 @@
     vl_vlc_init(&vlc, 1, (const void * const*)&data, &buf->size);
  
