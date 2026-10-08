@@ -320,3 +320,109 @@ VA-API library and the vrend path are all healthy (mpv decodes hardware-accelera
 guest), and the remaining defect is inside Chromium's decoder creation, which needs either
 upstream knowledge of that code path or a Chromium built with decoder logging that this official
 build does not emit at any `--vmodule` tried.
+
+## Upstream read (2026-10-09): `kFailedToCreateDecoder` is a decoder-*selection* code, and neither documented flag set engages the guest's decode
+
+Sources are the pinned Chromium **154.0.8037.57** tree on
+`chromium.googlesource.com/chromium/src/+/refs/tags/154.0.8037.57/` (line numbers
+are that tag's) and Chromium's own `docs/gpu/vaapi.md`.
+
+### (a) `VaapiVideoDecoder::Initialize` never returns `kFailedToCreateDecoder`
+
+- `media/base/decoder_status.h:50` defines `kFailedToCreateDecoder = 205`.
+- `VaapiVideoDecoder::Initialize` returns `kFailed` on every failure path
+  (`media/gpu/vaapi/vaapi_video_decoder.cc:190,304,468,798`), never 205. So 205 is
+  produced one level up, by the **decoder pipeline / mojo factory**, not by the
+  VA-API decoder:
+  - `MojoVideoDecoderService::Initialize`: `if (!decoder_) OnDecoderInitialized(
+    kFailedToCreateDecoder)` — `media/mojo/services/mojo_video_decoder_service.cc:289`;
+    `decoder_` is `mojo_media_client_->CreateVideoDecoder(...)` (`:223`).
+  - `VideoDecoderPipeline::InitializeTask`: `if (!decoder_) { OnError("|decoder_|
+    creation failed."); ... kFailedToCreateDecoder }` —
+    `media/gpu/chromeos/video_decoder_pipeline.cc:688`.
+- The Linux factory `GpuMojoMediaClient::CreateVideoDecoder`
+  (`media/mojo/services/gpu_mojo_media_client.cc`) returns `nullptr` when
+  `IsAcceleratedDecodingDisabled()` (i.e. `--disable-accelerated-video-decode`, or
+  `GPU_FEATURE_TYPE_ACCELERATED_VIDEO_DECODE != kGpuFeatureStatusEnabled`, or GL is
+  disabled) or when there is no command buffer id; otherwise
+  `GpuMojoMediaClientLinux::CreatePlatformVideoDecoder`
+  (`media/mojo/services/gpu_mojo_media_client_linux.cc`) returns `nullptr` when
+  `GetActualPlatformDecoderImplementation()` is `kUnknown` (its `default: return
+  nullptr`). That function is the real selection gate:
+  - `kAcceleratedVideoDecodeLinux` must be enabled (`media/base/media_switches.cc:1486`,
+    default on with `USE_VAAPI`), then
+  - **GL** (`gr_context_type == kGL`) needs `kAcceleratedVideoDecodeLinuxGL`
+    (`:1494`, default on) — vendor-independent; **Vulkan** needs `gr_context_type ==
+    kVulkan` and `features::kVulkanFromANGLE` **and** `features::kDefaultANGLEVulkan`,
+    both `FEATURE_DISABLED_BY_DEFAULT` (`ui/gl/gl_switches.cc:299-310`), plus a
+    non-empty `gpu_info.vulkan_info`, plus Intel or `kVaapiIgnoreDriverChecks`.
+- So the profile/entrypoint storm is the *capability* query
+  (`GetSupportedVideoDecoderConfigs` → `VideoDecoderPipeline::GetSupportedConfigs` →
+  `VaapiVideoDecoder::GetSupportedConfigs` → `VaapiWrapper::GetSupportedDecodeProfiles`),
+  which is a different call from `CreateVideoDecoder`. 205 is the latter declining to
+  build a decoder, or the pipeline's own decoder creation failing.
+
+### (b) `GetHandle()/PreSandboxInitialization` is a real gate, and it is bypassable
+
+- `VADisplayStateSingleton::GetHandle` returns nothing when `drm_fd_` is invalid —
+  "PreSandboxInitialization() hasn't been called or that method failed to find a
+  suitable render node" (`media/gpu/vaapi/vaapi_wrapper.cc:1754`).
+- `PreSandboxInitialization` (`:1623-1732`) skips non-PCI devices, needs a render node,
+  and when `gpu_info` is supplied requires the device's PCI vendor/device to equal
+  `gpu_info->active_gpu()` (`:1683-1690`). In this guest the only DRM device is virtio
+  (`0x1af4`) while venus surfaces the host AMD part (`0x1002`), so the scan leaves
+  `drm_fd_` invalid. Three switches set `drm_fd_` directly:
+  `--hardware-video-device-path` and `--render-node-override` (`:1634-1656`), and the
+  primary-node fallback `--enable-primary-node-access-for-vkms-testing` (`:1708-1728`;
+  upstream extended that switch to cover `USE_VAAPI`).
+- So yes, the complaint is the gate for `VaapiWrapper::Create`
+  (`media/gpu/vaapi/vaapi_wrapper.cc:1915-1918`), and `--render-node-override` clears it
+  (measured below). It is **not** the whole story: clearing it does not by itself get a
+  decode context.
+
+### (c) Verified: Chromium's own documented VA-API flags still produce zero decode contexts
+
+Chromium documents an unsupported "VaAPI on Linux" OpenGL and Vulkan flag set in
+`docs/gpu/vaapi.md` ("VaAPI on Linux with OpenGL" / "with Vulkan"). Both, plus the
+`--render-node-override` from (b), were run in one bounded `--gpu=drm --waypipe` guest
+(cang `cang-baseline`, guest-init `gi-gbm`, image `1393b4cc`, the guest's own patched
+`virtio_gpu_drv_video.so`), playing the 20 s 1920x1080 H.264 clip under the
+`vawrap4.so` dlopen/dlsym witness (evidence:
+`/home/dev/cang/disk/nctx/t06{,b,c}/`):
+
+| arm (`--ozone-platform=wayland`, all `--alloc=hardened --ignore-gpu-blocklist`) | libva init | `vaCreateConfig` | surfaces / contexts / begin / render | GetHandle complaint |
+| --- | --- | --- | --- | --- |
+| ticket's flags: `--use-angle=vulkan` + `VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiIgnoreDriverChecks` | 0 | 0 | 0 / 0 / 0 / 0 | 1 |
+| + `--use-gl=angle --use-angle=gl` + doc GL features + `--render-node-override` | 1 | 38 | 0 / 0 / 0 / 0 | 0 |
+| + `--use-gl=angle --use-angle=vulkan` + doc Vulkan features (`Vulkan,DefaultANGLEVulkan,VulkanFromANGLE`) + override | 1 | 38 | 0 / 0 / 0 / 0 | 0 |
+| default GL + doc GL features + `--render-node-override` | 1 | 38 | 0 / 0 / 0 / 0 | 0 |
+| `--use-angle=vulkan` + doc Vulkan features (no `--use-gl=angle`) + override | 1 | 38 | 0 / 0 / 0 / 0 | 0 |
+| as above, `--v=2 --log-level=0` and `video_decoder_pipeline/decoder_selector` vmodule | 1 | 38 | 0 / 0 / 0 / 0 | 0 |
+
+Every arm played software (`readyState=4`, ~570-596 frames of 1920x1080 in 20 s). The
+witness log is identical in all five "improved" arms: `vaInitialize` once, the whole
+`VASupportedProfiles` enumeration (`profile=7 entry=1` created and destroyed as a
+probe, `MemoryType 0x68000001`, NV12 `0x3231564e`, Max 16384x16384), then
+`vaCreateConfig profile=-1 entry=10` and `vaTerminate` — i.e. `GetHandle()` was taken
+and released **once**, and no decoder wrapper, surface or context was ever created.
+`--render-node-override=/dev/dri/renderD128` alone (arm 2/4/5) removes the
+`PreSandboxInitialization` failure, so (b) is a genuine, bypassable gate — it is just
+not the binding one.
+
+**Therefore cang has no Chromium flag to set here.** The remainder is inside Chromium's
+decoder creation *after* the capability query, and the official build emits no
+`VideoDecoderPipeline`/`DecoderStatus`/`decoder_selector` line to stderr even at
+`--v=2 --log-level=0`, so 205 vs 202 vs "no decoder built at all" cannot be told apart
+from the console.
+
+### Smallest next experiment
+
+Read the decoder the renderer actually selected from the media pipeline's own log
+surface instead of stderr: run the arm and open `chrome://media-internals` (or capture
+the `MediaLog` via `--vmodule=media_log=3`), and look at the player's `video_decoder`
+property and `error` field. That names `GpuVideoDecoder`/`FFmpegVideoDecoder` (so the
+selection result is known) and prints the `DecoderStatus` (205 vs 202), which decides
+between (i) `CreateVideoDecoder` returning nullptr and (ii) the pipeline being built and
+rejecting the config. Only after that does it make sense to ask whether the fix is an
+upstream Chromium change (Linux VA-API is documented as unsupported) or a cang-side
+image/GPU-property decision.
