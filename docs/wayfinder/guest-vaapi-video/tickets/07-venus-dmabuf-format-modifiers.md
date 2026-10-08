@@ -1,7 +1,7 @@
 ---
 label: wayfinder:research
 title: Venus dma-buf format-modifier imports block Vulkan-presenting clients
-status: open
+status: closed
 blocked_by: []
 claimed_by:
 ---
@@ -265,3 +265,23 @@ was missing `rename` too.
 **Acceptance:** a Vulkan-presenting client in a `--gpu=drm --waypipe` guest reaches its first frame -
 satisfied by the minimal-fix arm (mpv presented for the whole 40 s probe window, with both render
 workers alive), and to be re-confirmed on the committed build.
+
+## Verified on a committed build (2026-10-08)
+
+`git worktree add --detach <HEAD>`, `nix build .#cang`, then the presenting arm with the **packaged**
+policy (no `CANG_RENDER_SERVER_POLICY`), against a **cold** shader cache:
+
+| arm (same binary, same image, cold cache) | result |
+| --- | --- |
+| committed policy (108 syscalls, `rename` present) | mpv **presents via venus for the whole 40 s window** (`PROBE_MPV_RC=124`, killed by its own probe timeout; `T07_PLAYING`; log runs to t=38.8 s), **no** ring-stall/abort lines, and both `virgl-*-gpu_ren` workers alive across all 52 samples |
+| same policy minus `{"syscall": "rename"}` (107 syscalls) | `PROBE_MPV_RC=134` at 10 s: worker SIGSYS-killed mid-present, `stuck in ring seqno wait` / `aborting on expired ring alive status` |
+
+So the one-line seccomp change is **necessary and sufficient**. The negative control also retires the
+last doubt about the earlier confusing runs - see the cold-cache hazard in
+`notes/encode-measurement-hazards.md` section 8: **a warm `/dev/shm/mesa-cache` hides this bug
+entirely**, because `rename(2)` only fires when a shader is first committed.
+
+Gates on that commit: `cargo clippy --all-targets --all-features -- -D warnings` PASS, `cargo test`
+**996 passed / 0 failed**, `cargo fmt --check` FAIL - a pre-existing drift in
+`crates/cang-repository-tests/tests/repository.rs` introduced by `728e4aa`, fixed separately in
+`d2ef9d6`. `cargo-deny` was not run by that child; run here.

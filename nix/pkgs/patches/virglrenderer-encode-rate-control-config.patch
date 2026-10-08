@@ -1,0 +1,255 @@
+--- a/src/vrend/virgl_video.c	2026-10-09 00:03:32.096744513 +0800
++++ b/src/vrend/virgl_video.c	2026-10-09 00:07:48.563155650 +0800
+@@ -109,6 +109,8 @@
+    uint32_t max_references;
+    VAContextID va_ctx;
+    VAConfigID  va_cfg;
++   uint32_t va_rt_format;                      /* Enc: RTFormat mask for the config */
++   uint32_t rc_method;                         /* Enc: rate-control mode the config was created with */
+    struct virgl_video_buffer *buffer;
+    struct virgl_video_buffer *ref_pic_list[32]; /* Enc: reference pictures */
+    uint32_t ref_pic_poc[32];                   /* Enc: their picture-order counts */
+@@ -744,6 +746,104 @@
+     return 0;
+ }
+ 
++/* Map the client's pipe rate-control method (which crosses the wire in the
++ * picture description) onto the VA config attribute a host VA driver expects.
++ * A VA driver decides its encoder's rate-control behaviour from the config, so
++ * carrying this across is what lets a client's -b:v / -qp reach the driver at
++ * all. */
++static uint32_t va_rc_from_pipe_rc(uint32_t method)
++{
++    switch (method) {
++    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_CONSTANT:
++    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_CONSTANT_SKIP:
++        return VA_RC_CBR;
++    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_VARIABLE:
++    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_VARIABLE_SKIP:
++        return VA_RC_VBR;
++    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_QUALITY_VARIABLE:
++        return VA_RC_QVBR;
++    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_DISABLE:
++    default:
++        return VA_RC_CQP;
++    }
++}
++
++/* Create (or, if the client switched mode, recreate) the encoder's VA config
++ * and context.
++ *
++ * The rate-control mode is a VA *config* attribute, so it has to be known when
++ * vaCreateConfig() is called - but vrend creates the codec at
++ * VIRGL_CCMD_CREATE_VIDEO_CODEC and the mode only arrives later, with the first
++ * picture's rate_ctrl_method.  The config is therefore created lazily from the
++ * first picture instead of in virgl_video_create_codec(); a client that changes
++ * the mode mid-stream gets a fresh config and context.  The VA surfaces in
++ * ref_pic_list[] belong to the codec, not the context, so they survive a
++ * recreate. */
++static int virgl_video_create_encoder(struct virgl_video_codec *codec,
++                                      uint32_t rc_method)
++{
++    VAStatus va_stat;
++    VAConfigAttrib attr[2];
++    VAProfile profile = va_profile_from_pipe(codec->profile);
++    VAEntrypoint entrypoint = va_entrypoint_from_pipe(codec->entrypoint);
++    VAConfigID cfg;
++    VAContextID ctx;
++
++    if (codec->va_ctx && codec->rc_method == rc_method)
++        return 0;
++
++    if (codec->va_ctx) {
++        if (codec->va_coded_buf) {
++            vaDestroyBuffer(va_dpy, codec->va_coded_buf);
++            codec->va_coded_buf = 0;
++        }
++        vaDestroyContext(va_dpy, codec->va_ctx);
++        vaDestroyConfig(va_dpy, codec->va_cfg);
++        codec->va_ctx = 0;
++        codec->va_cfg = 0;
++    }
++
++    attr[0].type = VAConfigAttribRTFormat;
++    attr[0].value = codec->va_rt_format;
++    attr[1].type = VAConfigAttribRateControl;
++    attr[1].value = va_rc_from_pipe_rc(rc_method);
++
++    va_stat = vaCreateConfig(va_dpy, profile, entrypoint, attr, 2, &cfg);
++    if (VA_STATUS_SUCCESS != va_stat) {
++        /* A driver may refuse a mode it does not implement (QVBR is the common
++         * one).  Fall back to declaring no mode - the previous behaviour -
++         * rather than failing the whole encode. */
++        virgl_warn("create config with rate control 0x%x failed (0x%x), retrying without\n",
++                   attr[1].value, va_stat);
++        va_stat = vaCreateConfig(va_dpy, profile, entrypoint, &attr[0], 1, &cfg);
++        if (VA_STATUS_SUCCESS != va_stat) {
++            virgl_error("create config failed, err = 0x%x\n", va_stat);
++            return -1;
++        }
++        rc_method = PIPE_H2645_ENC_RATE_CONTROL_METHOD_DISABLE;
++    }
++    codec->va_cfg = cfg;
++
++    va_stat = vaCreateContext(va_dpy, cfg, codec->width, codec->height,
++                              VA_PROGRESSIVE, NULL, 0, &ctx);
++    if (VA_STATUS_SUCCESS != va_stat) {
++        virgl_error("create context failed, err = 0x%x\n", va_stat);
++        vaDestroyConfig(va_dpy, codec->va_cfg);
++        codec->va_cfg = 0;
++        return -1;
++    }
++    codec->va_ctx = ctx;
++    codec->rc_method = rc_method;
++
++    va_stat = vaCreateBuffer(va_dpy, codec->va_ctx, VAEncCodedBufferType,
++                             CODED_BUF_DEFAULT_SIZE(codec->width, codec->height),
++                             1, NULL, &codec->va_coded_buf);
++    if (VA_STATUS_SUCCESS != va_stat)
++        virgl_error("create coded buffer failed, err = 0x%x\n", va_stat);
++
++    return 0;
++}
++
+ struct virgl_video_codec *virgl_video_create_codec(
+         const struct virgl_video_create_codec_args *args)
+ {
+@@ -777,21 +877,6 @@
+         goto err;
+     }
+ 
+-    va_stat = vaCreateConfig(va_dpy, profile, entrypoint, &attr, 1, &cfg);
+-    if (VA_STATUS_SUCCESS != va_stat) {
+-        virgl_error("create config failed, err = 0x%x\n", va_stat);
+-        goto err;
+-    }
+-    codec->va_cfg = cfg;
+-
+-    va_stat = vaCreateContext(va_dpy, cfg, args->width, args->height,
+-                                VA_PROGRESSIVE, NULL, 0, &ctx);
+-    if (VA_STATUS_SUCCESS != va_stat) {
+-        virgl_error("create context failed, err = 0x%x\n", va_stat);
+-        goto err;
+-    }
+-    codec->va_ctx = ctx;
+-
+     codec->profile = args->profile;
+     codec->level = args->level;
+     codec->entrypoint = args->entrypoint;
+@@ -800,11 +885,27 @@
+     codec->height = args->height;
+     codec->max_references = args->max_references;
+     codec->opaque = args->opaque;
++    codec->va_rt_format = attr.value;
++    codec->rc_method = (uint32_t)-1;
+ 
+-    if (entrypoint == VAEntrypointEncSlice) {
+-        vaCreateBuffer(va_dpy, codec->va_ctx, VAEncCodedBufferType,
+-                       CODED_BUF_DEFAULT_SIZE(codec->width, codec->height),
+-                       1, NULL, &codec->va_coded_buf);
++    if (entrypoint != VAEntrypointEncSlice) {
++        /* Decode has no rate control: create the VA config/context up front, as
++         * before.  An encoder's config is created lazily from the first
++         * picture's rate-control mode - see virgl_video_create_encoder(). */
++        va_stat = vaCreateConfig(va_dpy, profile, entrypoint, &attr, 1, &cfg);
++        if (VA_STATUS_SUCCESS != va_stat) {
++            virgl_error("create config failed, err = 0x%x\n", va_stat);
++            goto err;
++        }
++        codec->va_cfg = cfg;
++
++        va_stat = vaCreateContext(va_dpy, cfg, args->width, args->height,
++                                    VA_PROGRESSIVE, NULL, 0, &ctx);
++        if (VA_STATUS_SUCCESS != va_stat) {
++            virgl_error("create context failed, err = 0x%x\n", va_stat);
++            goto err;
++        }
++        codec->va_ctx = ctx;
+     }
+ 
+     return codec;
+@@ -944,8 +1045,14 @@
+     if (!va_dpy || !codec || !target)
+         return -1;
+ 
+-    if (codec->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE)
++    if (codec->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE) {
++        /* Upload the picture now, but defer vaBeginPicture() to
++         * virgl_video_encode_bitstream(): the VA context cannot exist before the
++         * first picture's rate-control mode is known. */
+         encode_upload_picture(codec, target);
++        codec->buffer = target;
++        return 0;
++    }
+ 
+     codec->buffer = target;
+     va_stat = vaBeginPicture(va_dpy, codec->va_ctx, target->va_sfc);
+@@ -3348,6 +3455,10 @@
+                                  struct virgl_video_buffer *source,
+                                  const union virgl_picture_desc *desc)
+ {
++    VAStatus va_stat;
++    uint32_t rc_method;
++    bool supported = true;
++
+     if (!va_dpy || !codec || !source || !desc)
+         return -1;
+ 
+@@ -3366,6 +3477,45 @@
+     case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH10:
+     case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH422:
+     case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH444:
++        rc_method = desc->h264_enc.rate_ctrl[0].rate_ctrl_method;
++        break;
++    case PIPE_VIDEO_PROFILE_HEVC_MAIN:
++    case PIPE_VIDEO_PROFILE_HEVC_MAIN_10:
++    case PIPE_VIDEO_PROFILE_HEVC_MAIN_STILL:
++    case PIPE_VIDEO_PROFILE_HEVC_MAIN_12:
++    case PIPE_VIDEO_PROFILE_HEVC_MAIN_444:
++        rc_method = desc->h265_enc.rc[0].rate_ctrl_method;
++        break;
++    default:
++        supported = false;
++        break;
++    }
++
++    if (!supported)
++        return -1;
++
++    /* The VA config - and with it the context - is created here, from the
++     * client's own rate-control mode, because that mode is only known once the
++     * picture description has arrived. */
++    if (virgl_video_create_encoder(codec, rc_method) < 0)
++        return -1;
++
++    /* vaBeginPicture() was deferred from virgl_video_begin_frame(). */
++    va_stat = vaBeginPicture(va_dpy, codec->va_ctx, source->va_sfc);
++    if (VA_STATUS_SUCCESS != va_stat) {
++        virgl_error("begin picture failed, err = 0x%x\n", va_stat);
++        return -1;
++    }
++
++    switch (codec->profile) {
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_BASELINE:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_CONSTRAINED_BASELINE:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_EXTENDED:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH10:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH422:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH444:
+         return h264_encode_bitstream(codec, source, &desc->h264_enc);
+     case PIPE_VIDEO_PROFILE_HEVC_MAIN:
+     case PIPE_VIDEO_PROFILE_HEVC_MAIN_10:
+@@ -3388,6 +3538,11 @@
+     if (!va_dpy || !codec || !target)
+         return -1;
+ 
++    if (!codec->va_ctx) {
++        virgl_error("end picture without an encoder context\n");
++        return -1;
++    }
++
+     va_stat = vaEndPicture(va_dpy, codec->va_ctx);
+     if (VA_STATUS_SUCCESS != va_stat) {
+         virgl_error("end picture failed, err = 0x%x\n", va_stat);

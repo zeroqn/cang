@@ -126,3 +126,20 @@ ffmpeg -i out.h264 -r 29913/1000 -t 10 -i source.mp4 -lavfi "[0:v][1:v]psnr=stat
 
 Two of ticket 05's original numbers were taken the invalid way; the corrected re-measurement is in the
 ticket's Resolution section.
+
+## 8. A warm Mesa shader cache hides the venus render-worker SIGSYS (2026-10-08)
+
+The render-server seccomp policy used to omit `rename`, which Mesa's disk shader cache calls to
+publish a newly compiled shader under `MESA_SHADER_CACHE_DIR=/dev/shm/mesa-cache`. With
+`mismatch_action: "trap"` the per-context render worker - the process owning the guest's venus ring -
+was SIGSYS-killed mid-present, and the guest aborted with `stuck in ring seqno wait` /
+`aborting on expired ring alive status` (ticket 07).
+
+Because `rename(2)` only fires when a shader is **first** committed, a warm
+`/dev/shm/mesa_shader_cache` makes the bug disappear: the first presenting arm of the verification run
+passed even with the `rename` entry removed, and only an A/B with the cache cleared reproduced the
+kill. Any measurement of this defect (or of anything that depends on it) must therefore **clear
+`/dev/shm/mesa-cache` first** - and restore it afterwards if other work depends on it.
+
+This also explains a whole class of "sometimes it hangs, sometimes it plays" results earlier in the
+investigation.
