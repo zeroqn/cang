@@ -568,3 +568,55 @@ Nothing is wired. The guest VA encode remains usable with a bitrate cap; constan
 content hangs. The next session's first job is the second stall: with the RBSP bound wired, mark the
 submission path (guest winsys → host front door → vrend → host VA) to see exactly which call blocks,
 using the same shim/marker toolkit that found the first one.
+
+## The submission-path round: the second stall is the *same* defect, one level up (2026-10-08)
+
+Setup: cang's virglrenderer built with submission-path markers (stderr *and* a file log at
+`virgl_renderer_submit_cmd`'s context lookup, `vrend_video_encode_bitstream`'s entry, and the line
+immediately before `return virgl_video_encode_bitstream(cdc->codec, src->buffer, &desc);` - the hand-off
+to the host VA driver), plus the mesa RBSP bound wired so the guest gets past its parse.
+
+Two things came out of it:
+
+1. **vrend hands the frame over and never returns from the call.** The markers show
+   `VMARK encode_bitstream enter` and `VMARK handoff to host VA` once, for the first encode frame, and
+   *nothing* after them for the rest of both arms. So the stall is inside the host-side
+   `virgl_video_encode_bitstream` -> host VA encode, not between the guest submission and vrend.
+   Corroborating: the guest now *submits* (past the RBSP parse) and polls the host with
+   `waiting got error - 16` (EBUSY), creeping to frame 1-2 before the in-guest kill.
+2. **On this host the host-side VA driver is the same code.** `/dev/dri/renderD128` here is virtio-gpu
+   and its driver dir carries `virtio_gpu_drv_video.so -> ../libgallium-26.1.8.so`, i.e. the host's own
+   VA encode goes through mesa's *virgl* VA driver - the same unbounded `vl_rbsp_ue()`. Measured
+   host-side, with no VM involved: the host's own `ffmpeg -vaapi_device /dev/dri/renderD128` encode of
+   the same clip **stalls with the system mesa** (rc=137, 0 bytes) and **completes with cang's patched
+   mesa** (`LIBVA_DRIVERS_PATH=/nix/store/yd0f5gw...-mesa-26.1.8/lib/dri`: rc=0, 857 994 bytes,
+   599 frames).
+
+So the guest stall and the surviving host stall are **one defect in mesa**, met twice on a virtio-gpu
+host. That also explains why bounding the read alone does not make the CQP arm produce a stream: the
+bound uncorks the guest and the host then blocks in the very same parser.
+
+### Why the host cannot simply be pointed at cang's patched mesa
+
+The host-side VA encode runs in the **VM worker** (the render server is venus-only - it never maps
+libva/libgallium, verified over 55 samples), and the VM worker is exec'd through
+`unshare --keep-id` with a changed uid, so glibc is in secure-execution mode and libva's
+`secure_getenv()` ignores `LIBVA_DRIVERS_PATH`. A run with the override set therefore still used the
+**unpatched system mesa** and stalled (`m-qp.h264` and `m-br.h264` both 0 bytes, 0 frames). cang cannot
+fix the host's VA driver by configuration; the host-side half has to come from the *host's* mesa.
+
+### Where this leaves the fix
+
+- cang's own patches remain the right shape for the **guest** half (raw headers over the wire, the
+  upload fence, and - still unwired pending the review below - the RBSP bounds).
+- the **host** half is upstream work, in mesa: bound the RBSP readers (`vl_rbsp_ue`/`vl_rbsp_se`) and
+  the HRD loop (`parseEncHrdParamsH264`'s `for (i = 0; i <= cpb_cnt_minus1; ++i)` writes into 32-entry
+  arrays with a client-controlled count - an out-of-bounds write for truncated input, and an
+  effectively infinite loop for a garbage count). A host running any mesa VA driver (virtio-gpu,
+  radeonsi, ...) is exposed to the same hang whenever a client hands vrend a packed header whose parse
+  walks off the end.
+- the remaining open question for shipping the bound in cang is the *bitrate arm*: with the bound wired
+  it stalls too, and that regression is **not** explained yet (the host used there is the same unpatched
+  system mesa, so a host-side cause is possible but unproven). Resolve it by re-running both arms with
+  the host pointed at a patched mesa through some route the VM worker honours (its secure-exec mode
+  rules out `LIBVA_DRIVERS_PATH`).
