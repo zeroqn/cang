@@ -231,3 +231,37 @@ WSI modifier path that this ticket started from.
 Environment fact worth carrying into that work (found earlier this session): the render server's
 `/dev/shm` is **not** the host's while the VM worker's *is*, so any ring/wake object that is expected to
 be shared between those two processes must not rely on `/dev/shm` agreeing.
+
+## ROOT CAUSE (2026-10-08): the render worker is SIGSYS-killed for calling `rename`
+
+Traced end to end with the VM worker under `--seccomp=audit` (plus cang's own VM-worker strace
+hook, so ptrace is permitted) and the render server traced from birth under a permissive policy:
+
+- **hop 1 works**: the guest's venus commands arrive at the VM worker - context create
+  (`CREATE_CONTEXT ctx=1 name="vo"`) and 95 × 264-byte `SUBMIT_CMD` messages on the render-server
+  socketpair, all delivered;
+- **hop 2 works**: the sends succeed and are drained;
+- **hop 3 breaks**: the per-context render worker process (`virgl-N-gpu_renderer`, the process that
+  owns that context's venus ring and its `vkr-ringmon` alive-bit) **disappears** mid-run; the VM
+  worker's later teardown of the context gets `EPIPE`; and the guest then reports exactly
+  `stuck in ring seqno wait with iter at 4096` / `aborting on expired ring alive status` and aborts.
+
+Diffing the syscalls the render server and its workers actually used against the packaged 107-entry
+allowlist yields **one** used-but-not-allowed syscall: **`rename`**. The workers' disk-cache threads
+call it to publish Mesa shader-cache entries under `MESA_SHADER_CACHE_DIR=/dev/shm/mesa-cache` (which
+cang's runner sets itself): 12 `rename("<cache>/…tmp", "<cache>/…")` calls, all from the ctx-1/ctx-2
+workers. With `mismatch_action: "trap"` that is an immediate SIGSYS death - of the process that owns
+the guest's ring, ~5 s after the client starts presenting.
+
+**Minimal-fix proof:** the packaged policy with nothing changed but `{"syscall": "rename"}` added -
+mpv plays to its probe timeout (`rc=124`, 40 s), both workers stay alive, no ring wait, no abort.
+The existing guard test (`render_server_seccomp_policy_allows_venus_driver_syscalls`, which already
+covers `fallocate`/`flock`/`mkdir`/`sched_setscheduler`/`setpriority` for exactly this failure class)
+was missing `rename` too.
+
+**Fix applied in-tree:** `crates/cang/assets/seccomp/render-server.json` now allows `rename` next to
+`renameat2`, and the guard test's list includes `"rename"`.
+
+**Acceptance:** a Vulkan-presenting client in a `--gpu=drm --waypipe` guest reaches its first frame -
+satisfied by the minimal-fix arm (mpv presented for the whole 40 s probe window, with both render
+workers alive), and to be re-confirmed on the committed build.

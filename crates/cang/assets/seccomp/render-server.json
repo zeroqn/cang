@@ -82,6 +82,7 @@
       {"syscall": "readv"},
       {"syscall": "recvfrom"},
       {"syscall": "recvmsg"},
+      {"syscall": "rename"},
       {"syscall": "renameat2"},
       {"syscall": "rseq"},
       {"syscall": "rt_sigaction"},

@@ -401,6 +401,13 @@ mod tests {
         // `fallocate` is what the on-disk shader cache uses to grow its cache
         // file: the runner sets MESA_SHADER_CACHE_DIR, so the driver always
         // enables that cache and always reaches this call.
+        // `rename` is how that cache publishes an entry (`renameat2` was
+        // allowed, plain `rename` was not): without it the per-context worker -
+        // the process that owns the guest's venus ring and its alive-bit
+        // heartbeat - is SIGSYS-killed the first time a compiled shader is
+        // committed, and the guest then waits for a ring seqno that can never
+        // advance ("expired ring alive status"). See
+        // docs/wayfinder/guest-vaapi-video/tickets/07-*.
         // Regression guard for the chromium --gpu=drm venus smoke baseline.
         let policy_path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/seccomp/render-server.json");
@@ -410,6 +417,7 @@ mod tests {
             "fallocate",
             "flock",
             "mkdir",
+            "rename",
             "sched_setscheduler",
             "setpriority",
         ] {
