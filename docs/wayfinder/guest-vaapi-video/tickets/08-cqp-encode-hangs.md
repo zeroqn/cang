@@ -1,6 +1,14 @@
+---
+label: wayfinder:research
+title: The guest VA encode hangs in CQP mode on complex 640x360 content
+status: open
+blocked_by: []
+claimed_by: bob + pi session (2026-10-04)
+---
+
 # 08 - the guest VA encode hangs in CQP mode on complex 640x360 content
 
-Status: open. Measured 2026-10-04 with the image that finally ships the guest VA driver
+Measured 2026-10-04 with the image that finally ships the guest VA driver
 (`localhost/cang:latest` id `60c470a1a2e3`, `/usr/lib/cang-va-runtime/dri/virtio_gpu_drv_video.so ->
 ../lib/libgallium.so` confirmed in-guest by the probe's own `PROBE driver:` line). All arms below are
 one VM, `--gpu=drm`, `h264_vaapi`, `-bf 0`, 30 frames of the same 640x360 clip, 60 s in-guest cap
