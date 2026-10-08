@@ -42,3 +42,39 @@ A Vulkan-presenting client in a `--gpu=drm --waypipe` guest that reaches its
 first frame through the host compositor (mpv with its default video output, or
 Chromium with `--use-angle=vulkan`), with the render server logging no
 `invalid res_id`/CS error.
+
+## First pass (2026-10-08, static analysis; no live repro - this box has no host compositor)
+
+**Q1 - which modifiers?** The guest advertises the **host renderer's modifier list verbatim**:
+`vn_wsi.c`'s `vn_wsi_init` sets `wsi_device.supports_modifiers` from the host's
+`EXT_image_drm_format_modifier`, and `vn_physical_device.c`'s `vn_GetPhysicalDeviceFormatProperties2`
+→ `vn_sanitize_format_properties` only masks YCbCr feature flags - it never intersects the list with
+what *guest-allocatable* resources can back. So the guest tells its clients it supports tiled
+modifiers (AMD GFX11 families, DCC variants) while the guest's GBM/virgl shared resources are
+**LINEAR only** - `virglrenderer`'s pipe-resource layout reports LINEAR for them (cang's
+`virglrenderer-gbm-layout-linear-modifier.patch`), and guest-init sets
+`GBM_BACKENDS_PATH=/usr/lib/cang-mesa-runtime/lib/gbm`.
+
+**Q2 - which layer fails?** The mpv abort is the **resource-properties query path**, not
+modifier-list negotiation: guest `vn_GetMemoryFdPropertiesKHR` → `vn_get_memory_dma_buf_properties` →
+`vn_renderer_bo_create_from_data`, with the modifier arriving as `0xffffffffffffffff`
+(`DRM_FORMAT_MOD_INVALID`) - which is the same value `tools/chromium-cang-smoke/README.md:198-207`
+records for the chromium flavour, and that README documents the chromium side as *fixed* by making the
+guest publish the host's real layout as LINEAR. `can_import_image` passes before the properties query
+in the mpv case, so the list itself is not what rejects.
+
+**Q3 - smaller fix?** Waypipe's dmabuf path - one guest process, and cang already controls
+`GBM_BACKENDS_PATH` and the venus ICD selection - rather than a guest compositor rendering through
+virgl.
+
+**Not established:** no live reproduction (no compositor on this box), and the guest waypipe's
+`DmabufDevice` being the venus ICD is inferred from guest-init's `VK_ICD_FILENAMES` pin plus waypipe's
+Vulkan usage.
+
+**Next concrete step (no C change, discriminating):** re-run the captured `smoke-mp2` arm with the
+guest's venus WSI forced LINEAR (`MESA_ENV` addition `VN_PERF=no_tiled_wsi_image`) and the waypipe
+server started with `--test-skip-vulkan`, then require the render server to log neither
+`invalid res_id` nor CS error and mpv to reach its first frame. That separates the
+cross-context-resource explanation from the modifier one. Also check whether the image ships
+`dri_gbm.so` at all and either point `GBM_BACKENDS_PATH` at it or add it to the image's mesa runtime.
+It needs a host with a compositor (not this box).
