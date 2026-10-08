@@ -669,3 +669,7 @@ ships a prebuilt:
   `packages.<system>.mesa-release-build` - the source build - which is what
   `.github/workflows/build-mesa.yml` builds, tars as `mesa-<version>-<system>.tar.gz`, attests and
   publishes, then updates the pin with `scripts/update-mesa-prebuilt.sh`.
+
+Both branches are verified to evaluate: the fallback (source build, `rkw128ll...-mesa-26.1.8.drv`)
+and the prebuilt branch (with a synthetic pin: `0rc47qa5...-mesa-26.1.8.drv`, whose fixed-output
+derivation path is computable without fetching the asset).
