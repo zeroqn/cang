@@ -218,3 +218,17 @@ Two side-findings for whoever picks this up:
   bug to chase after the reference plumbing.
 - `-qp` with `-bf 0` still hangs, but that is the RBSP defect (ticket 08), not this one; `-bf 1` arms
   complete on both drivers.
+
+### Build detail for that re-measurement (2026-10-08)
+
+- caps image: `ky3kd0sv98dypmghiz34mcfwahmdbch8-cang.tar.gz`; its guest mesa `qgghkr5k58i1azw0180vbc4c5nvdsxhi`
+  (its drv references `mesa-virgl-encode-caps.patch`), in-guest driver md5 `e5694b8a968d75d865bd14caeb0d5f36`
+  (the practice image's driver is md5 `7bf2ab7bc2d477e1c617d5fd41406ebc`).
+- caps cang: `nlhszk53zbfg8bk7sd0yw1jy1bra3mnj-cang-0.11.2`, whose render server is
+  `msq2sary7qw9n0yc4mds5s29al6q85pd-virglrenderer-1.3.0` (references `virglrenderer-encode-caps.patch`).
+  The first `.#cang` build hit an unrelated rustc-1.95 ICE while compiling vendored `unicode-ident`; the
+  retry was clean.
+- with the caps wired, `-qp 26 -bf 1` **also stopped hanging** (rc=0, ~2 s) - so the caps change which
+  client configuration reaches the host, and the earlier `-qp` hang of that arm is not merely the
+  ticket-08 RBSP defect. The stream is still corrupt and still I/P only, i.e. advertising the
+  attributes without the reference plumbing buys a wrong stream rather than a better one.
