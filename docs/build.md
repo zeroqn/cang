@@ -95,8 +95,11 @@ goes to the input instead of the checkout:
 - `.#virglrenderer`: the nixpkgs `virglrenderer` with this repo's host-side
   patches (`virglrenderer-enum-26.patch`,
   `virglrenderer-gbm-layout-linear-modifier.patch`,
-  `virglrenderer-encode-raw-headers.patch` and
-  `virglrenderer-encode-upload-fence.patch`, applied by the overlay in
+  `virglrenderer-encode-raw-headers.patch`,
+  `virglrenderer-encode-upload-fence.patch`,
+  `virglrenderer-linear-surface.patch` and the two halves of the B-frame fix,
+  `virglrenderer-encode-caps.patch` and
+  `virglrenderer-encode-reference-frames.patch`, applied by the overlay in
   `nix/lib/systems.nix`). Host-side only: cang links `libvirglrenderer.so.1`
   and the `virgl_render_server` helper is symlinked from this package, so the
   cang packages already ship it; downstream flakes that build their own host
@@ -107,7 +110,8 @@ goes to the input instead of the checkout:
 - The guest's VA-API driver is not a flake output: it is image-local. The
   image's mesa is a prebuilt binary drop that cannot be patched, so
   `nix/lib/systems.nix` builds `mesaVaApi` (nixpkgs' mesa with only the `virgl`
-  gallium driver, plus `mesa-virgl-encode-raw-headers.patch`), `nix/image/layers.nix`
+  gallium driver, plus `mesa-virgl-encode-raw-headers.patch`,
+  `mesa-virgl-encode-caps.patch` and `mesa-virgl-rbsp-bounds.patch`), `nix/image/layers.nix`
   exposes it as the `cang-va-runtime` driver directory and the image links that at
   `/usr/lib/cang-va-runtime`, which guest-init puts first in
   `LIBVA_DRIVERS_PATH`. It is the guest half of the host `virglrenderer`

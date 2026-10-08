@@ -1,0 +1,40 @@
+diff -ruN a/src/vrend/virgl_video.c b/src/vrend/virgl_video.c
+--- a/src/vrend/virgl_video.c	2026-10-08 23:38:28.018107615 +0800
++++ b/src/vrend/virgl_video.c	2026-10-08 23:38:28.059598642 +0800
+@@ -1328,9 +1328,17 @@
+ 
+     param->bits_per_second = rc->peak_bitrate;
+     if (desc->rate_ctrl[0].rate_ctrl_method !=
+-        PIPE_H2645_ENC_RATE_CONTROL_METHOD_CONSTANT) {
+-        param->target_percentage = rc->target_bitrate *
+-                                   param->bits_per_second / 100.0;
++        PIPE_H2645_ENC_RATE_CONTROL_METHOD_CONSTANT &&
++        param->bits_per_second) {
++        /* The wire carries the client's target and peak bitrates, not its
++         * target_percentage, so recover the percentage here: the host VA
++         * frontend multiplies it back into a target bitrate. The previous
++         * expression multiplied where it should have divided, so every VBR
++         * client's target came out many orders of magnitude too large and the
++         * driver clamped it - which is why a guest's -b:v had no effect while a
++         * native client's did. */
++        param->target_percentage = rc->target_bitrate * 100.0 /
++                                   param->bits_per_second;
+     }
+     //window_size;
+     //initial_qp;
+@@ -2048,9 +2056,12 @@
+ 
+     param->bits_per_second = desc->rc.peak_bitrate;
+     if (desc->rc.rate_ctrl_method !=
+-        PIPE_H2645_ENC_RATE_CONTROL_METHOD_CONSTANT) {
+-        param->target_percentage = desc->rc.target_bitrate *
+-                                   param->bits_per_second / 100.0;
++        PIPE_H2645_ENC_RATE_CONTROL_METHOD_CONSTANT &&
++        param->bits_per_second) {
++        /* See h264_fill_enc_misc_param_rate_ctrl: recover the client's
++         * target_percentage from the target/peak bitrates the wire carries. */
++        param->target_percentage = desc->rc.target_bitrate * 100.0 /
++                                   param->bits_per_second;
+     }
+     //window_size;
+     //initial_qp;

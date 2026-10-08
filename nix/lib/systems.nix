@@ -31,12 +31,22 @@ let
                     ../pkgs/patches/virglrenderer-encode-raw-headers.patch
                     ../pkgs/patches/virglrenderer-encode-upload-fence.patch
                     ../pkgs/patches/virglrenderer-linear-surface.patch
-                    # NOTE: virglrenderer-encode-caps.patch and
-                    # virglrenderer-encode-reference-frames.patch are deliberately
-                    # NOT wired: together with the guest half they hang
-                    # real-content encodes at frame 0 (and the DPB fill hangs even
-                    # a 6-frame testsrc encode). Kept in-tree for the next
-                    # attempt; see tickets/04-*.md
+                    # Encoder-attribute forwarding (the guest half is
+                    # mesa-virgl-encode-caps.patch) and the reference/DPB fill
+                    # that makes the forwarded B-frames honour their references.
+                    # Both are needed together: the caps alone advertise future
+                    # references the host DPB cannot keep. See tickets/04-*.md.
+                    ../pkgs/patches/virglrenderer-encode-caps.patch
+                    ../pkgs/patches/virglrenderer-encode-reference-frames.patch
+                    # NOTE: virglrenderer-encode-rate-control.patch is NOT wired.
+                    # It corrects vrend's target_percentage reconstruction (it
+                    # multiplied where it must divide), but on its own it does
+                    # not change the measured stream: the real blocker for guest
+                    # rate control is that virgl_video_create_codec() calls
+                    # vaCreateConfig() with only VAConfigAttribRTFormat, so the
+                    # host driver's context stays in
+                    # PIPE_H2645_ENC_RATE_CONTROL_METHOD_DISABLE and ignores the
+                    # client's RC buffers. See tickets/04-*.md.
                   ];
                 });
               }

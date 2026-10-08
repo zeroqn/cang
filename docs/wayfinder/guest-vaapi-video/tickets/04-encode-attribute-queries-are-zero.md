@@ -232,3 +232,96 @@ Two side-findings for whoever picks this up:
   client configuration reaches the host, and the earlier `-qp` hang of that arm is not merely the
   ticket-08 RBSP defect. The stream is still corrupt and still I/P only, i.e. advertising the
   attributes without the reference plumbing buys a wrong stream rather than a better one.
+
+## Reference/DPB fix: the B-frame stream is correct and matches the host (2026-10-08)
+
+The DPB fill was re-implemented and, with it, the caps are now shippable. The
+patch is `nix/pkgs/patches/virglrenderer-encode-reference-frames.patch` (rewritten)
+and it is **wired** together with `virglrenderer-encode-caps.patch` (host) and
+`mesa-virgl-encode-caps.patch` (guest, in `nix/lib/mesa-patched.nix`).
+
+What the new patch does in `h264_fill_enc_picture_param()`:
+
+- `CurrPic.frame_idx` and `CurrPic.flags` are set (not left commented out);
+- the picture-order count is recorded only for **reference** pictures, so a
+  non-reference B-frame (which carries the frame number of the following
+  reference) can no longer overwrite its entry;
+- `ReferenceFrames[]` is filled from the client's own `ref_idx_l0_list` /
+  `ref_idx_l1_list` (bounded by the active counts and by the 16-entry array),
+  with `picture_id` from `get_enc_ref_pic()`, `frame_idx`, the recorded POC and
+  `VA_PICTURE_H264_{SHORT,LONG}_TERM_REFERENCE` from `l0/l1_is_long_term`.
+
+The earlier "the DPB fill hangs a 6-frame testsrc `-bf 0` encode" verdict was a
+measurement artifact: the tiny probe decoded a *file* (`tiny-src.mkv`), i.e. the
+`-bf 0` + decoded-input host hang of `notes/encode-measurement-hazards.md` §1.
+Re-measured with `-bf 1`, the patch completes and fixes the stream.
+
+### Arms: 640x360 clip, first 10 s (300 frames), `-bf 1`, guest image `image-04`
+
+Guest (`--gpu=drm`, guest driver md5 `e5694b8a...`, `supported references: 1 / 1`):
+
+| arm | rc | bytes | frames | PSNR y/u/v | SSIM All | ffprobe types |
+| --- | --- | --- | --- | --- | --- | --- |
+| `-b:v 200k -maxrate 250k -bufsize 500k` | 0 | 389 739 | 300 | 43.302 / 48.855 / 48.274 | 0.982030 (17.45) | B=147 P=150 I=3 |
+| `-b:v 2M -maxrate 2.5M -bufsize 5M` | 0 | 389 742 | 300 | 43.302 / 48.855 / 48.274 | 0.982030 (17.45) | B=147 P=150 I=3 |
+| `-qp 26` | 0 | 386 079 | 300 | 43.302 / 48.855 / 48.274 | 0.982030 (17.45) | B=147 P=150 I=3 |
+
+Host control (native `ffmpeg` on cang's patched mesa, `mesa-ship`, `1 / 1`):
+
+| arm | rc | bytes | frames | PSNR y/u/v | SSIM All | ffprobe types |
+| --- | --- | --- | --- | --- | --- | --- |
+| `-b:v 200k -maxrate 250k -bufsize 500k` | 0 | 234 592 | 300 | 40.835 / 47.903 / 47.058 | 0.973845 (15.82) | B=147 P=150 I=3 |
+| `-b:v 2M -maxrate 2.5M -bufsize 5M` | 0 | 2 207 702 | 300 | 51.539 / 56.058 / 55.339 | 0.996459 (24.51) | B=147 P=150 I=3 |
+| `-qp 26` | 0 | 344 965 | 300 | 43.058 / 48.799 / 48.208 | 0.981820 (17.40) | B=147 P=150 I=3 |
+
+Acceptance: the guest stream decodes (`measure_rc=0`), the guest emits real
+B pictures (147 of 300, same histogram as the host control), and at matched
+quality it matches the host control - guest `-qp 26` 43.30 dB vs host `-qp 26`
+43.06 dB (0.24 dB), 386 079 vs 344 965 bytes. Before the reference plumbing the
+guest was 10.818 dB y and I/P only.
+
+### Bug 2 is located: the VA config declares no rate-control mode
+
+The second bug (all guest `-b:v` arms produce one stream) is *not* in the
+guest-to-vrend description. A temporary `virgl_error` in
+`h264_encode_bitstream()` dumped the wire desc for each arm:
+
+```
+br200k  rc0={method=4(VARIABLE) target=200000  peak=250000  vbv=500000}
+br2M    rc0={method=4(VARIABLE) target=2000000 peak=2500000 vbv=5000000}
+qp26    rc0={method=0(DISABLE)  target=0       peak=0       max_qp=51}
+```
+
+So the parameters arrive per arm; the loss is on the host side. Root cause:
+`virgl_video_create_codec()` (`src/vrend/virgl_video.c`) calls
+`vaCreateConfig(va_dpy, profile, entrypoint, &attr, 1, &cfg)` with **only**
+`VAConfigAttribRTFormat`. Without `VAConfigAttribRateControl` the host VA driver
+leaves the encode context's `rate_ctrl_method` at
+`PIPE_H2645_ENC_RATE_CONTROL_METHOD_DISABLE`, and the encoder then ignores every
+RC buffer vrend submits - so the guest encodes at a fixed QP regardless of `-b:v`.
+
+Proof: adding `VAConfigAttribRateControl = VA_RC_VBR` to that `vaCreateConfig`
+call (a throw-away test patch, **not wired**) made the guest honour the bitrate:
+
+| guest arm, test config | bytes |
+| --- | --- |
+| `-b:v 200k -maxrate 250k -bufsize 500k` | 251 395 (host 234 592) |
+| `-b:v 2M -maxrate 2.5M -bufsize 5M` | 2 285 511 (host 2 207 702) |
+| `-qp 26` (CQP) | 25 854 (wrong: the config says VBR while the client sends CQP) |
+
+So the correct fix is not a fixed mode but carrying the client's RC mode: the
+guest's `virgl_video_create_codec_args` / wire cannot express it today, so the
+next attempt should add it (or create the VA context per RC mode) before setting
+`VAConfigAttribRateControl` from it. `virglrenderer-encode-rate-control.patch`
+(the `target_percentage` reconstruction: the code multiplied where the wire
+needs a divide) is a real but insufficient piece of this and is kept **unwired**.
+
+### Build detail
+
+- final cang `5g6wipw56qv2qahcc55ss3dxayv20i33-cang-0.11.2` (its render server
+  `msrb0zmdimfp3azaq19insz3xldn99dj-virglrenderer-1.3.0`, drv referencing
+  `virglrenderer-encode-reference-frames.patch` and `virglrenderer-encode-caps.patch`).
+- image-04 `rcl1dhxd4jw3r304ags6c0lblnknmin1-cang.tar.gz`, guest mesa
+  `qgghkr5k58i1azw0180vbc4c5nvdsxhi` (md5 `e5694b8a968d75d865bd14caeb0d5f36`).
+- the practice image was reloaded afterwards (`localhost/cang:latest` =
+  `1393b4cc6ad5...`, driver md5 `7bf2ab7bc2d477e1c617d5fd41406ebc`).

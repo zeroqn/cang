@@ -24,5 +24,9 @@ mesa.overrideAttrs (old: {
     # host-side: report DMA-BUF modifiers on a virtio-gpu render node (shared with the
     # headless flake; same fix cang's host vrend needs on such a host)
     ../pkgs/patches/mesa-headless-virtio-modifiers.patch
+    # forward the host driver's encoder attributes (past/future reference counts)
+    # so a VA client can build a B-frame GOP - the host half is
+    # virglrenderer-encode-caps.patch
+    ../pkgs/patches/mesa-virgl-encode-caps.patch
   ];
 })
