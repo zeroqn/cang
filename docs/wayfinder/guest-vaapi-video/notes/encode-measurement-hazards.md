@@ -107,3 +107,22 @@ line appears, which a 420 s cap cuts off before any arm runs. Use 900 s.
 
 Same family of trap as the stale-log one: check `ls -l` on the console log's mtime and size before
 believing - or reporting - its contents.
+
+## 7. A raw `.h264` demuxes at 25 fps, so `psnr`/`ssim` compare the wrong frames (2026-10-08)
+
+Comparing an encoded stream against its source with
+
+```
+ffmpeg -i out.h264 -i source.mp4 -lavfi "[0:v][1:v]psnr;[0:v][1:v]ssim" -f null -
+```
+
+is invalid when `out.h264` is a raw elementary stream: it has no timestamps, so ffmpeg assumes 25 fps
+while the source is 29913/1000 fps, the two inputs drift apart, and the metric saturates near 20 dB for
+*any* quality (a CRF 20 and a CRF 30 encode both measured ~20.4 dB). Declare the input's rate and trim:
+
+```
+ffmpeg -i out.h264 -r 29913/1000 -t 10 -i source.mp4 -lavfi "[0:v][1:v]psnr=stats_file=p;[0:v][1:v]ssim=stats_file=s" -f null -
+```
+
+Two of ticket 05's original numbers were taken the invalid way; the corrected re-measurement is in the
+ticket's Resolution section.

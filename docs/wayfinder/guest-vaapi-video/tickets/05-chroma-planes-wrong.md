@@ -7,10 +7,40 @@
 ---
 label: wayfinder:research
 title: The guest encode's chroma planes are wrong
-status: open
+status: closed
 blocked_by: []
 claimed_by:
 ---
+
+## Resolution (2026-10-08) - the chroma defect is gone
+
+Re-measured with the fixed image (guest driver `/usr/lib/cang-va-runtime/dri/virtio_gpu_drv_video.so`
+-> the patched `mesa-26.1.8` built from source, printed by the guest itself) against a host control on
+cang's patched mesa, first 10 s (300 frames) of the same clip, same ffmpeg and options:
+
+| arm | where | rc | bytes | frames | PSNR y/u/v | SSIM All |
+| --- | --- | --- | --- | --- | --- | --- |
+| guest, `-qp 26 -bf 1` | guest | 137 | 0 | 0 | hangs (`frame= 0`) | - |
+| host, `-qp 26 -bf 1` | host | 0 | 344 965 | 300 | 43.058 / 48.799 / 48.208 | 0.981820 |
+| guest, `-b:v 2M …` | guest | 0 | 450 772 | 300 | 43.198 / 48.735 / 48.173 | 0.981768 |
+| host, `-b:v 2M …` | host | 0 | 2 207 702 | 300 | 51.539 / 56.058 / 55.339 | 0.996459 |
+
+At matched **luma** the host gives u ~48.96 / v ~48.33 and the guest u 48.735 / v 48.173 - a 0.2 dB
+difference, against the void earlier numbers (guest u 15.93 / v 15.64 while luma was identical at
+28.126). No plane-specific chroma penalty remains. At matched *output size* there is a uniform
+~1 dB gap across all three planes, i.e. a rate-control/efficiency difference rather than a chroma
+defect.
+
+Two caveats that matter more than the closing numbers:
+
+- **the guest cannot be placed at a requested QP or bitrate**: `-qp` hangs, `-rc_mode CBR` hangs, and
+  `-b:v` is *ignored* (200k, 400k and 2M all produce ~450 770 bytes with bit-identical PSNR). That is
+  the encoder-attribute gap of ticket 04 showing up as a *rate-control* symptom, and it means every
+  earlier "bitrate-capped" guest arm was really a default-mode encode. Folded into ticket 04.
+- the earlier `-qp`-based comparison was additionally distorted by framesync: a raw `.h264` is
+  demuxed as 25 fps while the source is 29913/1000, so `psnr`/`ssim` compared different frames and
+  saturated near 20 dB regardless of quality. The numbers above use
+  `-r 29913/1000 -i out.h264 -t 10 -i src`. Recorded in the hazards note.
 
 ## Question
 
