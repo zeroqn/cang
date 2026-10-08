@@ -1,5 +1,5 @@
---- a/src/vrend/virgl_video.c	2026-10-09 00:03:32.096744513 +0800
-+++ b/src/vrend/virgl_video.c	2026-10-09 00:07:48.563155650 +0800
+--- a/src/vrend/virgl_video.c	2026-10-09 00:11:07.524174891 +0800
++++ b/src/vrend/virgl_video.c	2026-10-09 00:10:44.890767412 +0800
 @@ -109,6 +109,8 @@
     uint32_t max_references;
     VAContextID va_ctx;
@@ -9,7 +9,7 @@
     struct virgl_video_buffer *buffer;
     struct virgl_video_buffer *ref_pic_list[32]; /* Enc: reference pictures */
     uint32_t ref_pic_poc[32];                   /* Enc: their picture-order counts */
-@@ -744,6 +746,104 @@
+@@ -744,6 +746,102 @@
      return 0;
  }
  
@@ -27,8 +27,6 @@
 +    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_VARIABLE:
 +    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_VARIABLE_SKIP:
 +        return VA_RC_VBR;
-+    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_QUALITY_VARIABLE:
-+        return VA_RC_QVBR;
 +    case PIPE_H2645_ENC_RATE_CONTROL_METHOD_DISABLE:
 +    default:
 +        return VA_RC_CQP;
@@ -114,7 +112,7 @@
  struct virgl_video_codec *virgl_video_create_codec(
          const struct virgl_video_create_codec_args *args)
  {
-@@ -777,21 +877,6 @@
+@@ -777,21 +875,6 @@
          goto err;
      }
  
@@ -136,7 +134,7 @@
      codec->profile = args->profile;
      codec->level = args->level;
      codec->entrypoint = args->entrypoint;
-@@ -800,11 +885,27 @@
+@@ -800,11 +883,27 @@
      codec->height = args->height;
      codec->max_references = args->max_references;
      codec->opaque = args->opaque;
@@ -168,7 +166,7 @@
      }
  
      return codec;
-@@ -944,8 +1045,14 @@
+@@ -944,8 +1043,14 @@
      if (!va_dpy || !codec || !target)
          return -1;
  
@@ -184,7 +182,7 @@
  
      codec->buffer = target;
      va_stat = vaBeginPicture(va_dpy, codec->va_ctx, target->va_sfc);
-@@ -3348,6 +3455,10 @@
+@@ -3359,6 +3464,10 @@
                                   struct virgl_video_buffer *source,
                                   const union virgl_picture_desc *desc)
  {
@@ -195,7 +193,7 @@
      if (!va_dpy || !codec || !source || !desc)
          return -1;
  
-@@ -3366,6 +3477,45 @@
+@@ -3377,6 +3486,45 @@
      case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH10:
      case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH422:
      case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH444:
@@ -206,7 +204,7 @@
 +    case PIPE_VIDEO_PROFILE_HEVC_MAIN_STILL:
 +    case PIPE_VIDEO_PROFILE_HEVC_MAIN_12:
 +    case PIPE_VIDEO_PROFILE_HEVC_MAIN_444:
-+        rc_method = desc->h265_enc.rc[0].rate_ctrl_method;
++        rc_method = desc->h265_enc.rc.rate_ctrl_method;
 +        break;
 +    default:
 +        supported = false;
@@ -241,7 +239,7 @@
          return h264_encode_bitstream(codec, source, &desc->h264_enc);
      case PIPE_VIDEO_PROFILE_HEVC_MAIN:
      case PIPE_VIDEO_PROFILE_HEVC_MAIN_10:
-@@ -3388,6 +3538,11 @@
+@@ -3399,6 +3547,11 @@
      if (!va_dpy || !codec || !target)
          return -1;
  

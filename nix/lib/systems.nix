@@ -38,15 +38,18 @@ let
                     # references the host DPB cannot keep. See tickets/04-*.md.
                     ../pkgs/patches/virglrenderer-encode-caps.patch
                     ../pkgs/patches/virglrenderer-encode-reference-frames.patch
-                    # NOTE: virglrenderer-encode-rate-control.patch is NOT wired.
-                    # It corrects vrend's target_percentage reconstruction (it
-                    # multiplied where it must divide), but on its own it does
-                    # not change the measured stream: the real blocker for guest
-                    # rate control is that virgl_video_create_codec() calls
-                    # vaCreateConfig() with only VAConfigAttribRTFormat, so the
-                    # host driver's context stays in
-                    # PIPE_H2645_ENC_RATE_CONTROL_METHOD_DISABLE and ignores the
-                    # client's RC buffers. See tickets/04-*.md.
+                    # Guest rate control. The wire already carries the client's
+                    # RC mode with the picture description, but the host driver
+                    # used to ignore it: virgl_video_create_codec() asked for
+                    # only VAConfigAttribRTFormat, so the context stayed in
+                    # PIPE_H2645_ENC_RATE_CONTROL_METHOD_DISABLE. The -config
+                    # patch creates the VA config/context lazily from the first
+                    # picture's rate_ctrl_method (recreating on a mid-stream
+                    # change), and the target_percentage patch recovers the
+                    # client's target percentage correctly - VBR needs both. See
+                    # tickets/04-*.md.
+                    ../pkgs/patches/virglrenderer-encode-rate-control.patch
+                    ../pkgs/patches/virglrenderer-encode-rate-control-config.patch
                   ];
                 });
               }

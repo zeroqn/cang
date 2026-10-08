@@ -6,10 +6,24 @@
 ---
 label: wayfinder:research
 title: The guest's encoder attribute queries are all zero (and cost B-frames)
-status: open
+status: closed
 blocked_by: []
 claimed_by:
 ---
+
+## Resolution (2026-10-09) - both bugs fixed
+
+1. **Encoder attributes reach the guest** (caps pair wired) and **the reference/DPB state crosses
+   the wire** (rewritten `virglrenderer-encode-reference-frames.patch`): the guest emits real
+   B-frames (`B147 P150 I3`) and matches the host control at matched QP - 43.302 dB y vs 43.058,
+   where it was 10.818 dB and I/P-only before.
+2. **Guest rate control works** (below): the host's VA config is created from the client's own
+   `rate_ctrl_method` instead of always `VAConfigAttribRTFormat`, so `-b:v 200k` and `-b:v 2M` now
+   produce different streams that each track their target (1.07x / 1.04x the host's size, slightly
+   better PSNR), while `-qp 26` stays byte-identical to the pre-fix output.
+
+The residual 3.5-7% size difference is a rate-control-efficiency difference at equal nominal rate,
+not a defect. Ticket closed; the measurements are in the sections above.
 
 ## Question
 
@@ -325,3 +339,78 @@ needs a divide) is a real but insufficient piece of this and is kept **unwired**
   `qgghkr5k58i1azw0180vbc4c5nvdsxhi` (md5 `e5694b8a968d75d865bd14caeb0d5f36`).
 - the practice image was reloaded afterwards (`localhost/cang:latest` =
   `1393b4cc6ad5...`, driver md5 `7bf2ab7bc2d477e1c617d5fd41406ebc`).
+
+
+## Bug 2 fixed: the client's rate-control mode reaches the host VA config (2026-10-09)
+
+The fix is **host-side only**; the guest image and the wire are unchanged. The
+VA-API rate-control mode is a *config* attribute, so the host needs it when it
+calls `vaCreateConfig()` - but vrend creates the codec at
+`VIRGL_CCMD_CREATE_VIDEO_CODEC` and the mode only crosses the wire later, with
+the first picture's `rate_ctrl_method`. Rather than grow the create-codec wire,
+the encoder half of a codec is now created **lazily**, from the first picture:
+
+- `virgl_video_create_codec()` still validates the RTFormat and creates the
+  config/context up front for a decoder, but for `VAEntrypointEncSlice` it only
+  records the profile/entrypoint/size and leaves `va_cfg`/`va_ctx` unset.
+- `virgl_video_begin_frame()` uploads the picture and records the target but
+  **defers `vaBeginPicture()`**.
+- `virgl_video_encode_bitstream()` reads `rate_ctrl[0].rate_ctrl_method` from
+  the picture description, (re)creates the config with
+  `VAConfigAttribRateControl` mapped from it (`DISABLE`->`VA_RC_CQP`,
+  `CONSTANT*`->`VA_RC_CBR`, `VARIABLE*`->`VA_RC_VBR`), then calls
+  `vaBeginPicture()` and renders. A mid-stream mode change destroys and
+  recreates the config + context + coded buffer (the VA surfaces in
+  `ref_pic_list[]` belong to the codec, not the context, so they survive). If a
+  driver rejects the mode (QVBR is the common one) it retries without the
+  attribute, i.e. the old DISABLE behaviour.
+
+Two patches are wired in `nix/lib/systems.nix`:
+
+- `virglrenderer-encode-rate-control-config.patch` (new) - the lazy config
+  described above.
+- `virglrenderer-encode-rate-control.patch` (was unwired) - the
+  `target_percentage` reconstruction (`target*100/peak`, not `target*peak/100`),
+  which the host VA frontend multiplies back into the target bitrate for every
+  non-CONSTANT method. The earlier throw-away VBR test was config-VBR **plus**
+  this patch (its render server drv references both), which is why the VBR
+  numbers below reproduce it exactly.
+
+Measured on the same harness as the caps/DPB round: 640x360 `clip360.mp4`,
+first 10 s (300 frames), `-bf 1`, image-04 guest (driver md5 `e5694b8a...`),
+cang `3xdavg4y4424b4w85qzm1px0wz2i7mzh-cang-0.11.2` whose render server is
+`a5yraawnl5b79bjpraf14nzqganrcj5x-virglrenderer-1.3.0` (drv references both
+patches). Raw logs in `../notes/` are not committed; the run artefacts are
+`/home/dev/cang/disk/nctx/rc2-run/` and the scratch harness is
+`rc2-run.sh`.
+
+| arm | where | bytes | frames | PSNR y/u/v | SSIM All | ratio vs host |
+| --- | --- | --- | --- | --- | --- | --- |
+| `-b:v 200k -maxrate 250k -bufsize 500k` | guest | 251 395 | 300 | 41.296 / 48.178 / 47.330 | 0.975905 | 1.072 |
+| `-b:v 2M -maxrate 2.5M -bufsize 5M` | guest | 2 285 511 | 300 | 51.871 / 56.251 / 55.528 | 0.996606 | 1.035 |
+| `-qp 26` | guest | 386 079 | 300 | 43.302 / 48.855 / 48.274 | 0.982030 | 1.119 |
+| `-b:v 200k -maxrate 250k -bufsize 500k` | host control | 234 592 | 300 | 40.835 / 47.903 / 47.058 | 0.973845 | - |
+| `-b:v 2M -maxrate 2.5M -bufsize 5M` | host control | 2 207 702 | 300 | 51.539 / 56.058 / 55.339 | 0.996459 | - |
+| `-qp 26` | host control | 344 965 | 300 | 43.058 / 48.799 / 48.208 | 0.981820 | - |
+
+Before this change both guest `-b:v` arms produced one stream (389 739 /
+389 742 B); now 200k and 2M differ by ~9x and each tracks its target, landing
+3.5-7% above the host control at +0.33/+0.46 dB y (the guest is slightly more
+efficient at the same nominal rate). `-qp 26` is **byte- and quality-identical**
+to the pre-fix guest (386 079 B, 43.302 dB y), i.e. the CQP arm is preserved -
+which is exactly what the throw-away VBR-only config got wrong (25 854 B).
+
+The decode path is untouched: a decoder still creates its config/context in
+`virgl_video_create_codec()`, and `virgl_video_begin_frame()` still calls
+`vaBeginPicture()` for it; the deferred path is guarded by
+`codec->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE`.
+
+Build detail:
+
+- cang `3xdavg4y4424b4w85qzm1px0wz2i7mzh-cang-0.11.2`, render server
+  `a5yraawnl5b79bjpraf14nzqganrcj5x-virglrenderer-1.3.0` (drv references
+  `virglrenderer-encode-rate-control.patch` and
+  `virglrenderer-encode-rate-control-config.patch`).
+- guest image-04 (`rcl1dhxd4jw3r304ags6c0lblnknmin1-cang.tar.gz`, config
+  `d261fe7f...`) unchanged - the fix needs no guest rebuild; the practice image
+  (`1393b4cc...`) was reloaded afterwards.
