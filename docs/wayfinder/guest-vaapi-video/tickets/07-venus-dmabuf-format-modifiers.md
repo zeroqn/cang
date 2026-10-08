@@ -121,3 +121,27 @@ Also settled by this run:
 **Redirect:** ticket 07 is no longer a format-modifier ticket. The next step is to instrument the venus
 ring/CS - build cang's virglrenderer with logging (cang can, and the marker recipe is known) and/or
 bisect the submit that never completes - with the GL path (arm C) as the healthy control.
+
+## Instrumentation attempt (2026-10-08): built, but did not converge
+
+A delegated attempt built a marker-instrumented cang virglrenderer (markers at `vkr_context_set_fatal`,
+`vkr_queue_sync_submit`, ring submit/thread paths - `insert_markers.py` + `t07c_mark.h` under
+`/home/dev/cang/disk/nctx/t07c/`) and ran the well-known arms (headless weston + waypipe + mpv
+`--vo=gpu`). What survives:
+
+- **no marker line was ever captured.** That is the *known* trap, not evidence: the render server's
+  stderr does not reach the VM console, and it may write to its own `/dev/shm`, so markers only count
+  if they go to a file in the shared workspace *and* the pid is recorded. The attempt did not reach
+  that point.
+- a render-server liveness watcher (`rs-watch.log`) recorded, for the whole hang,
+  `state=S wchan=do_sys_poll` together with `exit_code=17`. Whether that field means the render server
+  had exited (making the guest's ring wait a *symptom* of the host having vanished) or is the watcher
+  misreading `/proc/<pid>/stat` was **not** resolved.
+- the marked build was reverted; the tree is clean and no VM/compositor leftovers remain.
+
+**Now the decisive and cheap instrument** (much smaller than a vkr-marker build): cang takes the
+render-server binary from `CANG_VIRGL_RENDER_SERVER` (crates/cang/src/runtime/host_tools.rs:50), so a
+tiny wrapper that execs the real `virgl_render_server`, forwards its argv, and records
+`wait`'s status/signal plus its stderr into the shared workspace answers the *first* question - does the
+host venus process die, and with what - which decides whether this ticket is "the host venus context
+faults" or "the host venus thread never advances a specific submit".
