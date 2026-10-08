@@ -28,7 +28,6 @@ let
     systemd
     wayland
     llvmPackages.libllvm
-    xcbutils
     xcbutilkeysyms
     zstd
     elfutils
@@ -45,13 +44,13 @@ if builtins.hasAttr system systems then
   let
     asset = builtins.getAttr system systems;
     prebuilt = pkgs.callPackage ../pkgs/mesa-prebuilt.nix {
-      inherit mesaRuntimeDeps;
       runtimeDeps = mesaRuntimeDeps;
       vulkanLoader = pkgs.vulkan-loader;
       releaseAsset = asset // {
         inherit system;
         inherit (release) owner repo tag version;
         revision = release.revision or null;
+        url = "https://github.com/${release.owner}/${release.repo}/releases/download/${release.tag}/${asset.asset}";
       };
     };
   in
