@@ -673,3 +673,47 @@ ships a prebuilt:
 Both branches are verified to evaluate: the fallback (source build, `rkw128ll...-mesa-26.1.8.drv`)
 and the prebuilt branch (with a synthetic pin: `0rc47qa5...-mesa-26.1.8.drv`, whose fixed-output
 derivation path is computable without fetching the asset).
+
+## The fix IS verifiable in the nix dev shell (2026-10-08)
+
+No VM is needed to verify that the patch cures the hang: on this machine the *host's own* VA-API
+encode goes through the same mesa code, on the same render node the guest's frames are handed to.
+Recipe (all local; the clip is any 640x360 H.264 file):
+
+```sh
+cd /home/dev/cang/cang
+nix build .#mesa-rbsp-bounds -o /tmp/mesa-fix          # source build with cang's patches
+FF=/nix/store/wbskc2agldpv2q9sqx7nqi57n201vzqy-ffmpeg-headless-8.1.2-bin/bin/ffmpeg
+# system mesa (unpatched) - the hang:
+timeout -k 5 180 $FF -nostdin -y -hide_banner -loglevel error \
+  -vaapi_device /dev/dri/renderD128 -i clip360.mp4 -vf format=nv12,hwupload \
+  -c:v h264_vaapi -qp 26 -bf 0 -f h264 /tmp/sys-qp26.h264
+# cang's patched mesa - completes:
+timeout -k 5 180 env LIBVA_DRIVERS_PATH=/tmp/mesa-fix/lib/dri:/run/opengl-driver/lib/dri $FF \
+  -nostdin -y -hide_banner -loglevel error \
+  -vaapi_device /dev/dri/renderD128 -i clip360.mp4 -vf format=nv12,hwupload \
+  -c:v h264_vaapi -qp 26 -bf 0 -f h264 /tmp/pat-qp26.h264
+```
+
+Measured (2026-10-08, x86_64-linux, virtio-gpu render node):
+
+| arm | driver | args | result |
+| --- | --- | --- | --- |
+| `sys-qp26-bf0` | system mesa | `-qp 26 -bf 0` | **rc=137, 0 bytes, 0 frames** - `frame= 0` for ~185 s, killed by `timeout -k 5` |
+| `pat-qp26-bf0` | cang's patched mesa | `-qp 26 -bf 0` | **rc=0, 0.7 s, 857 994 bytes, 599 frames** |
+| `pat-qp26-bf1` | cang's patched mesa | `-qp 26 -bf 1` | rc=0, 3.8 s, 599 frames |
+| `sys-bitrate` | system mesa | `-b:v 200k -maxrate 250k -bufsize 500k` | rc=0, 2.6 s, 493 121 bytes, 599 frames |
+| `pat-bitrate` | cang's patched mesa | same | rc=0, 2.7 s, **493 121 bytes - byte-identical size to the unpatched arm** |
+
+Two conclusions beyond the cure itself:
+
+1. the trigger is exactly **constant-QP with `-bf 0`** on the client side; a bitrate-capped encode does
+   not reach the bug even with the unpatched driver, which is why bitrate-capped guest encodes always
+   worked while `-qp` ones hung;
+2. a well-formed encode produces the **same size** with and without the patch, so the bound does not
+   change what a valid stream parses to - the earlier "the bound regresses the working arm" reading was
+   the *host's* copy of the same bug, not a regression from the bound.
+
+Still not verified anywhere: the complete cang guest path with **both** halves patched (guest driver
+from the image + a host whose system mesa comes from `cang.overlays.default`); on this dev box the VM
+worker necessarily loads the system mesa.
