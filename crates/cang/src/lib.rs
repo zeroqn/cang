@@ -11,6 +11,7 @@ mod naming;
 mod runtime;
 mod state;
 mod task_rootfs;
+mod va_driver;
 
 use cli::{Cli, CliAction, RuntimeOptions};
 
@@ -18,6 +19,8 @@ const DEFAULT_IMAGE: &str = "localhost/cang:latest";
 const DEFAULT_FALLBACK_IMAGE: &str = "ghcr.io/zeroqn/cang:latest";
 
 pub fn entrypoint() -> ExitCode {
+    // Link cang's `dlopen` interposer in (see `va_driver`).
+    va_driver::install();
     let host_session_started_at = Instant::now();
     let args = std::env::args_os().collect::<Vec<_>>();
     if is_internal_invocation(&args) {

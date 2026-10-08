@@ -1,7 +1,7 @@
 ---
 label: wayfinder:research
 title: The guest VA encode hangs in CQP mode on complex 640x360 content
-status: open
+status: closed
 blocked_by: []
 claimed_by: bob + pi session (2026-10-04)
 ---
@@ -758,3 +758,88 @@ Attribution caveat, stated because it matters for the upstream claim: that patch
 it", not "rbsp-bounds alone fixes it". The single-cause attribution comes from the standalone
 reproducer (`notes/08-vl-rbsp-ue-spin.c`: the unpatched reader never returns) and from the earlier
 image runs where the bound alone moved the guest from `CMARK rbsp type=7` to `CMARK slice done`.
+
+## Shipped: the VM worker reaches cang's driver through a `dlopen` interposer (2026-10-09)
+
+The host half is now proven end to end. cang interposes `dlopen` in its own
+binary (`crates/cang/src/va_driver.rs`, exported to `.dynsym` by
+`crates/cang/build.rs` with `-Wl,--export-dynamic-symbol=dlopen`) and rewrites
+libva's `<name>_drv_video.so` request to `CANG_VA_DRIVER_PATH` (or the
+package-relative `<prefix>/lib/cang/dri`); every other `dlopen` is forwarded to
+libc through `dlsym(RTLD_NEXT, "dlopen")`. The VM worker *is* the cang binary,
+so the executable's definition wins libva's global symbol lookup, and the
+redirect depends on nothing the dynamic linker or `secure_getenv` reads.
+
+### The worker really does ignore `LIBVA_DRIVERS_PATH` (measured)
+
+Three `--gpu=drm` guest runs, one 640x360 clip (the first 10 s), the same
+fully-patched guest driver (`qgghkr5k58i1azw0180vbc4c5nvdsxhi-mesa-26.1.8` from
+`.#mesa-rbsp-bounds`), differing only in the host override. The worker's own
+`/proc/<pid>/maps` is the ground truth; its `/proc/<pid>/status` is
+`Uid: 165536 165536 165536 165536`, `CapEff: 000001ffffffffff`,
+`NoNewPrivs: 0` - a full capability set on a mapped uid, a capability gain at
+exec, which is what puts glibc in secure-execution mode.
+
+| run | host override | worker `libgallium` | `-qp 26 -bf 1` | `-b:v 200k … -bf 1` | `-qp 26 -bf 0` |
+| --- | --- | --- | --- | --- | --- |
+| baseline | none | `dqdfhil…` (system) | ok, 386 079 B | ok, 251 395 B | **stall** rc 137, 0 B |
+| `libva` | `LIBVA_DRIVERS_PATH=<qggh>/lib/dri` | `dqdfhil…` (system) | ok, 386 079 B | (poisoned by the stall) | **stall** rc 137, 0 B |
+| interposer | `CANG_VA_DRIVER_PATH=<qggh>/lib/dri` | `qggh…` **and** `dqdfhil…` | ok, 386 079 B | ok, 251 395 B | **ok, 447 133 B** |
+
+- the `libva` run loads the *system* mesa and stalls exactly like the baseline,
+  so the variable is genuinely ignored by the worker, while the same value under
+  cang's own variable reaches the interposer;
+- the worker still maps the system mesa's EGL/GBM (`libEGL_mesa.so`,
+  `dri_gbm.so`): only the `*_drv_video.so` request is rewritten, so the
+  VA-encode driver is patched and the GL surface path is untouched;
+- the two arms that already worked are **byte-identical** with and without the
+  override (`md5sum` equal), so the redirect changes nothing for well-formed
+  input.
+
+### The CQP arm now matches the host control
+
+Host control on the real render node, same clip, no VM:
+
+| arm | system mesa | cang's patched mesa |
+| --- | --- | --- |
+| `-qp 26 -bf 1` | ok, 344 965 B | ok, 344 965 B (identical) |
+| `-b:v 200k -maxrate 250k -bufsize 500k -bf 1` | ok, 234 592 B | ok, 234 592 B (identical) |
+| `-qp 26 -bf 0` | **stall** rc 137, 0 B, 185 s | **ok, 447 145 B** |
+
+With both halves patched the guest's `-qp 26 -bf 0` is **447 133 B, 300 frames,
+y-PSNR 43.198433** - the same PSNR/SSIM to six decimals as the patched host
+control's **447 145 B** (12 bytes apart, the encoder's SEI string). The `-bf 1`
+arms carry real B-frames (`B=147 I=2 I,=1 P=150`; y-PSNR 43.30 guest vs 43.06
+host); `-bf 0` is `I=2 I,=1 P=297`, as expected. The `qp26bf0-unpatched`
+contrast arm (guest on the prebuilt `fdw09…` mesa, host patched) still stalls at
+frame 0, so the guest bound remains load-bearing.
+
+An extra `-b:v 2M -maxrate 2.5M -bufsize 5M -bf 1` arm in the interposer run
+produces **2 285 511 B** in 1 s (`B=147 I=2 I,=1 P=150`, y-PSNR 51.87), so the
+multi-MB stream with real B-frames the acceptance asked for is a guest output,
+not just a host control.
+
+### New hazard: a stalled arm poisons the rest of the VM
+
+A stall is not cleaned up by killing the guest client - the worker stays stuck
+in the host driver, so every later arm in the same VM stalls too. The first
+baseline run stalled on `-qp 26 -bf 0` and its bitrate arm then also read 0 B;
+re-running with the stalling arm last gave a clean `-b:v 200k` (251 395 B).
+Order a stalling arm last, or start a new VM.
+
+### Wired, and not
+
+- **wired**: the interposer, the `CANG_VA_DRIVER_PATH` knob and the
+  `<prefix>/lib/cang/dri` default are in cang (nix packaging unchanged);
+- **not wired**: installing the patched driver into `$out/lib/cang/dri` so the
+  default applies with no environment variable. A host that applies
+  `cang.overlays.default` already has a patched system mesa and needs no redirect
+  at all; `CANG_VA_DRIVER_PATH` is the escape hatch for a host that cannot, and
+  is what this verification used. The upstream mesa submission (bound
+  `vl_rbsp_ue`/`vl_rbsp_se`, the three slice-parser `while (true)` loops, the HRD
+  loop) is still worth making.
+
+Raw logs, worker maps and arm files for every run above are under
+`/home/dev/cang/disk/nctx/t08/run-{baseline2,libva,patched,patched2}/`
+(console.log, maps.sample, status.sample, g-*.h264) and the host control
+under `t08/hostctl/`.
