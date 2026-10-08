@@ -78,3 +78,46 @@ server started with `--test-skip-vulkan`, then require the render server to log 
 cross-context-resource explanation from the modifier one. Also check whether the image ships
 `dri_gbm.so` at all and either point `GBM_BACKENDS_PATH` at it or add it to the image's mesa runtime.
 It needs a host with a compositor (not this box).
+
+## Experiment: the modifier theory is refuted; the failure is a venus ring hang (2026-10-08)
+
+Ran the discriminating step on this box: headless weston 15.0.1 (host) + waypipe 0.11.0 client +
+`cang --gpu=drm --waypipe` guest, presenting client = **mpv v0.41.0 from the image** with `--vo=gpu`
+(waylandvk = Vulkan through venus), `--hwdec=no`:
+
+| arm | variant | client rc | playback | host frame |
+| --- | --- | --- | --- | --- |
+| A | baseline `--vo=gpu` | **134** | no | blank |
+| B | `VN_PERF=no_tiled_wsi_image` (LINEAR WSI) | **134** | no | blank |
+| C | control `--gpu-api=opengl` | 124 (killed after playing) | **yes** | real video frame |
+| D | baseline + `MESA_LOG_LEVEL=debug VN_DEBUG=wsi,result` | 134 | no | blank |
+| E | `VN_PERF` + the same debug | 134 | no | blank |
+| S | baseline under strace | 134 | no | blank |
+
+The env knob *is* live - arm E logs `rejecting non-linear wsi image format modifier <0x…>` where arm D
+logs `rejecting multi-plane (2/3) modifier …`, i.e. the WSI modifier policy really changes - and both
+then create the swapchain (`vn_wsi_create_image` x3) and die in the identical place:
+
+```
+MESA-VIRTIO: debug: stuck in ring seqno wait with iter at 4096
+MESA-VIRTIO: debug: aborting on expired ring alive status at iter 4096
+```
+
+**So the abort is a venus ring hang** (the host stops advancing the ring after swapchain creation),
+not a dma-buf modifier or import failure. Under strace the venus `VIRTGPU_EXECBUFFER` ioctls all
+return 0, then ~5 s of quiet, then a self-raised SIGABRT (`SI_TKILL`) - no failing ioctl.
+
+Also settled by this run:
+
+- **`dri_gbm.so` is shipped and pointed at** (`/usr/lib/cang-mesa-runtime/lib/gbm/dri_gbm.so`,
+  in-guest `GBM_BACKENDS_PATH=/usr/lib/cang-mesa-runtime/lib/gbm`), so that half of the earlier
+  proposal does not apply;
+- **waypipe 0.11.0 has no `--test-skip-vulkan`** (host and image), so that half cannot be run;
+- the 2026-10-02 `invalid res_id 15` / CS-error sequence was **not** reproduced on the current practice
+  image - the failure today is a silent ring hang. The host-side absence of `vkr:` lines is *not*
+  evidence either way: the shipped render server binary has no `VIRGL_LOG_FILE`/`VIRGL_LOG_LEVEL`
+  support and the messages are INFO-level.
+
+**Redirect:** ticket 07 is no longer a format-modifier ticket. The next step is to instrument the venus
+ring/CS - build cang's virglrenderer with logging (cang can, and the marker recipe is known) and/or
+bisect the submit that never completes - with the GL path (arm C) as the healthy control.
