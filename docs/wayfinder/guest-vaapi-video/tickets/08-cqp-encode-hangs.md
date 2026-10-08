@@ -717,3 +717,36 @@ Two conclusions beyond the cure itself:
 Still not verified anywhere: the complete cang guest path with **both** halves patched (guest driver
 from the image + a host whose system mesa comes from `cang.overlays.default`); on this dev box the VM
 worker necessarily loads the system mesa.
+
+### Ground truth for that dev-shell A/B (2026-10-08)
+
+The two drivers the arms actually loaded, from `/proc/<pid>/maps` (distinct inodes, so the A/B is not
+two symlinks to one library):
+
+- system arms: `/run/opengl-driver/lib/dri/virtio_gpu_drv_video.so` ->
+  `dqdfhilmkqpijpa5jhmyqpjgh4mgpzlp-mesa-26.1.8/lib/libgallium-26.1.8.so` (no cang patches);
+- patched arms: `k9zqmyiw5db2829s9ail53gn8g1h5vfx-mesa-26.1.8/lib/dri/...` -> that build's
+  `libgallium-26.1.8.so`.
+
+Full arm matrix from that run (`-k 5 180`, `timeout` SIGKILL after a SIGTERM the spinning ffmpeg never
+acted on, hence rc=137):
+
+| arm | driver | args | rc | secs | bytes |
+| --- | --- | --- | --- | --- | --- |
+| `sys-qp26-bf0` | system | `-qp 26 -bf 0` | 137 | 185.1 | 0 |
+| `pat-qp26-bf0` | patched | `-qp 26 -bf 0` | 0 | 3.1 | 857 994 |
+| `pat-fallback-qp26-bf0` | patched (`path:path`) | `-qp 26 -bf 0` | 0 | 0.7 | 857 994 |
+| `sys-qp26-bf1` | system | `-qp 26 -bf 1` | 0 | 8.9 | 656 913 |
+| `pat-qp26-bf1` | patched | `-qp 26 -bf 1` | 0 | 3.8 | 656 913 |
+| `sys-bitrate` | system | `-b:v 200k -maxrate 250k -bufsize 500k` | 0 | 2.6 | 493 121 |
+| `pat-bitrate` | patched | same | 0 | 2.7 | 493 121 |
+
+Every non-empty output decodes to 599 frames, and the two pairs that complete on both drivers are
+**byte-identical** (`sys-qp26-bf1` == `pat-qp26-bf1`, `sys-bitrate` == `pat-bitrate`) - so the patch
+provably changes nothing for well-formed input.
+
+Attribution caveat, stated because it matters for the upstream claim: that patched build carries
+*both* cang mesa patches (raw headers + RBSP bounds), so this run proves "cang's patched mesa fixes
+it", not "rbsp-bounds alone fixes it". The single-cause attribution comes from the standalone
+reproducer (`notes/08-vl-rbsp-ue-spin.c`: the unpatched reader never returns) and from the earlier
+image runs where the bound alone moved the guest from `CMARK rbsp type=7` to `CMARK slice done`.
