@@ -472,3 +472,61 @@ DRM-PRIME memory type included) - then its decoder creation fails with `DecoderS
 (`kFailedToCreateDecoder`) and no decode context is ever created (ticket 06). For hardware
 video in a cang guest today, use **`mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl`**, which is
 proven end to end.
+
+## Where this stands (2026-10-09)
+
+Closed: 01 (decode), 02 (packed headers over the wire), 03 (upload fence), 04 (encoder attributes,
+references/DPB and rate control), 05 (chroma), 07 (venus presenting - a missing `rename` in the render
+server's seccomp policy, verified by a cold-cache A/B). Open: **06** and **08**.
+
+Shipped for consumers: cang's mesa patch set (raw headers, RBSP bounds, virtio-gpu modifiers) is wired
+for the guest image and exported to hosts as `overlays.default` / `packages.mesa-rbsp-bounds`, with a
+prebuilt-mesa workflow (`.github/workflows/build-mesa.yml` + `scripts/update-mesa-prebuilt.sh`) so a
+downstream host need not build Mesa; the prebuilt pin is empty until that workflow first runs, so today
+everything still builds from source.
+
+### Ticket 08 - what is left
+
+The guest half is shipped and the guest-side stall is gone (RBSP bound in the image). What is not
+verified is the CQP arm end to end, because the host-side VA encode runs in the **VM worker**, which
+`unshare --keep-id` puts into glibc secure-execution mode, where libva's `secure_getenv()` ignores
+`LIBVA_DRIVERS_PATH` - so the worker always uses the *system* mesa (measured; a run with the override
+set still used the unpatched driver and stalled). Next:
+
+1. make cang hand the VM worker a patched driver through a route that works in secure-exec mode - the
+   most promising is cang's existing **libva preload** hook (see the libkrun-rust-api map's
+   "re-verify the libva preload" ticket), pointing at cang's own mesa; if that is impossible, prove it;
+2. re-run ticket 08's CQP arm with the guest patches and that driver, and confirm a multi-MB stream
+   with real B-frames;
+3. re-check the old "the bound regresses the bitrate arm" observation - it was taken against an
+   unpatched host and is probably the same host-side defect.
+If (1) fails, the acceptance needs a host whose system mesa carries `cang.overlays.default`, i.e. a
+NixOS-level decision - and on this dev box the host's own render node is virtio-gpu's virgl VA driver,
+which is the same code, so the dev-shell A/B in ticket 08 is the standing proof for that half.
+
+### Ticket 06 - what is left
+
+The guest, driver, VA-API library and vrend are proven healthy (mpv decodes hardware-accelerated in the
+same guest). Chromium's VA-API use is pure enumeration - 152 x `vaQuerySurfaceAttributes`, 152 x
+`vaCreateConfig`/`DestroyConfig`, and **zero** surfaces, contexts, buffers or pictures - and it never
+creates a decode config the way mpv does. Its own log names the failure twice
+(`DecoderStatus::205 = kFailedToCreateDecoder`, and `GetHandle(): Either VADisplayStateSingleton::
+PreSandboxInitialization() hasn't been called or that method failed`), and the official build emits no
+decoder logging at any `--vmodule` tried. Next: upstream knowledge of that code path - what makes
+`VaapiVideoDecoder::Initialize` refuse after successful probes, and whether the `PreSandboxInitialization`
+complaint is the real gate - plus checking the guest Chromium's feature/sandbox flags; deliverable is an
+answer with citations unless the cause turns out to be a flag cang can set.
+
+### Working notes for whoever picks this up
+
+- the guest VA driver and the host control it is compared against are `/usr/lib/cang-va-runtime/dri`
+  (image) and `mesa-ship` (patched, host) - see the tickets for the exact store paths of each round;
+- measurement hazards that have already cost this work days are in
+  `notes/encode-measurement-hazards.md` - read it before running anything: `-bf 0` + `-qp` hangs even the
+  host's driver, a raw `.h264` needs `-r 29913/1000` before PSNR/SSIM mean anything, a warm
+  `/dev/shm/mesa-cache` hides the venus seccomp bug, and a stale console log has repeatedly been read as
+  a fresh result;
+- only one VM at a time: take `/home/dev/cang/disk/nctx/vm.lock` (mkdir/rmdir) before a VM run or image
+  load;
+- the loaded image is `image-clean2` (`1393b4cc…`) and must be restored before releasing that lock; the
+  practice cang is `cang-baseline`, guest-init `gi-gbm`.
