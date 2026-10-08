@@ -174,3 +174,47 @@ baseline. The B-frame work needs a different shape: the caps must be negotiated 
 cannot misread them (a new caps field with a version/flag, or the value carried in the existing
 `reserved` bits only when a feature bit says so), and the DPB fill must use only picture-order counts
 vrend actually recorded, with `frame_idx` set alongside `picture_id`.
+
+## Re-measurement with both caps halves wired (2026-10-08)
+
+Both halves were wired (`mesa-virgl-encode-caps.patch` for the guest's `mesaVaApi`,
+`virglrenderer-encode-caps.patch` for the host's vrend), the image and cang rebuilt, the image loaded,
+and the arms run on the same 640x360 clip (first 10 s, 300 frames) against a host control. The tree was
+reverted and the practice image reloaded afterwards.
+
+**The forwarding itself works.** The guest's ffmpeg now logs `supported references: 1 / 1` (it logged
+`1 / 0` before), so the attributes genuinely arrive from the host's `vaGetConfigAttributes` for the
+per-(profile, entrypoint) caps array.
+
+**But enabling it is a net regression**, exactly as the ticket predicted:
+
+| arm | where | bytes | frames | PSNR y/u/v | SSIM All |
+| --- | --- | --- | --- | --- | --- |
+| guest caps, `-b:v 200k` | guest | 2 166 837 | 300 | **10.818 / 6.227 / 6.739** | 0.621 |
+| guest caps, `-b:v 2M` | guest | 2 166 834 | 300 | 10.818 / 6.227 / 6.739 | 0.621 |
+| guest caps, `-qp 26 -bf 1` | guest | 2 163 174 | 300 | (same) | (same) |
+| guest, *no* caps (practice image) | guest | 450 772 | 300 | 43.198 / 48.735 / 48.173 | 0.982 |
+| host control, `-b:v 200k` | host | 234 592 | 300 | 40.8 / … | … |
+| host control, `-b:v 2M` | host | 2 207 702 | 300 | 51.5 / … | … |
+| host control, `-qp 26 -bf 1` | host | 344 965 | 300 | 43.06 / … | … |
+
+Per-frame PSNR on the caps arm reads 45.3 / 12.4 / 44.9 / 10.2 / 12.4 and then ~10 dB onward: the
+stream is decodable but its pictures are wrong after the first few, and it is ~5x the size of the
+pre-change guest output at 32 dB worse luma. Rate control is still ignored (`-b:v` 200k and 2M produce
+the same size and the same PSNR), and the pictures are still I/P only.
+
+**Verdict: do not wire the caps. The blocker is the reference plumbing, not the attribute query.**
+A B-frame needs `ref_pic_list0/1` and the DPB/reorder state to cross the wire, and `vrend`'s fill still
+(a) leaves `RefPicList0`/`RefPicList1` commented out, (b) invents `ReferenceFrames` from its own
+`frame_num % 32` ring, and (c) sets `param->CurrPic.picture_id` from `get_enc_ref_pic()` while
+discarding `source` outright - the surface the upload actually wrote into. Until those are filled from
+the desc, advertising the attribute only makes the client build a GOP the host cannot honour.
+
+Two side-findings for whoever picks this up:
+
+- the guest **ignores rate control** in every configuration measured so far (`-b:v` 200k/400k/2M give
+  one size; `-rc_mode CBR` and `-qp … -bf 0` hang). The caps forwarding did not change that, so the
+  rate-control parameters are lost somewhere other than the attribute query - a second, independent
+  bug to chase after the reference plumbing.
+- `-qp` with `-bf 0` still hangs, but that is the RBSP defect (ticket 08), not this one; `-bf 1` arms
+  complete on both drivers.
