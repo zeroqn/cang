@@ -167,3 +167,44 @@ Discriminating between those needs host-side visibility inside the venus ring th
 marker build whose output lands in the *shared workspace* (the earlier attempt's markers never fired,
 which the notes explain: the render server's stderr does not reach the VM console and its own
 `/dev/shm` is not the host's). That is the next instrument - and it is real work, not a wrapper.
+
+## The host venus ring thread is blocked in a futex while the guest waits for its seqno (2026-10-08)
+
+Re-ran the presenting arm (headless weston + waypipe + `cang --gpu=drm --waypipe` + `mpv --vo=gpu`,
+clip 1080p) while sampling every thread of the host render server at 0.5 s intervals. Guest:
+
+```
+MESA-VIRTIO: debug: vn_GetPhysicalDeviceImageFormatProperties2: VK_ERROR_FORMAT_NOT_SUPPORTED   (many)
+MESA-VIRTIO: debug: rejecting multi-plane (2)/(3) modifier … for wsi image with format 64
+MESA-VIRTIO: debug: vn_wsi_create_image: legacy_scanout=0, prime_blit=0      (x3)
+MESA-VIRTIO: debug: stuck in ring seqno wait with iter at 4096
+MESA-VIRTIO: debug: aborting on expired ring alive status at iter 4096
+```
+
+(mpv then aborts, `rc=134`, ~9 s in.)
+
+Host render server, same window:
+
+| thread | wait |
+| --- | --- |
+| `virgl_render_se` (main) | `do_sys_poll` |
+| **`vkr-ring-1`** | **`__futex_wait`** |
+| **`vkr-ringmon-1`** | **`__futex_wait`** |
+| `vkr-queue-1` | `__futex_wait` |
+| `virgl_r:disk$0` | `__futex_wait` |
+| vCPUs | `kvm_vcpu_block` |
+
+Nothing anywhere is in a DRM `ioctl`/syncobj wait.
+
+Interpretation: the guest has *written* a command and is polling for the ring seqno to advance, while
+the host's **ring thread and its monitor are parked in futex waits** - i.e. the guest-to-host wake for
+that command was never delivered (or the ring thread is waiting on a lock owned by another parked
+thread). Because no thread sits in a DRM call, this is **not** a GPU fence that never signals; it is the
+ring's own notification path. That is a much sharper statement of the defect than "the host stopped
+advancing the ring", and it fits the earlier 2026-10-02 `invalid res_id 15` evidence only loosely.
+
+Next: read the ring protocol itself - venus's `src/venus/vkr_ring.c` (how the ring thread waits and how
+a submit wakes it, including the shared-memory futex and the ring's alive/seqno fields) against the
+guest side (mesa's `vn_ring` in `src/virtio/vulkan/`), and check whether cang's guest-proxy /
+zero-copy-shm path (`--gpu=drm`, the PR-822 work) is in that notification chain. A lost wake there would
+explain both the guest's seqno wait and the host's parked ring thread.
