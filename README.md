@@ -55,12 +55,18 @@ rootless Podman tooling for development.
   the guest's `virtio_gpu` VA driver advertises the host's hardware profiles, so
   `vainfo` lists H.264/HEVC/VP9/AV1/JPEG and `ffmpeg -hwaccel vaapi` decodes with
   it. guest-init exports `LIBVA_DRIVERS_PATH` for that driver as part of the
-  `--gpu=drm` Mesa environment. Encode works too: `ffmpeg -c:v h264_vaapi` and
-  `-c:v hevc_vaapi` produce streams a decoder reads, because cang carries the
-  two halves of the encode fix (the host half in its `virglrenderer`, the guest
-  half in the image's VA driver - see `docs/vaapi-video-investigation.md`). One
-  gap remains: an encoder-attribute query is still 0 in the guest, so an encoder
-  picks its settings from defaults.
+  `--gpu=drm` Mesa environment. Encode works: `ffmpeg -c:v h264_vaapi -b:v …`
+  and the same with `hevc_vaapi` produce streams a decoder reads, because cang
+  carries the encode fix on both sides - its `virglrenderer` submits the client's
+  packed headers to the host driver, and the image's mesa applies cang's patches
+  to the guest VA driver (`docs/vaapi-video-investigation.md`). A host whose own
+  VA-API driver is mesa (a virtio-gpu host, radeonsi, ...) should apply cang's
+  overlay so the host half has the same RBSP-bound fix:
+  `nixpkgs.overlays = [ cang.overlays.default ];`, or use
+  `cang.packages.<system>.mesa-rbsp-bounds`. Two gaps remain: an
+  encoder-attribute query is still 0 in the guest, so an encoder picks its
+  settings from defaults; and a constant-QP (rather than bitrate-capped) encode of
+  complex content can still stall on a host whose mesa lacks that overlay.
 - `cang --gpu=drm --zero-copy-shm` asks the virtio-GPU device for the udmabuf
   zero-copy shared-memory fast path: a guest `wl_shm` client's pool is imported
   as a guest blob that carries a host-side handle, so the host compositor reads
