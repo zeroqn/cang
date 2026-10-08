@@ -15,6 +15,19 @@ in
   };
 
   # Pinned by scripts/update-herdr.sh (tag + per-system asset hashes).
+  # Prebuilt mesa carrying cang's VA-API encode fixes (nix/lib/mesa-patched.nix).
+  # `.github/workflows/build-mesa.yml` builds it and fills `systems` with the
+  # published asset per platform; while a platform is absent, nix/lib/mesa-cang.nix
+  # falls back to building the same patches from source.
+  mesaPrebuiltRelease = {
+    owner = "zeroqn";
+    repo = "cang";
+    tag = "";
+    version = "";
+    revision = "";
+    systems = { };
+  };
+
   herdrPrebuiltRelease = {
     owner = "herdrdev";
     repo = "herdr";

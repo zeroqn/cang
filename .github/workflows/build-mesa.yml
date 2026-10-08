@@ -1,0 +1,265 @@
+name: Build and publish Mesa
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-mesa.yml
+      # The patch set, the selector and the prebuilt consumer all change what
+      # this workflow builds and publishes.
+      - nix/lib/mesa-cang.nix
+      - nix/lib/mesa-patched.nix
+      - nix/pkgs/mesa-prebuilt.nix
+      - nix/pkgs/patches/mesa-*.patch
+      # `mesa-release-build` is defined in flake.nix and built from the locked
+      # nixpkgs, so a flake or lock move can change the Mesa version.
+      - flake.nix
+      - flake.lock
+  schedule:
+    # Weekly: float the nixpkgs lock and rebuild when the Mesa version or the
+    # libva/Mesa stack it builds against moved.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force a Mesa rebuild even when the Mesa version is unchanged'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: mesa-main-build
+  cancel-in-progress: false
+
+jobs:
+  update-and-build-mesa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        # No submodule checkout: every step here is a Nix build, and the flake
+        # compiles the fork sources from its `libkrun-src`/`libkrunfw-src`/
+        # `rutabaga-gfx-src` inputs.
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Assert CI-required package attributes exist
+        # Mirror the sibling flake's `packages-output-contract` check: this
+        # workflow evaluates and builds these attributes, so a rename has to
+        # fail here instead of silently breaking CI. Check attribute presence
+        # (`?`) rather than forcing the derivation, exactly like the check does.
+        run: |
+          set -euo pipefail
+
+          present="$(nix eval --impure --json --expr '
+            let
+              flake = builtins.getFlake (toString ./.);
+              system = builtins.currentSystem;
+              required = [ "mesa-release-build" "mesa-rbsp-bounds" ];
+            in
+            builtins.all (name: flake.packages.${system} ? ${name}) required
+          ')"
+          if [ "${present}" != "true" ]; then
+            echo "missing a CI-required mesa package attribute (mesa-release-build, mesa-rbsp-bounds)" >&2
+            exit 1
+          fi
+          echo "ok: packages.<system>.{mesa-release-build,mesa-rbsp-bounds}"
+
+      - name: Update nixpkgs input
+        # Only the weekly run floats nixpkgs; push runs build the pinned lock.
+        if: github.event_name == 'schedule'
+        run: nix flake update nixpkgs
+
+      - name: Extract Mesa version
+        id: mesa-version
+        run: |
+          set -euo pipefail
+
+          mesa_version="$(nix eval --raw .#mesa-release-build.version)"
+          if [ -z "${mesa_version}" ]; then
+            echo "nix eval returned an empty mesa version" >&2
+            exit 1
+          fi
+          echo "mesa_version=${mesa_version}" >> "${GITHUB_OUTPUT}"
+          echo "Detected Mesa version: ${mesa_version}"
+
+      - name: Check whether Mesa needs a rebuild
+        id: check-version
+        env:
+          MESA_VERSION: ${{ steps.mesa-version.outputs.mesa_version }}
+          FORCE_REBUILD: ${{ github.event.inputs.force_rebuild }}
+        run: |
+          set -euo pipefail
+
+          case "$(uname -m)" in
+            x86_64) system="x86_64-linux" ;;
+            aarch64 | arm64) system="aarch64-linux" ;;
+            *)
+              echo "unsupported runner architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          pinned_version="$(nix eval --raw --impure \
+            --expr '(import ./nix/pins.nix).mesaPrebuiltRelease.version' || true)"
+          pinned_system="$(nix eval --raw --impure \
+            --expr "if builtins.hasAttr \"${system}\" (import ./nix/pins.nix).mesaPrebuiltRelease.systems then \"true\" else \"false\"" \
+            || echo false)"
+
+          locked_rev="$(git show HEAD:flake.lock | jq -r '.nodes.nixpkgs.locked.rev // empty' 2>/dev/null || true)"
+          work_rev="$(jq -r '.nodes.nixpkgs.locked.rev // empty' flake.lock 2>/dev/null || true)"
+
+          echo "System:             ${system}"
+          echo "Pinned Mesa:        ${pinned_version:-<none>}"
+          echo "New Mesa version:   ${MESA_VERSION}"
+          echo "Pinned ${system}:    ${pinned_system}"
+          echo "Committed nixpkgs:  ${locked_rev}"
+          echo "Lock nixpkgs:       ${work_rev}"
+
+          changed=false
+          if [ "${MESA_VERSION}" != "${pinned_version}" ]; then
+            echo "Mesa version changed (${pinned_version:-<none>} -> ${MESA_VERSION})"
+            changed=true
+          fi
+          if [ "${pinned_system}" != "true" ]; then
+            echo "nix/pins.nix has no prebuilt mesa asset for ${system}"
+            changed=true
+          fi
+          if [ -n "${locked_rev}" ] && [ -n "${work_rev}" ] && [ "${locked_rev}" != "${work_rev}" ]; then
+            echo "nixpkgs input moved (${locked_rev} -> ${work_rev}); rebuilding for the new libva/Mesa stack"
+            changed=true
+          fi
+          if [ "${FORCE_REBUILD}" = "true" ]; then
+            echo "manual force_rebuild requested"
+            changed=true
+          fi
+
+          echo "system=${system}" >> "${GITHUB_OUTPUT}"
+          if [ "${changed}" = "true" ]; then
+            echo "version_changed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "version_changed=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Report Mesa unchanged
+        if: steps.check-version.outputs.version_changed == 'false'
+        env:
+          MESA_VERSION: ${{ steps.mesa-version.outputs.mesa_version }}
+          SYSTEM: ${{ steps.check-version.outputs.system }}
+        run: |
+          echo "Mesa ${MESA_VERSION} is already published for ${SYSTEM} and neither the Mesa version, the nixpkgs lock, nor a force request changed; skipping."
+
+      - name: Confirm workflow commit is current main
+        run: |
+          set -euo pipefail
+
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+
+      - name: Build patched Mesa
+        if: steps.check-version.outputs.version_changed == 'true'
+        env:
+          MESA_VERSION: ${{ steps.mesa-version.outputs.mesa_version }}
+        run: |
+          set -euo pipefail
+
+          if ! nix build .#mesa-release-build \
+            --out-link result-mesa \
+            --print-build-logs 2>&1 | tee build.log; then
+            echo "Mesa build failed -- the patch set may need updating for Mesa ${MESA_VERSION}"
+            tail -n 200 build.log
+            exit 1
+          fi
+
+      - name: Package Mesa
+        id: package
+        if: steps.check-version.outputs.version_changed == 'true'
+        env:
+          MESA_VERSION: ${{ steps.mesa-version.outputs.mesa_version }}
+          SYSTEM: ${{ steps.check-version.outputs.system }}
+        run: |
+          set -euo pipefail
+
+          archive="mesa-${MESA_VERSION}-${SYSTEM}.tar.gz"
+          mesa_dir="$(readlink -f result-mesa)"
+
+          # The reconstruction in nix/pkgs/mesa-prebuilt.nix relies on these; fail
+          # before publishing a tarball that would break the prebuilt consumer.
+          test -f "${mesa_dir}/lib/libgallium-${MESA_VERSION}.so"
+          test -f "${mesa_dir}/lib/dri/virtio_gpu_drv_video.so"
+          test -f "${mesa_dir}/lib/gbm/dri_gbm.so"
+          test -f "${mesa_dir}/share/vulkan/icd.d/virtio_icd.$(uname -m).json"
+
+          tar -czf "${archive}" -C "${mesa_dir}" .
+          sha256sum "${archive}" > "${archive}.sha256"
+          echo "archive=${archive}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest Mesa archive
+        if: steps.check-version.outputs.version_changed == 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.package.outputs.archive }}
+
+      - name: Upload Mesa release assets
+        if: steps.check-version.outputs.version_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          set -euo pipefail
+
+          # `alpha` is cang's rolling prerelease. `publish_release.yml` owns its
+          # lifecycle and creates it on every push to main; only fill the gap when
+          # this workflow runs before it ever has.
+          if ! gh release view alpha > /dev/null 2>&1; then
+            gh release create alpha --title alpha --prerelease --target "${GITHUB_SHA}" || true
+          fi
+          gh release upload alpha "${ARCHIVE}" "${ARCHIVE}.sha256" --clobber
+
+      - name: Update the mesa prebuilt pin
+        if: steps.check-version.outputs.version_changed == 'true'
+        env:
+          MESA_VERSION: ${{ steps.mesa-version.outputs.mesa_version }}
+          SYSTEM: ${{ steps.check-version.outputs.system }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          set -euo pipefail
+
+          # Hash the tarball this run uploaded (no download race) and write
+          # nix/pins.nix with the same updater a maintainer runs by hand.
+          bash scripts/update-mesa-prebuilt.sh \
+            --tag alpha \
+            --system "${SYSTEM}" \
+            --version "${MESA_VERSION}" \
+            --asset "${ARCHIVE}" \
+            --asset-path "${ARCHIVE}"
+
+      - name: Commit the mesa prebuilt pin
+        if: steps.check-version.outputs.version_changed == 'true'
+        env:
+          MESA_VERSION: ${{ steps.mesa-version.outputs.mesa_version }}
+        run: |
+          set -euo pipefail
+
+          git add flake.lock nix/pins.nix
+          if git diff --cached --quiet; then
+            echo "no pin change to commit"
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "chore: update mesa prebuilt release pin to ${MESA_VERSION}"
+          git push origin HEAD:main

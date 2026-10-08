@@ -53,14 +53,14 @@
 
     }:
     let
-      systems = import ./nix/lib/systems.nix {
-        inherit nixpkgs headless;
-      };
       pins = import ./nix/pins.nix;
-      # cang's mesa override (the VA-API encode fixes), shared with the guest image's
-      # `mesaVaApi`; see nix/lib/mesa-patched.nix for why both halves are applied and
-      # `overlays.default` below for the host-side consumer.
-      applyMesaPatches = import ./nix/lib/mesa-patched.nix;
+      systems = import ./nix/lib/systems.nix {
+        inherit nixpkgs headless pins;
+      };
+      # cang's mesa (the VA-API encode fixes + the headless virtio-gpu modifier fix):
+      # the prebuilt release asset when one is published for the system, otherwise
+      # the same patches built from source. Shared with the guest image's `mesaVaApi`.
+      mesaCang = pkgs: import ./nix/lib/mesa-cang.nix { inherit pkgs pins; };
     in
     {
       # Apply to a host's nixpkgs to give *its* VA-API driver the same fix the guest
@@ -71,8 +71,8 @@
       # LIBVA_DRIVERS_PATH - so pointing it at the patched build by environment does
       # not work. See docs/wayfinder/guest-vaapi-video/tickets/08-cqp-encode-hangs.md.
       overlays.default = final: prev: {
-        mesa = applyMesaPatches prev.mesa;
-        mesaVaApi = applyMesaPatches prev.mesa;
+        mesa = mesaCang prev;
+        mesaVaApi = mesaCang prev;
       };
 
       packages = systems.forAllSystems (
@@ -249,7 +249,11 @@
         // {
           # nixpkgs' mesa with cang's VA-API encode fixes, for consumers that cannot
           # apply the overlay (the guest image uses the same override as `mesaVaApi`).
-          mesa-rbsp-bounds = applyMesaPatches pkgs.mesa;
+          mesa-rbsp-bounds = mesaCang pkgs;
+          # The source build of the same patches: what `.github/workflows/build-mesa.yml`
+          # builds, tars and publishes as the `mesa-rbsp-bounds` release assets that
+          # `mesa-rbsp-bounds` / `overlays.default` then consume as prebuilts.
+          mesa-release-build = (import ./nix/lib/mesa-patched.nix) pkgs.mesa;
         }
       );
 

@@ -648,3 +648,24 @@ field decode of the captured buffers is bit-identical with and without the patch
 from the earlier rounds - the bitrate-capped guest arm stalling with the bound wired against an
 *unpatched* host - is re-measured with this shipping configuration; until it is explained, that arm's
 behaviour with the bound is the thing to watch.
+
+### Prebuilt mesa for downstream hosts (2026-10-08)
+
+Building mesa from source for the fix is a ~20-minute detour for every downstream host, so cang also
+ships a prebuilt:
+
+- `nix/lib/mesa-patched.nix` (the source override) now applies three patches: cang's
+  `mesa-virgl-encode-raw-headers.patch` and `mesa-virgl-rbsp-bounds.patch`, plus
+  `mesa-headless-virtio-modifiers.patch` copied from the sibling `headless` flake (the AMD virtio-gpu
+  DMA-BUF modifier fix cang's host vrend needs on such a host - the same patch headless publishes
+  prebuilt, so this keeps the two stacks aligned).
+- `nix/lib/mesa-cang.nix` picks, per system, either cang's **prebuilt** mesa release asset
+  (`nix/pkgs/mesa-prebuilt.nix`, which fetches the tarball and reconstructs it with
+  `autoPatchelfHook`, modelled on headless's `mesa/prebuilt-package.nix`) or the source build with the
+  same patches; `nix/pins.nix`'s `mesaPrebuiltRelease` is the pin the release workflow fills in, and
+  while a platform is absent the source build is used, so nothing breaks before the first publish.
+- both consumers go through it: the guest image's `mesaVaApi` and the host-facing
+  `overlays.default` / `packages.mesa-rbsp-bounds`. `flake.nix` also exposes
+  `packages.<system>.mesa-release-build` - the source build - which is what
+  `.github/workflows/build-mesa.yml` builds, tars as `mesa-<version>-<system>.tar.gz`, attests and
+  publishes, then updates the pin with `scripts/update-mesa-prebuilt.sh`.

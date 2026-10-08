@@ -1214,3 +1214,71 @@ fn image_includes_rootless_container_stacks_without_fuse_overlayfs() {
     }
     assert!(!LAYERS.contains("fuse-overlayfs"));
 }
+
+#[test]
+fn mesa_fix_is_shipped_for_the_guest_image_and_for_hosts() {
+    // The VA-API encode fix has to reach both sides of the vrend video path: the
+    // image's guest driver (mesaVaApi) and a downstream host's own driver, through
+    // the overlay / package the flake exports. Both go through nix/lib/mesa-cang.nix,
+    // which prefers cang's prebuilt mesa release asset when one is pinned.
+    const MESA_PATCHED_NIX: &str = include_str!("../../../nix/lib/mesa-patched.nix");
+    const MESA_CANG_NIX: &str = include_str!("../../../nix/lib/mesa-cang.nix");
+    const MESA_PREBUILT_NIX: &str = include_str!("../../../nix/pkgs/mesa-prebuilt.nix");
+
+    for patch in [
+        "mesa-virgl-encode-raw-headers.patch",
+        "mesa-virgl-rbsp-bounds.patch",
+        "mesa-headless-virtio-modifiers.patch",
+    ] {
+        assert!(
+            MESA_PATCHED_NIX.contains(patch),
+            "nix/lib/mesa-patched.nix should apply {patch}"
+        );
+    }
+    assert!(
+        MESA_CANG_NIX.contains("mesaPrebuiltRelease")
+            && MESA_CANG_NIX.contains("mesa-prebuilt.nix"),
+        "nix/lib/mesa-cang.nix should fall back to the prebuilt mesa package"
+    );
+    assert!(
+        MESA_PREBUILT_NIX.contains("fetchurl") && MESA_PREBUILT_NIX.contains("autoPatchelfHook"),
+        "the prebuilt mesa package should fetch and reconstruct a release asset"
+    );
+
+    // The flake has to expose the fix to hosts, not only to the image.
+    for required in [
+        "overlays.default",
+        "mesa-rbsp-bounds",
+        "mesa-release-build",
+        "mesaCang",
+    ] {
+        assert!(FLAKE_NIX.contains(required), "flake.nix should expose {required}");
+    }
+    assert!(
+        LAYERS.contains("mesaVaApi"),
+        "the image's VA driver should stay wired to mesaVaApi"
+    );
+
+    // The pin the release workflow fills in, and the workflow itself.
+    assert!(
+        PINS_NIX.contains("mesaPrebuiltRelease"),
+        "nix/pins.nix should carry the prebuilt mesa pin"
+    );
+    const BUILD_MESA_WORKFLOW: &str =
+        include_str!("../../../.github/workflows/build-mesa.yml");
+    for required in [
+        "mesa-release-build",
+        "mesaPrebuiltRelease",
+        "force_rebuild",
+    ] {
+        assert!(
+            BUILD_MESA_WORKFLOW.contains(required),
+            "the mesa workflow should mention {required}"
+        );
+    }
+    const UPDATE_MESA_SCRIPT: &str = include_str!("../../../scripts/update-mesa-prebuilt.sh");
+    assert!(
+        UPDATE_MESA_SCRIPT.contains("mesaPrebuiltRelease"),
+        "the mesa updater should write the pinned release"
+    );
+}

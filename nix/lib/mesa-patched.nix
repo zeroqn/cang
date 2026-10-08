@@ -1,22 +1,28 @@
-# cang's mesa override, shared by every consumer that needs the VA-API encode fix:
+# cang's mesa override: the source-built variant with cang's VA-API encode fixes and
+# the headless virtio-gpu DMA-BUF modifier fix.
 #
-#  * the guest image (`mesaVaApi` in nix/lib/systems.nix), whose libgallium is the
-#    guest's VA-API driver;
-#  * the host-side overlay (`overlays.default` in flake.nix), so a downstream host
-#    that runs its own mesa VA-API driver (a virtio-gpu host, radeonsi, ...) gets the
-#    same fix - cang cannot reach the host's VA driver by configuration, because the
-#    VM worker runs in glibc secure-execution mode and libva's secure_getenv()
-#    ignores LIBVA_DRIVERS_PATH there.
+# Consumers:
+#  * `nix/lib/mesa-cang.nix` picks this source build when cang's prebuilt mesa has no
+#    release asset for the system (otherwise it uses the prebuilt - see
+#    `nix/pkgs/mesa-prebuilt.nix` and `.github/workflows/build-mesa.yml`);
+#  * the guest image's VA-API driver (`mesaVaApi` in nix/lib/systems.nix);
+#  * `overlays.default` / `packages.mesa-rbsp-bounds` in flake.nix, which a downstream
+#    host applies to its own nixpkgs - a host whose VA driver is mesa (virtio-gpu,
+#    radeonsi, ...) hits the same hang in vl_rbsp_ue() when vrend hands it a packed
+#    header, and cang cannot reach that driver by configuration (the VM worker runs in
+#    glibc secure-execution mode, where libva's secure_getenv() ignores
+#    LIBVA_DRIVERS_PATH).
 #
-# Both patches are applied together: `mesa-virgl-encode-raw-headers.patch` carries
-# the guest half of the vrend video wire extension, and
-# `mesa-virgl-rbsp-bounds.patch` stops the packed-header RBSP readers looping for
-# ever on a truncated header. See
-# docs/wayfinder/guest-vaapi-video/tickets/08-cqp-encode-hangs.md.
+# See docs/wayfinder/guest-vaapi-video/tickets/08-cqp-encode-hangs.md.
 mesa:
 mesa.overrideAttrs (old: {
   patches = (old.patches or [ ]) ++ [
+    # the guest half of the vrend video wire extension
     ../pkgs/patches/mesa-virgl-encode-raw-headers.patch
+    # stop the packed-header RBSP readers looping for ever on a truncated header
     ../pkgs/patches/mesa-virgl-rbsp-bounds.patch
+    # host-side: report DMA-BUF modifiers on a virtio-gpu render node (shared with the
+    # headless flake; same fix cang's host vrend needs on such a host)
+    ../pkgs/patches/mesa-headless-virtio-modifiers.patch
   ];
 })

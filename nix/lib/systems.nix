@@ -1,6 +1,6 @@
-{ nixpkgs, headless }:
+{ nixpkgs, headless, pins }:
 let
-  applyMesaPatches = import ./mesa-patched.nix;
+  mesaCang = pkgs: import ./mesa-cang.nix { inherit pkgs pins; };
   systems = [
     "x86_64-linux"
     "aarch64-linux"
@@ -23,7 +23,7 @@ let
                 # vrend video fix is carried by nixpkgs' mesa built from source with
                 # cang's patches. The same override is exported for hosts as
                 # `overlays.default` / `packages.mesa-rbsp-bounds` in flake.nix.
-                mesaVaApi = applyMesaPatches prev.mesa;
+                mesaVaApi = mesaCang prev;
                 virglrenderer = prev.virglrenderer.overrideAttrs (old: {
                   patches = (old.patches or [ ]) ++ [
                     ../pkgs/patches/virglrenderer-enum-26.patch
