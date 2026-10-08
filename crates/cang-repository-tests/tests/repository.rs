@@ -1252,7 +1252,10 @@ fn mesa_fix_is_shipped_for_the_guest_image_and_for_hosts() {
         "mesa-release-build",
         "mesaCang",
     ] {
-        assert!(FLAKE_NIX.contains(required), "flake.nix should expose {required}");
+        assert!(
+            FLAKE_NIX.contains(required),
+            "flake.nix should expose {required}"
+        );
     }
     assert!(
         LAYERS.contains("mesaVaApi"),
@@ -1264,13 +1267,8 @@ fn mesa_fix_is_shipped_for_the_guest_image_and_for_hosts() {
         PINS_NIX.contains("mesaPrebuiltRelease"),
         "nix/pins.nix should carry the prebuilt mesa pin"
     );
-    const BUILD_MESA_WORKFLOW: &str =
-        include_str!("../../../.github/workflows/build-mesa.yml");
-    for required in [
-        "mesa-release-build",
-        "mesaPrebuiltRelease",
-        "force_rebuild",
-    ] {
+    const BUILD_MESA_WORKFLOW: &str = include_str!("../../../.github/workflows/build-mesa.yml");
+    for required in ["mesa-release-build", "mesaPrebuiltRelease", "force_rebuild"] {
         assert!(
             BUILD_MESA_WORKFLOW.contains(required),
             "the mesa workflow should mention {required}"
