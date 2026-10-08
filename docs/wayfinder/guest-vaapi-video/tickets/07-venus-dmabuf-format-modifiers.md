@@ -208,3 +208,26 @@ a submit wakes it, including the shared-memory futex and the ring's alive/seqno 
 guest side (mesa's `vn_ring` in `src/virtio/vulkan/`), and check whether cang's guest-proxy /
 zero-copy-shm path (`--gpu=drm`, the PR-822 work) is in that notification chain. A lost wake there would
 explain both the guest's seqno wait and the host's parked ring thread.
+
+### Which hop stalls (2026-10-08, from the same run)
+
+Two rings are involved, and the thread names locate them:
+
+1. the **guest's** venus ring against the VM's virtio-gpu (in guest RAM): the guest's message is about
+   this one, and it is serviced by the **VM worker** (libkrun/rutabaga) - the same process that also
+   runs vrend's GL threads (`cang:gl0`, `cang:gdrv0`, `cang:traceq0`, all `__futex_wait` during the
+   hang);
+2. the **render server's** own ring (`vkr-ring-1`, `vkr-ringmon-1`, `vkr-queue-1`, all `__futex_wait`,
+   with the server's main thread in `do_sys_poll`) - the external venus context cang spawns with
+   `virgl_render_server --socket-fd=…`.
+
+Since the guest complains about ring 1 and ring 1 is serviced in the VM worker, the stalled hop is
+**the VM worker's virtio-gpu/venus path**, and the parked render server is a consequence (no work
+arrives there). The sharpest next instrument is therefore in libkrun/rutabaga inside the VM worker -
+count the virtqueue kicks and the venus ring seqno updates it performs (`virglrenderer`'s
+`vkr_ring_submit_virtqueue_seqno` has the host-side counterpart) - not in venus's C code, and not in the
+WSI modifier path that this ticket started from.
+
+Environment fact worth carrying into that work (found earlier this session): the render server's
+`/dev/shm` is **not** the host's while the VM worker's *is*, so any ring/wake object that is expected to
+be shared between those two processes must not rely on `/dev/shm` agreeing.
