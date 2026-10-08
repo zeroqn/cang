@@ -145,3 +145,25 @@ tiny wrapper that execs the real `virgl_render_server`, forwards its argv, and r
 `wait`'s status/signal plus its stderr into the shared workspace answers the *first* question - does the
 host venus process die, and with what - which decides whether this ticket is "the host venus context
 faults" or "the host venus thread never advances a specific submit".
+
+## The render server does NOT die - so the wrapper is unnecessary (2026-10-08)
+
+The liveness ambiguity is resolved from the existing watcher output, without another run. A process that
+has exited and is waiting to be reaped is in state **`Z`**; the watcher recorded the render server as
+`state=S wchan=do_sys_poll` for the whole hang, i.e. **alive and idle in its event loop**. Therefore the
+`exit_code=17` field the watcher printed for it was a misread of `/proc/<pid>/stat` (that field is only
+meaningful once a process is dead), not evidence of an exit - and the wrapper planned as the next
+instrument is not needed.
+
+The picture is therefore: the guest submits (every `EXECBUFFER` returns 0), the host's venus process is
+alive and polling, and yet the guest's ring wait expires. That is *not* "the host venus context
+faulted"; it is either
+
+1. a command that reached the host but was never dispatched to the ring thread (context/resource
+   mismatch - the shape the 2026-10-02 `invalid res_id 15` evidence had), or
+2. a ring thread blocked on a fence/syncobj the client side never signals.
+
+Discriminating between those needs host-side visibility inside the venus ring thread, which means a
+marker build whose output lands in the *shared workspace* (the earlier attempt's markers never fired,
+which the notes explain: the render server's stderr does not reach the VM console and its own
+`/dev/shm` is not the host's). That is the next instrument - and it is real work, not a wrapper.
