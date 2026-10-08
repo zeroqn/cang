@@ -620,3 +620,31 @@ fix the host's VA driver by configuration; the host-side half has to come from t
   system mesa, so a host-side cause is possible but unproven). Resolve it by re-running both arms with
   the host pointed at a patched mesa through some route the VM worker honours (its secure-exec mode
   rules out `LIBVA_DRIVERS_PATH`).
+
+## Shipping the fix (2026-10-08)
+
+The fix now ships for both sides of the vrend video path:
+
+- **guest**: `nix/lib/systems.nix`'s `mesaVaApi` (the image's VA-API driver) applies
+  `nix/pkgs/patches/mesa-virgl-rbsp-bounds.patch` alongside the raw-headers patch. The patch is written
+  up as an upstream submission: it stops `vl_rbsp_ue()`'s exponential-Golomb scan at the end of the
+  RBSP, bounds the three `while (true)` loops in `parseEncSliceParamsH264` and the packed-header
+  handler's outer scan by the end of their buffers, and bounds
+  `parseEncHrdParamsH264`'s `for (i = 0; i <= cpb_cnt_minus1; ++i)` by the 32-entry arrays it fills
+  (an out-of-bounds write for a truncated stream, and an effectively infinite loop for a garbage
+  count).
+- **host**: `flake.nix` exports `overlays.default` (and `packages.<system>.mesa-rbsp-bounds`) applying
+  the same override to `mesa`, so a downstream host can give its *own* VA-API driver the fix:
+  `nixpkgs.overlays = [ cang.overlays.default ];`. Both patches are applied together so guest and host
+  agree on the vrend video wire format. This route exists because the host cannot be redirected by
+  configuration: the host-side VA encode runs in the VM worker, which `unshare --keep-id` puts into
+  glibc secure-execution mode, where libva's `secure_getenv()` ignores `LIBVA_DRIVERS_PATH` (measured -
+  a run with the override set still used the system mesa and stalled).
+- `nix/lib/mesa-patched.nix` holds the single definition both consumers use.
+
+Evidence the patch is safe for well-formed input: on the host, the same clip encodes with the patched
+mesa (`rc=0`, 857 994 bytes, 599 frames) where the system mesa hangs (`rc=137`, 0 bytes); and the SPS
+field decode of the captured buffers is bit-identical with and without the patch. The one open item
+from the earlier rounds - the bitrate-capped guest arm stalling with the bound wired against an
+*unpatched* host - is re-measured with this shipping configuration; until it is explained, that arm's
+behaviour with the bound is the thing to watch.

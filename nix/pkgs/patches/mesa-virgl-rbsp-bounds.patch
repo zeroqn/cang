@@ -1,3 +1,45 @@
+From: cang <cang@localhost>
+Subject: [PATCH] va: h264: stop the RBSP readers at the end of the NAL
+
+vaRenderPicture() can hang forever on a client-supplied packed header.
+
+vl_rbsp_ue() (src/util/vl_rbsp.h) reads an exponential-Golomb code with
+
+   while (!vl_vlc_get_uimsbf(&rbsp->nal, 1)) {
+      ++bits;
+      if (bits == 16)
+         vl_rbsp_fillbits(rbsp);
+   }
+
+with no end-of-NAL check. Once the RBSP is exhausted, vl_rbsp_fillbits() cannot
+add any more bits, so the "next bit" reads as zero for ever and `bits` grows
+without bound - the loop never returns. In a release build this is a silent
+hang (a debug build trips the assertion in vl_vlc_get_uimsbf instead). A client
+that hands the encoder a packed header whose parse walks past the end of its NAL
+therefore wedges the driver: measured in a VM, an H.264 High-profile
+constant-QP encode hangs inside parseEncSpsParamsH264() for the client's
+SPS/PPS buffer, with nothing ever submitted to the GPU.
+
+The same shape appears three times in parseEncSliceParamsH264(), whose
+`while (true)` ref-list and marking loops only exit when the bitstream supplies
+a terminator (modification_of_pic_nums_idc == 3,
+memory_management_control_operation == 0), and in the packed-header handler's
+outer scan, whose loop condition uses vl_vlc_bits_left() - a value that
+*underflows* to a huge unsigned once the reads run past the buffer end.
+
+parseEncHrdParamsH264() is the other half of the problem: its
+
+   for (i = 0; i <= hrd_params->cpb_cnt_minus1; ++i)
+
+writes into 32-entry arrays (bit_rate_value_minus1[], cpb_size_value_minus1[],
+cbr_flag[]) with an unbounded, client-controlled count. For a truncated or
+corrupt stream that is both an out-of-bounds write and, when the garbage count
+is large, an effectively infinite loop.
+
+Fix all four: stop the RBSP readers when nothing is left, bound the loops by the
+arrays they fill / by the end of the RBSP, and stop the packed-header scan when
+its buffer is exhausted. Values produced by a well-formed stream are unchanged.
+
 --- a/src/util/vl_rbsp.h
 +++ b/src/util/vl_rbsp.h
 @@ -153,6 +153,9 @@

@@ -57,8 +57,24 @@
         inherit nixpkgs headless;
       };
       pins = import ./nix/pins.nix;
+      # cang's mesa override (the VA-API encode fixes), shared with the guest image's
+      # `mesaVaApi`; see nix/lib/mesa-patched.nix for why both halves are applied and
+      # `overlays.default` below for the host-side consumer.
+      applyMesaPatches = import ./nix/lib/mesa-patched.nix;
     in
     {
+      # Apply to a host's nixpkgs to give *its* VA-API driver the same fix the guest
+      # image gets: `nixpkgs.overlays = [ cang.overlays.default ];`. Needed because a
+      # host whose own vadriver is mesa (virtio-gpu, radeonsi, ...) hits the same hang
+      # in vl_rbsp_ue() when vrend hands it a packed header, and the VM worker runs in
+      # glibc secure-execution mode, where libva's secure_getenv() ignores
+      # LIBVA_DRIVERS_PATH - so pointing it at the patched build by environment does
+      # not work. See docs/wayfinder/guest-vaapi-video/tickets/08-cqp-encode-hangs.md.
+      overlays.default = final: prev: {
+        mesa = applyMesaPatches prev.mesa;
+        mesaVaApi = applyMesaPatches prev.mesa;
+      };
+
       packages = systems.forAllSystems (
         { pkgs, system, ... }:
         let
@@ -229,6 +245,11 @@
         }
         // pkgs.lib.optionalAttrs (rtkPrebuilt != null) {
           rtk-prebuilt = rtkPrebuilt;
+        }
+        // {
+          # nixpkgs' mesa with cang's VA-API encode fixes, for consumers that cannot
+          # apply the overlay (the guest image uses the same override as `mesaVaApi`).
+          mesa-rbsp-bounds = applyMesaPatches pkgs.mesa;
         }
       );
 
