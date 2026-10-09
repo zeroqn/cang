@@ -42,6 +42,7 @@ pub(in crate::guest_init) enum CangEnterOperation {
     ResolveIdentity,
     DeriveShellEnvironment,
     ExportShellEnvironment,
+    BuildOpenglDriverFarm,
     MaterializeHome,
     MaterializeAllocatorPreload,
     RestrictDmesg,
@@ -69,6 +70,7 @@ pub(in crate::guest_init) fn planned_enter_operations() -> Vec<CangEnterOperatio
         CangEnterOperation::ResolveIdentity,
         CangEnterOperation::DeriveShellEnvironment,
         CangEnterOperation::ExportShellEnvironment,
+        CangEnterOperation::BuildOpenglDriverFarm,
         CangEnterOperation::MaterializeHome,
         CangEnterOperation::MaterializeAllocatorPreload,
         CangEnterOperation::RestrictDmesg,
@@ -183,6 +185,18 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     profiler.measure("export-gpu-env", || {
         crate::guest_init::components::wayland::export_mesa_if_enabled(env_contract.cang.gpu_drm)
     });
+    profiler.measure_result("build-opengl-driver-farm", || {
+        // The NixOS-conventional `/run/opengl-driver` farm is a boot-time root
+        // operation; the explicit MESA_ENV above stays the authoritative
+        // override, and the farm is what an env-less nixpkgs client resolves
+        // through. Only a DRM guest has a hardware stack to expose.
+        if process::is_root() {
+            crate::guest_init::components::opengl::ensure_driver_layout_if_enabled(
+                env_contract.cang.gpu_drm,
+            )?;
+        }
+        Ok(())
+    })?;
     profiler.measure_result("materialize-home", || {
         crate::guest_init::components::home::root::materialize(&identity)
     })?;
@@ -676,6 +690,33 @@ mod tests {
         assert!(pos(CangEnterOperation::EnsureGuestSwap) < pos(CangEnterOperation::DropAndExec));
         assert!(
             pos(CangEnterOperation::EnsureGuestSwap) < pos(CangEnterOperation::RunManagedSession)
+        );
+    }
+
+    #[test]
+    fn planned_cang_enter_builds_the_opengl_driver_farm_before_the_workload_starts() {
+        let operations = planned_enter_operations();
+        let pos = |op| {
+            operations
+                .iter()
+                .position(|candidate| candidate == &op)
+                .expect("operation should exist")
+        };
+
+        assert!(
+            pos(CangEnterOperation::ExportShellEnvironment)
+                < pos(CangEnterOperation::BuildOpenglDriverFarm)
+        );
+        assert!(
+            pos(CangEnterOperation::BuildOpenglDriverFarm)
+                < pos(CangEnterOperation::StartWaylandProxy)
+        );
+        assert!(
+            pos(CangEnterOperation::BuildOpenglDriverFarm) < pos(CangEnterOperation::DropAndExec)
+        );
+        assert!(
+            pos(CangEnterOperation::BuildOpenglDriverFarm)
+                < pos(CangEnterOperation::RunManagedSession)
         );
     }
 

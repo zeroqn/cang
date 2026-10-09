@@ -195,6 +195,9 @@ the part that is easy to get wrong:
   and `VK_ICD_FILENAMES` at the image's mesa but never sets the GBM backend path,
   so ozone searched the NixOS default `/run/opengl-driver/lib/gbm`, missed the
   guest's `dri_gbm.so` and could not init a DRM render node.
+  *Note (2026-10-09): guest-init now builds `/run/opengl-driver/lib/gbm` as part
+  of the conventional graphics farm, so this re-pointing is belt-and-braces rather
+  than required; `MESA_ENV` still sets `GBM_BACKENDS_PATH` explicitly.*
 - dmabuf must still be blocked on the waypipe side (`-n`/`--no-gpu`), though the
   buffer-descriptor failure this run first recorded is fixed. The guest's
   virtio-gpu GBM path reported `DRM_FORMAT_MOD_INVALID` for its shared exports,

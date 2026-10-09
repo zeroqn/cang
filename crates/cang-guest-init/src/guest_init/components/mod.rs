@@ -5,6 +5,7 @@ pub(in crate::guest_init) mod hardening;
 pub(in crate::guest_init) mod home;
 pub(in crate::guest_init) mod net;
 pub(in crate::guest_init) mod nix;
+pub(in crate::guest_init) mod opengl;
 pub(in crate::guest_init) mod podman;
 pub(in crate::guest_init) mod pulse;
 pub(in crate::guest_init) mod rootless;

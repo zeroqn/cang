@@ -128,6 +128,9 @@ let
   );
   configSourceFile = pkgs.writeText "cang-config-nix-source.txt" (builtins.readFile ./config.nix);
   layersSourceFile = pkgs.writeText "cang-layers-nix-source.txt" (builtins.readFile ./layers.nix);
+  openglSourceFile = pkgs.writeText "cang-guest-init-opengl-source.txt" (
+    builtins.readFile ../../crates/cang-guest-init/src/guest_init/components/opengl.rs
+  );
   piSourceFile = pkgs.writeText "cang-pi-coding-agent-nix-source.txt" (
     builtins.readFile ../pkgs/pi-coding-agent.nix
   );
@@ -412,6 +415,27 @@ let
         test -f ${layers.vaApiRuntime}/dri/virtio_gpu_drv_video.so
         test -f ${layers.vaApiRuntime}/lib/libgallium.so
         grep -F 'pkgs.mesaVaApi' ${layersSourceFile}
+        # guest-init builds the NixOS-conventional `/run/opengl-driver` symlink
+        # farm out of these published runtime dirs (component `opengl.rs`).
+        # `lib/dri/virtio_gpu_drv_video.so` has to be the PATCHED driver: libva
+        # searches that directory by default, and the mesa runtime also ships a
+        # `virtio_gpu_drv_video.so`, so pointing the farm at mesa would silently
+        # reintroduce ticket 08's constant-QP encode stall. Assert the two
+        # drivers really differ, that the patched one is the VA runtime's
+        # libgallium, and that the builder links the VA runtime while excluding
+        # mesa's copy.
+        test -f ${pkgs.mesa}/lib/dri/virtio_gpu_drv_video.so
+        patched_va="$(readlink -f ${layers.vaApiRuntime}/dri/virtio_gpu_drv_video.so)"
+        mesa_va="$(readlink -f ${pkgs.mesa}/lib/dri/virtio_gpu_drv_video.so)"
+        test "$patched_va" = "${pkgs.mesaVaApi}/lib/libgallium-${pkgs.mesaVaApi.version}.so"
+        test "$patched_va" != "$mesa_va"
+        grep -F '"/run/opengl-driver"' ${openglSourceFile}
+        grep -F '"/usr/lib/cang-gpu-runtime/lib"' ${openglSourceFile}
+        grep -F '"/usr/lib/cang-mesa-runtime/lib"' ${openglSourceFile}
+        grep -F '"/usr/lib/cang-mesa-runtime/share"' ${openglSourceFile}
+        grep -F '"/usr/lib/cang-va-runtime/dri"' ${openglSourceFile}
+        grep -F '"virtio_gpu_drv_video.so"' ${openglSourceFile}
+        grep -F 'name != VA_DRIVER_FILE' ${openglSourceFile}
         grep -F './usr/lib/cang-va-runtime' ${containerSourceFile}
         grep -F 'ln -s ${"$"}{layers.vaApiRuntime} ./usr/lib/cang-va-runtime' ${containerSourceFile}
         grep -F './usr/lib/cang-software-renderer' ${containerSourceFile}

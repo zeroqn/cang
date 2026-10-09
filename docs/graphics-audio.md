@@ -86,7 +86,12 @@ use llvmpipe and Vulkan applications use lavapipe on the guest CPU. When
 `--gpu=drm` is also selected, guest-init omits Waypipe's `--no-gpu`, does not
 force the software-renderer environment, and preserves the DRM-scoped Mesa
 OpenGL/EGL and Vulkan discovery paths, including `GBM_BACKENDS_PATH`
-(`/usr/lib/cang-mesa-runtime/lib/gbm`). The frame transfer is then dma-buf
+(`/usr/lib/cang-mesa-runtime/lib/gbm`). It also builds the NixOS-conventional `/run/opengl-driver`
+symlink farm (libva's `lib/dri`, libgbm's `lib/gbm`, glvnd's `egl_vendor.d`, the Vulkan
+`icd.d`) out of the image's runtime directories, so a nixpkgs client that consults those
+compiled-in defaults resolves without a cang env var; the env vars above stay the
+authoritative override. The farm's `lib/dri` entry is the patched VA driver, never mesa's
+own. The frame transfer is then dma-buf
 rather than shared memory: a client that allocates GBM buffers presents them
 without a copy, and `ffmpeg`/`mpv` played through the display reach the guest's
 hardware VA-API path. For a media client, `mpv --hwdec=vaapi --vo=gpu

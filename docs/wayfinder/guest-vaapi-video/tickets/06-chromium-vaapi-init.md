@@ -757,3 +757,67 @@ guest-init, the GPU process mapped `/nix/store/mwlz1nal...-libglvnd-1.7.0/lib/li
 Evidence: `/home/dev/cang/disk/nctx/t06{g,i,h,j}/` (console logs, per-arm
 `t06*-<arm>.cdp.json` with the `chrome://gpu` and `chrome://media-internals`
 shadow-DOM dumps, and the `vawrap4.so` `.va` witness files).
+
+
+## Follow-up (2026-10-09): the `/run/opengl-driver` symlink farm, and what it does not fix
+
+guest-init now materializes the NixOS-conventional graphics root `/run/opengl-driver`
+(component `crates/cang-guest-init/src/guest_init/components/opengl.rs`), symlinks only,
+into the image's published runtimes:
+
+```
+/run/opengl-driver/lib/        glvnd dispatcher + mesa's flat libs
+/run/opengl-driver/lib/dri/    mesa's DRI drivers + the PATCHED VA driver
+/run/opengl-driver/lib/gbm/    mesa's GBM backends
+/run/opengl-driver/share/glvnd/egl_vendor.d, /share/vulkan/icd.d
+```
+
+It is built for `--gpu=drm` only, it is idempotent (rebuilt per boot), and the explicit
+`MESA_ENV` (`LIBVA_DRIVERS_PATH`, `GBM_BACKENDS_PATH`, `LD_LIBRARY_PATH`,
+`__EGL_VENDOR_LIBRARY_FILENAMES`, `VK_ICD_FILENAMES`) stays the authoritative override -
+the farm is the fallback an env-less nixpkgs client resolves through. `lib/dri` is the
+one non-naive entry: libva's compiled default search is `/run/opengl-driver/lib/dri`
+(grep of the image's `libva.so.2.24.1`), and both `/usr/lib/cang-mesa-runtime/lib/dri`
+and `/usr/lib/cang-va-runtime/dri` publish a `virtio_gpu_drv_video.so`, so mesa's copy is
+excluded and the patched one linked deliberately - a naive mirror would reintroduce
+ticket 08's CQP stall.
+
+Measured in a `--gpu=drm --waypipe` guest (image `1393b4cc`, the new guest-init,
+libglvnd bind-mounted at `/usr/lib/cang-gpu-runtime` because that image predates the
+layer), evidence under `/home/dev/cang/disk/nctx/t0farm*`:
+
+| arm | result |
+| --- | --- |
+| farm shape | `/run/opengl-driver/lib/dri/virtio_gpu_drv_video.so -> /usr/lib/cang-va-runtime/dri/...` and resolves to `/nix/store/1gfhk7h...-mesa-26.1.8/lib/libgallium-26.1.8.so`; mesa's own copy resolves to `/nix/store/fdw09ay...-mesa-26.1.8/lib/libgallium-26.1.8.so` |
+| libva default search, `LIBVA_DRIVERS_PATH` unset | `openat("/run/opengl-driver/lib/dri/virtio_gpu_drv_video.so") = 14`, mpv `Using hardware decoding (vaapi)` / `vaapi[yuv420p]`; with `LIBVA_DRIVERS_PATH=/usr/lib/cang-mesa-runtime/lib/dri` the same client opens that path instead |
+| Chromium, `LD_LIBRARY_PATH` set (today) | GPU process boots native EGL, `Compositing: Hardware accelerated`, `VaapiVideoDecoder` (`kIsPlatformVideoDecoder=true`), ctx=1 sfc=21 render=635 |
+| Chromium, `LD_LIBRARY_PATH` removed | `Could not dlopen native EGL: libEGL.so.1` (x12), `Compositing: Software only`, `FFmpegVideoDecoder`, ctx=0 render=0 |
+| mpv GL, `LD_LIBRARY_PATH`/`LIBGL_DRIVERS_PATH`/`__EGL_VENDOR_LIBRARY_FILENAMES`/`GBM_BACKENDS_PATH` removed | rc=0, loader opens `/run/opengl-driver/lib/libEGL.so.1`, glvnd opens `/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json`, `Using hardware decoding (vaapi)` / `vaapi[yuv420p]` |
+| Chromium, `GBM_BACKENDS_PATH` removed (farm present) | no `failed to open dri`, no GPU crash, `VaapiVideoDecoder`, ctx=1 sfc=21 render=635 |
+
+**So the farm does not replace `LD_LIBRARY_PATH` for Chromium, and that variable stays.**
+The reason is narrow: Chromium's ANGLE dlopens `libEGL.so.1` from the chromium *bundle*,
+whose RUNPATH does not carry `/run/opengl-driver/lib`; the guest has no `/etc/ld.so.cache`
+to make that directory a loader default (only `/etc/ld.so.conf`-less glibc defaults, its
+own store lib dir, and per-binary RUNPATH). mpv is unaffected because its ELF *does* carry
+`/run/opengl-driver/lib` in RUNPATH (nixpkgs `addOpenGLRunpath`), and libva / libgbm /
+vulkan-loader consult the farm through compiled-in defaults.
+
+Which conventional paths are actually needed (client strace/`openat` ground truth plus the
+image's compiled-in defaults):
+
+- **needed, and supplied by the farm:** `/run/opengl-driver/lib/dri` (libva),
+  `/run/opengl-driver/lib/gbm` (libgbm), `/run/opengl-driver/share/glvnd/egl_vendor.d`
+  (libglvnd), `/run/opengl-driver/share/vulkan/icd.d` (vulkan-loader - its string table
+  names only `/run/opengl-driver/share`, not `/usr/share/vulkan`);
+- **not needed:** `/usr/lib/dri` and `/usr/lib32/dri` (libva fallbacks; absent in the
+  image), `/usr/share/glvnd/egl_vendor.d` and `/etc/glvnd/egl_vendor.d` (libglvnd
+  fallbacks; `openat` shows them tried after the farm's dir, both `ENOENT`, the farm's copy
+  is the one loaded), `/usr/lib/x86_64-linux-gnu/dri` (absent, and not in libva's string
+  table), `/usr/share/vulkan/icd.d` (absent, not in the loader's table). The image's merged
+  `/usr/lib` holds only the `cang-*-runtime` symlinks and `usr/bin/env`, so no existing
+  `/usr/lib/dri` was being shadowed.
+
+The farm's `lib/gbm` also makes the `GBM_BACKENDS_PATH` re-pointing this ticket's smoke
+needed unnecessary (chromium with that variable removed still initialises GBM and decodes);
+`MESA_ENV` keeps setting it so the intent stays visible.

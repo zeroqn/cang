@@ -485,6 +485,14 @@ Chromium's GPU process boots on native EGL, `chrome://gpu` reports hardware comp
 `chrome://media-internals` names `VaapiVideoDecoder` (clients must still pass
 `--render-node-override`, since a virtio-pci 0x1af4 node cannot match the host's AMD 0x1002).
 
+The guest also now builds the NixOS-conventional `/run/opengl-driver` symlink farm
+(guest-init `components/opengl.rs`), so an env-less nixpkgs client resolves libva's
+`lib/dri`, libgbm's `lib/gbm` and the glvnd/Vulkan manifests the way a NixOS one does.
+Its `lib/dri` is deliberately the *patched* VA runtime, never mesa's own driver. Measured
+(see ticket 06's follow-up): libva's default search picks the patched driver, mpv's GL path
+runs from the farm alone, but Chromium still needs `LD_LIBRARY_PATH` for `libEGL.so.1`
+(its ANGLE dlopens from the chromium bundle, and the guest has no ld.so cache).
+
 Gates on the combined tree: `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`,
 `cargo test` (1003 passed) and `cargo deny check` all pass.
 
