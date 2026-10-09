@@ -63,7 +63,18 @@ rootless Podman tooling for development.
   VA-API driver is mesa (a virtio-gpu host, radeonsi, ...) should apply cang's
   overlay so the host half has the same RBSP-bound fix:
   `nixpkgs.overlays = [ cang.overlays.default ];`, or use
-  `cang.packages.<system>.mesa-rbsp-bounds`. Two gaps remain: an
+  `cang.packages.<system>.mesa-rbsp-bounds`. A host that cannot apply that
+  overlay needs no cang rebuild either: export
+  `CANG_VA_DRIVER_PATH=<mesa>/lib/dri` for a mesa it built with the same patches,
+  and the VM worker's VA driver opens from there. `LIBVA_DRIVERS_PATH` cannot do
+  this - the worker runs in glibc secure-execution mode, where libva's
+  `secure_getenv` ignores it - so cang reads its own knob with plain `getenv` and
+  rewrites libva's `<name>_drv_video.so` request. That override is used only when
+  it resolves to a usable VA driver; an unset knob, a directory with no driver,
+  an unloadable driver and a library that is not a VA driver all fall back to the
+  system driver, after a one-line warning. The package-relative default is
+  `<prefix>/lib/cang/dri`. cang deliberately does not bundle mesa (its VA driver
+  closure is roughly 1 GiB), which is why the redirect exists. Two gaps remain: an
   encoder-attribute query is still 0 in the guest, so an encoder picks its
   settings from defaults; and a constant-QP (rather than bitrate-capped) encode of
   complex content can still stall on a host whose mesa lacks that overlay.

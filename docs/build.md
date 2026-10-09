@@ -137,6 +137,45 @@ every `h264_vaapi` encode stalls at `frame= 0`. Build with
 `nix build .#container -o <path outside the store>` and keep that symlink
 (see `docs/wayfinder/guest-vaapi-video/notes/encode-measurement-hazards.md`).
 
+## Host VA-API driver override (opt-in)
+
+The image's guest VA driver is the guest half of cang's encode fix; the host half
+is a mesa patch (the RBSP bound) in *the host's own* VA-API driver. A host that
+applies `cang.overlays.default` (or installs
+`packages.<system>.mesa-rbsp-bounds`, a prebuilt or source mesa carrying the same
+patches) has a patched *system* mesa, needs no redirect, and the VM worker loads
+it normally.
+
+A host that cannot apply the overlay - a non-NixOS host, or one whose mesa is not
+the nixpkgs one - points the worker at a driver it built itself rather than
+rebuilding cang:
+
+```sh
+CANG_VA_DRIVER_PATH=<mesa>/lib/dri ./result/bin/cang --gpu=drm -- ...
+```
+
+`CANG_VA_DRIVER_PATH` is a `:`-separated directory list, like
+`LIBVA_DRIVERS_PATH`, and is the only variable that works: the VM worker is
+exec'd through `unshare --keep-id`, which puts glibc in secure-execution mode,
+where libva's `secure_getenv("LIBVA_DRIVERS_PATH")` ignores it. cang's interposer
+reads its own knob with plain `getenv`, and rewrites only libva's
+`<name>_drv_video.so` `dlopen`; every other library still opens normally. The
+worker inherits the variable through the whole launch path (`cang` helper, the
+`unshare --keep-id` exec, the VM worker and the sandboxed child it forks). When
+the knob is unset the package-relative default `<prefix>/lib/cang/dri` is used.
+
+cang deliberately does not bundle mesa - its VA driver closure is roughly 1 GiB -
+and does not install a driver into `<prefix>/lib/cang/dri`, so the default only
+applies to a package that ships its own. The redirect is defensive as well: a
+candidate is used only when it loads and exports the `__vaDriverInit_*` entry
+point libva looks for. An unset knob, a configured directory with no
+`<name>_drv_video.so`, an unloadable file, and a valid library that is not a VA
+driver all fall through to the caller's original path, so the worker keeps using
+the system driver and the encode still runs. A rejected override is reported once
+on stderr. See
+`docs/wayfinder/guest-vaapi-video/tickets/08-cqp-encode-hangs.md` for the measured
+arm matrix.
+
 ## Nix store / DB diagnostics
 
 `nix build .#container` depends on a static image metadata linter before running

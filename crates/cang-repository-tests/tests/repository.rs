@@ -1280,3 +1280,57 @@ fn mesa_fix_is_shipped_for_the_guest_image_and_for_hosts() {
         "the mesa updater should write the pinned release"
     );
 }
+
+/// Ticket 08's host escape hatch is a knob and a `dlopen` interposer, not a
+/// bundled mesa. A rename of the knob, the package-relative default directory,
+/// the libva request suffix it matches, or the exported symbol would silently
+/// disable the redirect for every host following the documented recipe, so pin
+/// the code, the build export and the docs together.
+#[test]
+fn cang_va_driver_escape_hatch_is_named_forwarded_and_documented() {
+    const VA_DRIVER_RS: &str = include_str!("../../../crates/cang/src/va_driver.rs");
+    const CANG_BUILD_RS: &str = include_str!("../../../crates/cang/build.rs");
+    const CANG_LIB_RS: &str = include_str!("../../../crates/cang/src/lib.rs");
+    const README: &str = include_str!("../../../README.md");
+    const BUILD_MD: &str = include_str!("../../../docs/build.md");
+
+    for required in [
+        r#"pub(crate) const VA_DRIVER_PATH_ENV: &str = "CANG_VA_DRIVER_PATH";"#,
+        r#"const PACKAGE_DRIVER_DIR: &str = "lib/cang/dri";"#,
+        r#"const DRIVER_SUFFIX: &str = "_drv_video.so";"#,
+        r#"const VA_DRIVER_INIT_PREFIX: &str = "__vaDriverInit_1_";"#,
+        "fn is_va_driver(handle: *mut c_void) -> bool {",
+        r#"dlsym(-1isize as *mut c_void, c"dlopen".as_ptr())"#,
+        "#[unsafe(no_mangle)]",
+        "pub unsafe extern \"C\" fn dlopen(",
+        "report_override_used",
+        "warn_override_rejected",
+    ] {
+        assert!(
+            VA_DRIVER_RS.contains(required),
+            "va_driver.rs should keep the escape hatch's contract: missing {required}"
+        );
+    }
+    for required in [
+        "--export-dynamic-symbol=dlopen",
+        "cargo:rustc-link-arg-bin=cang=",
+    ] {
+        assert!(
+            CANG_BUILD_RS.contains(required),
+            "build.rs missing {required}"
+        );
+    }
+    assert!(
+        CANG_LIB_RS.contains("va_driver::install();"),
+        "the entrypoint must keep linking the interposer in"
+    );
+
+    for (label, source) in [("README.md", README), ("docs/build.md", BUILD_MD)] {
+        for required in ["CANG_VA_DRIVER_PATH", "lib/cang/dri", "1 GiB"] {
+            assert!(
+                source.contains(required),
+                "{label} should document the VA driver escape hatch: missing {required}"
+            );
+        }
+    }
+}

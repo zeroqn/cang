@@ -477,7 +477,8 @@ proven end to end.
 
 Closed: 01 (decode), 02 (packed headers over the wire), 03 (upload fence), 04 (encoder attributes,
 references/DPB and rate control), 05 (chroma), 07 (venus presenting - a missing `rename` in the render
-server's seccomp policy, verified by a cold-cache A/B). Open: **06** and **08**.
+server's seccomp policy, verified by a cold-cache A/B), 08 (the guest RBSP bound plus the opt-in
+host VA-driver redirect). Open: **06**.
 
 Shipped for consumers: cang's mesa patch set (raw headers, RBSP bounds, virtio-gpu modifiers) is wired
 for the guest image and exported to hosts as `overlays.default` / `packages.mesa-rbsp-bounds`, with a
@@ -485,24 +486,30 @@ prebuilt-mesa workflow (`.github/workflows/build-mesa.yml` + `scripts/update-mes
 downstream host need not build Mesa; the prebuilt pin is empty until that workflow first runs, so today
 everything still builds from source.
 
-### Ticket 08 - what is left
+### Ticket 08 - closed as an opt-in (2026-10-09)
 
-The guest half is shipped and the guest-side stall is gone (RBSP bound in the image). What is not
-verified is the CQP arm end to end, because the host-side VA encode runs in the **VM worker**, which
-`unshare --keep-id` puts into glibc secure-execution mode, where libva's `secure_getenv()` ignores
-`LIBVA_DRIVERS_PATH` - so the worker always uses the *system* mesa (measured; a run with the override
-set still used the unpatched driver and stalled). Next:
+Both halves of the vrend video fix ship, and the host-side route is an explicit
+opt-in rather than an undocumented variable: a host that can take
+`cang.overlays.default` gets the RBSP bound in its *system* mesa and needs no
+redirect, and a host that cannot sets `CANG_VA_DRIVER_PATH=<mesa>/lib/dri` for
+the environment that launches cang. cang does not bundle mesa (roughly 1 GiB).
 
-1. make cang hand the VM worker a patched driver through a route that works in secure-exec mode - the
-   most promising is cang's existing **libva preload** hook (see the libkrun-rust-api map's
-   "re-verify the libva preload" ticket), pointing at cang's own mesa; if that is impossible, prove it;
-2. re-run ticket 08's CQP arm with the guest patches and that driver, and confirm a multi-MB stream
-   with real B-frames;
-3. re-check the old "the bound regresses the bitrate arm" observation - it was taken against an
-   unpatched host and is probably the same host-side defect.
-If (1) fails, the acceptance needs a host whose system mesa carries `cang.overlays.default`, i.e. a
-NixOS-level decision - and on this dev box the host's own render node is virtio-gpu's virgl VA driver,
-which is the same code, so the dev-shell A/B in ticket 08 is the standing proof for that half.
+The `dlopen` interposer is now defensive: it accepts an override candidate only
+if it loads and exports a `__vaDriverInit_*` symbol, and otherwise falls through
+to the system driver with one stderr line. Measured over one VM per override
+kind (worker `/proc/<pid>/maps` as ground truth): knob unset, an empty directory,
+a non-ELF file and a valid non-VA ELF all keep the system `dqdfhil...` driver and
+still encode (`-qp 26 -bf 1` 386 079 B, `-b:v 200k/2M` 251 395 / 2 285 511 B);
+the positive override loads `qggh...` and the CQP `-qp 26 -bf 0` arm completes
+447 133 B. The override also reaches the worker on the default-seccomp,
+`--seccomp=off` and `--waypipe` launch paths (and therefore through the
+`unshare --keep-id` exec). A repository test and the README/`docs/build.md`
+recipe pin the knob, the `<prefix>/lib/cang/dri` default and the forwarding.
+
+The one item left for upstream is the mesa submission itself (bound
+`vl_rbsp_ue`/`vl_rbsp_se`, the three slice-parser `while (true)` loops, the HRD
+loop); cang carries it as a patch until then.
+
 
 ### Ticket 06 - what is left
 

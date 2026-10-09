@@ -843,3 +843,114 @@ Raw logs, worker maps and arm files for every run above are under
 `/home/dev/cang/disk/nctx/t08/run-{baseline2,libva,patched,patched2}/`
 (console.log, maps.sample, status.sample, g-*.h264) and the host control
 under `t08/hostctl/`.
+
+## Closed as an opt-in (2026-10-09)
+
+Ticket 08 is closed. The maintainer's decision is that cang does **not** bundle
+mesa. The host half ships as an opt-in redirect that is now defensive, covered by
+a repository guard and documented, rather than an undocumented environment
+variable.
+
+### What is wired, what is opt-in
+
+| half | how it ships | who needs it |
+| --- | --- | --- |
+| guest VA driver | image-local `mesaVaApi` (raw-headers + caps + RBSP bounds), linked at `/usr/lib/cang-va-runtime`, first in guest-init's `LIBVA_DRIVERS_PATH` | every `--gpu=drm` encode; already wired |
+| host VA driver | `cang.overlays.default` / `packages.<system>.mesa-rbsp-bounds` patch the *system* mesa | a host that can apply an overlay; needs no redirect |
+| host VA driver escape hatch | `CANG_VA_DRIVER_PATH=<mesa>/lib/dri` in cang's environment | a host that cannot change its mesa; no cang rebuild |
+
+Nothing is bundled: cang's package installs no driver into
+`<prefix>/lib/cang/dri` and carries no mesa in its closure (mesa's VA driver
+closure is roughly 1 GiB).
+
+### The exact host recipe
+
+A host that can apply the overlay:
+
+```nix
+nixpkgs.overlays = [ cang.overlays.default ];
+# or install cang.packages.<system>.mesa-rbsp-bounds as its mesa
+```
+
+A host that cannot:
+
+```sh
+CANG_VA_DRIVER_PATH=/path/to/patched/mesa/lib/dri cang --gpu=drm -- <command>
+```
+
+`LIBVA_DRIVERS_PATH` is not an alternative: the VM worker is exec'd through
+`unshare --keep-id` (`--keep-caps`), so glibc is in secure-execution mode and
+libva's `secure_getenv("LIBVA_DRIVERS_PATH")` ignores it. cang reads its own knob
+with a plain `getenv` inside its `dlopen` interposer and rewrites only libva's
+`<name>_drv_video.so` request; the value is inherited unchanged through
+`cang` -> `unshare --keep-id` -> VM worker -> the sandboxed child that forks
+libkrun. When the knob is unset the package-relative `<prefix>/lib/cang/dri` is
+used instead.
+
+### The redirect is defensive
+
+`crates/cang/src/va_driver.rs` now refuses a candidate unless it both `dlopen`s
+and exports a `__vaDriverInit_1_<minor>` entry point (libva probes
+`__vaDriverInit_<major>_<minor>` down from its own version; the interposer probes
+minors 0..=64). On refusal it forwards the caller's original path and prints one
+line to stderr, so all four non-happy cases keep the system driver: the knob
+unset, a configured directory without `<name>_drv_video.so`, a file that cannot be
+loaded, and a valid ELF that is not a VA driver.
+
+`crates/cang-repository-tests`'
+`cang_va_driver_escape_hatch_is_named_forwarded_and_documented` pins the knob
+name, `<prefix>/lib/cang/dri`, the `_drv_video.so` suffix, the `__vaDriverInit_`
+prefix, the `.dynsym` export and the README/`docs/build.md` recipe together.
+`README.md` and `docs/build.md` document the recipe and say cang does not bundle
+mesa (roughly 1 GiB).
+
+### Measured arms (2026-10-09)
+
+Host: x86_64-linux, virtio-gpu `/dev/dri/renderD128`. System mesa
+`dqdfhilmkqpijpa5jhmyqpjgh4mgpzlp-mesa-26.1.8` (no cang patch); override mesa
+`qgghkr5k58i1azw0180vbc4c5nvdsxhi-mesa-26.1.8` (`.#mesa-rbsp-bounds`). cang under
+test `/nix/store/hb3lm4hz3hwn6biyqldgnsml3yc8n16j-cang-0.11.2` (the worktree build
+carrying the check). Guest image `image-04`
+(`rcl1dhxd4jw3r304ags6c0lblnknmin1`, guest driver `qggh`), 10 s of the same
+640x360 clip, `--gpu=drm --seccomp=off --landlock=off`, one VM per override kind
+(the worker reads the knob once per process). Ground truth is the worker's own
+`/proc/<pid>/maps`.
+
+| cang env | worker `libgallium` from maps | `-qp 26 -bf 1` | `-b:v 200k -bf 1` | `-b:v 2M -bf 1` | `-qp 26 -bf 0` |
+| --- | --- | --- | --- | --- | --- |
+| (knob unset) | `dqdfhil...` only | ok, 386 079 B / 300 f | ok, 251 395 B | ok, 2 285 511 B | not run: stalls on the unpatched host |
+| `CANG_VA_DRIVER_PATH=/tmp/t08-ovr-empty` | `dqdfhil...` only | ok, 386 079 B | ok, 251 395 B | ok, 2 285 511 B | not run |
+| `...=/tmp/t08-ovr-broken` (33-byte text file) | `dqdfhil...` only | ok, 386 079 B | ok, 251 395 B | ok, 2 285 511 B | not run |
+| `...=/tmp/t08-ovr-notva` (`libjpeg.so.62` copied over the driver name) | `dqdfhil...` only | ok, 386 079 B | ok, 251 395 B | ok, 2 285 511 B | not run |
+| `...=qggh.../lib/dri` (positive control) | **`qggh...` + `dqdfhil...`** | ok, 386 079 B | ok, 251 395 B | ok, 2 285 511 B | **ok, 447 133 B / 300 f** |
+
+The VM started and the encode completed through the system driver in every
+fallback row; only the positive row loads the override driver. The two refusal
+paths printed exactly one line each, from inside the worker:
+
+```
+cang: CANG_VA_DRIVER_PATH candidate /tmp/t08-ovr-broken/virtio_gpu_drv_video.so for /run/opengl-driver/lib/dri/virtio_gpu_drv_video.so cannot be loaded; falling back to the system VA driver
+cang: CANG_VA_DRIVER_PATH candidate /tmp/t08-ovr-notva/virtio_gpu_drv_video.so for /run/opengl-driver/lib/dri/virtio_gpu_drv_video.so exports no VA driver entry point; falling back to the system VA driver
+```
+
+Env survival per launch path (same override `qggh.../lib/dri`, worker maps as
+ground truth):
+
+| launch path | worker `libgallium` from maps | override reached the worker |
+| --- | --- | --- |
+| default seccomp, `--landlock=off` | `qggh...` + `dqdfhil...` | yes |
+| `--seccomp=off --landlock=off` | `qggh...` + `dqdfhil...` | yes |
+| `--waypipe` (with `--seccomp=off --landlock=off`) | `qggh...` + `dqdfhil...` | yes |
+| the `unshare --keep-id` exec | every run's helper is `unshare --user --mount --fork --kill-child --propagation private --map-users ... --map-groups ... --setuid 0 --setgid 0 --keep-caps .../cang internal libkrun-network-enter`; the override appearing in the worker shows it survived | yes |
+
+The default-**landlock** (no `--landlock=off`) arm never reached the VA path at
+all: the guest reported `No virgl contexts available on host` and `vaInitialize`
+failed, so the default-seccomp row above keeps the harness's `--landlock=off` and
+varies only seccomp. That is a landlock/GPU behaviour independent of this knob.
+
+Raw logs: `t08/run-{fb-unset,fb-empty,fb-broken,fb-notva,pos-override2,waypipe2,normal-seccomp}/`
+(console.log, maps.sample, g-*.h264) and the refusal lines under
+`t08/fb-{broken2,notva2}-wrapper.log`. `image-04` was garbage-collected after
+these runs, so the two refusal-line follow-ups ran the practice image; their
+host-side maps and stderr lines are the evidence, and the clean encode rows above
+are the `image-04` runs.

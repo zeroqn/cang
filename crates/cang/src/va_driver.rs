@@ -17,9 +17,18 @@
 //!
 //! The override directory comes from `CANG_VA_DRIVER_PATH` - a plain `getenv`,
 //! which secure-execution mode does not hide - and otherwise from the
-//! package-relative `<exe-prefix>/lib/cang/dri`. A request whose file is absent
-//! from every override directory falls through to the caller's original path, so
-//! an unpatched package (no `lib/cang/dri`) behaves exactly as before.
+//! package-relative `<exe-prefix>/lib/cang/dri`. The knob is deliberately
+//! opt-in: cang does not carry mesa's ~1 GiB VA driver closure, so a host that
+//! cannot apply cang's overlay points the worker at a driver it built itself.
+//!
+//! A rewrite only happens when that produces a *usable* VA driver. When the knob
+//! is unset and the package has no `<prefix>/lib/cang/dri`, when the configured
+//! directory holds no `<name>_drv_video.so`, when the candidate cannot be
+//! `dlopen`ed, and when it loads but exports no `__vaDriverInit_*` entry point
+//! (the symbol libva itself probes), the interposer forwards the caller's own
+//! path unchanged. libva therefore falls back to the system driver and a bad
+//! override cannot take the VA stack down; a rejected override is reported once
+//! on stderr. The forwarding is what makes this safe to leave in place.
 //!
 //! The symbol has to reach `.dynsym`; `build.rs` adds
 //! `-Wl,--export-dynamic-symbol=dlopen` to the `cang` bin target for that.
@@ -44,8 +53,29 @@ type Dlopen = unsafe extern "C" fn(*const c_char, c_int) -> *mut c_void;
 
 static REAL_DLOPEN: OnceLock<Dlopen> = OnceLock::new();
 
+/// libva looks up `__vaDriverInit_<major>_<minor>` for every minor from its own
+/// VA version down to 0 (`va_getDriverInitName` in libva's `va.c`), so a real
+/// driver exports at least one symbol with this prefix. The interposer probes
+/// the same prefix over a generous minor range before it hands a candidate back,
+/// which is what rejects a valid ELF that is not a VA driver.
+const VA_DRIVER_INIT_PREFIX: &str = "__vaDriverInit_1_";
+const VA_DRIVER_INIT_MAX_MINOR: u32 = 64;
+
+// libva 2.24.1 implements VA-API 1.23; the probe range must cover every minor a
+// driver libva would accept can advertise.
+const _: () = assert!(VA_DRIVER_INIT_MAX_MINOR >= 23);
+
+/// Set once, so a rejected override is reported at most once per process.
+static OVERRIDE_REJECTED_WARNED: OnceLock<()> = OnceLock::new();
+
+/// Set once, so the selected override driver is reported at most once per
+/// process - which is also what shows the knob reached the VM worker on each
+/// launch path.
+static OVERRIDE_USED_REPORTED: OnceLock<()> = OnceLock::new();
+
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn dlclose(handle: *mut c_void) -> c_int;
 }
 
 /// Force the interposer object into the binary even though nothing in Rust calls
@@ -75,32 +105,108 @@ fn real_dlopen() -> Dlopen {
 /// `dlopen` with one request rewritten: a VA driver cang has built (or been
 /// pointed at) opens from the override directory instead of the system one.
 ///
+/// The rewrite is only used for a candidate that actually loads as a VA driver.
+/// Otherwise the caller's own path is opened, so libva falls back to the system
+/// driver rather than failing on whatever the override directory held.
+///
 /// # Safety
 ///
 /// `filename` must be null or a NUL-terminated C string, as `dlopen(3)` requires.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void {
     let real = real_dlopen();
-    if let Some(rewritten) = intercept_path(filename) {
-        // SAFETY: `rewritten` is NUL-terminated.
-        let handle = unsafe { real(rewritten.as_ptr(), flags) };
-        if !handle.is_null() {
+    if let Some(override_request) = driver_override(filename) {
+        // SAFETY: `path` is NUL-terminated.
+        let handle = unsafe { real(override_request.path.as_ptr(), flags) };
+        if !handle.is_null() && is_va_driver(handle) {
+            report_override_used(&override_request);
             return handle;
+        }
+        if handle.is_null() {
+            warn_override_rejected(&override_request, "cannot be loaded");
+        } else {
+            // SAFETY: `handle` came from `real` above and is not used again.
+            unsafe { dlclose(handle) };
+            warn_override_rejected(&override_request, "exports no VA driver entry point");
         }
     }
     // SAFETY: forwarding the caller's own arguments to libc's dlopen.
     unsafe { real(filename, flags) }
 }
 
-/// The replacement path for a driver request, if one exists.
-fn intercept_path(filename: *const c_char) -> Option<CString> {
+/// A VA driver request the interposer wants to serve from cang's own directory.
+struct DriverOverride {
+    requested: String,
+    candidate: PathBuf,
+    path: CString,
+}
+
+/// The replacement path for a driver request, if an override directory holds a
+/// candidate file for it.
+fn driver_override(filename: *const c_char) -> Option<DriverOverride> {
     if filename.is_null() {
         return None;
     }
     // SAFETY: dlopen filenames are NUL-terminated C strings.
     let requested = unsafe { CStr::from_ptr(filename) }.to_str().ok()?;
-    let path = overridden_path(requested, &override_dirs())?;
-    CString::new(path.as_os_str().as_encoded_bytes()).ok()
+    let candidate = overridden_path(requested, &override_dirs())?;
+    let path = CString::new(candidate.as_os_str().as_encoded_bytes()).ok()?;
+    Some(DriverOverride {
+        requested: requested.to_owned(),
+        candidate,
+        path,
+    })
+}
+
+/// The libva driver entry point symbol for a VA-API minor version, matching
+/// `va_getDriverInitName()` in libva's `va.c`.
+fn va_driver_init_symbol(minor: u32) -> String {
+    format!("{VA_DRIVER_INIT_PREFIX}{minor}")
+}
+
+/// Whether a loaded object is a VA driver: it exports the
+/// `__vaDriverInit_<major>_<minor>` entry point libva will look for. A candidate
+/// that fails this is dropped, so libva's own search continues to the system
+/// driver instead of failing on a library it cannot initialise.
+fn is_va_driver(handle: *mut c_void) -> bool {
+    for minor in 0..=VA_DRIVER_INIT_MAX_MINOR {
+        let Ok(symbol) = CString::new(va_driver_init_symbol(minor)) else {
+            continue;
+        };
+        // SAFETY: `handle` is a live dlopen handle and `symbol` is NUL-terminated.
+        if !unsafe { dlsym(handle, symbol.as_ptr()) }.is_null() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Report the override driver that was selected, once per process. Its presence
+/// in the worker's stderr is what shows the knob reached the VM worker on a
+/// given launch path.
+fn report_override_used(request: &DriverOverride) {
+    if OVERRIDE_USED_REPORTED.set(()).is_err() {
+        return;
+    }
+    eprintln!(
+        "cang: using VA driver {} for {}",
+        request.candidate.display(),
+        request.requested
+    );
+}
+
+/// Report a configured but unusable override once per process, so an operator
+/// who set the knob can tell it did not take effect.
+fn warn_override_rejected(request: &DriverOverride, reason: &str) {
+    if OVERRIDE_REJECTED_WARNED.set(()).is_err() {
+        return;
+    }
+    eprintln!(
+        "cang: {VA_DRIVER_PATH_ENV} candidate {} for {} {reason}; \
+         falling back to the system VA driver",
+        request.candidate.display(),
+        request.requested
+    );
 }
 
 /// Directories to search, most specific first.
@@ -184,5 +290,24 @@ mod tests {
             overridden_path("/run/opengl-driver/lib/dri/virtio_gpu_drv_video.so", &dirs),
             Some(populated.path().join("virtio_gpu_drv_video.so"))
         );
+    }
+
+    /// The documented escape hatch: renaming the knob, the package-relative
+    /// default directory, or the libva request suffix would silently break the
+    /// host recipe without this.
+    #[test]
+    fn the_knob_name_and_package_default_are_stable() {
+        assert_eq!(VA_DRIVER_PATH_ENV, "CANG_VA_DRIVER_PATH");
+        assert_eq!(PACKAGE_DRIVER_DIR, "lib/cang/dri");
+        assert_eq!(DRIVER_SUFFIX, "_drv_video.so");
+    }
+
+    /// The interposer accepts a candidate only when it exports one of the
+    /// `__vaDriverInit_*` symbols libva itself probes, so a valid ELF that is not
+    /// a VA driver is rejected rather than handed to libva.
+    #[test]
+    fn the_driver_init_symbols_match_what_libva_probes() {
+        assert_eq!(va_driver_init_symbol(0), "__vaDriverInit_1_0");
+        assert_eq!(va_driver_init_symbol(23), "__vaDriverInit_1_23");
     }
 }
