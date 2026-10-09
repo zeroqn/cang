@@ -22,10 +22,15 @@ in
   mesaPrebuiltRelease = {
     owner = "zeroqn";
     repo = "cang";
-    tag = "";
-    version = "";
-    revision = "";
-    systems = { };
+    tag = "alpha";
+    version = "26.1.8";
+    revision = "mesa-26.1.8";
+    systems = {
+      x86_64-linux = {
+        asset = "mesa-26.1.8-x86_64-linux.tar.gz";
+        hash = "sha256-5gR4Laz5yRvvYZYNIdFFiY8XzFKk4bTLcmPVPLYeWCk=";
+      };
+    };
   };
 
   herdrPrebuiltRelease = {
