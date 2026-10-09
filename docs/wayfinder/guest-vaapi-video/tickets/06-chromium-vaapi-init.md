@@ -426,3 +426,193 @@ between (i) `CreateVideoDecoder` returning nullptr and (ii) the pipeline being b
 rejecting the config. Only after that does it make sense to ask whether the fix is an
 upstream Chromium change (Linux VA-API is documented as unsupported) or a cang-side
 image/GPU-property decision.
+
+## In-guest introspection (2026-10-09): Chromium creates no hardware video decoder at all
+
+Ran the two probes the ticket asked for inside a single `--gpu=drm --waypipe` guest
+(cang `cang-baseline`, guest-init `gi-gbm`, image `1393b4cc`, the 20 s 1920x1080 clip,
+the `vawrap4.so` dlopen/dlsym witness): `ps`/`/proc/<pid>/cmdline` for the GPU and
+renderer processes, a small Node CDP client that serialises the shadow DOM of
+`chrome://gpu` (`info-view`, incl. its "Problems Detected", "Log Messages" and
+"Graphics Feature Status" sections), and `chrome://media-internals` (the player's
+property table and its decoder-selection events). Evidence under
+`/home/dev/cang/disk/nctx/t06d/`, `/home/dev/cang/disk/nctx/t06e/` and
+`/home/dev/cang/disk/nctx/t06f/` (in-guest logs land in
+`/home/dev/cang/disk/nctx/workspace/t06{d,e,f}-*`).
+
+### 1. The GPU process does carry every VA-API feature
+
+Arm `--use-angle=vulkan --disable-vulkan-surface --render-node-override=/dev/dri/renderD128
+--disable-gpu-driver-bug-workarounds --enable-features=AcceleratedVideoDecoder,VaapiIgnoreDriverChecks,VulkanFromANGLE,DefaultANGLEVulkan`,
+`/proc/<pid>/cmdline` of the `--type=gpu-process` process:
+
+```
+... --ozone-platform=wayland --render-node-override=/dev/dri/renderD128
+    --disable-gpu-driver-bug-workarounds --use-angle=vulkan ...
+    --enable-features=AcceleratedVideoDecoder,DefaultANGLEVulkan,SingleAxisScrollContainers,VaapiIgnoreDriverChecks,VulkanFromANGLE ...
+```
+
+The renderer process carries the same `--enable-features=...`. So "the GPU process is
+missing the VA-API features" is ruled out - they survive to both the GPU and renderer
+processes.
+
+### 2. `chrome://gpu`: "Video Decode: Hardware accelerated" but "Compositing: Software only"
+
+```
+Graphics Feature Status
+*  Canvas: Hardware accelerated
+*  Direct Rendering Display Compositor: Disabled
+*  Compositing: Software only. Hardware acceleration disabled
+*  OpenGL: Enabled
+*  Rasterization: Hardware accelerated
+*  Video Decode: Hardware accelerated
+*  Vulkan: Disabled
+*  WebGL: Hardware accelerated but at reduced performance
+...
+Problems Detected
+*  Accelerated video encode has been disabled, either via blocklist, about:flags or the
+   command line.    Disabled Features: video_encode
+*  Gpu compositing has been disabled, either via blocklist, about:flags or the command
+   line. The browser will fall back to software compositing and hardware acceleration
+   will be unavailable.    Disabled Features: gpu_compositing
+Log Messages
+*  ERROR:ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc:249 :
+   '--ozone-platform=wayland' is not compatible with Vulkan. Consider switching to
+   '--ozone-platform=x11' or disabling Vulkan
+```
+
+Chromium reports the video-decode *feature* as "Hardware accelerated" while its own
+"Problems Detected" list says GPU compositing is disabled and the browser has fallen
+back to software compositing. The two are computed from different inputs: "Video Decode"
+is the `GPU_FEATURE_TYPE_ACCELERATED_VIDEO_DECODE` status (the VA-API compile-time
+feature), not a statement that a decoder was built.
+
+### 3. `chrome://media-internals`: the selector never even considers a platform decoder
+
+```
+info  Cannot select DecryptingVideoDecoder for video decoding. status=DecoderStatus::Codes::kUnsupportedEncryptionMode
+info  Cannot select VpxVideoDecoder for video decoding. status=DecoderStatus::Codes::kUnsupportedConfig
+info  Cannot select Dav1dVideoDecoder for video decoding. status=DecoderStatus::Codes::kUnsupportedCodec
+info  Selected FFmpegVideoDecoder for video decoding, config: codec: h264, profile: h264 high, ...
+kVideoDecoderName        = "FFmpegVideoDecoder"
+kIsPlatformVideoDecoder  = false
+```
+
+There is **no** `MojoVideoDecoder`/`GpuVideoDecoder` candidate in the selection log at
+all, so in this configuration Chromium never even reaches
+`kFailedToCreateDecoder` (205). The `vawrap` witness for the same arm is
+`vaInitialize` x1, `vaCreateConfig` x38, and zero surfaces/contexts/pictures - the
+`vaCreateConfig` storm is the renderer's `RenderMediaClient` supported-config query, not
+a decoder.
+
+### The cause: software compositing removes the video-decode accelerator
+
+Chromium 154.0.8037.57:
+
+- `content/renderer/render_thread_impl.cc` - `RenderThreadImpl::GetGpuFactories()`
+  returns `nullptr` when `is_gpu_compositing_disabled_` (the comment there: "fall back to
+  software video decoding if gpu compositing is off").
+- `media/renderers/default_decoder_factory.cc` -
+  `DefaultDecoderFactory::CreateVideoDecoders` only adds the external (Mojo/platform)
+  decoder when `gpu_factories && gpu_factories->IsGpuVideoDecodeAcceleratorEnabled()`.
+  With `gpu_factories == nullptr` the candidate vector holds only Decrypting/Vpx/Dav1d/
+  FFmpeg - exactly the four names in the media-internals log.
+- `content/browser/gpu/gpu_data_manager_impl_private.cc` -
+  `IsGpuCompositingDisabled() = disable_gpu_compositing_ || !HardwareAccelerationEnabled()`,
+  and `HardwareAccelerationEnabled()` is false unless the browser's `gpu_mode_` is
+  `HARDWARE_GL`, `HARDWARE_GRAPHITE` or `HARDWARE_VULKAN`.
+
+So the guest is blocked one level **above** the ticket's whole investigation: the browser
+process is in software compositing, so the renderer never asks the GPU process for a
+hardware video decoder. `VaapiVideoDecoder`, `GetHandle()`/`PreSandboxInitialization`,
+the virtio-vs-venus vendor mismatch and `--render-node-override` are all downstream of a
+decoder that is never created.
+
+### Every observed backend has GPU compositing disabled
+
+Three arms in a second guest run (`--gpu=drm --waypipe`, same guest) isolate it:
+
+| arm (all `--use-angle=vulkan`, `--render-node-override`, VA features) | Vulkan row | Compositing | renderer's decoder |
+| --- | --- | --- | --- |
+| no `--disable-vulkan-surface` | Disabled | Software only | FFmpegVideoDecoder |
+| `--disable-vulkan-surface` | Disabled | Software only | FFmpegVideoDecoder |
+| `--disable-vulkan-surface` + `--enable-features=...,Vulkan` | **Enabled** | Software only | FFmpegVideoDecoder |
+
+`--disable-vulkan-surface` is not the toggle: every ANGLE-Vulkan arm disables
+`gpu_compositing`, with or without it. With `--enable-features=Vulkan` the compositor
+additionally tries a Vulkan swapchain
+(`components/viz/service/display_embedder/skia_output_device_vulkan.cc:301 Failed to
+create vulkan surface`) and falls back to software, and every ANGLE-Vulkan arm also logs
+`wayland_surface_factory.cc:249` ("'--ozone-platform=wayland' is not compatible with
+Vulkan"). The third run below shows the only other backend (native EGL) cannot boot at
+all, so **no configuration observed in this guest has GPU compositing enabled**.
+
+**The ticket's `--use-angle=vulkan` "VA-API is on" signal is therefore not a VA-API
+signal at all**: that is the only backend in this guest with a working GL context, it
+carries GPU compositing off (so hardware video decode is off), and the
+`--disable-vulkan-surface` the smoke tool needs hangs off the same backend. The
+`mediaCapabilities.powerEfficient` flip that made Vulkan/ANGLE look like the enabling arm
+measures the GPU-process capability enumeration, which happens regardless.
+
+### The only working GL backend is ANGLE-Vulkan, which has GPU compositing off
+
+The default-GL backend cannot even start a GPU process in this guest (third run,
+two arms, `--disable-gpu-driver-bug-workarounds` + `AcceleratedVideoDecoder,VaapiIgnoreDriverChecks`,
+one with `--render-node-override`):
+
+```
+ERROR:ui/gl/angle_platform_impl.cc:34  Display.cpp:1187 (initialize): ANGLE Display::initialize
+  error 12289: Could not dlopen native EGL: libEGL.so.1: cannot open shared object file
+ERROR:ui/gl/gl_display.cc:665  Initialization of all (2) EGL display types failed.
+ERROR:ui/ozone/common/gl_ozone_egl.cc:26  GLDisplayEGL::Initialize failed.
+VERBOSE1:gpu/ipc/service/gpu_init.cc:521  gl::init::InitializeGLNoExtensionsOneOff failed
+ERROR:components/viz/service/main/viz_main_impl.cc:190  Exiting GPU process due to errors during initialization
+```
+
+`chrome://gpu` then reports `OpenGL: Disabled`, `WebGL: Disabled`, `Canvas:
+Software only`, `Video Decode: Software only`, and
+`GPU process was unable to boot: GPU access is disabled due to frequent crashes.
+Disabled Features: all`; the relaunched GPU process carries `--use-gl=disabled`
+on its command line. The guest's `/usr/lib/cang-mesa-runtime/lib` (a symlink to
+`pkgs.mesa`; mesa 26.1.8's `lib/`) has `libEGL_mesa.so.0` but **no
+`libEGL.so.1`** (glvnd's dispatcher lives in a different store), and nixpkgs' chromium expects the NixOS
+`/run/opengl-driver/lib` to supply it - which the guest does not provide (the
+smoke README already documents the guest's GBM path having to be re-pointed away
+from `/run/opengl-driver/lib/gbm`). So the *native* EGL route - the GL branch of
+`GetActualPlatformDecoderImplementation` - is dead in this guest before
+`gpu_compositing` or VA-API are even considered.
+
+Which leaves the arm matrix observed in this guest:
+
+| GL backend | GPU process | Compositing | renderer's decoder |
+| --- | --- | --- | --- |
+| native EGL (default GL) | cannot boot (no `libEGL.so.1`) | Software only | FFmpegVideoDecoder |
+| ANGLE-Vulkan (`--use-angle=vulkan`) | boots (venus) | Software only | FFmpegVideoDecoder |
+
+Every configuration with a working GL backend has `gpu_compositing` disabled, and
+the other one has no GPU at all: **no configuration reachable from a Chromium flag
+gives the renderer a hardware video decoder, so VA-API decode is unreachable in
+the guest regardless of the VA-API feature flags, the render node or the vendor
+mismatch.** `--render-node-override` removes `GetHandle()` (ticket's t06c) but
+cannot help because the decoder that would call `GetHandle()` is never created.
+
+### Where that leaves the ticket
+
+The block is not Chromium's VA-API selection and not a Chromium flag; it is the
+guest's GPU-compositing setup, and there are two concrete, separable fixes to try,
+both image/guest-init-level:
+
+1. **Make native EGL reachable** (`libEGL.so.1`/glvnd + `pkgs.mesa`'s
+   `libEGL_mesa.so.0` on the chromium process's loader path, or provide the
+   `/run/opengl-driver` layout the nixpkgs chromium expects). That would let the
+   default-GL backend boot, which is the only path that also gets
+   `gr_context_type == kGL` + `kAcceleratedVideoDecodeLinuxGL` -> `kVaapi` *and*
+   (per the browser's rules) GPU compositing. Prediction: if `Compositing` becomes
+   "Hardware accelerated", `chrome://media-internals` gains a `MojoVideoDecoder`
+   candidate, and with `--render-node-override` a `vaCreateContext` may appear.
+2. **Give ozone-Wayland a Vulkan present path** (or make the browser keep GPU
+   compositing on with ANGLE-Vulkan despite it). Without one, `--use-angle=vulkan`
+   will keep falling back to software compositing on this display.
+
+Only after one of those is real does the ticket's original question - whether
+Chromium's VA-API path can actually decode - become testable.
