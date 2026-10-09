@@ -400,6 +400,13 @@ let
         grep -F 'pkgs.mesa' ${layersSourceFile}
         grep -F './usr/lib/cang-mesa-runtime' ${containerSourceFile}
         grep -F 'ln -s ${"$"}{pkgs.mesa} ./usr/lib/cang-mesa-runtime' ${containerSourceFile}
+        # Native EGL needs glvnd's dispatcher (`libEGL.so.1`) on a loader path:
+        # mesa's output only has the vendor library the dispatcher loads, so the
+        # image exposes libglvnd at a stable path and guest-init exports
+        # LD_LIBRARY_PATH for it.
+        test -f ${pkgs.libglvnd}/lib/libEGL.so.1
+        grep -F './usr/lib/cang-gpu-runtime' ${containerSourceFile}
+        grep -F 'ln -s ${"$"}{pkgs.libglvnd} ./usr/lib/cang-gpu-runtime' ${containerSourceFile}
         # The guest's VA-API driver has to be the patched libgallium, not the
         # prebuilt mesa's: libva opens the drv_video.so from LIBVA_DRIVERS_PATH.
         test -f ${layers.vaApiRuntime}/dri/virtio_gpu_drv_video.so

@@ -149,6 +149,12 @@ let
       chmod 0644 ./home/dev/.terminfo/x/xterm-ghostty
       mkdir -p ./usr/lib
       ln -s ${pkgs.mesa} ./usr/lib/cang-mesa-runtime
+      # Native-EGL GL needs glvnd's dispatcher (`libEGL.so.1`); mesa's output
+      # only carries the vendor library (`libEGL_mesa.so.0`) that the
+      # dispatcher loads through `__EGL_VENDOR_LIBRARY_FILENAMES`. guest-init
+      # puts this directory on the DRM clients' loader path, because the
+      # guest glibc's only default search directory is its own store lib dir.
+      ln -s ${pkgs.libglvnd} ./usr/lib/cang-gpu-runtime
       ln -s ${pkgs.mesa} ./usr/lib/cang-software-renderer
       ln -s ${layers.vaApiRuntime} ./usr/lib/cang-va-runtime
       ln -s ${pkgs.fontconfig.out} ./usr/lib/cang-fontconfig

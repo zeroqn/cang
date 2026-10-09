@@ -1,10 +1,40 @@
 ---
 label: wayfinder:research
 title: Chromium's VA-API decoder instantiates but does not offload
-status: open
+status: closed
 blocked_by: []
 claimed_by:
 ---
+
+## Resolution (2026-10-09) - hardware decode works; the guest was missing EGL's dispatcher
+
+The block was never Chromium's VA-API selection: the guest had no way to create a **native EGL display**,
+so Chromium's GPU process could not boot on its default GL backend ("GPU access is disabled due to
+frequent crashes. Disabled Features: all", then a relaunch with `--use-gl=disabled`), and the only
+working backend (ANGLE-Vulkan) left compositing software - which never grants the renderer a hardware
+decoder.
+
+Fix: the image now exposes **glvnd's dispatcher** (`libEGL.so.1`) at `/usr/lib/cang-gpu-runtime` (mesa's
+output only carries the vendor library `libEGL_mesa.so.0` that the dispatcher loads), and guest-init
+puts that directory on the DRM clients' loader path (`LD_LIBRARY_PATH`, part of `MESA_ENV`). With it:
+
+- the GPU process boots on native EGL (it maps the store's `libglvnd-1.7.0/lib/libEGL.so.1`);
+- `chrome://gpu` reports **`Compositing: Hardware accelerated`**;
+- `chrome://media-internals` names **`VaapiVideoDecoder`**, and the VA witness shows a real decode
+  context doing work (`ctx=1`, `sfc=21`, `render=635`).
+
+That meets this ticket's acceptance (a positive signal from Chromium that hardware decode is engaged,
+not merely the absence of a fallback line).
+
+**What remains, and why it is outside cang:** the client must pass
+`--render-node-override=/dev/dri/renderD128` (or `--hardware-video-device-path`), because
+`VADisplayStateSingleton::PreSandboxInitialization` matches the DRM node's PCI vendor against the
+browser's active GPU, and in this guest the only DRM node is virtio-pci (0x1af4) while the active GPU
+through venus is the host's AMD part (0x1002). cang cannot set a Chromium flag; the requirement is
+documented for clients. ANGLE-Vulkan (`--use-angle=vulkan`) stays the wrong route (software
+compositing, and it failed on the dma-buf transport this round). The waypipe client's `-n` (dmabuf
+off) that `tools/chromium-cang-smoke` uses is now revisitable for the presenting run - the dma-buf arm
+no longer crashes the GPU process - but that is a tooling choice, not a ticket blocker.
 
 ## Question
 
@@ -616,3 +646,114 @@ both image/guest-init-level:
 
 Only after one of those is real does the ticket's original question - whether
 Chromium's VA-API path can actually decode - become testable.
+
+## Resolved (2026-10-09): native EGL + a dma-buf display, and Chromium decodes VA-API
+
+The prediction above is half right, and the missing half is the display transport.
+Two independent guest-side problems had to be fixed together; fixing either alone
+leaves the renderer on `FFmpegVideoDecoder`.
+
+### 1. The missing glvnd dispatcher (the guest-init/image fix)
+
+`mesa`'s output ships only the glvnd *vendor* library: `libEGL_mesa.so.0` exports
+no `eglGetDisplay`, only `__egl_Main` (the dispatcher entry point). The file a
+client dlopens by soname, glvnd's dispatcher `libEGL.so.1`, is in `pkgs.libglvnd`
+- which *is* in the guest `/nix/store` (chromium's own RPATH names
+`/nix/store/mwlz1nal...-libglvnd-1.7.0/lib`, and `nixpkgs` patches that RPATH into
+`libGLESv2.so`), but nothing puts it on any loader path:
+
+- `/usr/lib/cang-mesa-runtime/lib` (the image symlink to `pkgs.mesa`) has no
+  `libEGL.so.1`;
+- the guest's `/lib` is dockerTools' merged symlink tree, and the guest glibc's
+  *only* system search path is its own store lib dir
+  (`ld-linux --list` prints `search path=/nix/store/<glibc>/lib (system search
+  path)`), so a merged `/lib` would not be searched either;
+- ANGLE dlopens from the chromium bundle's `libEGL.so`, which the nixpkgs
+  `postFixup` does **not** patch (it patches `chromium` and `libGLESv2.so` only),
+  so its RUNPATH never participates.
+
+The fix is an env/image pair:
+
+- `crates/cang-guest-init/src/guest_init/components/wayland.rs`: `MESA_ENV` gains
+  `LD_LIBRARY_PATH=/usr/lib/cang-gpu-runtime/lib`, exported exactly where the other
+  DRM Mesa variables are (`--gpu=drm`).
+- `nix/image/container.nix`: `ln -s ${pkgs.libglvnd} ./usr/lib/cang-gpu-runtime`
+  (plus the `pkgs.libglvnd` contents entry in `layers.nix` and the matching
+  `checks.nix` wrapper contracts). The built layer carries
+  `./usr/lib/cang-gpu-runtime -> /nix/store/mwlz1nal5bznpy8mlp02ry79h3083k1b-libglvnd-1.7.0`.
+
+Measured in a displayed `--gpu=drm --waypipe` guest (image `1393b4cc`, cang
+`cang-baseline`, host weston + waypipe client), same chromium flags and same
+`vawrap4.so` witness, GL backend left at its default (ANGLE -> native EGL):
+
+| arm | `libEGL.so.1` maps in GPU process | GPU process | `Compositing` | `Video Decode` | renderer decoder |
+| --- | --- | --- | --- | --- | --- |
+| no dispatcher (before) | 0 | cannot boot (`Could not dlopen native EGL`, relaunched with `--use-gl=disabled`) | Software only | Software only | FFmpegVideoDecoder |
+| `LD_LIBRARY_PATH=<libglvnd>/lib` | 5 | boots, no crash streak | **Hardware accelerated** (dma-buf run) | Hardware accelerated | **VaapiVideoDecoder** (`kIsPlatformVideoDecoder=true`) |
+
+### 2. GPU compositing also needs a dma-buf display path
+
+The dispatcher alone is not enough: with the smoke's usual
+`waypipe ... client -n` (shm-only) the GPU process boots with hardware GL and
+`Video Decode: Hardware accelerated`, but `Compositing` stays **Software only**
+and the renderer still selects `FFmpegVideoDecoder` - Chromium will not keep GPU
+compositing on for a Wayland surface the compositor cannot accept GPU buffers for.
+Same run, host `waypipe` client **without `-n`** (dma-buf negotiated: the client
+log binds `zwp_linux_dmabuf_v1` and logs 27 `create_params`):
+
+| arm (`--ozone-platform=wayland`, `--render-node-override=/dev/dri/renderD128`, VA features) | transport | Compositing | decoder | VA witness |
+| --- | --- | --- | --- | --- |
+| default GL + dispatcher | `-n` (shm) | Software only | FFmpegVideoDecoder | ctx=0, begin=0, render=0 |
+| default GL + dispatcher | dma-buf | **Hardware accelerated** | **VaapiVideoDecoder** | ctx=1, sfc=21, begin=635, render=635, sync=21 |
+| `--use-gl=angle --use-angle=gl` + dispatcher | `-n` | Software only | FFmpegVideoDecoder | 0 |
+| `--disable-features=Vulkan,SkiaGraphite` + dispatcher | `-n` | Software only | FFmpegVideoDecoder | 0 |
+| `--use-angle=vulkan` + dispatcher | dma-buf | Software only (GPU process failed) | FFmpegVideoDecoder | 0 |
+
+The winning witness is a real decode, not an enumeration: `vaCreateContext
+1920x1088`, `vaCreateSurfaces fmt=0x1 1920x1088 ... sfc=3..`, 635
+`vaBeginPicture`/`vaRenderPicture`/`vaEndPicture` and 21 `vaSyncSurface` for a
+20 s 1920x1080 H.264 clip that plays at `readyState=4, frames=534/20 s`.
+
+### Acceptance
+
+Met. A `--gpu=drm --waypipe` guest Chromium decodes the 1920x1080 clip with a
+Chromium hardware decoder engaged: `chrome://media-internals` reports
+`kVideoDecoderName=VaapiVideoDecoder`, `kIsPlatformVideoDecoder=true`, and the
+VA-API witness shows surfaces, a context and 635 submitted pictures. `chrome://gpu`
+reports `Compositing: Hardware accelerated` and `Video Decode: Hardware
+accelerated`, with no `Gpu compositing has been disabled` problem.
+
+Shipped-form re-verification (new `cang-guest-init`, the image's
+`/usr/lib/cang-gpu-runtime` path, no manual env): `LD_LIBRARY_PATH` came from
+guest-init, the GPU process mapped `/nix/store/mwlz1nal...-libglvnd-1.7.0/lib/libEGL.so.1`,
+`Compositing: Hardware accelerated`, `VaapiVideoDecoder`, ctx=1/sfc=21/render=635.
+
+### What still does not work
+
+- **The render-node override is still required.** `VaapiVideoDecoder` only gets a
+  VA display because `--render-node-override=/dev/dri/renderD128` (or
+  `--hardware-video-device-path`) bypasses `VADisplayStateSingleton::
+  PreSandboxInitialization`'s PCI vendor/device match, which cannot succeed here:
+  the only guest DRM node is `virtio-pci` (0x1af4) while the browser's active GPU
+  through venus is the host AMD part (0x1002). Without the switch the decoder
+  builds, fails `GetHandle()` and falls back (the `DecoderStatus::205` of the
+  earlier section). cang cannot set a chromium flag, so this stays a client-side
+  requirement.
+- **The dma-buf transport must be the operator's choice.** `-n` is a host
+  `waypipe` client flag; cang only receives the socket. `tools/chromium-cang-smoke`
+  keeps `-n` ("with dmabuf enabled the presenting Chromium GPU process still
+  aborts"), which is what kept Chromium in software compositing in every earlier
+  run; with the dispatcher fix the dma-buf arm no longer crashes
+  (`GPU process crashes: exited=0`), so that flag can be reconsidered for the
+  presenting run. Suggested line for `tools/chromium-cang-smoke/README.md` (the
+  runner is not this ticket's file): *"The presenting run no longer needs `-n`:
+  with `/usr/lib/cang-gpu-runtime/lib/libEGL.so.1` on the guest's loader path
+  (guest-init `MESA_ENV`) Chromium's native-EGL GPU process boots and accepts
+  dma-bufs, so `-n` can be dropped and GPU compositing turns on."*
+- ANGLE-Vulkan (`--use-angle=vulkan`) is unchanged: it still boots the GPU process
+  but leaves compositing software, and in this round it failed outright on the
+  dma-buf transport, so `--use-angle` is not the route.
+
+Evidence: `/home/dev/cang/disk/nctx/t06{g,i,h,j}/` (console logs, per-arm
+`t06*-<arm>.cdp.json` with the `chrome://gpu` and `chrome://media-internals`
+shadow-DOM dumps, and the `vawrap4.so` `.va` witness files).

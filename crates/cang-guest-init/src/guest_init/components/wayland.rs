@@ -22,6 +22,16 @@ pub(in crate::guest_init) const PROXY_BIN: &str = "wl-cross-domain-proxy";
 // the venus renderer stays the default and --use-angle=swiftshader reaches
 // SwiftShader with zero GPU-process crashes.
 const MESA_ENV: &[(&str, &str)] = &[
+    // The native-EGL GL backend of an EGL client dlopens `libEGL.so.1` by
+    // soname. That file is glvnd's *dispatcher*: mesa ships only the vendor
+    // library (`libEGL_mesa.so.0`) that the dispatcher loads through
+    // `__EGL_VENDOR_LIBRARY_FILENAMES`. The image exposes libglvnd at a stable
+    // path because nothing else carries the dispatcher - the guest's `/lib` is
+    // a merged symlink tree, but its glibc searches only its own store lib
+    // dir - so without this an EGL client's native display cannot be created
+    // (chromium's ANGLE: "Could not dlopen native EGL: libEGL.so.1") and the
+    // browser falls back to `--use-gl=disabled` after its GPU-process crashes.
+    ("LD_LIBRARY_PATH", "/usr/lib/cang-gpu-runtime/lib"),
     ("LIBGL_DRIVERS_PATH", "/usr/lib/cang-mesa-runtime/lib/dri"),
     // libva searches only /run/opengl-driver/lib/dri and /usr/lib*/dri by
     // default; the driver it needs (virtio_gpu_drv_video.so, the guest side of
@@ -259,10 +269,12 @@ mod tests {
         for (name, value) in MESA_ENV {
             assert_eq!(std::env::var(name).as_deref(), Ok(*value));
             // Everything points into the image's mesa runtime, except the VA
-            // driver search path, which starts at the patched VA runtime.
+            // driver search path, which starts at the patched VA runtime and
+            // the loader path, which points at the image's libglvnd symlink.
             assert!(
                 value.starts_with("/usr/lib/cang-mesa-runtime")
                     || value.starts_with("/usr/lib/cang-va-runtime")
+                    || value.starts_with("/usr/lib/cang-gpu-runtime")
             );
         }
         // The ICD pin must use VK_ICD_FILENAMES and never VK_DRIVER_FILES: the
@@ -297,6 +309,17 @@ mod tests {
             va_paths,
             "/usr/lib/cang-va-runtime/dri:/usr/lib/cang-mesa-runtime/lib/dri"
         );
+        // Native EGL needs glvnd's dispatcher on the loader path: mesa ships
+        // only the vendor library (`libEGL_mesa.so.0`), the guest glibc's only
+        // default search directory is its own store lib dir, and an EGL client
+        // (chromium's ANGLE) dlopens `libEGL.so.1` by soname. The value is the
+        // image's stable libglvnd symlink, never a store hash.
+        let loader_path = MESA_ENV
+            .iter()
+            .find(|(name, _)| *name == "LD_LIBRARY_PATH")
+            .expect("LD_LIBRARY_PATH in MESA_ENV")
+            .1;
+        assert_eq!(loader_path, "/usr/lib/cang-gpu-runtime/lib");
         assert!(std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none());
 
         for (name, _) in MESA_ENV {

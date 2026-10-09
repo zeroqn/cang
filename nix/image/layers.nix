@@ -433,6 +433,11 @@ let
     ++ [
       browserImageLayer
       pkgs.mesa
+      # glvnd's dispatcher (`libEGL.so.1`). The image exposes it at
+      # `/usr/lib/cang-gpu-runtime` for the guest's DRM clients, and a client
+      # that links the dispatcher directly (rather than dlopening it) also gets
+      # it from the merged `/lib` tree this contents entry produces.
+      pkgs.libglvnd
       vaApiRuntime
       pkgs.fontconfig.out
       pkgs.perf
