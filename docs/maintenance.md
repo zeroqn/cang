@@ -423,6 +423,22 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.12.0` (`942c4bc`) - the `--gpu=drm` VA-API video path is complete on both
+  halves. The host's `virglrenderer` now carries the client's packed parameter
+  sets, the picture-order DPB references and reference lists a B-frame needs and
+  the client's rate-control mode, and allocates the video surface linearly, so a
+  guest's `h264_vaapi`/`hevc_vaapi` encode matches a host control's PSNR. Guest
+  presentation is GPU-side: `GBM_BACKENDS_PATH` makes Waypipe carry dma-bufs,
+  guest-init builds the NixOS-shaped `/run/opengl-driver` farm and exposes the
+  glvnd EGL dispatcher so Chromium's GPU process boots on native EGL, and
+  `mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl` presents `vaapi` surfaces. A
+  host whose own mesa VA driver needs the RBSP bound applies
+  `cang.overlays.default` (`packages.mesa-rbsp-bounds`) or points
+  `CANG_VA_DRIVER_PATH` at its own build, which the VM worker's `dlopen`
+  interposer reads because secure-execution mode makes libva ignore
+  `LIBVA_DRIVERS_PATH`. The render server's seccomp policy now allows
+  `rename()`, which had been SIGSYS-killing it mid-present; x86_64 asset sha256
+  `e5e0c90f5bd732ea4b6b78fa01c165940b7c6517cef15f8f6ef4d872ae5676f4`.
 - `v0.11.2` (`b3007a1`) - the guest attach session no longer drops a child's
   final PTY output (it is forwarded before the `Exit` frame) and the
   guest-init suite is deterministic under load, so the nix builds whose
@@ -456,11 +472,11 @@ nix build .#libkrunfw
 
 Each of these is the hash its release publishes, and each was reproduced locally
 from the tagged tree with the `overrideAttrs` recipe above (v0.9.0 while
-validating that recipe; v0.9.1, v0.10.1, v0.11.0, v0.11.1 and v0.11.2 before
-their pins went in - for v0.10.1, v0.11.0 and v0.11.2 the main-branch run of the
-same commit published the same bytes as the rolling `sha-<shortsha>` artifact
-first, while for v0.11.1 that run's build step failed and the tag run published
-the bytes the local recipe had already produced),
+validating that recipe; v0.9.1, v0.10.1, v0.11.0, v0.11.1, v0.11.2 and v0.12.0
+before their pins went in - for v0.10.1, v0.11.0, v0.11.2 and v0.12.0 the
+main-branch run of the same commit published the same bytes as the rolling
+`sha-<shortsha>` artifact first, while for v0.11.1 that run's build step failed
+and the tag run published the bytes the local recipe had already produced),
 so a freshly published `.sha256` that disagrees with this list means the build
 inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache` attribute first.
 
