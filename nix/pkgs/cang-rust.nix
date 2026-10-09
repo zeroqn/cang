@@ -26,7 +26,7 @@ let
   # pointers and the matching flake inputs.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-sdXp23UcFn0PCmzxzkmeg2gX7GHwLYSFNyh4kw8OSBQ=";
+    hash = "sha256-goNlKHgpdohF0Mr3E3ZepFIS2tdR2woy+2dA+/rxcVE=";
   };
 
   # Building libkrun is what needs clang/libclang (krun-display and krun-input

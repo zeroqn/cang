@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "cang"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "cang-attach-protocol",
@@ -164,21 +164,21 @@ dependencies = [
 
 [[package]]
 name = "cang-attach-protocol"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "cang-exec-protocol"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "cang-guest-init"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "cang-attach-protocol",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "cang-libkrun"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "krun-init-blob",
@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "cang-repository-tests"
-version = "0.11.2"
+version = "0.12.0"
 
 [[package]]
 name = "caps"
