@@ -142,7 +142,7 @@ every `h264_vaapi` encode stalls at `frame= 0`. Build with
 The image's guest VA driver is the guest half of cang's encode fix; the host half
 is a mesa patch (the RBSP bound) in *the host's own* VA-API driver. A host that
 applies `cang.overlays.default` (or installs
-`packages.<system>.mesa-rbsp-bounds`, a prebuilt or source mesa carrying the same
+`packages.<system>.mesa-cang`, a prebuilt or source mesa carrying the same
 patches) has a patched *system* mesa, needs no redirect, and the VM worker loads
 it normally.
 

@@ -8,6 +8,9 @@ claimed_by: bob + pi session (2026-10-04)
 
 # 08 - the guest VA encode hangs in CQP mode on complex 640x360 content
 
+> **Renamed 2026-10-09:** the host-facing package named below as
+> `packages.<system>.mesa-rbsp-bounds` is now `packages.<system>.mesa-cang`.
+
 Measured 2026-10-04 with the image that finally ships the guest VA driver
 (`localhost/cang:latest` id `60c470a1a2e3`, `/usr/lib/cang-va-runtime/dri/virtio_gpu_drv_video.so ->
 ../lib/libgallium.so` confirmed in-guest by the probe's own `PROBE driver:` line). All arms below are

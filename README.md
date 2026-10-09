@@ -63,7 +63,7 @@ rootless Podman tooling for development.
   VA-API driver is mesa (a virtio-gpu host, radeonsi, ...) should apply cang's
   overlay so the host half has the same RBSP-bound fix:
   `nixpkgs.overlays = [ cang.overlays.default ];`, or use
-  `cang.packages.<system>.mesa-rbsp-bounds`. A host that cannot apply that
+  `cang.packages.<system>.mesa-cang`. A host that cannot apply that
   overlay needs no cang rebuild either: export
   `CANG_VA_DRIVER_PATH=<mesa>/lib/dri` for a mesa it built with the same patches,
   and the VM worker's VA driver opens from there. `LIBVA_DRIVERS_PATH` cannot do

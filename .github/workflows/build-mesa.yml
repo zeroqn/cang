@@ -67,15 +67,15 @@ jobs:
             let
               flake = builtins.getFlake (toString ./.);
               system = builtins.currentSystem;
-              required = [ "mesa-release-build" "mesa-rbsp-bounds" ];
+              required = [ "mesa-release-build" "mesa-cang" ];
             in
             builtins.all (name: flake.packages.${system} ? ${name}) required
           ')"
           if [ "${present}" != "true" ]; then
-            echo "missing a CI-required mesa package attribute (mesa-release-build, mesa-rbsp-bounds)" >&2
+            echo "missing a CI-required mesa package attribute (mesa-release-build, mesa-cang)" >&2
             exit 1
           fi
-          echo "ok: packages.<system>.{mesa-release-build,mesa-rbsp-bounds}"
+          echo "ok: packages.<system>.{mesa-release-build,mesa-cang}"
 
       - name: Update nixpkgs input
         # Only the weekly run floats nixpkgs; push runs build the pinned lock.

@@ -1248,7 +1248,7 @@ fn mesa_fix_is_shipped_for_the_guest_image_and_for_hosts() {
     // The flake has to expose the fix to hosts, not only to the image.
     for required in [
         "overlays.default",
-        "mesa-rbsp-bounds",
+        "mesa-cang = mesaCang pkgs;",
         "mesa-release-build",
         "mesaCang",
     ] {
@@ -1257,6 +1257,12 @@ fn mesa_fix_is_shipped_for_the_guest_image_and_for_hosts() {
             "flake.nix should expose {required}"
         );
     }
+    // The host-facing attribute was renamed from `mesa-rbsp-bounds`, a name that
+    // described one of its four patches; the retired spelling should not come back.
+    assert!(
+        !FLAKE_NIX.contains("mesa-rbsp-bounds"),
+        "flake.nix should not expose the retired `mesa-rbsp-bounds` attribute"
+    );
     assert!(
         LAYERS.contains("mesaVaApi"),
         "the image's VA driver should stay wired to mesaVaApi"

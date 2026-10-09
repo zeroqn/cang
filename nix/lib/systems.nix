@@ -22,7 +22,7 @@ let
                 # image's mesa is a prebuilt binary drop, so the guest half of the
                 # vrend video fix is carried by nixpkgs' mesa built from source with
                 # cang's patches. The same override is exported for hosts as
-                # `overlays.default` / `packages.mesa-rbsp-bounds` in flake.nix.
+                # `overlays.default` / `packages.mesa-cang` in flake.nix.
                 mesaVaApi = mesaCang prev;
                 virglrenderer = prev.virglrenderer.overrideAttrs (old: {
                   patches = (old.patches or [ ]) ++ [

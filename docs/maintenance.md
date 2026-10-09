@@ -433,7 +433,7 @@ nix build .#libkrunfw
   glvnd EGL dispatcher so Chromium's GPU process boots on native EGL, and
   `mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl` presents `vaapi` surfaces. A
   host whose own mesa VA driver needs the RBSP bound applies
-  `cang.overlays.default` (`packages.mesa-rbsp-bounds`) or points
+  `cang.overlays.default` (`packages.mesa-cang`) or points
   `CANG_VA_DRIVER_PATH` at its own build, which the VM worker's `dlopen`
   interposer reads because secure-execution mode makes libva ignore
   `LIBVA_DRIVERS_PATH`. The render server's seccomp policy now allows

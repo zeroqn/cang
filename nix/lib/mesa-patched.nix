@@ -6,7 +6,7 @@
 #    release asset for the system (otherwise it uses the prebuilt - see
 #    `nix/pkgs/mesa-prebuilt.nix` and `.github/workflows/build-mesa.yml`);
 #  * the guest image's VA-API driver (`mesaVaApi` in nix/lib/systems.nix);
-#  * `overlays.default` / `packages.mesa-rbsp-bounds` in flake.nix, which a downstream
+#  * `overlays.default` / `packages.mesa-cang` in flake.nix, which a downstream
 #    host applies to its own nixpkgs - a host whose VA driver is mesa (virtio-gpu,
 #    radeonsi, ...) hits the same hang in vl_rbsp_ue() when vrend hands it a packed
 #    header, and cang cannot reach that driver by configuration (the VM worker runs in

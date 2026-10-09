@@ -248,11 +248,13 @@
         }
         // {
           # nixpkgs' mesa with cang's VA-API encode fixes, for consumers that cannot
-          # apply the overlay (the guest image uses the same override as `mesaVaApi`).
-          mesa-rbsp-bounds = mesaCang pkgs;
+          # apply the overlay (the guest image uses the same override as `mesaVaApi`):
+          # the prebuilt release asset when one is pinned for the system, otherwise
+          # the same patches built from source.
+          mesa-cang = mesaCang pkgs;
           # The source build of the same patches: what `.github/workflows/build-mesa.yml`
-          # builds, tars and publishes as the `mesa-rbsp-bounds` release assets that
-          # `mesa-rbsp-bounds` / `overlays.default` then consume as prebuilts.
+          # builds, tars and publishes as the per-system release assets that
+          # `mesa-cang` / `overlays.default` then consume as prebuilts.
           mesa-release-build = (import ./nix/lib/mesa-patched.nix) pkgs.mesa;
         }
       );

@@ -501,7 +501,7 @@ and the VA-driver fixes, and that a host whose own mesa VA driver lacks the RBSP
 `cang.overlays.default` (or set `CANG_VA_DRIVER_PATH`) - cang deliberately does not bundle mesa.
 
 Shipped for consumers: cang's mesa patch set (raw headers, RBSP bounds, virtio-gpu modifiers) is wired
-for the guest image and exported to hosts as `overlays.default` / `packages.mesa-rbsp-bounds`, with a
+for the guest image and exported to hosts as `overlays.default` / `packages.mesa-cang`, with a
 prebuilt-mesa workflow (`.github/workflows/build-mesa.yml` + `scripts/update-mesa-prebuilt.sh`) so a
 downstream host need not build Mesa; the prebuilt pin is empty until that workflow first runs, so today
 everything still builds from source.
