@@ -473,12 +473,24 @@ DRM-PRIME memory type included) - then its decoder creation fails with `DecoderS
 video in a cang guest today, use **`mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl`**, which is
 proven end to end.
 
-## Where this stands (2026-10-09)
+## Where this stands (2026-10-09) - every ticket in this map is closed
 
-Closed: 01 (decode), 02 (packed headers over the wire), 03 (upload fence), 04 (encoder attributes,
-references/DPB and rate control), 05 (chroma), 07 (venus presenting - a missing `rename` in the render
-server's seccomp policy, verified by a cold-cache A/B), 08 (the guest RBSP bound plus the opt-in
-host VA-driver redirect). Open: **06**.
+01 decode; 02 packed headers over the wire; 03 upload fence; 04 encoder attributes, references/DPB and
+rate control; 05 chroma; 07 venus presenting (a missing `rename` in the render server's seccomp policy,
+verified by a cold-cache A/B); 08 the host-side encode stall (the VM worker is in secure-exec mode, so
+cang interposes `dlopen` and can load a patched VA driver from `CANG_VA_DRIVER_PATH`, opt-in with
+verified fallbacks); 06 **Chromium hardware decode** - the guest had no EGL dispatcher, so the image now
+exposes glvnd at `/usr/lib/cang-gpu-runtime` and guest-init sets `LD_LIBRARY_PATH` for it, after which
+Chromium's GPU process boots on native EGL, `chrome://gpu` reports hardware compositing and
+`chrome://media-internals` names `VaapiVideoDecoder` (clients must still pass
+`--render-node-override`, since a virtio-pci 0x1af4 node cannot match the host's AMD 0x1002).
+
+Gates on the combined tree: `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`,
+`cargo test` (1003 passed) and `cargo deny check` all pass.
+
+A downstream consumer should know that the guest image must be **rebuilt** to pick up the EGL dispatcher
+and the VA-driver fixes, and that a host whose own mesa VA driver lacks the RBSP bound should apply
+`cang.overlays.default` (or set `CANG_VA_DRIVER_PATH`) - cang deliberately does not bundle mesa.
 
 Shipped for consumers: cang's mesa patch set (raw headers, RBSP bounds, virtio-gpu modifiers) is wired
 for the guest image and exported to hosts as `overlays.default` / `packages.mesa-rbsp-bounds`, with a
