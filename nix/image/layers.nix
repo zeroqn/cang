@@ -1,7 +1,6 @@
 {
   pkgs,
   piCodingAgent,
-  rioBin,
   herdrPrebuilt,
   montyPrebuilt,
   rmuxPrebuilt,
@@ -429,7 +428,6 @@ let
       toolingImageLayer
       agentImageLayer
     ]
-    ++ pkgs.lib.optional (rioBin != null) rioBin
     ++ [
       browserImageLayer
       pkgs.mesa
@@ -455,7 +453,6 @@ let
       toolingImageLayer
       agentImageLayer
     ]
-    ++ pkgs.lib.optional (rioBin != null) rioBin
     ++ [
       browserImageLayer
       pkgs.perf

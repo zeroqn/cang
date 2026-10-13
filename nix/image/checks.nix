@@ -1,7 +1,6 @@
 {
   pkgs,
   piCodingAgent,
-  rioBin,
   herdrPrebuilt,
   montyPrebuilt,
   rmuxPrebuilt,
@@ -23,7 +22,6 @@ let
     inherit
       pkgs
       piCodingAgent
-      rioBin
       herdrPrebuilt
       montyPrebuilt
       rmuxPrebuilt
@@ -183,11 +181,6 @@ let
     grep -F 'pkgs.ghostty.terminfo' ${containerSourceFile}
     grep -F 'xterm-ghostty' ${containerSourceFile}
     test -f ${pkgs.ghostty.terminfo}/share/terminfo/x/xterm-ghostty
-    ${pkgs.lib.optionalString (rioBin != null) ''
-      test -x ${rioBin}/bin/rio
-      test -f ${rioBin}/share/terminfo/r/rio
-      test -f ${rioBin}/share/terminfo/x/xterm-rio
-    ''}
   '';
 
   browserContracts = ''
@@ -444,16 +437,6 @@ let
         grep -F './usr/lib/cang-fontconfig' ${containerSourceFile}
         grep -F 'ln -s ${"$"}{pkgs.fontconfig.out} ./usr/lib/cang-fontconfig' ${containerSourceFile}
         test -f ${pkgs.fontconfig.out}/etc/fonts/fonts.conf
-        ${pkgs.lib.optionalString (rioBin != null) ''
-          test -x ${rioBin}/bin/rio
-          grep -F './home/dev/.terminfo/r' ${containerSourceFile}
-          grep -F '${"$"}{rioBin}/share/terminfo/r/rio' ${containerSourceFile}
-          grep -F '${"$"}{rioBin}/share/terminfo/x/xterm-rio' ${containerSourceFile}
-          case ":${layers.imagePath}:" in
-            *":${rioBin}/bin:"*) ;;
-            *) exit 1 ;;
-          esac
-        ''}
         test -x ${pkgs.waypipe}/bin/waypipe
         ${browserContracts}
         case ":${layers.imagePath}:" in

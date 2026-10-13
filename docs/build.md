@@ -52,11 +52,6 @@ goes to the input instead of the checkout:
 - `.#rmux-prebuilt`: install the pinned published Helvesec/rmux Linux release
   tarball for the current system. The cang image includes this package as
   `rmux` alongside Nixpkgs `tmux`.
-- `.#rio-bin` (`x86_64-linux`): install the pinned `zeroqn/headless` Rio package.
-  The x86_64 cang image includes `rio` and installs its `rio` and `xterm-rio`
-  terminfo entries in `/home/dev/.terminfo`, so managed guest shells can use
-  either Rio terminal identity without additional guest setup. Upstream does
-  not currently publish this package for `aarch64-linux`.
 - `.#rtk-prebuilt`: install the pinned published RTK release asset (currently
   pinned for `x86_64-linux`).
 - `.#herdr-prebuilt`: install the pinned published `herdrdev/herdr` Linux

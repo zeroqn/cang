@@ -1,7 +1,6 @@
 {
   pkgs,
   piCodingAgent,
-  rioBin,
   herdrPrebuilt,
   montyPrebuilt,
   rmuxPrebuilt,
@@ -23,7 +22,6 @@ let
     inherit
       pkgs
       piCodingAgent
-      rioBin
       herdrPrebuilt
       montyPrebuilt
       rmuxPrebuilt
@@ -53,7 +51,6 @@ let
     inherit
       pkgs
       piCodingAgent
-      rioBin
       herdrPrebuilt
       montyPrebuilt
       rmuxPrebuilt
@@ -83,7 +80,6 @@ let
         ./etc/nix \
         ./home/dev/.cache \
         ./home/dev/.codex \
-        ./home/dev/.terminfo/r \
         ./home/dev/.terminfo/x \
         ./root \
         ./tmp \
@@ -158,11 +154,6 @@ let
       ln -s ${pkgs.mesa} ./usr/lib/cang-software-renderer
       ln -s ${layers.vaApiRuntime} ./usr/lib/cang-va-runtime
       ln -s ${pkgs.fontconfig.out} ./usr/lib/cang-fontconfig
-      ${pkgs.lib.optionalString (rioBin != null) ''
-        cp ${rioBin}/share/terminfo/r/rio ./home/dev/.terminfo/r/rio
-        cp ${rioBin}/share/terminfo/x/xterm-rio ./home/dev/.terminfo/x/xterm-rio
-        chmod 0644 ./home/dev/.terminfo/r/rio ./home/dev/.terminfo/x/xterm-rio
-      ''}
       if ! grep -q '^nixbld:' ./etc/group; then
         printf 'nixbld:x:${toString layers.nixBuilderGroupId}:${layers.nixBuilderGroupMembers}\n' >> ./etc/group
       fi

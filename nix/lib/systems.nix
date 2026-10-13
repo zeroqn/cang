@@ -1,4 +1,4 @@
-{ nixpkgs, headless, pins }:
+{ nixpkgs, pins }:
 let
   mesaCang = pkgs: import ./mesa-cang.nix { inherit pkgs pins; };
   systems = [

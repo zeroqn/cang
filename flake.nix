@@ -6,8 +6,6 @@
 
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    headless.url = "github:zeroqn/headless";
-
     # `cang-libkrun` depends on libkrun's source at `deps/libkrun` by path (cang
     # links libkrun's Rust API, so libkrun has to be compiled by cang's own
     # rustc). A flake's own source cannot carry submodule contents - neither from
@@ -46,7 +44,6 @@
       self,
       nixpkgs,
       nixpkgs-unstable,
-      headless,
       libkrun-src,
       libkrunfw-src,
       rutabaga-gfx-src,
@@ -55,7 +52,7 @@
     let
       pins = import ./nix/pins.nix;
       systems = import ./nix/lib/systems.nix {
-        inherit nixpkgs headless pins;
+        inherit nixpkgs pins;
       };
       # cang's mesa (the VA-API encode fixes + the headless virtio-gpu modifier fix):
       # the prebuilt release asset when one is published for the system, otherwise
@@ -79,7 +76,6 @@
         { pkgs, system, ... }:
         let
           bun = (import nixpkgs-unstable { inherit system; }).bun;
-          rioBin = headless.packages.${system}.rio-bin or null;
           piCodingAgent = import ./nix/pkgs/pi-coding-agent.nix {
             inherit pkgs pins;
           };
@@ -191,7 +187,6 @@
                 pkgs
 
                 piCodingAgent
-                rioBin
                 herdrPrebuilt
                 montyPrebuilt
                 rmuxPrebuilt
@@ -240,9 +235,6 @@
         // pkgs.lib.optionalAttrs (montyPrebuilt != null) {
           monty-prebuilt = montyPrebuilt;
         }
-        // pkgs.lib.optionalAttrs (rioBin != null) {
-          rio-bin = rioBin;
-        }
         // pkgs.lib.optionalAttrs (rtkPrebuilt != null) {
           rtk-prebuilt = rtkPrebuilt;
         }
@@ -273,7 +265,6 @@
             inherit pkgs;
             bun = bun;
             piCodingAgent = packages.pi-coding-agent;
-            rioBin = packages.rio-bin or null;
             herdrPrebuilt = packages.herdr-prebuilt or null;
             montyPrebuilt = packages.monty-prebuilt or null;
             rmuxPrebuilt = packages.rmux-prebuilt;
