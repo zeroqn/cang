@@ -69,6 +69,41 @@ second IDR - which is what points at vrend's per-buffer state (a buffer recycled
 after 30 frames carrying a stale `dmabuf`, `egl_image` or `va_sfc`) rather than at
 the guest's client.
 
+## What the host still does after the freeze (instrumented, 40-frame clip)
+
+A rooted diagnostic `virglrenderer` logging every decode callback
+(`vrend_video_decode_completed`: guest buffer handle, plane resource handles,
+dmabuf fd, cached EGL image; `virgl_video.c:decode_completed`: buffer and `va_sfc`),
+40 frames, `-bf 1 -g 30`:
+
+```
+decode callbacks: 39        create_buffer calls: 18        virgl decode_completed: 39
+
+create_buffer handle=11 .. handle=80       <- the guest's ffmpeg grows a pool, one
+                                              new surface per frame
+decode#0..#17   handle 11,16,20,24,...,80  one new buffer each time
+decode#18       handle=20  fd0=1633  egl0=0x...   <- first recycle: pool of 18
+decode#29       handle=48  res=(51,52,53)         <- this is frame 30 (1-based)
+decode#38       handle=11  res=(3,4,5)
+```
+
+Every frame in the 40-frame clip got a decode callback and a copy, with the same
+per-buffer dmabuf fd and EGL image as on the buffer's first use, and the guest
+received all 40 frames (13 824 000 bytes = 40 x 640x360 nv12). The frozen bytes the
+guest reads are *surface 48's* content - the surface frame 30 (1-based) was decoded
+into. So the host keeps decoding and copying; the guest's read-back is what stops
+tracking the surface it just submitted a picture to, and keeps reading one fixed
+surface.
+
+Reconciled with the knob sweep, the trigger is **an IDR that arrives after the
+guest's surface pool has started recycling**: the pool grows for the first 18
+frames, so the IDR at frame 16 lands while every surface is still fresh (no freeze)
+while the IDRs at frame 31 (`-g 30`, and `-g 15` with IDRs at 1/16/31) land after
+recycling has started, and a single IDR (`-g 60`) never freezes. That points at the
+guest's VA driver surface bookkeeping across an IDR (mesa's virgl VA frontend and its
+`vaCreateSurfaces`/`vaSyncSurface`/buffer-pool handling) rather than at vrend's copy,
+so the remaining work is guest-side.
+
 ## Where it can be
 
 The decode path, in order: the guest's ffmpeg submits a picture to its VA driver
