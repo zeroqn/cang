@@ -345,6 +345,18 @@ screenshots, and the guest's chromium needs `--alloc=hardened` or it segfaults a
 
 ## Open tickets
 
+- [The guest's VA-API decode loses the Cr plane](tickets/09-decode-loses-cr-plane.md):
+  found by `tools/virglrenderer-cang-smoke`'s VA-API arm. The guest's *decoded*
+  picture has bit-exact luma and Cb and a **zeroed Cr plane** (per-frame
+  `mse_y:0.00 mse_u:0.00 mse_v:22540`, `psnr_v 4.6`), because the host exports the
+  decoded `VA_RT_FORMAT_YUV420` surface as NV12 (two planes: R8 luma + interleaved
+  GR88 chroma) while the guest's video buffer describes it as three (luma, Cb, Cr):
+  `vrend_video.c`'s `sync_dmabuf_to_video_buffer()` copies plane *i* to plane *i*
+  for `min(2, 3)` planes, so Cb gets the interleaved plane's R channel and Cr is
+  never written. Encode passes because its guest buffer is two-plane (NV12), which
+  is why this only shows up now that decoded frames are compared to the source.
+  Instrumented `virglrenderer` evidence, upstream parity and the ruled-out
+  `VASurfaceAttribPixelFormat` attempt are in the ticket.
 - ~~[The guest encode's chroma planes are wrong](tickets/05-chroma-planes-wrong.md)~~ -
   **done (2026-10-02)**: vrend's video surface is now allocated with a linear DRM
   modifier (`nix/pkgs/patches/virglrenderer-linear-surface.patch`), and the guest's
