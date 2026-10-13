@@ -116,7 +116,10 @@ rootless Podman tooling for development.
   runtime, so a client can allocate GBM buffers and Waypipe carries the frames
   as dma-bufs instead of shared memory. GPU video clients work on that path -
   `mpv --hwdec=vaapi --vo=gpu --gpu-api=opengl` reports hardware decoding and a
-  `vaapi[yuv420p]` video output. mpv's default Vulkan video output (and
+  `vaapi[yuv420p]` video output, and the image ships `ffmpeg` and `vainfo` for
+  the same path: `ffmpeg -vaapi_device /dev/dri/renderD128 ... -c:v h264_vaapi`
+  and `-hwaccel vaapi` encode and decode through the render node, and `vainfo`
+  lists the driver's profiles. mpv's default Vulkan video output (and
   `--use-angle=vulkan` in a Wayland client) instead fails on venus dma-buf
   format-modifier imports, so use the GL path for presenting clients.
   Waypipe remains mutually exclusive with `--wayland` and requires the cang

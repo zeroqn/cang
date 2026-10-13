@@ -333,8 +333,20 @@ let
     # A media client that reports its own decoder choice (`Using hardware
     # decoding (vaapi)`), which is the only unambiguous oracle for whether the
     # guest's VA-API path is used: chromium instantiates its VA-API decoder but
-    # reports neither success nor failure at default verbosity.
+    # reports neither success nor failure at default verbosity. mpv only
+    # decodes; `ffmpeg` below is the encode half and the client the live smoke
+    # scores frame-by-frame.
     pkgs.mpv-unwrapped
+    # A VA-API encoder/decoder client and a profile oracle for the guest. The
+    # guest's /nix/store is the image's own closure, so a client that is not in
+    # the image cannot run there at all (a host store path, and even a host
+    # binary patched to the guest's own glibc, is outside that closure); ffmpeg
+    # links the same libav* build mpv already pulls in, so this adds the
+    # executable and little else. `vainfo` states the profile/entrypoint set the
+    # guest's driver advertises, which is how a decode (VLD) / encode (EncSlice)
+    # claim is checked without trusting a client's log.
+    pkgs.ffmpeg-headless
+    pkgs.libva-utils
   ]
   ++ pkgs.lib.optional (herdrPrebuilt != null) herdrPrebuilt
   ++ pkgs.lib.optional (montyPrebuilt != null) montyPrebuilt;

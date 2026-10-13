@@ -236,6 +236,23 @@ let
       *) exit 1 ;;
     esac
   '';
+  vaapiClientContracts = ''
+    grep -F 'pkgs.ffmpeg-headless' ${layersSourceFile}
+    grep -F 'pkgs.libva-utils' ${layersSourceFile}
+    test -x ${layers.agentImageLayer}/bin/ffmpeg
+    test -x ${layers.agentImageLayer}/bin/vainfo
+    # mpv is the decode oracle the agent layer already shipped; ffmpeg is the
+    # encode/decode client and vainfo the profile oracle for the same VA-API
+    # path. All three have to be on the image path - the guest's /nix/store is
+    # the image's own closure, so a client that is not in here cannot run in a
+    # guest at all.
+    test -x ${layers.agentImageLayer}/bin/mpv
+    case ":${layers.imagePath}:" in
+      *":${layers.agentImageLayer}/bin:"*) ;;
+      *) exit 1 ;;
+    esac
+  '';
+
   sqliteContracts = ''
     grep -F 'pkgs.sqlite' ${layersSourceFile}
     test -x ${layers.agentImageLayer}/bin/sqlite3
@@ -373,6 +390,7 @@ let
         ${doltContracts}
         ${beadsContracts}
         ${freshContracts}
+        ${vaapiClientContracts}
         ${sqliteContracts}
         ${montyContracts}
         ${nativeAddonRuntimeContracts}
