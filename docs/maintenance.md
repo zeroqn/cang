@@ -58,6 +58,16 @@ asset name, and SRI hash) in `nix/pins.nix` from the npm registry:
 nix develop --command ./scripts/update-monty-prebuilt.sh
 ```
 
+`nix/pins.nix` also pins cang's `virglrenderer` source revision, and
+`.github/workflows/build-virglrenderer.yml` builds that revision with this repo's
+patch set and fills the per-system prebuilt asset (name and SRI hash). The pin is
+normally written by that workflow; refresh it by hand to re-pin an already
+published asset:
+
+```bash
+nix develop --command ./scripts/update-virglrenderer-prebuilt.sh
+```
+
 libkrun itself is no longer pinned as an asset: cang links libkrun's Rust API
 compiled from source (see the next section), so `nix/pkgs/libkrun.nix`,
 `scripts/update-libkrun.sh`, the `libkrunRelease` pin and the

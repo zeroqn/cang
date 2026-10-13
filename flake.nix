@@ -58,6 +58,13 @@
       # the prebuilt release asset when one is published for the system, otherwise
       # the same patches built from source. Shared with the guest image's `mesaVaApi`.
       mesaCang = pkgs: import ./nix/lib/mesa-cang.nix { inherit pkgs pins; };
+      # cang's host-side virglrenderer (the VA-API encode fixes, at the pinned
+      # post-1.3.0 upstream revision): the prebuilt release asset when one is
+      # published for the system, otherwise the same source build. This is
+      # what the cang packages link and what their render server comes from, and
+      # it is exported for downstream hosts as `packages.virglrenderer` /
+      # `overlays.default`.
+      virglrendererCang = pkgs: import ./nix/lib/virglrenderer-cang.nix { inherit pkgs pins; };
     in
     {
       # Apply to a host's nixpkgs to give *its* VA-API driver the same fix the guest
@@ -70,12 +77,17 @@
       overlays.default = final: prev: {
         mesa = mesaCang prev;
         mesaVaApi = mesaCang prev;
+        virglrenderer = virglrendererCang prev;
       };
 
       packages = systems.forAllSystems (
         { pkgs, system, ... }:
         let
           bun = (import nixpkgs-unstable { inherit system; }).bun;
+          # The un-overridden nixpkgs. `nix/lib/systems.nix` replaces
+          # `virglrenderer` with the prebuilt-or-source selector, which is what
+          # consumers want but not what CI can build the asset from.
+          rawPkgs = import nixpkgs { inherit system; };
           piCodingAgent = import ./nix/pkgs/pi-coding-agent.nix {
             inherit pkgs pins;
           };
@@ -244,6 +256,15 @@
           # the prebuilt release asset when one is pinned for the system, otherwise
           # the same patches built from source.
           mesa-cang = mesaCang pkgs;
+          # The source build of the patches `.#virglrenderer` carries: what
+          # `.github/workflows/build-virglrenderer.yml` builds, tars and publishes
+          # as the per-system release assets that `virglrenderer-cang.nix` then
+          # consumes as a prebuilt.
+          virglrenderer-release-build = (import ./nix/lib/virglrenderer-patched.nix) {
+            inherit pins;
+            pkgs = rawPkgs;
+            virglrenderer = rawPkgs.virglrenderer;
+          };
           # The source build of the same patches: what `.github/workflows/build-mesa.yml`
           # builds, tars and publishes as the per-system release assets that
           # `mesa-cang` / `overlays.default` then consume as prebuilts.
@@ -333,7 +354,7 @@
               }
               ''
                 if [ "$patched" = "$plain" ]; then
-                  echo "packages.virglrenderer is the plain nixpkgs build; the host vrend patches in nix/lib/systems.nix are missing" >&2
+                  echo "packages.virglrenderer is the plain nixpkgs build; the host vrend patches in nix/lib/virglrenderer-patched.nix are missing" >&2
                   exit 1
                 fi
                 touch "$out"

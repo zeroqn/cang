@@ -565,8 +565,8 @@ see `docs/maintenance.md`. In-tree `cargo` builds still read the `deps/libkrun`,
 ## Maintenance helpers
 
 The pinned-asset refresh scripts for `nix/pins.nix` (cang, RTK, rmux, dolt,
-beads, fresh, monty, libkrun, libkrunfw, Pi, herdr, and zvec-grep) are documented
-in [docs/maintenance.md](docs/maintenance.md).
+beads, fresh, monty, virglrenderer, libkrun, libkrunfw, Pi, herdr, and zvec-grep)
+are documented in [docs/maintenance.md](docs/maintenance.md).
 
 ---
 

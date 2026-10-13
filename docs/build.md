@@ -87,21 +87,31 @@ goes to the input instead of the checkout:
   lives in `flake.lock`, and it moves together with the `deps/libkrun` submodule
   pointer - see
   [the maintenance procedure](maintenance.md#updating-the-libkrun-fork).
-- `.#virglrenderer`: the nixpkgs `virglrenderer` with this repo's host-side
+- `.#virglrenderer`: cang's virglrenderer. It is the prebuilt release asset
+  `.github/workflows/build-virglrenderer.yml` publishes when one is pinned for
+  the system, otherwise the nixpkgs `virglrenderer` at the upstream revision
+  pinned in `nix/pins.nix` (`virglrendererSource`) with this repo's host-side
   patches (`virglrenderer-enum-26.patch`,
   `virglrenderer-gbm-layout-linear-modifier.patch`,
   `virglrenderer-encode-raw-headers.patch`,
   `virglrenderer-encode-upload-fence.patch`,
   `virglrenderer-linear-surface.patch` and the two halves of the B-frame fix,
   `virglrenderer-encode-caps.patch` and
-  `virglrenderer-encode-reference-frames.patch`, applied by the overlay in
-  `nix/lib/systems.nix`). Host-side only: cang links `libvirglrenderer.so.1`
-  and the `virgl_render_server` helper is symlinked from this package, so the
-  cang packages already ship it; downstream flakes that build their own host
-  vrend/libkrun stack should consume this output instead of nixpkgs'
-  `virglrenderer`. The encode patch is the host half of the guest VA-API encode
-  fix - it submits the guest client's packed parameter sets to the host's VA
-  driver - and needs the image-local guest driver described below.
+  `virglrenderer-encode-reference-frames.patch`, plus the rate-control pair
+  `virglrenderer-encode-rate-control.patch` and
+  `virglrenderer-encode-rate-control-config.patch`; the source build lives in
+  `nix/lib/virglrenderer-patched.nix`, the selector in
+  `nix/lib/virglrenderer-cang.nix`). Host-side only: cang links
+  `libvirglrenderer.so.1` and the `virgl_render_server` helper is symlinked from
+  this package, so the cang packages already ship it; downstream flakes that
+  build their own host vrend/libkrun stack should consume this output instead of
+  nixpkgs' `virglrenderer` (`overlays.default` makes that substitution). The
+  encode patch is the host half of the guest VA-API encode fix - it submits the
+  guest client's packed parameter sets to the host's VA driver - and needs the
+  image-local guest driver described below.
+- `.#virglrenderer-release-build`: the source build of the same patches, which
+  `.github/workflows/build-virglrenderer.yml` builds, tars and publishes as the
+  per-system release assets that `.#virglrenderer` then consumes as a prebuilt.
 - The guest's VA-API driver is not a flake output: it is image-local. The
   image's mesa is a prebuilt binary drop that cannot be patched, so
   `nix/lib/systems.nix` builds `mesaVaApi` (nixpkgs' mesa with only the `virgl`

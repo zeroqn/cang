@@ -33,6 +33,41 @@ in
     };
   };
 
+  # cang's virglrenderer source (nix/lib/virglrenderer-patched.nix): a post-1.3.0
+  # upstream revision plus cang's host-side patches. The revision is main rather
+  # than a release because nixpkgs still pins 1.3.0, and it drags in the vrend
+  # robustness fixes since (shader/resource bounds and NULL checks, sampler-view
+  # swizzle, sync-thread teardown), the glibc 2.43 build fix, and the amdgpu
+  # `inttypes` fix nixpkgs otherwise carries as its own patch. Note that the
+  # panfrost `res_id_count` fix in it is NOT reachable from cang: cang does not
+  # support ARM/Mali hosts and the nixpkgs build's `-Ddrm-renderers` list
+  # (amdgpu-experimental, asahi, msm) does not compile the panfrost renderer in.
+  #
+  # The revision builds venus-protocol as a meson subproject; a Nix build has no
+  # network, so the wrap's checkout is pinned and vendored by
+  # nix/lib/virglrenderer-patched.nix.
+  virglrendererSource = {
+    rev = "c8e3fc3bd2f367d92fb1027061fe51afeec5136e";
+    hash = "sha256-Jo1W/6MODXBwuKio97xohfRtMMzbnUNQxUgzFTXI6bA=";
+    venusProtocolTag = "v1.1.3";
+    venusProtocolHash = "sha256-epSb26uLAbHYBDr+ju6rzFu4ozD/LUpRuou6hA/BFRM=";
+  };
+
+  # Prebuilt virglrenderer carrying the same patches.
+  # `.github/workflows/build-virglrenderer.yml` builds it and fills `systems` with
+  # the published asset per platform; while a platform is absent,
+  # nix/lib/virglrenderer-cang.nix falls back to building the same source.
+  # `revision` records the virglrendererSource.rev the assets were built from -
+  # the upstream version does not move when the revision does.
+  virglrendererPrebuiltRelease = {
+    owner = "zeroqn";
+    repo = "cang";
+    tag = "alpha";
+    version = "1.3.0";
+    revision = "c8e3fc3bd2f367d92fb1027061fe51afeec5136e";
+    systems = { };
+  };
+
   herdrPrebuiltRelease = {
     owner = "herdrdev";
     repo = "herdr";

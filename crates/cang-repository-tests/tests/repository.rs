@@ -1287,6 +1287,108 @@ fn mesa_fix_is_shipped_for_the_guest_image_and_for_hosts() {
     );
 }
 
+#[test]
+fn virglrenderer_fix_is_shipped_for_the_cang_build_and_for_hosts() {
+    // The host half of the vrend video path: the cang packages link
+    // libvirglrenderer and spawn its render server, and the flake exports the same
+    // package to hosts through the overlay. Both go through
+    // nix/lib/virglrenderer-cang.nix, which prefers cang's prebuilt virglrenderer
+    // release asset when one is pinned and otherwise builds the pinned upstream
+    // revision with cang's patches.
+    const VIRGLRENDERER_PATCHED_NIX: &str =
+        include_str!("../../../nix/lib/virglrenderer-patched.nix");
+    const VIRGLRENDERER_CANG_NIX: &str = include_str!("../../../nix/lib/virglrenderer-cang.nix");
+    const VIRGLRENDERER_PREBUILT_NIX: &str =
+        include_str!("../../../nix/pkgs/virglrenderer-prebuilt.nix");
+    const SYSTEMS_NIX: &str = include_str!("../../../nix/lib/systems.nix");
+
+    for patch in [
+        "virglrenderer-enum-26.patch",
+        "virglrenderer-gbm-layout-linear-modifier.patch",
+        "virglrenderer-encode-raw-headers.patch",
+        "virglrenderer-encode-upload-fence.patch",
+        "virglrenderer-linear-surface.patch",
+        "virglrenderer-encode-caps.patch",
+        "virglrenderer-encode-reference-frames.patch",
+        "virglrenderer-encode-rate-control.patch",
+        "virglrenderer-encode-rate-control-config.patch",
+    ] {
+        assert!(
+            VIRGLRENDERER_PATCHED_NIX.contains(patch),
+            "nix/lib/virglrenderer-patched.nix should apply {patch}"
+        );
+    }
+    // The source is the pinned upstream revision rather than nixpkgs' 1.3.0
+    // tarball, and that revision builds venus-protocol as a meson subproject that
+    // a network-less Nix build has to vendor itself.
+    for required in [
+        "pins.virglrendererSource",
+        "fetchFromGitLab",
+        "venus-protocol",
+        "subprojects/",
+    ] {
+        assert!(
+            VIRGLRENDERER_PATCHED_NIX.contains(required),
+            "nix/lib/virglrenderer-patched.nix should mention {required}"
+        );
+    }
+    assert!(
+        VIRGLRENDERER_CANG_NIX.contains("virglrendererPrebuiltRelease")
+            && VIRGLRENDERER_CANG_NIX.contains("virglrenderer-prebuilt.nix"),
+        "nix/lib/virglrenderer-cang.nix should fall back to the prebuilt virglrenderer package"
+    );
+    assert!(
+        VIRGLRENDERER_PREBUILT_NIX.contains("fetchurl")
+            && VIRGLRENDERER_PREBUILT_NIX.contains("autoPatchelfHook"),
+        "the prebuilt virglrenderer package should fetch and reconstruct a release asset"
+    );
+
+    // The overlay is what the cang packages link against, and the flake has to
+    // expose the fix to hosts, not only to cang.
+    assert!(
+        SYSTEMS_NIX.contains("virglrenderer = virglrendererCang prev;"),
+        "nix/lib/systems.nix should wire the overlay's virglrenderer to virglrendererCang"
+    );
+    for required in [
+        "overlays.default",
+        "virglrenderer = virglrendererCang prev;",
+        "virglrenderer-release-build",
+        "virglrendererCang",
+    ] {
+        assert!(
+            FLAKE_NIX.contains(required),
+            "flake.nix should expose {required}"
+        );
+    }
+
+    // The pins the workflows fill in, and the workflows themselves.
+    for required in ["virglrendererSource", "virglrendererPrebuiltRelease"] {
+        assert!(
+            PINS_NIX.contains(required),
+            "nix/pins.nix should carry {required}"
+        );
+    }
+    const BUILD_VIRGLRENDERER_WORKFLOW: &str =
+        include_str!("../../../.github/workflows/build-virglrenderer.yml");
+    for required in [
+        "virglrenderer-release-build",
+        "virglrendererPrebuiltRelease",
+        "virglrendererSource",
+        "force_rebuild",
+    ] {
+        assert!(
+            BUILD_VIRGLRENDERER_WORKFLOW.contains(required),
+            "the virglrenderer workflow should mention {required}"
+        );
+    }
+    const UPDATE_VIRGLRENDERER_SCRIPT: &str =
+        include_str!("../../../scripts/update-virglrenderer-prebuilt.sh");
+    assert!(
+        UPDATE_VIRGLRENDERER_SCRIPT.contains("virglrendererPrebuiltRelease"),
+        "the virglrenderer updater should write the pinned release"
+    );
+}
+
 /// Ticket 08's host escape hatch is a knob and a `dlopen` interposer, not a
 /// bundled mesa. A rename of the knob, the package-relative default directory,
 /// the libva request suffix it matches, or the exported symbol would silently

@@ -1,6 +1,7 @@
 { nixpkgs, pins }:
 let
   mesaCang = pkgs: import ./mesa-cang.nix { inherit pkgs pins; };
+  virglrendererCang = pkgs: import ./virglrenderer-cang.nix { inherit pkgs pins; };
   systems = [
     "x86_64-linux"
     "aarch64-linux"
@@ -24,34 +25,13 @@ let
                 # cang's patches. The same override is exported for hosts as
                 # `overlays.default` / `packages.mesa-cang` in flake.nix.
                 mesaVaApi = mesaCang prev;
-                virglrenderer = prev.virglrenderer.overrideAttrs (old: {
-                  patches = (old.patches or [ ]) ++ [
-                    ../pkgs/patches/virglrenderer-enum-26.patch
-                    ../pkgs/patches/virglrenderer-gbm-layout-linear-modifier.patch
-                    ../pkgs/patches/virglrenderer-encode-raw-headers.patch
-                    ../pkgs/patches/virglrenderer-encode-upload-fence.patch
-                    ../pkgs/patches/virglrenderer-linear-surface.patch
-                    # Encoder-attribute forwarding (the guest half is
-                    # mesa-virgl-encode-caps.patch) and the reference/DPB fill
-                    # that makes the forwarded B-frames honour their references.
-                    # Both are needed together: the caps alone advertise future
-                    # references the host DPB cannot keep. See tickets/04-*.md.
-                    ../pkgs/patches/virglrenderer-encode-caps.patch
-                    ../pkgs/patches/virglrenderer-encode-reference-frames.patch
-                    # Guest rate control. The wire already carries the client's
-                    # RC mode with the picture description, but the host driver
-                    # used to ignore it: virgl_video_create_codec() asked for
-                    # only VAConfigAttribRTFormat, so the context stayed in
-                    # PIPE_H2645_ENC_RATE_CONTROL_METHOD_DISABLE. The -config
-                    # patch creates the VA config/context lazily from the first
-                    # picture's rate_ctrl_method (recreating on a mid-stream
-                    # change), and the target_percentage patch recovers the
-                    # client's target percentage correctly - VBR needs both. See
-                    # tickets/04-*.md.
-                    ../pkgs/patches/virglrenderer-encode-rate-control.patch
-                    ../pkgs/patches/virglrenderer-encode-rate-control-config.patch
-                  ];
-                });
+                # The host half of the same video path: the cang packages link
+                # libvirglrenderer and spawn its render server, so they need cang's
+                # encode/present patches. The prebuilt release asset when one is
+                # published for the system, otherwise the same source build; the
+                # flake exports the same override to hosts as `overlays.default` /
+                # `packages.virglrenderer`. See nix/lib/virglrenderer-cang.nix.
+                virglrenderer = virglrendererCang prev;
               }
             );
       }
