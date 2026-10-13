@@ -1,7 +1,13 @@
 # cang's mesa: the prebuilt release asset when cang has published one for this
-# system, otherwise the source build with the same patches. Both consumers - the
-# guest image's VA driver and the host-side `overlays.default` - go through here, so
-# a downstream host can take the fix without a Mesa source build.
+# system, otherwise the source build with the same patches. Every consumer goes
+# through here - the guest image's VA driver (`pkgs.mesaVaApi`), the render-server
+# environment the cang packages carry (`CANG_MESA_LIBDIR` / `CANG_MESA_ICD`: the mesa
+# the external virgl_render_server loads for GL and Vulkan, via
+# nix/lib/render-server-env.nix), and the host-side `overlays.default` - so a
+# downstream host can take the fix, and the cang packages do too, without a Mesa
+# source build. The image's *guest-side* GL/Vulkan/software-renderer mesa is the
+# plain `pkgs.mesa` on purpose, and the image's wrapper contracts assert the two
+# differ.
 { pkgs, pins }:
 
 let

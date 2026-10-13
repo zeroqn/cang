@@ -77,6 +77,15 @@ const VIRGLRENDERER_SONAME: &str = "libvirglrenderer.so";
 /// libva's own environment variable for its driver search path.
 const LIBVA_DRIVERS_PATH_ENV: &str = "LIBVA_DRIVERS_PATH";
 
+/// The mesa the render server loads for GL and Vulkan (`nix/lib/render-server-env.nix`,
+/// baked into `.#cang-prebuilt`'s wrapper; `nix/lib/systems.nix` wires it to
+/// cang's mesa, because on a virtio-gpu host the DMA-BUF modifier fix lives
+/// there).
+const MESA_LIBDIR_ENV: &str = "CANG_MESA_LIBDIR";
+
+/// The file inside that directory the GL and Vulkan paths both resolve to.
+const MESA_LIBRARY_PREFIX: &str = "libgallium-";
+
 /// Where libva looks when nothing overrides it: the NixOS opengl-driver farm
 /// first (what a NixOS host builds its mesa into), then the usual system
 /// directories. The selected directory is the one whose `*_drv_video.so` decides
@@ -431,6 +440,94 @@ fn check_mesa(driver: Option<(VaDriverDir, PathBuf)>) -> Check {
     }
 }
 
+/// The mesa `libgallium` in `libdir`: the file the render server's GL, Vulkan and
+/// VA contexts all resolve to.
+fn mesa_library(libdir: &Path) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(libdir)
+        .ok()?
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(MESA_LIBRARY_PREFIX))
+        })
+        .collect();
+    candidates.sort();
+    candidates.into_iter().next()
+}
+
+/// The mesa the render server loads: the third check, so the wiring that points
+/// `CANG_MESA_LIBDIR` at cang's mesa cannot silently regress to a stock one.
+fn check_render_server_mesa(libdir: Option<&Path>) -> Check {
+    let Some(libdir) = libdir else {
+        return Check {
+            name: "mesa (render server)",
+            path: None,
+            found: Vec::new(),
+            detail: vec![format!(
+                "{MESA_LIBDIR_ENV} is not set, so the render server has no mesa to load: the \
+                 cang wrapper exports it (`nix/lib/render-server-env.nix`) and a --gpu=drm \
+                 guest needs it for the render server's GL and Vulkan"
+            )],
+            verdict: Verdict::Warn,
+        };
+    };
+
+    let Some(path) = mesa_library(libdir) else {
+        return Check {
+            name: "mesa (render server)",
+            path: None,
+            found: Vec::new(),
+            detail: vec![format!(
+                "{MESA_LIBDIR_ENV} is set to {}, which holds no {MESA_LIBRARY_PREFIX}*.so",
+                libdir.display()
+            )],
+            verdict: Verdict::Fail,
+        };
+    };
+
+    let mut detail = vec![format!("{MESA_LIBDIR_ENV}={}", libdir.display())];
+    let (found, verdict) = match markers_found(&path, MESA_MARKERS) {
+        Ok(found) if found.len() == MESA_MARKERS.len() => {
+            detail.push(format!("{} patch marker present", MESA_MARKERS.len()));
+            (found, Verdict::Pass)
+        }
+        Ok(found) if found.is_empty() => {
+            detail.push(
+                "no cang patch marker found: a stock mesa here loses the virtio-gpu DMA-BUF \
+                 modifier fix on such a host, and the encoder-attribute forwarding the VA path \
+                 relies on"
+                    .to_owned(),
+            );
+            detail.push(format!(
+                "patches not in this build: {}",
+                patches_missing(&found, MESA_MARKERS).join(", ")
+            ));
+            (found, Verdict::Fail)
+        }
+        Ok(found) => {
+            detail.push(format!(
+                "only {} of {} patch markers present",
+                found.len(),
+                MESA_MARKERS.len()
+            ));
+            (found, Verdict::Fail)
+        }
+        Err(err) => {
+            detail.push(format!("could not read the library: {err}"));
+            (Vec::new(), Verdict::Fail)
+        }
+    };
+
+    Check {
+        name: "mesa (render server)",
+        path: Some(path),
+        found,
+        detail,
+        verdict,
+    }
+}
+
 /// The render-server helper cang ships next to its own executable.
 fn render_server_helper() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
@@ -484,8 +581,15 @@ pub(crate) fn run() -> ExitCode {
     let mapped = mapped_library(&maps, VIRGLRENDERER_SONAME);
     let helper = render_server_helper();
     let driver = find_va_driver(&va_driver_dirs());
+    let mesa_libdir = std::env::var_os(MESA_LIBDIR_ENV)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty());
 
-    report(&[check_virglrenderer(mapped, helper), check_mesa(driver)])
+    report(&[
+        check_virglrenderer(mapped, helper),
+        check_mesa(driver),
+        check_render_server_mesa(mesa_libdir.as_deref()),
+    ])
 }
 
 #[cfg(test)]
@@ -711,6 +815,40 @@ mod tests {
         )));
         assert_eq!(check.verdict, Verdict::Pass);
         assert_eq!(check.found, vec!["fill_enc_raw_headers"]);
+    }
+
+    #[test]
+    fn the_render_server_mesa_is_checked_from_its_configured_libdir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let patched = dir.path().join("lib");
+        std::fs::create_dir_all(&patched).expect("mkdir");
+        patched_library(&patched, "libgallium-26.1.8.so", MESA_MARKERS);
+        let check = check_render_server_mesa(Some(&patched));
+        assert_eq!(check.verdict, Verdict::Pass);
+        assert!(check.detail[0].contains(MESA_LIBDIR_ENV));
+
+        let stock = dir.path().join("stock");
+        std::fs::create_dir_all(&stock).expect("mkdir");
+        std::fs::write(stock.join("libgallium-26.1.8.so"), "stock mesa").expect("write");
+        let stock_check = check_render_server_mesa(Some(&stock));
+        assert_eq!(stock_check.verdict, Verdict::Fail);
+        assert!(
+            stock_check
+                .detail
+                .iter()
+                .any(|line| line.contains("patches not in this build"))
+        );
+
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(&empty).expect("mkdir");
+        let empty_check = check_render_server_mesa(Some(&empty));
+        assert_eq!(empty_check.verdict, Verdict::Fail);
+        assert!(empty_check.detail[0].contains("holds no"));
+
+        let unset = check_render_server_mesa(None);
+        assert_eq!(unset.verdict, Verdict::Warn);
+        assert!(unset.detail[0].contains(MESA_LIBDIR_ENV));
     }
 
     #[test]

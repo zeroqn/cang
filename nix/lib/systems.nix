@@ -19,11 +19,13 @@ let
           }).extend
             (
               final: prev: {
-                # cang image only: the guest's VA-API driver is libgallium and the
-                # image's mesa is a prebuilt binary drop, so the guest half of the
-                # vrend video fix is carried by nixpkgs' mesa built from source with
-                # cang's patches. The same override is exported for hosts as
-                # `overlays.default` / `packages.mesa-cang` in flake.nix.
+                # cang's mesa under the name the image and the render-server
+                # environment both use. `pkgs.mesa` stays the plain nixpkgs drop on
+                # purpose: the guest's GL/Vulkan/software-renderer stack takes that
+                # one, while the guest's VA-API driver and the host render-server
+                # environment take this one - the image's wrapper contracts assert
+                # the two really are different, so a stock mesa cannot quietly take
+                # over the VA path (ticket 08). See nix/lib/mesa-patched.nix.
                 mesaVaApi = mesaCang prev;
                 # The host half of the same video path: the cang packages link
                 # libvirglrenderer and spawn its render server, so they need cang's

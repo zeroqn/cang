@@ -330,6 +330,9 @@ PASS     mesa           /nix/store/…-mesa-26.1.8/lib/libgallium-26.1.8.so
          VA driver directory: /run/opengl-driver/lib/dri
          1 patch marker present
          markers: fill_enc_raw_headers
+PASS     mesa (render server)  /nix/store/…-mesa-26.1.8/lib/libgallium-26.1.8.so
+         CANG_MESA_LIBDIR=/nix/store/…-mesa-26.1.8/lib
+         1 patch marker present
 
 Host GPU runtime is cang's patched build.
 ```
@@ -361,6 +364,14 @@ involved, so the check works for any cang package, prebuilt or not. The
 marker-to-patch table is asserted against the patch files in the crate's tests, so
 renaming a marker in a patch fails the build rather than silently reporting a
 patched library as stock.
+
+The third check covers the mesa the external `virgl_render_server` loads for GL and
+Vulkan, named by `CANG_MESA_LIBDIR`. `nix/lib/render-server-env.nix` takes cang's
+mesa (`pkgs.mesaVaApi`) for it - not nixpkgs' plain drop - so a virtio-gpu host
+gets the DMA-BUF modifier fix in the render server's own stack as well as in the
+VA driver the second check resolves. The image's guest-side mesa is a different
+thing and stays the plain drop; the image's wrapper contracts assert the two
+differ, so a stock mesa cannot quietly take over the VA path.
 
 A stock library is a **FAIL** (exit 1) and says what goes wrong with it - a stock
 vrend decodes a guest's video into the wrong planes and drops its reference

@@ -1301,6 +1301,7 @@ fn virglrenderer_fix_is_shipped_for_the_cang_build_and_for_hosts() {
     const VIRGLRENDERER_PREBUILT_NIX: &str =
         include_str!("../../../nix/pkgs/virglrenderer-prebuilt.nix");
     const SYSTEMS_NIX: &str = include_str!("../../../nix/lib/systems.nix");
+    const RENDER_SERVER_ENV_NIX: &str = include_str!("../../../nix/lib/render-server-env.nix");
 
     for patch in [
         "virglrenderer-enum-26.patch",
@@ -1353,6 +1354,19 @@ fn virglrenderer_fix_is_shipped_for_the_cang_build_and_for_hosts() {
     assert!(
         SYSTEMS_NIX.contains("virglrenderer = virglrendererCang prev;"),
         "nix/lib/systems.nix should wire the overlay's virglrenderer to virglrendererCang"
+    );
+    // The render-server environment (CANG_MESA_LIBDIR / CANG_MESA_ICD) has to name
+    // cang's mesa, so a virtio-gpu host gets the DMA-BUF modifier fix in the render
+    // server's own GL/Vulkan stack - not only in the VA driver `cang doctor`
+    // resolves. The image's guest-side mesa stays the plain drop on purpose; its
+    // wrapper contracts assert the two differ.
+    assert!(
+        RENDER_SERVER_ENV_NIX.contains("mesa = pkgs.mesaVaApi;"),
+        "nix/lib/render-server-env.nix should take cang's mesa, not pkgs.mesa"
+    );
+    assert!(
+        SYSTEMS_NIX.contains("mesaVaApi = mesaCang prev;"),
+        "nix/lib/systems.nix should keep the mesaVaApi alias for cang's mesa"
     );
     for required in [
         "overlays.default",

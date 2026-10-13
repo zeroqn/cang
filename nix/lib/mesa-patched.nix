@@ -5,7 +5,14 @@
 #  * `nix/lib/mesa-cang.nix` picks this source build when cang's prebuilt mesa has no
 #    release asset for the system (otherwise it uses the prebuilt - see
 #    `nix/pkgs/mesa-prebuilt.nix` and `.github/workflows/build-mesa.yml`);
-#  * the guest image's VA-API driver (`mesaVaApi` in nix/lib/systems.nix);
+#  * the guest image's VA-API driver (`mesaVaApi` in nix/lib/systems.nix) - the
+#    image's guest-side GL/Vulkan and software renderer stay on nixpkgs' plain
+#    `pkgs.mesa`, and the image's wrapper contracts assert the two differ so a stock
+#    mesa cannot take over the VA path;
+#  * the render-server environment the cang packages carry (`CANG_MESA_LIBDIR` /
+#    `CANG_MESA_ICD`, nix/lib/render-server-env.nix): the mesa the external
+#    virgl_render_server loads for GL and Vulkan, where the virtio-gpu DMA-BUF
+#    modifier fix applies on such a host;
 #  * `overlays.default` / `packages.mesa-cang` in flake.nix, which a downstream
 #    host applies to its own nixpkgs - a host whose VA driver is mesa (virtio-gpu,
 #    radeonsi, ...) hits the same hang in vl_rbsp_ue() when vrend hands it a packed

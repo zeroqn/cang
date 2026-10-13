@@ -9,7 +9,13 @@
 # no-argument run can launch a raw-ELF cang.
 { pkgs }:
 let
-  mesa = pkgs.mesa;
+  # cang's mesa, not nixpkgs' plain drop: this is the library the external
+  # `virgl_render_server` loads for GL and Vulkan, and on a virtio-gpu host the
+  # virtio-gpu DMA-BUF modifier fix (`mesa-headless-virtio-modifiers.patch`) has to
+  # be in it - "the same fix cang's host vrend needs on such a host". The image's
+  # guest-side mesa is a different thing and stays `pkgs.mesa`; the wrapper
+  # contracts pin that separation. See nix/lib/mesa-patched.nix.
+  mesa = pkgs.mesaVaApi;
   env = {
     CANG_MESA_LIBDIR = "${mesa}/lib";
     CANG_MESA_ICD = "${mesa}/share/vulkan/icd.d/radeon_icd.${pkgs.stdenv.hostPlatform.parsed.cpu.name}.json";
