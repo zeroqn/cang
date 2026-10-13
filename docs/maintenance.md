@@ -262,7 +262,11 @@ exports **nothing**.
 Any libkrun change cang picks up is re-verified through the GPU smoke, not just a
 green build: `.2` exported the ABI but regressed venus to the 2D fallback, which
 only the Chromium smoke catches (`tools/chromium-cang-smoke`, GPU and
-`--waypipe` modes). `.3` carries that fix.
+`--waypipe` modes). `.3` carries that fix. A change to cang's host-side
+virglrenderer, or to the guest GPU/video stack, is re-verified the same way with
+`tools/virglrenderer-cang-smoke`, which runs the Chromium smoke and adds VA-API
+encode/decode arms plus host-side attribution that `.#virglrenderer` served
+them.
 
 #### libkrunfw's two kernel lines
 

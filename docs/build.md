@@ -42,8 +42,9 @@ goes to the input instead of the checkout:
   `virgl_render_server`, as a sourceable `$out/render-server-env.sh`. The values
   are defined once in `nix/lib/render-server-env.nix`, which `.#cang-prebuilt`'s
   wrapper also bakes in; the file's assignments only fill unset variables, so a
-  value the caller exported wins. `tools/chromium-cang-smoke` sources it, which
-  is what lets its no-argument invocation run the default `.#cang`.
+  value the caller exported wins. `tools/chromium-cang-smoke` and
+  `tools/virglrenderer-cang-smoke` source it, which is what lets their
+  no-argument invocations run the default `.#cang`.
 - `.#cang-musl`: static/musl `cang-guest-init` (and `cang-granted`) binaries
   for image/guest use. It intentionally does not build or expose `bin/cang`;
   the host `cang` binary is a dynamically linked ELF (libkrun itself is linked
