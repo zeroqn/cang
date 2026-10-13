@@ -44,7 +44,7 @@ use std::sync::OnceLock;
 pub(crate) const VA_DRIVER_PATH_ENV: &str = "CANG_VA_DRIVER_PATH";
 
 /// libva asks for `<name>_drv_video.so`; only those requests are rewritten.
-const DRIVER_SUFFIX: &str = "_drv_video.so";
+pub(crate) const DRIVER_SUFFIX: &str = "_drv_video.so";
 
 /// Package-relative driver directory, next to `bin/cang`.
 const PACKAGE_DRIVER_DIR: &str = "lib/cang/dri";
@@ -209,8 +209,10 @@ fn warn_override_rejected(request: &DriverOverride, reason: &str) {
     );
 }
 
-/// Directories to search, most specific first.
-fn override_dirs() -> Vec<PathBuf> {
+/// Directories to search, most specific first: `CANG_VA_DRIVER_PATH` when it is
+/// set, otherwise the package-relative directory. `cang doctor` reports the
+/// driver these resolve to, so it asks the same code the interposer does.
+pub(crate) fn override_dirs() -> Vec<PathBuf> {
     if let Ok(value) = std::env::var(VA_DRIVER_PATH_ENV) {
         let value = value.trim();
         if !value.is_empty() {

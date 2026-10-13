@@ -350,6 +350,7 @@ Run/help:
 ./result/bin/cang -- bash -lc 'echo ok'
 ./result/bin/cang --workspace=/home/dev/foo --waypipe
 ./result/bin/cang --workspace=/home/dev/foo --waypipe=/tmp/cang-waypipe.sock -- gui-application
+./result/bin/cang doctor
 ./result/bin/cang ps
 ./result/bin/cang exec <task-id-or-handle-selector> -- bash -lc 'echo ok'
 ./result/bin/cang --waypipe exec <task-id-or-handle-selector> -- gui-application

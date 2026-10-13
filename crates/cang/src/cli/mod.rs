@@ -368,6 +368,12 @@ pub(crate) enum CliCommand {
         command: ImagesCommand,
     },
 
+    #[command(
+        name = "doctor",
+        about = "Check that the host GPU runtime (virglrenderer, mesa) is cang's patched build"
+    )]
+    Doctor,
+
     #[command(name = "ps", about = "List active cang task VMs across workspaces")]
     Ps,
 
@@ -507,6 +513,9 @@ pub(crate) enum CliAction {
         command: SeccompCommand,
         log_settings: LogSettings,
     },
+    Doctor {
+        log_settings: LogSettings,
+    },
 }
 
 impl Cli {
@@ -520,6 +529,9 @@ impl Cli {
                 CliCommand::DecodeLaunchConf { path } => CliAction::DecodeLaunchConf { path },
                 CliCommand::Images { command } => CliAction::Images {
                     command,
+                    log_settings: LogSettings::from_process_env(self.log_level, self.debug),
+                },
+                CliCommand::Doctor => CliAction::Doctor {
                     log_settings: LogSettings::from_process_env(self.log_level, self.debug),
                 },
                 CliCommand::Ps => CliAction::Ps {
@@ -950,6 +962,15 @@ mod tests {
                 if task_id == "task-a"
                     && command == ["printf", "--format=%s", "hello world"]
         ));
+    }
+
+    #[test]
+    fn doctor_subcommand_parses() {
+        let action = Cli::try_parse_from(["cang", "doctor"])
+            .expect("doctor should parse")
+            .into_action();
+
+        assert!(matches!(action, crate::cli::CliAction::Doctor { .. }));
     }
 
     #[test]

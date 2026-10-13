@@ -6,6 +6,7 @@ use std::time::Instant;
 
 mod cli;
 mod config;
+mod doctor;
 mod logging;
 mod naming;
 mod runtime;
@@ -102,6 +103,13 @@ pub fn entrypoint() -> ExitCode {
                     ExitCode::from(1)
                 }
             }
+        }
+        CliAction::Doctor { log_settings } => {
+            if let Err(err) = logging::init_tracing(&log_settings) {
+                eprintln!("cang: {err:#}");
+                return ExitCode::from(1);
+            }
+            doctor::run()
         }
         CliAction::Ps { log_settings } => {
             if let Err(err) = logging::init_tracing(&log_settings) {

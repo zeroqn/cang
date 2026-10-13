@@ -309,6 +309,69 @@ the launch path still consumes the encoded private handoff format.
   probing with `node` hides the problem: node links `libstdc++` itself and loads
   the addon even when the guest cannot, so use `bun` (or `pi`) to reproduce it.
 
+## Host GPU runtime (`cang doctor`)
+
+cang's GPU path needs two host libraries that are not stock upstream: the
+**virglrenderer** it links (`libvirglrenderer.so.1`) and execs as
+`libexec/cang-helpers/virgl_render_server`, and the **mesa** `libgallium` the
+render server loads for GL/Vulkan and whose VA driver the host-side encode path
+calls. `cang doctor` reports whether the ones this cang uses are cang's patched
+builds:
+
+```
+$ cang doctor
+cang doctor: host GPU runtime
+
+PASS     virglrenderer  /nix/store/…-virglrenderer-1.3.0/lib/libvirglrenderer.so.1.11.0
+         4 patch markers present
+         render server: /nix/store/…-cang-0.12.0/libexec/cang-helpers/virgl_render_server
+         markers: encode raw headers: %u, render encode raw header failed, …
+PASS     mesa           /nix/store/…-mesa-26.1.8/lib/libgallium-26.1.8.so
+         VA driver directory: /run/opengl-driver/lib/dri
+         1 patch marker present
+         markers: fill_enc_raw_headers
+
+Host GPU runtime is cang's patched build.
+```
+
+A stock library fails and says what breaks:
+
+```
+FAIL     mesa           /nix/store/…-mesa-26.1.8/lib/libgallium-26.1.8.so
+         VA driver directory: /nix/store/…-mesa-26.1.8/lib/dri (cang's VA driver override: CANG_VA_DRIVER_PATH)
+         no cang patch marker found: this is a stock mesa, so the packed-header reader can loop
+         for ever (a constant-QP VA-API encode hangs) and the encoder attributes a B-frame GOP
+         needs are not forwarded
+         patches not in this build: mesa-virgl-encode-raw-headers.patch
+```
+
+It resolves the virglrenderer from `/proc/self/maps` (the library this process
+actually loaded - ground truth, not a path cang hopes the loader used), requires
+the render server to come from the same build, and for mesa follows libva's own
+search order for a VA driver: cang's interposer override directory first
+(`CANG_VA_DRIVER_PATH`, or the package's `<prefix>/lib/cang/dri`), then
+`LIBVA_DRIVERS_PATH`, then the NixOS opengl-driver farm and the system
+directories. The file it lands on is the `libgallium` libva would open - the one
+whose `vl_rbsp_ue` decides whether a constant-QP host encode hangs - and the
+report names both the file and the rule that selected it. Each build is then
+identified by a
+**marker**: a literal that only cang's patch puts into the library
+(`nix/pkgs/patches/virglrenderer-*.patch`, `mesa-*.patch`). No nix evaluation is
+involved, so the check works for any cang package, prebuilt or not. The
+marker-to-patch table is asserted against the patch files in the crate's tests, so
+renaming a marker in a patch fails the build rather than silently reporting a
+patched library as stock.
+
+A stock library is a **FAIL** (exit 1) and says what goes wrong with it - a stock
+vrend decodes a guest's video into the wrong planes and drops its reference
+pictures; a stock mesa can loop for ever on a truncated packed header (the
+constant-QP encode hang of `docs/wayfinder/guest-vaapi-video/tickets/08-*`) and
+does not forward the encoder attributes a B-frame GOP needs. On a NixOS host the
+fix is to apply the flake's `overlays.default` to the system mesa (that is what
+puts the patched `libgallium` behind `/run/opengl-driver/lib/dri`). A host with no
+VA driver anywhere is a **WARN** (exit 0): it is reported, but a host that never
+starts a `--gpu=drm` guest has no VA path to break.
+
 - The guest has two descriptor ceilings, and cang keeps them consistent: the
   per-process `RLIMIT_NOFILE` and the guest-kernel-wide
   `/proc/sys/fs/file-max`. The guest kernel derives `file-max` from guest RAM at
