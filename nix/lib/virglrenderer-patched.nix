@@ -72,12 +72,12 @@ virglrenderer.overrideAttrs (old: {
     # tickets/04-*.md.
     ../pkgs/patches/virglrenderer-encode-rate-control.patch
     ../pkgs/patches/virglrenderer-encode-rate-control-config.patch
-    # The guest's video buffer and the host's exported surface can describe the
-    # same picture with different planes (the host exports NV12 whatever pixel
-    # format was asked for, and the guest's decode buffer is three-plane), and
-    # neither description can be bent to match the other. Reconcile them, and
-    # fail loudly instead of copying a prefix. See the patch header.
-    ../pkgs/patches/virglrenderer-decode-chroma-split.patch
+    # The guest's video buffer and the host's decoded surface describe the same
+    # picture with planes of their own choosing, and neither description can be
+    # bent to match the other. Read the surface itself (the memory its DMA-BUF
+    # exports is the driver's to reuse) and pack each guest plane from it, failing
+    # loudly on a pair it cannot reconcile. See the patch header.
+    ../pkgs/patches/virglrenderer-decode-surface-readback.patch
     # Order the decode against the export: a decoded surface is read as soon as
     # it is exported, and the export does not synchronise (the encode direction
     # already waits here). Without it the reader gets the previous frame.

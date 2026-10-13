@@ -109,22 +109,31 @@ assumption, not cang's regression, and not a consequence of moving the pin to
 
 ## Status (2026-10-13): fixed, and the fix measured
 
-Two patches carry it: `nix/pkgs/patches/virglrenderer-decode-chroma-split.patch`
-(reconcile the two descriptions: split the interleaved chroma plane into the guest's
-separate Cb and Cr planes, and fail loudly on a pair that is not understood) and
+Two patches carry it: `nix/pkgs/patches/virglrenderer-decode-surface-readback.patch`
+(read the decoded surface itself - `vaDeriveImage`/`vaMapBuffer` - and pack each of
+the guest's planes from it, failing loudly on a description it cannot reconcile) and
 `virglrenderer-decode-surface-sync.patch` (`vaSyncSurface` before the decode-side
 export, mirroring what `encode_upload_picture` already does, because
-`vaExportSurfaceHandle` synchronises nothing and the exported surface is read
-immediately).
+`vaExportSurfaceHandle` synchronises nothing and the surface is read immediately).
 
-Measured with `tools/virglrenderer-cang-smoke --skip-chromium` against a cang built
-with them: the hardware decode is **bit-exact** against the software decode of the
-same clip, every plane, for a whole GOP - `mse_y 0.000`, `mse_u 0.000`,
-`mse_v 0.000` for 30 of 60 frames, where before the fix luma and Cb matched and Cr
-was zero. The frames after the first GOP fail for a *different* reason, ticket 10
-(the guest's decoded output freezes at the IDR boundary), which is why the smoke
-scores that comparison over the first GOP and keeps the whole-clip check red with
-the freeze named.
+An intermediate fix - splitting the interleaved chroma plane out of the exported
+DMA-BUF with a GL read-back - made the first GOP *bit-exact* (`mse 0.000` on all
+three planes) but left the frames after it frozen, which turned out to be the same
+root cause seen again: the export is cached while the memory behind it is the
+driver's to reuse. Ticket 10 has that half; reading the surface removes both.
+
+Measured with the full `tools/virglrenderer-cang-smoke` against a cang built with
+them, 60 frames of 640x360, H.264 High, `-bf 1 -g 30`, one `--gpu=drm` VM:
+
+```
+hardware decode      vs source  y 46.63  u 44.23  v 44.41     (was 5.35 / 4.61 / 4.62)
+hardware decode      vs the software decode of the same clip, per frame: mse 0.000
+hardware encode -> software decode   y 46.54  u 43.63  v 42.91
+hardware encode -> hardware decode   y 46.54  u 43.63  v 42.91
+```
+
+and the smoke's verdict is PASS (its `vaapi-first-gop` check scores the per-frame
+decode-against-decode comparison, the whole-clip checks the numbers above).
 
 ## Fix direction (chosen)
 

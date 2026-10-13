@@ -1,10 +1,22 @@
 ---
 label: wayfinder:research
 title: The guest's decoded output freezes at the first GOP boundary
-status: open
+status: closed
 blocked_by: []
 claimed_by: pi session (2026-10-13)
 ---
+
+> **Closed 2026-10-13.** Root cause and fix are in ticket 09's patch
+> (`virglrenderer-decode-surface-readback.patch`): the copy out of a decoded
+> surface took the picture from the DMA-BUF the surface *exports*, and that memory
+> is the driver's to reuse. The export is cached for a video buffer's whole life,
+> so once the decoder reallocated the surface's storage - which it did at the IDR
+> that arrived after the guest's surface pool had started recycling - vrend kept
+> reading the memory that stopped receiving frames, and the guest read the same
+> frame for ever. Reading the surface itself (`vaDeriveImage`/`vaMapBuffer`) and
+> packing each guest plane from it removes the whole class: the smoke's
+> `vaapi-psnr-decode` and `vaapi-psnr-roundtrip` are now `y 46.6 / u 44.2 / v 44.4`
+> over all 60 frames, where they were 25.5 / 23.1 / 20.8.
 
 # 10 - the guest's decoded output freezes at the first GOP boundary
 

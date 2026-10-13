@@ -511,11 +511,12 @@ check vaapi-frames "$E/vaapi-frames.txt" \
   "both hwframe decodes reported exactly $frames decoded frames" frames_ok
 
 # The decoded picture has to equal the software decode of the *same clip*, frame
-# for frame; anything less means the copy out of the decode surface mangled it.
-# Scored over the first GOP only, because a separate defect freezes the guest's
-# decoded output at the first GOP boundary (see the README and ticket 10): the
-# frames after it repeat the last frame of the first GOP whatever the decode
-# does, so a whole-clip number says nothing about the copy any more.
+# for frame, on every plane; anything less means the copy out of the decode surface
+# mangled it. Scored per frame (not as an average) because that is how the two
+# defects this check was built for presented: a zeroed Cr plane, and an output that
+# stopped advancing at the first GOP boundary. Its first thirty frames (a GOP at the
+# settings the guest script uses) also catch a regression that the whole-clip
+# average would dilute.
 first_gop_ok() {
   local body line n fields my mu mv
   body="$(cat)"
@@ -562,11 +563,11 @@ psnr_check() { # psnr_check <name> <file> <desc>
   fi
 }
 psnr_check vaapi-psnr-decode "$E/vaapi-psnr-decode.txt" \
-  "hardware decode of a software-encoded clip matches the source over the whole clip (currently red for frames after the first GOP, where the guest's decoded output freezes - see readme)"
+  "hardware decode of a software-encoded clip matches the source over the whole clip"
 psnr_check vaapi-psnr-encode "$E/vaapi-psnr-encode.txt" \
   "the software decode of the hardware-encoded stream matches the source"
 psnr_check vaapi-psnr-roundtrip "$E/vaapi-psnr-roundtrip.txt" \
-  "the hardware encode -> hardware decode round trip matches the source over the whole clip (same first-GOP freeze)"
+  "the hardware encode -> hardware decode round trip matches the source over the whole clip"
 
 # Live attribution: every libvirglrenderer mapping sampled during the run has to
 # be the one .#virglrenderer installed.

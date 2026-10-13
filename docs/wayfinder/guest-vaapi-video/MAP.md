@@ -345,7 +345,13 @@ screenshots, and the guest's chromium needs `--alloc=hardened` or it segfaults a
 
 ## Open tickets
 
-- [The guest's decoded output freezes at the first GOP boundary](tickets/10-decode-freezes-at-first-gop.md):
+- ~~[The guest's decoded output freezes at the first GOP boundary](tickets/10-decode-freezes-at-first-gop.md)~~ -
+  **done (2026-10-13)**: the decode copy trusts the DMA-BUF a decoded surface
+  exports, and that memory is the driver's to reuse - the export is cached for the
+  buffer's life, so after the decoder reallocated the surface's storage (at the IDR
+  following the pool's first recycle) vrend copied memory that stopped receiving
+  frames. Reading the surface itself and packing each guest plane from it fixes it;
+  the smoke is green end to end. Details:
   found while verifying ticket 09. With the plane reconciliation in place the
   hardware decode is **bit-exact** against the software decode of the same clip for
   the whole first GOP (`mse_y/u/v 0.000` for 30 frames), and then, at the second
