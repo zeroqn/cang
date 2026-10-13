@@ -309,6 +309,18 @@ let
     pathsToLink = [ "/" ];
   };
 
+  # The guest-side Chromium launcher: it sets the environment and the flags a
+  # guest GPU stack needs (venus Vulkan, EGL through the image's mesa runtime,
+  # VA-API video), and refuses to start a software-rendered browser when the
+  # guest was booted without --gpu=drm. The script itself lives in the
+  # repository (tools/cang-chromium) and is the same file the tool's README
+  # documents; `writeShellScriptBin` supplies the interpreter, so drop the
+  # `#!/usr/bin/env bash` line the repository copy needs.
+  cangChromium = pkgs.writeShellScriptBin "cang-chromium" (
+    pkgs.lib.removePrefix "#!/usr/bin/env bash\n"
+      (builtins.readFile ../../tools/cang-chromium/cang-chromium.sh)
+  );
+
   # Development browser for the cang guest GPU smoke. Wrapped
   # `ungoogled-chromium` (the same package `environment.systemPackages`
   # installs on NixOS) so the wrapper script provides LD_LIBRARY_PATH /
@@ -316,7 +328,10 @@ let
   # cache-stable (only this layer's archive changes, not tooling/rust/base).
   browserImageLayer = pkgs.buildEnv {
     name = "cang-browser-layer";
-    paths = [ pkgs.ungoogled-chromium ];
+    paths = [
+      pkgs.ungoogled-chromium
+      cangChromium
+    ];
     pathsToLink = [ "/" ];
   };
 

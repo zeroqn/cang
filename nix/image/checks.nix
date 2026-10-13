@@ -187,6 +187,13 @@ let
     grep -F 'browserImageLayer' ${layersSourceFile}
     grep -F 'pkgs.ungoogled-chromium' ${layersSourceFile}
     test -x ${pkgs.ungoogled-chromium}/bin/chromium
+    # The guest-side launcher (tools/cang-chromium) ships in the browser layer
+    # and has to be runnable: it is the only place the guest GPU environment and
+    # the ANGLE/VA-API flags are assembled for a user.
+    grep -F 'cangChromium' ${layersSourceFile}
+    grep -F 'tools/cang-chromium/cang-chromium.sh' ${layersSourceFile}
+    test -x ${layers.browserImageLayer}/bin/cang-chromium
+    ${layers.browserImageLayer}/bin/cang-chromium --help | grep -F 'cang-chromium headless'
   '';
 
   zvecGrepContracts = ''

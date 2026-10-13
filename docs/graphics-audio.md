@@ -100,3 +100,25 @@ hardware VA-API path. For a media client, `mpv --hwdec=vaapi --vo=gpu
 default Vulkan output (and `--use-angle=vulkan` in Chromium) hits venus dma-buf
 format-modifier failures. `--waypipe` remains mutually exclusive with
 `--wayland`.
+
+## Chromium in the guest
+
+The image ships `cang-chromium` (`tools/cang-chromium/`, embedded by
+`nix/image/layers.nix`), which starts Chromium with that environment and the flags
+the guest path needs, in one of two modes:
+
+```bash
+cang --gpu=drm            -- cang-chromium headless https://example.com
+cang --gpu=drm --waypipe  -- cang-chromium gui      https://example.com
+```
+
+`headless` needs no display; `gui` opens a window on the guest's Wayland display,
+which in a cang guest is the one `--waypipe` provides (presented on the host's own
+compositor). `cang-chromium --check` reports the render node, the Vulkan/EGL/VA
+driver paths, the guest driver's VA-API profiles and what Chromium actually got,
+and exits non-zero unless WebGL renders on the GPU and the driver advertises H.264
+decode. A guest started without `--gpu=drm` has none of that — no DRM render node,
+no venus ICD, no VA driver — so the launcher explains that and exits instead of
+starting a software-rendered browser. `tools/cang-chromium/README.md` has the
+environment table and the per-flag rationale (`--disable-vulkan-surface`, why
+`gui` must not pass `--enable-features=Vulkan`, and so on).
