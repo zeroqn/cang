@@ -63,9 +63,14 @@ in
     owner = "zeroqn";
     repo = "cang";
     tag = "alpha";
-    version = "1.3.0";
+    version = "1.3.0-c8e3fc3b";
     revision = "c8e3fc3bd2f367d92fb1027061fe51afeec5136e";
-    systems = { };
+    systems = {
+      x86_64-linux = {
+        asset = "virglrenderer-1.3.0-c8e3fc3b-x86_64-linux.tar.gz";
+        hash = "sha256-r4LJnwnr34/1vHReBmfWYRHYYZMxJsspLACaeoyoPWs=";
+      };
+    };
   };
 
   herdrPrebuiltRelease = {
