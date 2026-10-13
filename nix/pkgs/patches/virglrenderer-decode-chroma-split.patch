@@ -1,0 +1,177 @@
+--- a/src/vrend/vrend_video.c
++++ b/src/vrend/vrend_video.c
+@@ -74,6 +74,10 @@
+ #include "vrend_renderer.h"
+ #include "vrend_video.h"
+ 
++#include <drm_fourcc.h>
++
++#include "util/u_math.h"
++
+ struct vrend_context;
+ 
+ struct vrend_video_context {
+@@ -146,15 +150,94 @@
+ }
+ 
+ 
++
++/* Fill one of the guest's chroma planes from an interleaved 4:2:0 chroma plane.
++ *
++ * The host exported the decoded surface with interleaved chroma (NV12: one
++ * two-channel plane, Cb then Cr byte-wise) while the guest's video buffer
++ * describes separate Cb and Cr planes, and a plane-by-plane blit can only move a
++ * whole plane - glCopyTexSubImage2D into a single-channel resource takes the
++ * source framebuffer's first channel and nothing else. `channel` selects which of
++ * the interleaved plane's two samples this guest plane holds (0 = Cb, 1 = Cr).
++ *
++ * The pass reads the interleaved plane back and uploads the wanted sample as the
++ * red channel, so the implicit RGBA -> R conversion of the upload picks it. Both
++ * GL_RGBA read and write are used so the pass does not depend on the attachment's
++ * own channel count: at 4:2:0 this moves the chroma of one frame (a quarter of the
++ * picture), luma never leaves the GPU, and a shader can replace the pass if a
++ * profile ever asks for it.
++ */
++static int split_interleaved_chroma_plane(struct vrend_video_plane *src,
++                                          struct vrend_resource *dst,
++                                          unsigned channel)
++{
++    unsigned width = dst->base.width0;
++    unsigned height = dst->base.height0;
++    unsigned char *pixels, *row;
++    unsigned x, y;
++
++    if (!width || !height)
++        return -1;
++
++    pixels = malloc((size_t)width * height * 4);
++    if (!pixels)
++        return -1;
++
++    glBindFramebuffer(GL_READ_FRAMEBUFFER, src->framebuffer);
++    glPixelStorei(GL_PACK_ALIGNMENT, 1);
++    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
++
++    for (y = 0; y < height; y++) {
++        row = pixels + (size_t)y * width * 4;
++        for (x = 0; x < width; x++) {
++            row[x * 4] = row[x * 4 + channel];
++            row[x * 4 + 1] = 0;
++            row[x * 4 + 2] = 0;
++            row[x * 4 + 3] = 255;
++        }
++    }
++
++    glBindTexture(GL_TEXTURE_2D, dst->gl_id);
++    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA,
++                    GL_UNSIGNED_BYTE, pixels);
++
++    free(pixels);
++
++    return 0;
++}
++
++/* Copy the picture the host decoded into the guest's video buffer.
++ *
++ * The two sides describe the same picture with planes of their own choosing: the
++ * host's driver exports the surface it allocated (NV12 for a VA_RT_FORMAT_YUV420
++ * surface, whatever pixel format was requested - and the request is accepted and
++ * ignored, see below), while the guest sent the planes of its own video buffer.
++ * Neither description can be bent to match the other: the create-buffer message
++ * carries only the pipe format, the geometry and the resource list, and
++ * vaExportSurfaceHandle()'s descriptor is an output. So the two are reconciled
++ * here - planes that agree are blitted, an interleaved chroma plane is split when
++ * the guest described separate Cb and Cr planes - and a pair this does not
++ * understand is an error. Copying the planes that happen to line up and leaving
++ * the rest would leave the guest's leftover planes holding whatever they were
++ * allocated with, which reads as a correct picture with a zeroed chroma plane
++ * rather than as a failure.
++ *
++ * The host could not ask for the guest's layout instead: radeonsi accepts
++ * VASurfaceAttribPixelFormat = VA_FOURCC_I420 for this surface (status
++ * VA_STATUS_SUCCESS) and still exports NV12 in two planes.
++ */
+ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
+                                        const struct virgl_video_dma_buf *dmabuf)
+ {
++    unsigned shared_planes = MIN2(dmabuf->num_planes, buf->num_planes);
++
+     if (!(dmabuf->flags & VIRGL_VIDEO_DMABUF_READ_ONLY)) {
+         virgl_error("%s: dmabuf is not readable\n", __func__);
+         return -1;
+     }
+ 
+-    for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
++    for (unsigned i = 0; i < shared_planes; i++) {
+         struct vrend_video_plane *plane = &buf->planes[i];
+         struct vrend_resource *res;
+ 
+@@ -201,6 +284,47 @@
+                             res->base.width0, res->base.height0);
+     }
+ 
++    if (buf->num_planes > dmabuf->num_planes) {
++        /* The guest described more planes than the host's surface carries: the
++         * extra ones are the separated chroma of an interleaved 4:2:0 plane,
++         * Cb then Cr. */
++        if (dmabuf->num_planes != 2 || buf->num_planes != 3 ||
++            (dmabuf->drm_format != DRM_FORMAT_NV12 &&
++             dmabuf->drm_format != DRM_FORMAT_NV21)) {
++            virgl_error("%s: cannot fill %u guest planes from a %u-plane "
++                        "surface (exported fourcc 0x%08x)\n", __func__,
++                        buf->num_planes, dmabuf->num_planes, dmabuf->drm_format);
++            return -1;
++        }
++
++        for (unsigned i = dmabuf->num_planes; i < buf->num_planes; i++) {
++            struct vrend_video_plane *plane = &buf->planes[i];
++            struct vrend_resource *res;
++
++            res = vrend_renderer_ctx_res_lookup(buf->ctx->ctx,
++                                                plane->res_handle);
++            if (!res) {
++                virgl_error("%s: res %d not found\n", __func__,
++                            plane->res_handle);
++                return -1;
++            }
++
++            /* The interleaved plane is buf->planes[1] (the shared loop above
++             * imported it); guest plane 2 holds Cr, the second sample. */
++            if (split_interleaved_chroma_plane(&buf->planes[dmabuf->num_planes - 1],
++                                               res, i - 1) != 0) {
++                virgl_error("%s: splitting the chroma for guest plane %u "
++                            "failed\n", __func__, i);
++                return -1;
++            }
++        }
++    } else if (dmabuf->num_planes > buf->num_planes) {
++        virgl_error("%s: the guest described %u planes and the host exported "
++                    "%u (fourcc 0x%08x)\n", __func__, buf->num_planes,
++                    dmabuf->num_planes, dmabuf->drm_format);
++        return -1;
++    }
++
+     glBindTexture(GL_TEXTURE_2D, 0);
+     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+ 
+@@ -215,7 +339,18 @@
+         return -1;
+     }
+ 
+-    for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
++    /* The guest's picture is blitted into the surface the host's encoder reads,
++     * so the two have to describe the same planes. Nothing here converts a
++     * layout yet: an encoder surface the host exports with a different plane
++     * count than the guest sent is an error, not a partial upload. */
++    if (buf->num_planes != dmabuf->num_planes) {
++        virgl_error("%s: the guest described %u planes and the host exported "
++                    "%u (fourcc 0x%08x)\n", __func__, buf->num_planes,
++                    dmabuf->num_planes, dmabuf->drm_format);
++        return -1;
++    }
++
++    for (unsigned i = 0; i < dmabuf->num_planes; i++) {
+         struct vrend_video_plane *plane = &buf->planes[i];
+         struct vrend_resource *res;
+ 

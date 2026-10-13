@@ -72,6 +72,16 @@ virglrenderer.overrideAttrs (old: {
     # tickets/04-*.md.
     ../pkgs/patches/virglrenderer-encode-rate-control.patch
     ../pkgs/patches/virglrenderer-encode-rate-control-config.patch
+    # The guest's video buffer and the host's exported surface can describe the
+    # same picture with different planes (the host exports NV12 whatever pixel
+    # format was asked for, and the guest's decode buffer is three-plane), and
+    # neither description can be bent to match the other. Reconcile them, and
+    # fail loudly instead of copying a prefix. See the patch header.
+    ../pkgs/patches/virglrenderer-decode-chroma-split.patch
+    # Order the decode against the export: a decoded surface is read as soon as
+    # it is exported, and the export does not synchronise (the encode direction
+    # already waits here). Without it the reader gets the previous frame.
+    ../pkgs/patches/virglrenderer-decode-surface-sync.patch
   ];
 
   # venus-protocol generates its headers with mako, which nixpkgs' pyyaml-only

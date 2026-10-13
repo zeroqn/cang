@@ -106,7 +106,8 @@ source, and every step is bounded by `timeout` in the guest:
 | `vaapi-steps` | `evidence/vaapi-rc.txt` | every step recorded `name=0` (a missing line fails: the guest died before writing it) |
 | `vaapi-frames` | `evidence/vaapi-frames.txt` | both hwframe decodes report exactly `frames` decoded frames |
 | `vaapi-frame-bytes` | `evidence/vaapi-sizes.txt` | every nv12 buffer is exactly `frames * 640 * 360 * 3 / 2` bytes and both bitstreams are non-empty |
-| `vaapi-psnr-decode` | `evidence/vaapi-psnr-decode.txt` | hardware decode vs source: `y >= 30`, `u/v >= 25` |
+| `vaapi-first-gop` | `evidence/vaapi-psnr-decode_hw_sw-perframe.log` | the hardware decode equals the *software* decode of the same clip, for each of the first 30 frames, on every plane (`mse <= 1`) |
+| `vaapi-psnr-decode` | `evidence/vaapi-psnr-decode.txt` | hardware decode vs source over the whole clip: `y >= 30`, `u/v >= 25` (see the freeze below) |
 | `vaapi-psnr-encode` | `evidence/vaapi-psnr-encode.txt` | software decode of the hardware stream vs source |
 | `vaapi-psnr-roundtrip` | `evidence/vaapi-psnr-roundtrip.txt` | hardware encode -> hardware decode vs source |
 | `virglrenderer-loaded` | `<out>/logs/vaapi-attribution.txt` | every sampled `libvirglrenderer.so.1` mapping is under `.#virglrenderer` |
@@ -134,6 +135,18 @@ the *encode* side (`EGL_DMA_BUF_PLANE0_*` used for every plane,
 `evidence/vaapi-psnr-*-perframe.log` has the per-frame shape. Measured
 2026-10-13 in the shipped image (ffmpeg 8.1.2, guest mesa 26.1.8 VA driver,
 `--gpu=drm`), 640x360 x 60 frames, qp 26, `-bf 1`.
+
+**Known limitation: the decoded output freezes at the first GOP boundary.** The
+hardware decode is bit-exact against the software decode for the first GOP (the
+`vaapi-first-gop` check, `mse` 0.000 on all three planes), and from the second IDR
+on the guest repeats the last frame it produced (`mse(hw[n], hw[n+1]) = 0`,
+`mse(hw[n], hw[29]) = 0`), so the whole-clip `vaapi-psnr-decode` and
+`vaapi-psnr-roundtrip` checks stay red. That is ticket
+`docs/wayfinder/guest-vaapi-video/tickets/10-decode-freezes-at-first-gop.md`, a
+separate defect from the plane reconciliation this smoke was built for, which is why
+the two are scored separately: the first-GOP check is what fails if the copy out of
+the decode surface mangles planes, and the whole-clip check is what fails while the
+freeze stands.
 
 **Known limitation: the explicit `hwdownload` form crashes (unscored).**
 `-hwaccel_output_format vaapi -vf hwdownload,format=nv12` - the usual way to pull

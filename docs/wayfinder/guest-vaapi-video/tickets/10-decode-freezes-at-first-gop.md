@@ -1,0 +1,69 @@
+---
+label: wayfinder:research
+title: The guest's decoded output freezes at the first GOP boundary
+status: open
+blocked_by: []
+claimed_by: pi session (2026-10-13)
+---
+
+# 10 - the guest's decoded output freezes at the first GOP boundary
+
+Found while verifying ticket 09's chroma fix with `tools/virglrenderer-cang-smoke`.
+It is a *second*, independent defect in the decode path: the plane reconciliation
+works, and everything after the first GOP is the same frame over and over.
+
+Measured 2026-10-13, cang 0.12.0 + ticket 09's patches, image
+`localhost/cang:latest` (ffmpeg 8.1.2, guest VA driver = cang's patched mesa
+26.1.8), 640x360 x 60 frames of lavfi `testsrc2`, `-c:v libx264 -qp 26 -bf 1 -g 30`
+(so the second IDR is frame 30), one `--gpu=drm` VM. Both decodes are written by
+the same guest run, so the comparison is decode-against-decode, not against the
+encoder's loss.
+
+```
+mse(hardware decode, software decode) of the same clip, per frame, per plane:
+
+  n= 0 .. n=29   mse_y 0.000   mse_u 0.000   mse_v 0.000     <- bit-exact
+  n=30           mse_y 541.093 mse_u ...     mse_v ...       <- the second IDR
+  n=31 .. n=59   mse_y ~360-550 ...
+
+after the break the guest repeats one frame:
+  mse(hw[n], hw[n+1])    = 0.0   for every n >= 31   (software decode: 167-209)
+  mse(hw[n], hw[29])     = 0.0   for n = 31, 32, 40, 59
+```
+
+So from the second IDR on, the guest's decoder output is frozen on the last frame
+it produced before it. The defect is not new - the pre-fix runs of the same arm had
+the identical shape (frame 1 `mse_y 0.00`, frame 60 `mse_y 379.97`, and a *constant*
+`mse_v 22540` because that stale frame's Cr plane was still the zeroed one ticket 09
+fixed) - it was simply hidden behind ticket 09's much larger error.
+
+## Where it can be
+
+The decode path, in order: the guest's ffmpeg submits a picture to its VA driver
+(mesa's virgl driver) -> vrend forwards it to the host's VA decoder -> the host's
+decoder writes a host surface -> `vrend_video_decode_completed` exports that surface
+and `sync_dmabuf_to_video_buffer` copies it into the guest's video buffer resources
+-> the guest's ffmpeg reads those resources back (`-vf format=nv12`).
+
+Candidates, none measured yet:
+
+- **Stale per-plane EGL images in vrend.** `vrend_video_plane.egl_image` is created
+  once (`if (EGL_NO_IMAGE_KHR == plane->egl_image)`) and reused for every later
+  frame of that buffer, and `virgl_video_buffer.dmabuf` is likewise exported once
+  per buffer. If the host's decode for the second GOP lands in a *different* host
+  surface (or the same buffer is re-exported with different memory), the cached
+  image keeps copying the old memory and the guest sees the frame it last got.
+- **Buffer identity across the pool change.** The guest's ffmpeg holds a surface
+  pool; at an IDR it may allocate or rotate buffers, and the copy could be writing
+  the guest buffer the *previous* frame used.
+- **The guest's readback**, if its own copy-out is the thing that freezes.
+
+## Next step
+
+One instrumented run of the smoke's decode arm with a rooted diagnostic
+`virglrenderer` (the recipe that produced ticket 09's evidence: add
+`nix/pkgs/patches/virglrenderer-diag-decode.patch`-style markers to
+`vrend_video_decode_completed` and `sync_dmabuf_to_video_buffer`, log
+`(frame, buf pointer, guest res_handle, host surface id, dmabuf fd, plane
+egl_image)`, then compare what the copy targets per frame with what the guest reads
+from). That distinguishes the three candidates in one run.

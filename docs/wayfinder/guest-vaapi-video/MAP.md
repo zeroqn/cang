@@ -345,6 +345,16 @@ screenshots, and the guest's chromium needs `--alloc=hardened` or it segfaults a
 
 ## Open tickets
 
+- [The guest's decoded output freezes at the first GOP boundary](tickets/10-decode-freezes-at-first-gop.md):
+  found while verifying ticket 09. With the plane reconciliation in place the
+  hardware decode is **bit-exact** against the software decode of the same clip for
+  the whole first GOP (`mse_y/u/v 0.000` for 30 frames), and then, at the second
+  IDR, it freezes: `mse(hw[n], hw[n+1]) = 0` and `mse(hw[n], hw[29]) = 0` for every
+  later frame, i.e. the guest keeps reading the last frame it produced. Pre-existed
+  ticket 09 (same shape, hidden behind the zeroed Cr plane). Candidates are vrend's
+  per-buffer cached EGL images and dmabuf, the guest's buffer pool across the IDR,
+  or the guest's own read-back; the ticket lists the one instrumented run that
+  distinguishes them.
 - [The guest's VA-API decode loses the Cr plane](tickets/09-decode-loses-cr-plane.md):
   found by `tools/virglrenderer-cang-smoke`'s VA-API arm. The guest's *decoded*
   picture has bit-exact luma and Cb and a **zeroed Cr plane** (per-frame

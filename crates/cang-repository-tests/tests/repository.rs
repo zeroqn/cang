@@ -1312,6 +1312,10 @@ fn virglrenderer_fix_is_shipped_for_the_cang_build_and_for_hosts() {
         "virglrenderer-encode-reference-frames.patch",
         "virglrenderer-encode-rate-control.patch",
         "virglrenderer-encode-rate-control-config.patch",
+        // The decode-side pair: reconcile the guest's plane description with the
+        // host's exported surface, and order the export against the decode.
+        "virglrenderer-decode-chroma-split.patch",
+        "virglrenderer-decode-surface-sync.patch",
     ] {
         assert!(
             VIRGLRENDERER_PATCHED_NIX.contains(patch),

@@ -1,0 +1,30 @@
+--- a/src/vrend/virgl_video.c
++++ b/src/vrend/virgl_video.c
+@@ -507,9 +507,27 @@
+ static void decode_completed(struct virgl_video_codec *codec,
+                              struct virgl_video_buffer *buffer)
+ {
++    VAStatus va_stat;
++
+     if (!callbacks || !callbacks->decode_completed)
+         return;
+ 
++    /* The decoded picture is exported and then read - by the guest's own copy
++     * of the surface into its video buffer, and by whoever reads the frame -
++     * and vaExportSurfaceHandle() performs no synchronisation of its own
++     * ("If the contents of the surface will be read, vaSyncSurface() must be
++     * called before doing so", libva's own header). Without this wait the
++     * surface is exported while the decode is still writing it, so the reader
++     * gets the previous frame's contents: the guest's first decoded frame is
++     * exact and every frame after it lags one frame behind, which measures as a
++     * per-frame error that grows with the content's motion. The encode
++     * direction already waits here (encode_upload_picture). */
++    va_stat = vaSyncSurface(va_dpy, buffer->va_sfc);
++    if (VA_STATUS_SUCCESS != va_stat) {
++        virgl_error("sync surface failed, err = 0x%x\n", va_stat);
++        return;
++    }
++
+     if (!buffer->dmabuf)
+         buffer->dmabuf = export_video_dma_buf(buffer, VIRGL_VIDEO_DMABUF_READ_ONLY);
+ 

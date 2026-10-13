@@ -465,7 +465,7 @@ check vaapi-profiles "$E/vaapi-vainfo.txt" \
 rc_ok() {
   local body name
   body="$(cat)"
-  for name in source reference decode_vaapi decode_vaapi_content decode_software encode_vaapi encoded_decode_software roundtrip_frames roundtrip_vaapi psnr_decode psnr_encode psnr_roundtrip; do
+  for name in source reference decode_vaapi decode_vaapi_content decode_software encode_vaapi encoded_decode_software roundtrip_frames roundtrip_vaapi psnr_decode psnr_encode psnr_roundtrip psnr_decode_hw_sw; do
     printf '%s\n' "$body" | grep -qx "$name=0" || return 1
   done
   return 0
@@ -510,6 +510,30 @@ frames_ok() {
 check vaapi-frames "$E/vaapi-frames.txt" \
   "both hwframe decodes reported exactly $frames decoded frames" frames_ok
 
+# The decoded picture has to equal the software decode of the *same clip*, frame
+# for frame; anything less means the copy out of the decode surface mangled it.
+# Scored over the first GOP only, because a separate defect freezes the guest's
+# decoded output at the first GOP boundary (see the README and ticket 10): the
+# frames after it repeat the last frame of the first GOP whatever the decode
+# does, so a whole-clip number says nothing about the copy any more.
+first_gop_ok() {
+  local body line n fields my mu mv
+  body="$(cat)"
+  for n in $(seq 1 30); do
+    line="$(printf '%s\n' "$body" | grep -m1 "^n:$n ")"
+    [ -n "$line" ] || return 1
+    my="$(printf '%s' "$line" | sed -n 's/.*mse_y:[\(]*\([-0-9.einf]*\)[)]*.*/\1/p')"
+    mu="$(printf '%s' "$line" | sed -n 's/.*mse_u:[\(]*\([-0-9.einf]*\)[)]*.*/\1/p')"
+    mv="$(printf '%s' "$line" | sed -n 's/.*mse_v:[\(]*\([-0-9.einf]*\)[)]*.*/\1/p')"
+    [ -n "$my" ] && [ -n "$mu" ] && [ -n "$mv" ] || return 1
+    awk -v y="$my" -v u="$mu" -v v="$mv" 'BEGIN { exit !(y <= 1 && u <= 1 && v <= 1) }' || return 1
+  done
+  return 0
+}
+check vaapi-first-gop "$E/vaapi-psnr-decode_hw_sw-perframe.log" \
+  "the hardware decode equals the software decode of the same clip for the first GOP, every plane, every frame" \
+  first_gop_ok
+
 check vaapi-frame-bytes "$E/vaapi-sizes.txt" \
   "every frame buffer holds exactly $frames frames of ${geom_w}x${geom_h} nv12 ($expected_bytes bytes) and both bitstreams are non-empty" \
   sizes_ok
@@ -538,11 +562,11 @@ psnr_check() { # psnr_check <name> <file> <desc>
   fi
 }
 psnr_check vaapi-psnr-decode "$E/vaapi-psnr-decode.txt" \
-  "hardware decode of a software-encoded clip matches the source"
+  "hardware decode of a software-encoded clip matches the source over the whole clip (currently red for frames after the first GOP, where the guest's decoded output freezes - see readme)"
 psnr_check vaapi-psnr-encode "$E/vaapi-psnr-encode.txt" \
   "the software decode of the hardware-encoded stream matches the source"
 psnr_check vaapi-psnr-roundtrip "$E/vaapi-psnr-roundtrip.txt" \
-  "the hardware encode -> hardware decode round trip matches the source"
+  "the hardware encode -> hardware decode round trip matches the source over the whole clip (same first-GOP freeze)"
 
 # Live attribution: every libvirglrenderer mapping sampled during the run has to
 # be the one .#virglrenderer installed.

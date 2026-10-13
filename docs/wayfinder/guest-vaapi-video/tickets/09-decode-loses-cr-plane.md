@@ -107,6 +107,25 @@ assumption, not cang's regression, and not a consequence of moving the pin to
   filter gets `EINVAL` from the derive/map path and segfaults when a format filter
   follows (rc 139). The smoke records it as unscored `INFO`.
 
+## Status (2026-10-13): fixed, and the fix measured
+
+Two patches carry it: `nix/pkgs/patches/virglrenderer-decode-chroma-split.patch`
+(reconcile the two descriptions: split the interleaved chroma plane into the guest's
+separate Cb and Cr planes, and fail loudly on a pair that is not understood) and
+`virglrenderer-decode-surface-sync.patch` (`vaSyncSurface` before the decode-side
+export, mirroring what `encode_upload_picture` already does, because
+`vaExportSurfaceHandle` synchronises nothing and the exported surface is read
+immediately).
+
+Measured with `tools/virglrenderer-cang-smoke --skip-chromium` against a cang built
+with them: the hardware decode is **bit-exact** against the software decode of the
+same clip, every plane, for a whole GOP - `mse_y 0.000`, `mse_u 0.000`,
+`mse_v 0.000` for 30 of 60 frames, where before the fix luma and Cb matched and Cr
+was zero. The frames after the first GOP fail for a *different* reason, ticket 10
+(the guest's decoded output freezes at the IDR boundary), which is why the smoke
+scores that comparison over the first GOP and keeps the whole-clip check red with
+the freeze named.
+
 ## Fix direction (chosen)
 
 **Host-side reconciliation, layout-generically, with a loud failure otherwise**

@@ -202,6 +202,20 @@ psnr decode "$E/decoded-vaapi.nv12"
 psnr encode "$E/encoded-vaapi-decoded.nv12"
 psnr roundtrip "$E/roundtrip.nv12"
 
+# The software decode of the same clip as the reference, not the source: it
+# isolates the decoder from the encoder, so "exact" means exact.
+psnr_pair() { # psnr_pair <name> <file-a> <file-b>
+  name="$1"
+  timeout "$PSNR_TIMEOUT" "$FFMPEG" -nostdin -hide_banner -loglevel info \
+    -f rawvideo -pix_fmt nv12 -s "${W}x${H}" -r 30 -i "$2" \
+    -f rawvideo -pix_fmt nv12 -s "${W}x${H}" -r 30 -i "$3" \
+    -lavfi "psnr=stats_file=$E/vaapi-psnr-$name-perframe.log" -f null - \
+    > "$E/vaapi-psnr-$name.txt" 2>&1
+  printf 'psnr_%s=%s\n' "$name" "$?" >> "$E/vaapi-rc.txt"
+}
+
+psnr_pair decode_hw_sw "$E/decoded-vaapi.nv12" "$E/decoded-software.nv12"
+
 # Frames the two hwframe decodes reported, so the host scores a count rather
 # than inferring one from the downloaded bytes.
 {
