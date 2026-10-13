@@ -353,8 +353,12 @@ screenshots, and the guest's chromium needs `--alloc=hardened` or it segfaults a
   later frame, i.e. the guest keeps reading the last frame it produced. Pre-existed
   ticket 09 (same shape, hidden behind the zeroed Cr plane). Candidates are vrend's
   per-buffer cached EGL images and dmabuf, the guest's buffer pool across the IDR,
-  or the guest's own read-back; the ticket lists the one instrumented run that
-  distinguishes them.
+  or the guest's own read-back. Measured since: the freeze is exactly frame 31
+  whatever the GOP length, it does *not* happen with a single IDR (`-g 60`), and
+  neither a bigger guest surface pool (`-extra_hw_frames`), single-threading nor
+  disabling the reorder moves it - so it is host-side per-buffer state that bites
+  once a second IDR has passed, not the guest's client. The ticket lists the one
+  instrumented run that names it.
 - [The guest's VA-API decode loses the Cr plane](tickets/09-decode-loses-cr-plane.md):
   found by `tools/virglrenderer-cang-smoke`'s VA-API arm. The guest's *decoded*
   picture has bit-exact luma and Cb and a **zeroed Cr plane** (per-frame

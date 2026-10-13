@@ -37,6 +37,38 @@ the identical shape (frame 1 `mse_y 0.00`, frame 60 `mse_y 379.97`, and a *const
 `mse_v 22540` because that stale frame's Cr plane was still the zeroed one ticket 09
 fixed) - it was simply hidden behind ticket 09's much larger error.
 
+## What it is not (measured 2026-10-13, same clip, one VM per probe)
+
+It is **frame 31 exactly**, and not the GOP boundary the ticket was first named
+after. Four encodings of the same 60-frame source, decoded hardware-against-software
+in the same VM:
+
+| variant | first frame whose mse > 1 | last mse_y |
+| --- | --- | --- |
+| `-bf 1 -g 30` | 31 | 369.79 |
+| `-bf 1 -g 60` (a single IDR) | **never** (all 60 frames `mse 0.000`) | 0.00 |
+| `-bf 1 -g 15` (IDRs at 1, 16, 31, 46) | 31 | 389.79 |
+| `-bf 0 -g 30` | 31 | 385.76 |
+
+So the IDR at frame 16 does *not* freeze it and the IDR at frame 31 does; with a
+single IDR nothing freezes at all. B-frames are irrelevant.
+
+Five decodes of the *same* `-g 30` clip, each with one client-side knob:
+
+| knob | first frame whose mse > 1 |
+| --- | --- |
+| none | 31 |
+| `-threads 1` | 31 |
+| `-extra_hw_frames 8` (a bigger guest surface pool) | 31 |
+| `-flags +low_delay` (no reordering) | 31 |
+
+All four freeze at 31 with the *same* frozen content (last `mse_y` 369.79), so it is
+not the guest's decoder pool size, frame threading or the reorder logic. It is a
+count boundary on the host/vrend side that only bites once the stream has had a
+second IDR - which is what points at vrend's per-buffer state (a buffer recycled
+after 30 frames carrying a stale `dmabuf`, `egl_image` or `va_sfc`) rather than at
+the guest's client.
+
 ## Where it can be
 
 The decode path, in order: the guest's ffmpeg submits a picture to its VA driver
