@@ -84,30 +84,59 @@ assumption, not cang's regression, and not a consequence of moving the pin to
 
 ## Attempted, and what it rules out
 
-- **Requesting a matching surface:** `VASurfaceAttribPixelFormat = VA_FOURCC_I420`
-  for a three-plane guest buffer (plus, in the same experiment, per-plane fourccs in
-  `fill_video_dma_buf` and chroma dimensions of half size instead of `width/(i+1)`).
-  The host's driver ignores the attribute: the exported descriptor stays
-  `fourcc=NV12 … layers=2`, and the measured PSNR is unchanged. So the VA surface's
-  layout cannot be pinned from this side with `vaCreateSurfaces` alone.
+- **Requesting a matching surface (ruled out, measured):** with the guest's
+  three-plane buffer, `virgl_video_create_buffer()` was made to pass
+  `VASurfaceAttribPixelFormat = VA_FOURCC_I420` (plus, in the same experiment,
+  per-plane fourccs in `fill_video_dma_buf` and half-size chroma dimensions instead
+  of `width/(i+1)`). An instrumented build shows the request is *accepted* -
+  `create_surface: pipe=165 640x368 guest_planes=3 -> fourcc=0x30323449 attrs=1`,
+  `create_surface: with attr -> 0x0` (`VA_STATUS_SUCCESS`) - **and the exported
+  descriptor is still `fourcc=0x3231564e` (NV12), `layers=2`**, i.e. the
+  driver/mesa allocate NV12 for a `VA_RT_FORMAT_YUV420` decode surface whatever
+  pixel format is asked for. Measured PSNR is unchanged (`y:5.37 u:4.58 v:4.62`).
+  The surface cannot be made planar from this side, and the guest's surface
+  attributes cannot reach the host anyway: the vvideo create-buffer message carries
+  only the pipe format, geometry and the resource list, so the guest's layout
+  request *is* its pipe format plus the number of planes it sends.
+- **One more consequence of the ABI being one-way:** `vaExportSurfaceHandle`'s
+  descriptor is `[out]` (libva's own header), so vrend cannot ask the export for a
+  different fourcc either. The host has no lever that makes the two descriptions
+  agree; it can only reconcile them after the fact.
 - **The explicit `hwdownload` form** (`-hwaccel_output_format vaapi -vf
   hwdownload,format=nv12`) fails separately and is *not* part of this ticket: the
   filter gets `EINVAL` from the derive/map path and segfaults when a format filter
   follows (rc 139). The smoke records it as unscored `INFO`.
 
-## Candidate fixes
+## Fix direction (chosen)
 
-1. **Host-side de-interleave.** Keep the driver's NV12 surface and fill the guest's
-   extra chroma planes from the interleaved plane's *G* channel. A plain copy cannot
-   select a channel, so this needs a sampled blit (texture swizzle `R←G`, or a
-   small shader) into the guest's Cb/Cr resources - `glCopyTexSubImage2D` from a
-   GR88 attachment only ever yields R.
-2. **Guest-side layout.** Make the guest describe the decode buffer as NV12 (two
-   planes) so the 1:1 copy holds, i.e. change what the guest's VA frontend chooses
-   for a `VA_RT_FORMAT_YUV420` decode surface (mesa's VA frontend / virgl driver,
-   which the image already builds with cang's patches).
-3. **Upstream report.** Either way the ABI assumption is worth reporting: the copy
-   silently ignores the guest's extra planes rather than failing.
+**Host-side reconciliation, layout-generically, with a loud failure otherwise**
+(decided with bob 2026-10-13, after the surface-format attempt above was measured
+to be a dead end). The guest half - a guest that *asks* for the host's layout - is
+deferred until it can be real negotiation rather than a hardcoded guess: vvideo's
+caps carry no supported-surface-format field (the same gap ticket 04 found for
+encoder attributes), so today a guest-side pin would just encode today's
+host-driver behaviour and rot silently.
+
+`sync_dmabuf_to_video_buffer()` becomes a reconciliation of the two descriptions:
+
+- **matching planes stay on the GPU path** (the existing
+  `glEGLImageTargetTexture2DOES` + `glCopyTexSubImage2D` per plane);
+- **planes whose layout differs are converted.** The intended shape is a CPU
+  de-interleave of the chroma only: `vaSyncSurface` + `vaDeriveImage`/`vaMapBuffer`
+  on the host surface (the standard VA readback path; the guest's EINVAL-only
+  `hwdownload` is a different, virgl-forwarded path), split U/V, then
+  `glTexSubImage2D` into the guest's Cb/Cr resources. The chroma is 320x184x2 =
+  117 KB/frame at 640x360, so the readback is ~7 MB/s at 60 fps - a correctness-first
+  implementation that a shader can replace later if it ever shows up in a profile;
+  luma never leaves the GPU;
+- **an unknown pair fails loudly**: log both descriptions (host surface fourcc and
+  per-plane formats/pitches, guest plane count and pipe format) and fail the decode
+  instead of copying a prefix. That is what makes a future guest-driver change a
+  visible error rather than a silently corrupted picture.
+
+The smoke's `vaapi-psnr-decode` / `vaapi-psnr-roundtrip` checks are the regression
+guard, and the three-plane guest already in the image is what keeps the conversion
+path exercised.
 
 ## Deliverable
 
