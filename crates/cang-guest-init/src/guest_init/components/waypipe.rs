@@ -247,7 +247,6 @@ fn export_env(runtime_dir: &std::path::Path, gpu_drm_enabled: bool) {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -303,16 +302,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let program = dir.path().join("fake-waypipe");
         let pid_log = dir.path().join("pids");
-        fs::write(
+        crate::guest_init::components::test_support::write_executable_stub(
             &program,
-            format!(
+            &format!(
                 "#!/bin/sh\necho $$ >> '{}'\nwhile [ \"$1\" != \"--display\" ]; do shift; done\ntouch \"$XDG_RUNTIME_DIR/$2\"\nexec sleep 60\n",
                 pid_log.display()
             ),
-        )
-        .expect("write fake Waypipe");
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
-            .expect("make fake Waypipe executable");
+        );
         let identity = DevIdentity::new(
             unsafe { libc::geteuid() },
             unsafe { libc::getegid() },

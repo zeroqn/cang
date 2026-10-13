@@ -325,8 +325,7 @@ fn podman_service_lock_times_out_instead_of_blocking_forever() {
 }
 
 fn executable_fixture(path: PathBuf, contents: &str) -> PathBuf {
-    fs::write(&path, contents).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::guest_init::components::test_support::write_executable_stub(&path, contents);
     path
 }
 
