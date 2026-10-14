@@ -94,6 +94,15 @@ Tracing, so far:
   `libgallium`) produce logs of identical shape in both arms (705 lines, the same
   counts), so the guest driver's trace does not separate them.
 
-Next: trace the DRM ioctls of the render helper (`strace -f -e trace=ioctl`) in
-both arms and compare the `VIRTGPU_EXECBUFFER` / `RESOURCE_CREATE` /
-`TRANSFER_FROM_HOST` sequence the decode and its read-back produce.
+The DRM-ioctl route is blocked from an unprivileged shell here. Tracing the whole
+run (`strace -f ... -- cang ...`) breaks the rootless setup: `newuidmap` and
+`newgidmap` refuse to run under ptrace (`Operation not permitted`), cang's rootfs
+ownership fix then fails with `os error 22` and the VM never starts. Attaching to
+the render helper *after* cang has set up needs `ptrace_scope` 0 (it is 1 here,
+"only a parent may trace"), so `strace -p <helper pid>` is refused - silently,
+if its stderr is redirected, which produced an empty log before the cause was
+found.
+
+Next: instrument a **local build** of `virglrenderer` (or of cang's video
+read-back patch) with a log line on the decoded-surface read-back path and run
+both arms against it, which needs neither ptrace nor the library's file logger.
