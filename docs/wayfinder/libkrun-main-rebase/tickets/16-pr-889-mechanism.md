@@ -289,3 +289,22 @@ Next probe: log `decode_completed()` and the VA statuses of `vaEndPicture()` and
 the host believe the decode finished, and is the surface empty even then (a
 reuse/clear race), or does the status show a decode that never produced a picture
 (a driver-side drop)?
+
+### The probe perturbs the race it measures (important)
+
+Running the *same instrumented renderer* in the **control** arm - the fork
+*without* PR 889, which passes with the shipped prebuilt renderer - also fails,
+with the same empty surface. The difference between the two renderers is the
+probe: it does an `fopen`/`fprintf`/`fclose` on the read-back path for every
+frame. That path is exactly where the race is, so a probe that adds work there
+can lose the race in *both* arms, and cannot be used to compare them.
+
+Consequences:
+
+- The *observation* stands (in the failing arm the host's mapped surface is empty
+  and the input bitstream is intact) - it was measured in a run that failed in
+  the arm's own terms as well.
+- The *comparison* between arms does not stand until the probe is weightless:
+  record into memory and dump once at process exit (`atexit`), log only the first
+  few frames, or gate on a flag set by the environment. Only then is a two-arm
+  A/B meaningful.
