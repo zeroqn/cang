@@ -250,3 +250,42 @@ line in the local `virglrenderer` build settles it: in `virgl_video_end_frame` /
 bytes of the mapped surface. If the host's surface is already zero when the copy
 runs, the decode itself produced nothing in the host driver (a VA/driver problem on
 this host), not a guest read-back problem.
+
+## Third measurement (2026-10-15): the host's surface is empty, its input is not
+
+The read-back path itself is now instrumented, inside the render server cang
+really runs (the local source build of `virglrenderer`, reached by making
+`nix/lib/virglrenderer-cang.nix` pick the source tree, with the probe patch added
+to its patch list and a `postFixup`-free build - the shipped helper is a thin
+loader, so repointing its symlink alone left the *prebuilt* library mapped).
+Failing arm (fork with PR 889, decode `y:5.372522`), logged in
+`sync_dmabuf_to_video_buffer` and in `h264_decode_bitstream`:
+
+    PROBE input buffers=1 empty=0 [0] size=9871 first=00 00 01 65 88 84 03 ff
+    PROBE map fourcc=0x3231564e ('NV12') planes=2 layout=2 sixteen=0
+              w0=640 h0=368 w1=320 h1=184 pitch0=768 pitch1=768 guest_planes=3
+    PROBE plane0 row0=00 00 00 00 00 00 00 00   row1=00...  q=00...
+    PROBE plane1 row0=80 80 80 80 80 80 80 80   row1=80...  q=80...
+    PROBE packed plane=0 row0=00...   plane=1/2 row0=80...
+
+Two things fall out, and they move the mechanism off the input side:
+
+1. **The input is intact.** The coded bitstream the host's decoder is handed is
+   9871 bytes starting `00 00 01 65` - an H.264 IDR NAL start code plus NAL type
+   5 - so the guest's write reached the host complete. `empty=0`.
+2. **The host's decoded surface is the cleared picture.** The mapped surface is
+   all-zero luma with `0x80` chroma, and the packing path copies exactly that, so
+   the guest receives a faithful copy of a surface that already held nothing.
+   vrend's decode produced no picture into the surface *with valid input*.
+
+That rules out the guest-write -> host-read ordering hypothesis for the *input*
+(the fence I added covered the GL path and changed nothing, consistent with this
+reading) and leaves the *output* side: with PR 889 in play the host's decode ends
+up with an empty surface even though it was given a correct bitstream - i.e. the
+host's own decode-vs-surface-reuse/in-flight ordering, not the guest's writes.
+
+Next probe: log `decode_completed()` and the VA statuses of `vaEndPicture()` and
+`vaSyncSurface()` per frame, with the surface's first bytes *at that moment* - does
+the host believe the decode finished, and is the surface empty even then (a
+reuse/clear race), or does the status show a decode that never produced a picture
+(a driver-side drop)?
