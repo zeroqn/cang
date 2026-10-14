@@ -47,6 +47,13 @@ the ABI but silently degraded venus to the 2D fallback, which only the smoke
 catches - a reminder that the symbol assertion is necessary, not sufficient.
 "Not yet specified" below still names the map's open design questions.
 
+**PR 889 does not survive the VA-API smoke (2026-10-14).** The re-base onto
+upstream `b9f27258` - this round as fork tip `f8c18a1c`, published as
+`v2.0.0-cang.6` - is green on its own (`cargo test`, the libkrun test matrix, the
+pinned `nix build .#cang`, the Chromium/venus waypipe smoke), and the 2x2 A/B of
+ticket 15 shows the guest's VA-API decode passes on both bases **without** upstream
+PR 889 and fails on both **with** it: the PR is what must not be carried as-is.
+
 ### The GPU regression in one paragraph
 
 ABI 2's device code dropped two things the fork's vendored rutabaga used to do:
