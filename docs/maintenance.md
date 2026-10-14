@@ -443,6 +443,18 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.13.0` (`a3b9fed`) - the host GPU runtime becomes diagnosable and the
+  guest's VA-API decode works. `cang doctor` reports the host's GPU runtime, the
+  render-server environment points at cang's own mesa (renamed `mesa-cang`) and
+  the host's `virglrenderer` comes from a pinned prebuilt revision, and the new
+  `tools/virglrenderer-cang-smoke` live smoke covers Chromium-on-venus over
+  Waypipe and the guest's VA-API encode/decode against a host control. The
+  libkrun fork is re-based onto upstream main (`v2.0.0-cang.7`, ABI 2) and
+  upstream PR 889 is deliberately left out because it blanks the guest's VA-API
+  decode (see `wayfinder/libkrun-main-rebase`). The guest image gains
+  `cang-chromium`, ffmpeg and libva-utils and drops rio, and nixpkgs plus
+  nixpkgs-unstable are bumped; x86_64 asset sha256
+  `38f13f56e5b2c2cc88e095e29583501cdc9141043279d4ef0440e24d3863fc8a`.
 - `v0.12.0` (`942c4bc`) - the `--gpu=drm` VA-API video path is complete on both
   halves. The host's `virglrenderer` now carries the client's packed parameter
   sets, the picture-order DPB references and reference lists a B-frame needs and
@@ -492,13 +504,14 @@ nix build .#libkrunfw
 
 Each of these is the hash its release publishes, and each was reproduced locally
 from the tagged tree with the `overrideAttrs` recipe above (v0.9.0 while
-validating that recipe; v0.9.1, v0.10.1, v0.11.0, v0.11.1, v0.11.2 and v0.12.0
-before their pins went in - for v0.10.1, v0.11.0, v0.11.2 and v0.12.0 the
-main-branch run of the same commit published the same bytes as the rolling
-`sha-<shortsha>` artifact first, while for v0.11.1 that run's build step failed
-and the tag run published the bytes the local recipe had already produced),
-so a freshly published `.sha256` that disagrees with this list means the build
-inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache` attribute first.
+validating that recipe; v0.9.1, v0.10.1, v0.11.0, v0.11.1, v0.11.2, v0.12.0 and
+v0.13.0 before their pins went in - for v0.10.1, v0.11.0, v0.11.2, v0.12.0 and
+v0.13.0 the main-branch run of the same commit published the same bytes as the
+rolling `sha-<shortsha>` artifact first, while for v0.11.1 that run's build step
+failed and the tag run published the bytes the local recipe had already
+produced), so a freshly published `.sha256` that disagrees with this list means
+the build inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache`
+attribute first.
 
 Refresh pinned Pi coding agent source/npm metadata in `nix/pins.nix` from `earendil-works/pi`:
 
