@@ -139,3 +139,53 @@ with `--no-preserve=mode` and repoint the link there. Until one of those proves
 the fence, the interim policy stands: the fork does not carry PR 889, and when
 upstream ships it the fork takes a `Revert "vsock: drain rxq in muxer thread"`
 commit rather than letting the regression in.
+
+## Mechanism found and fixed (2026-10-14, late)
+
+**The decode's inputs are GL-written and VA-read with nothing ordering the two.**
+The picture's coded bitstream and parameter buffers are written into this process'
+shared memory by GL commands, and `virgl_video_end_frame()` -> `vaEndPicture()` is
+what reads them. The encode direction already closes exactly this gap
+(`virglrenderer-encode-upload-fence.patch`); the decode side never got the same
+fence, so a decoder that runs before those writes execute reads an input buffer
+that is not there yet and the picture comes out neutral. PR 889 signals the used
+queue on every muxer iteration, which lets the guest get far enough ahead to lose
+that race on every frame - and either half of the PR alone does the same, which is
+why the earlier splitting measurement could not separate them.
+
+**Fix:** `nix/pkgs/patches/virglrenderer-decode-upload-fence.patch` - a
+`glFinish()` immediately before the decode submission.
+
+**Verification** (`tools/virglrenderer-cang-smoke` arm 2; same guest image,
+guest-init, kernel, renderer revision and hermetic store in every arm; the render
+server taken from a locally built patched virglrenderer through a cang built with a
+`postFixup` that repoints the packaged helper, so the mapped library was the
+patched one):
+
+  f8c18a1c (upstream main + fork + PR 889), stock renderer       FAIL  y 5.372522  u 9.994820  v 9.662058
+  f8c18a1c, renderer built with the fence                        PASS  y 46.633758 u 44.227307 v 44.408519
+  421247f6 (v2.0.0-cang.7, no PR 889), renderer with the fence   PASS  the same pre-rebase numbers
+
+All twelve arm-2 checks pass in the patched builds; the only FAIL was
+`virglrenderer-helper`, the attribution check that *expects* `.#virglrenderer` and
+found the local experiment build - an artefact of the wiring, not of the fix.
+
+**Shipping, and the trap that had to be fixed first:** the fix reaches users
+through the prebuilt pin, and that pin's asset name and version carried only the
+nixpkgs version and the pinned upstream revision - not cang's patch set. A patch
+change therefore looked like "nothing changed" to `build-virglrenderer.yml`: it
+skipped the build and left the pin pointing at the earlier tarball, so the fence
+would never have shipped. The pipeline now keys on a hash of the patch set too
+(`a5be550`), which republished the asset and moved the pin by itself.
+
+**Consequence for the fork:** PR 889 can be carried again - the re-base on it is
+safe now - and cang is not exposed whenever upstream ships it.
+
+**Landed and shipped.** `build-virglrenderer.yml` published
+`virglrenderer-1.3.0-c8e3fc3b-p440d7bb5-x86_64-linux.tar.gz` and moved the pin in
+its own commit (`9b343e6`). Running arm 2 against that *shipped* artefact - as
+`.#virglrenderer`, with cang built from the tip so its packaged helper names it -
+passes all thirteen checks, `virglrenderer-helper` included, with the pre-rebase
+PSNR. The shipped `libvirglrenderer.so.1.11.0` hashes `82771340082907f3…` against
+the previous pin's `3afe8165ff9ac76e…`, so the artefact that ships is the fenced
+one.
