@@ -28,6 +28,16 @@ const POLL_TIMEOUT_MS: i32 = 100;
 const PTY_INPUT_WRITE_POLL_TIMEOUT_MS: i32 = 10;
 const ATTACHED_PTY_DRAIN_MAX_READS: usize = 4;
 const ATTACHED_PTY_DRAIN_MAX_BYTES: usize = 64 * 1024;
+
+/// How long the final drain keeps waiting for the line discipline to hand over
+/// the last bytes of a child's output before the `Exit` frame goes out.
+///
+/// The master reports the slave's hangup as `EIO` once the child is gone and the
+/// tty buffer has drained, so `EIO`/`EOF` end the drain. A bare `EAGAIN` means
+/// only that the bytes are not in the buffer yet: the `OPOST`-expanded newline of
+/// a child's final line routinely arrives in a read of its own, and ending the
+/// drain there would let the `Exit` frame precede it and drop that line's ending.
+const FINAL_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
 const ATTACHED_PTY_DRAIN_MAX_ELAPSED: Duration = Duration::from_millis(1);
 const DEFAULT_TERMINAL_ROWS: u16 = 24;
 const DEFAULT_TERMINAL_COLS: u16 = 80;
@@ -1124,6 +1134,7 @@ fn forward_final_attached_pty_output_nonblocking(
     profiler: &mut GuestAttachProfiler,
     mode: PtyForwardingMode,
 ) -> Result<()> {
+    let deadline = Instant::now() + FINAL_DRAIN_TIMEOUT;
     loop {
         match reader.read(buf) {
             Ok(0) => return Ok(()),
@@ -1139,7 +1150,43 @@ fn forward_final_attached_pty_output_nonblocking(
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            // Nothing left *right now* is not the same as nothing left: the last
+            // bytes may still be in the line discipline. Wait a bounded while for
+            // the master to become readable again, or to report the hangup.
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() || !wait_for_pty_readable(reader.as_raw_fd(), remaining)? {
+                    return Ok(());
+                }
+            }
             Err(_) => return Ok(()),
+        }
+    }
+}
+
+/// Wait for the PTY master to become readable again, or for the slave's hangup.
+///
+/// `true` tells the final drain to read again - a hangup shows up as `EIO` on
+/// that read, which ends the drain - and `false` means the timeout expired with
+/// nothing pending.
+fn wait_for_pty_readable(fd: RawFd, timeout: Duration) -> Result<bool> {
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as libc::c_int;
+    loop {
+        let rc = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+        if rc > 0 {
+            return Ok(true);
+        }
+        if rc == 0 {
+            return Ok(false);
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::Interrupted {
+            return Err(err).context("final PTY drain poll failed");
         }
     }
 }
@@ -1601,38 +1648,108 @@ mod tests {
         assert_eq!(libc::WTERMSIG(status), libc::SIGTERM);
     }
 
+    /// Drive one attached session to its `Exit` frame and return every byte the
+    /// client saw on the way there, the reported exit code, and the session result.
+    ///
+    /// The bytes are collected across frames and only then compared by the tests
+    /// below, because a PTY read hands a line over in as many chunks as the line
+    /// discipline produces. What the session guarantees is that nothing readable is
+    /// left behind when it reports the child's exit, so the checks are on the bytes
+    /// seen before `Exit`, not on how they were split.
+    fn collect_final_session_frames(child: libc::pid_t, pty: Pty) -> (Vec<u8>, i32, ClientResult) {
+        let temp = tempfile::tempdir().unwrap();
+        let unix_listener = UnixListener::bind(temp.path().join("listener.sock")).unwrap();
+        let listener = VsockListener {
+            fd: unix_listener.into_raw_fd(),
+        };
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let server_file = unsafe { File::from_raw_fd(server.into_raw_fd()) };
+
+        let server = thread::spawn(move || {
+            let mut terminal_state = TerminalState::new(PtySize::default());
+            serve_attached_client(
+                &pty.master,
+                child,
+                server_file,
+                &listener,
+                &mut terminal_state,
+                false,
+                PtyForwardingMode::Normalized,
+            )
+        });
+
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut forwarded = Vec::new();
+        let exit_code = loop {
+            match read_frame(&mut client) {
+                Ok(Some(Frame::Data(chunk))) => forwarded.extend_from_slice(&chunk),
+                Ok(Some(Frame::Exit { code })) => break code,
+                Ok(Some(frame)) => panic!("expected PTY data or Exit, got {frame:?}"),
+                Ok(None) => panic!("the session ended without an Exit frame"),
+                Err(err) if is_would_block(&err) && Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(err) => panic!("failed to read the session's final frames: {err:#}"),
+            }
+        };
+        (forwarded, exit_code, server.join().unwrap().unwrap())
+    }
+
     #[test]
     fn final_pty_output_is_forwarded_after_the_writers_close() {
         let pty = Pty::open().unwrap();
-        {
-            let mut slave = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(pty.slave_path.as_str())
-                .unwrap();
-            slave.write_all(b"final-visible\n").unwrap();
+        let slave = pty_slave_cstring(&pty);
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            close_inherited_fds();
+            let code = write_then_exit_on_pty_slave(&slave, b"final-visible\n");
+            // SAFETY: a forked child of this multi-threaded harness must leave
+            // through `_exit`; `std::process::exit` runs the stdio flush that can
+            // deadlock on a lock another harness thread held at fork time.
+            unsafe { libc::_exit(code) }
         }
 
-        let (mut peer, client) = UnixStream::pair().unwrap();
-        let mut client = unsafe { File::from_raw_fd(client.into_raw_fd()) };
-        let mut master = pty.master;
-        let mut terminal_state = TerminalState::new(PtySize::default());
-        let mut profiler = GuestAttachProfiler::new(false);
-        forward_final_attached_pty_output(
-            &mut master,
-            &mut [0u8; IO_BUF_SIZE],
-            &mut client,
-            &mut terminal_state,
-            &mut profiler,
-            PtyForwardingMode::Normalized,
-        )
-        .unwrap();
+        let (forwarded, exit_code, result) = collect_final_session_frames(child, pty);
+        assert_eq!(forwarded, b"final-visible\r\n");
+        assert_eq!(exit_code, 0);
+        assert_eq!(result, ClientResult::ChildExited(0));
+    }
 
-        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        assert_eq!(
-            read_frame(&mut peer).unwrap(),
-            Some(Frame::Data(b"final-visible\r\n".to_vec()))
-        );
+    /// A writer that closes *after* the session reaped the child must still have
+    /// its bytes forwarded before `Exit`.
+    ///
+    /// The child writes the line's text, leaves a grandchild holding the slave
+    /// open, and exits at once; the grandchild writes the newline 30 ms later, so
+    /// the drain's first read finds nothing more and only its bounded wait for the
+    /// master covers the gap. Ending the drain on that first `EAGAIN` drops the
+    /// line ending - the shape of a final line the line discipline hands over in a
+    /// second read.
+    #[test]
+    fn final_pty_output_waits_for_a_late_writer_before_exit() {
+        let pty = Pty::open().unwrap();
+        let slave = pty_slave_cstring(&pty);
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            close_inherited_fds();
+            let code = write_then_leave_a_late_writer_on_pty_slave(
+                &slave,
+                b"final-visible",
+                b"\n",
+                Duration::from_millis(30),
+            );
+            // SAFETY: see `final_pty_output_is_forwarded_after_the_writers_close`.
+            unsafe { libc::_exit(code) }
+        }
+
+        let (forwarded, exit_code, result) = collect_final_session_frames(child, pty);
+        assert_eq!(forwarded, b"final-visible\r\n");
+        assert_eq!(exit_code, 0);
+        assert_eq!(result, ClientResult::ChildExited(0));
     }
 
     #[test]
@@ -2382,6 +2499,64 @@ mod tests {
     /// syscall-only. `fork()` copies every lock the other harness threads held at
     /// that instant - including glibc's malloc arenas - so an allocation here can
     /// block forever and hang the parent's `waitpid`.
+    /// Write `first` to the PTY slave, leave a grandchild that writes `late` on
+    /// its own slave descriptor after `delay` and closes it, and return the code
+    /// the child exits with straight away.
+    ///
+    /// The session therefore reaps the child while a writer still holds the slave
+    /// open, so `late` becomes readable only after the drain's first read.
+    fn write_then_leave_a_late_writer_on_pty_slave(
+        slave: &CStr,
+        first: &[u8],
+        late: &[u8],
+        delay: Duration,
+    ) -> i32 {
+        // SAFETY: opening the PTY slave path read-write for this child only.
+        let fd = unsafe { libc::open(slave.as_ptr(), libc::O_RDWR) };
+        if fd < 0 {
+            return 1;
+        }
+        if !write_all_fd(fd, first) {
+            return 1;
+        }
+        let writer = unsafe { libc::fork() };
+        if writer < 0 {
+            return 1;
+        }
+        if writer == 0 {
+            close_inherited_fds();
+            let fd = unsafe { libc::open(slave.as_ptr(), libc::O_RDWR) };
+            if fd < 0 {
+                unsafe { libc::_exit(1) }
+            }
+            let sleep = libc::timespec {
+                tv_sec: delay.as_secs() as libc::time_t,
+                tv_nsec: delay.subsec_nanos() as libc::c_long,
+            };
+            unsafe { libc::nanosleep(&sleep, std::ptr::null_mut()) };
+            let ok = write_all_fd(fd, late);
+            unsafe { libc::close(fd) };
+            unsafe { libc::_exit(if ok { 0 } else { 1 }) }
+        }
+        0
+    }
+
+    /// Write `data` to the PTY slave and return the code the child exits with.
+    ///
+    /// Syscall-only, like `write_then_wait_on_pty_slave` below: this runs in a
+    /// forked child of a multi-threaded harness and must not allocate or lock.
+    fn write_then_exit_on_pty_slave(slave: &CStr, data: &[u8]) -> i32 {
+        // SAFETY: opening the PTY slave path read-write for this child only.
+        let fd = unsafe { libc::open(slave.as_ptr(), libc::O_RDWR) };
+        if fd < 0 {
+            return 1;
+        }
+        if !write_all_fd(fd, data) {
+            return 1;
+        }
+        0
+    }
+
     fn write_then_wait_on_pty_slave(slave: &CStr, data: &[u8]) -> i32 {
         // SAFETY: opening the PTY slave path read-write for this child only.
         let fd = unsafe { libc::open(slave.as_ptr(), libc::O_RDWR) };
