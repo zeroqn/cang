@@ -64,3 +64,36 @@ A fix - in the host read-back, the fence path, or the guest driver - that keeps 
 VA-API decode green with PR 889 carried, so the next re-base onto upstream main does
 not have to drop it; or a demonstration that the PR must be paired with a specific
 upstream change before cang can carry it.
+
+## Second measurement, 2026-10-14 (after v0.13.0)
+
+Both arms were rebuilt from the pinned fork (`421247f6` = v2.0.0-cang.7, PASS and
+`f8c18a1c` = that tree plus PR 889, FAIL) and the guest was left to decode the same
+staged H.264 clip with the same guest-init, image, kernel, renderer and store. The
+failure reproduces byte-for-byte (`y:5.372522 u:9.994820 v:9.662058` against
+`y:46.633758 u:44.227307 v:44.408519`), and the guest's own view localises it:
+
+| arm | hardware decode | software decode, same VM |
+| --- | --- | --- |
+| `421247f6` | md5 `3006d5a7881626c4c1ca1ff2b7b4eb91` | md5 `3006d5a7881626c4c1ca1ff2b7b4eb91` |
+| `f8c18a1c` (+ PR 889) | md5 `f22b572fb3967b0e4377a04088a546c0`, first 8 Y bytes all zero | md5 `3006d5a7881626c4c1ca1ff2b7b4eb91` |
+
+So the clip, the guest userland, the file I/O and the software decode are
+identical in both arms, and only the hardware path returns a cleared picture -
+with the useful side effect that a working arm's `hw` decode is bit-identical to
+its `sw` decode, which is worth keeping as the guard.
+
+Tracing, so far:
+
+- the pinned prebuilt `libvirglrenderer` *does* carry `VIRGL_LOG_LEVEL`,
+  `VIRGL_LOG_FILE` and `VREND_DEBUG` (an earlier "no knobs" reading was a missing
+  `strings` binary), and the render server's `/proc/<pid>/environ` shows those
+  variables arriving - but no log file appears even with `--seccomp=off
+  --landlock=off`, so that build's file logger needs another trigger;
+- the guest side's `VIRGL_DEBUG`/`MESA_DEBUG` (both present in the image's
+  `libgallium`) produce logs of identical shape in both arms (705 lines, the same
+  counts), so the guest driver's trace does not separate them.
+
+Next: trace the DRM ioctls of the render helper (`strace -f -e trace=ioctl`) in
+both arms and compare the `VIRTGPU_EXECBUFFER` / `RESOURCE_CREATE` /
+`TRANSFER_FROM_HOST` sequence the decode and its read-back produce.
