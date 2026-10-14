@@ -106,3 +106,36 @@ found.
 Next: instrument a **local build** of `virglrenderer` (or of cang's video
 read-back patch) with a log line on the decoded-surface read-back path and run
 both arms against it, which needs neither ptrace nor the library's file logger.
+
+## Testing a candidate fix outside the fork (2026-10-14, late)
+
+The candidate fix is a host-side fence: the picture's inputs (the coded bitstream
+and the parameter buffers) are written into shared memory by GL commands and the
+VA submission is what reads them, exactly the gap
+`virglrenderer-encode-upload-fence.patch` closes on the encode side and
+`virgl_video_end_frame()` does not close on the decode side. PR 889's extra
+used-queue signals are what let the guest get far enough ahead to lose that race
+every frame.
+
+To test it without touching the fork, a patched `virglrenderer` was built locally
+(`nix build --impure` over `.#virglrenderer-release-build` with the one-line patch
+appended to `patches`; lib sha256 `f22a25d7c6e285ee…` against the pin's
+`3afe8165ff9ac76e…`) and the arm run against it. Three attempts did not test it,
+each for an environment reason, and each was caught by checking *which* library
+was actually mapped rather than by trusting the exit status:
+
+- copying the cang prefix and repointing `libexec/cang-helpers/virgl_render_server`
+  left the link resolving to the pin;
+- exporting `CANG_VIRGL_RENDER_SERVER` does not help: the smoke resolves the
+  helper from its `--cang` root (`helper="$cang_root/libexec/cang-helpers/…"`) and
+  asserts it, so the harness, not the environment, chooses the renderer;
+- the last attempt could not even rewrite the link (`chmod` returned EROFS on the
+  copied tree).
+
+So the reliable route is one of: run the guest probe directly with
+`CANG_VIRGL_RENDER_SERVER` pointing at the patched helper (the probe generates its
+own clip with the guest's ffmpeg), or copy the cang prefix into a scratch tree
+with `--no-preserve=mode` and repoint the link there. Until one of those proves
+the fence, the interim policy stands: the fork does not carry PR 889, and when
+upstream ships it the fork takes a `Revert "vsock: drain rxq in muxer thread"`
+commit rather than letting the regression in.
