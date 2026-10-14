@@ -227,3 +227,26 @@ arrive as buffers the guest writes, and PR 889's extra used-queue signals change
 Instrumenting the guest's submission (a locally built `virglrenderer` with a log
 line on the decode path, the route that produced the fence) is the way to see it;
 more host-side fences are not.
+
+## Two corrections and the next probe (2026-10-15)
+
+**The guest-side confound is eliminated.** The two cang builds (with and without
+PR 889) reference *different* `krun-init` derivations, which looked like a second
+variable - but their binaries are byte-identical
+(`8dcef2246ba66bc795cd0f27d3a4190e…`), the static build being reproducible. So the
+two arms differ in exactly one place: the host-side muxer change.
+
+**The earlier "split" measurement was mislabelled.** The variant recorded as
+"signal only" still called `drain_rxq()`; only its `if drain_rxq()` conditional was
+folded to an unconditional signal. What that pair actually shows is therefore
+narrower than recorded: *drain without signal* fails, *drain + always signal*
+fails. Nothing yet separates the drain from the signal - the useful split is a build
+whose muxer no longer drains at all, with the original conditional signal intact.
+
+**Next probe: measure the host, not the guest.** "The guest reads its own cleared
+surfaces" was an inference from the frame contents, never a measurement. One log
+line in the local `virglrenderer` build settles it: in `virgl_video_end_frame` /
+`decode_completed`, print the surface id, the mapped plane pointer and the first
+bytes of the mapped surface. If the host's surface is already zero when the copy
+runs, the decode itself produced nothing in the host driver (a VA/driver problem on
+this host), not a guest read-back problem.
