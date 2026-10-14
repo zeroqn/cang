@@ -102,3 +102,13 @@ Guest-side facts (probe3, `/home/dev/cang/disk/probe5-*`, `probe6-*`, `probe3-*`
   fence-passing bits are not in play;
 - the failing picture is the guest driver's cleared surface: luma 0, chroma 128,
   the first frame's surface entirely zero.
+
+## Note on the raw arm directories (2026-10-15)
+
+The `/home/dev/cang/disk/probe*`, `vr-exp-*`, `vr-smoke-*`, `iso-*` and
+`fence*` arm directories quoted above were pruned to reclaim space on the btrfs
+the smokes write to (they held guest-rootfs snapshots - btrfs subvolumes, which
+`du --one-file-system` does not see, so the earlier inventories understated them
+by an order of magnitude). Every number those runs produced is in this note and in
+`tickets/15-pr-889-breaks-vaapi-decode.md`; the raw files can only come back by
+re-running the arms.
