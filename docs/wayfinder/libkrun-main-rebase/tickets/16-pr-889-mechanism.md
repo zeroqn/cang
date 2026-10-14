@@ -308,3 +308,33 @@ Consequences:
   record into memory and dump once at process exit (`atexit`), log only the first
   few frames, or gate on a flag set by the environment. Only then is a two-arm
   A/B meaningful.
+
+## The local source build of virglrenderer is broken; the shipped prebuilt is not (2026-10-15)
+
+The isolation run settles the instrument question, and the answer is neither the
+probe nor PR 889:
+
+    arm: fork WITHOUT PR 889 (421247f6) - the configuration that PASSES with the
+         shipped renderer - with a locally built *source* virglrenderer and no
+         probe patch at all (wired: probe=0):
+    PASS  vaapi-steps
+    FAIL  vaapi-psnr-decode
+
+So a locally built `.#virglrenderer` (the flake's source path: `pkgs.virglrenderer`
+plus cang's patch list) blanks the decode **on its own**, with the same patches as
+the pin, while `.#virglrenderer` resolved through the pin (the CI-built prebuilt
+tarball) passes in exactly the same arm. That invalidates every instrumented run in
+this ticket as evidence about PR 889: those runs used the source path, so they were
+measuring this build difference. The "mapped surface is empty / input is intact"
+lines describe a run whose renderer was already broken - the input observation is
+probably still true of a healthy run, but neither is usable as evidence until a
+passing baseline exists.
+
+What still stands is the anchor A/B, which used the shipped prebuilt in both arms:
+fork tip PASS, +PR 889 FAIL, re-based tip FAIL, re-based minus PR 889 PASS.
+
+Open question, and the next step: why do the source build and the prebuilt differ
+at all when they carry the same patches - build environment (the prebuilt is built
+by `build-virglrenderer.yml` on a CI runner), the toolchain, or something the
+workflow sets. The controlled pair is one no-PR-889 arm with the pinned prebuilt
+(expected PASS) against the same arm built from the local source (measured FAIL).
