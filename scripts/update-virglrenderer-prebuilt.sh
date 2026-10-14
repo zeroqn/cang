@@ -119,7 +119,12 @@ if [ -z "$version" ]; then
     exit 1
   fi
   upstream_version="$(cd "$repo_root" && nix eval --raw .#virglrenderer-release-build.version)"
-  version="$upstream_version-${revision:0:8}"
+  # The patch set changes the artefact too, so it is part of the key: without it
+  # a hand-run would write a name the workflow never publishes. See
+  # .github/workflows/build-virglrenderer.yml.
+  patch_hash="$(cat "$repo_root"/nix/pkgs/patches/virglrenderer-*.patch \
+    "$repo_root"/nix/lib/virglrenderer-patched.nix | sha256sum | cut -c1-8)"
+  version="$upstream_version-${revision:0:8}-p${patch_hash}"
 fi
 
 if [ -z "$version" ]; then

@@ -98,7 +98,14 @@ jobs:
             echo "nix eval returned an empty virglrenderer revision or version" >&2
             exit 1
           fi
-          version="${upstream}-${revision:0:8}"
+          # cang's own patch set changes the artefact as much as the upstream
+          # revision does, so it is part of the key: without it a patch change
+          # leaves the earlier tarball - and the pin pointing at it - in place,
+          # and the fix the patch carries never ships.
+          patch_hash="$(cat nix/pkgs/patches/virglrenderer-*.patch \
+            nix/lib/virglrenderer-patched.nix | sha256sum | cut -c1-8)"
+          version="${upstream}-${revision:0:8}-p${patch_hash}"
+          echo "patch_hash=${patch_hash}" >> "${GITHUB_OUTPUT}"
           echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "Detected virglrenderer ${version} (revision ${revision})"
@@ -107,6 +114,7 @@ jobs:
         id: check-version
         env:
           REVISION: ${{ steps.version.outputs.revision }}
+          VERSION: ${{ steps.version.outputs.version }}
           FORCE_REBUILD: ${{ github.event.inputs.force_rebuild }}
         run: |
           set -euo pipefail
@@ -147,6 +155,15 @@ jobs:
           fi
           if [ -n "${locked_rev}" ] && [ -n "${work_rev}" ] && [ "${locked_rev}" != "${work_rev}" ]; then
             echo "nixpkgs input moved (${locked_rev} -> ${work_rev}); rebuilding for the new libva stack"
+            changed=true
+          fi
+          # The pinned version carries the patch-set hash as well as the source
+          # revision, so a patch change is detected the same way a revision move
+          # is.
+          pinned_version="$(nix eval --raw --impure \
+            --expr '(import ./nix/pins.nix).virglrendererPrebuiltRelease.version' 2>/dev/null || true)"
+          if [ "${pinned_version}" != "${VERSION}" ]; then
+            echo "the published virglrenderer pin is ${pinned_version:-<none>} and this tree builds ${VERSION}"
             changed=true
           fi
           if [ "${FORCE_REBUILD}" = "true" ]; then
