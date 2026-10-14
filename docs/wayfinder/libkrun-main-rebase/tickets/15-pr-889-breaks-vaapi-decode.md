@@ -1,7 +1,7 @@
 ---
 label: wayfinder:research
 title: Carrying upstream PR 889 breaks the guest's VA-API hardware decode
-status: open
+status: closed
 blocked_by: []
 claimed_by: pi session (2026-10-14)
 ---
@@ -70,6 +70,15 @@ is indirect. Two candidates, neither measured:
    reads - the same class as ticket 03 (unsynchronised upload blit) and ticket 10
    (cached export). PR 889 adds a thread that wakes on every iteration of the
    muxer loop.
+
+## Decision (2026-10-14, bob): drop it and re-cut
+
+PR 889 is not carried: the branch was rewritten without the commit (tip
+`421247f6`), pushed, and released as `v2.0.0-cang.7` (both assets published, CI
+green on the branch and the tag). cang is pinned to it. Dropping it is a stopgap
+only - the PR returns with upstream main - so the mechanism is now its own ticket,
+[16](16-pr-889-mechanism.md), with the split and load arms recorded in
+`notes/15-pr-889-vaapi-arms.md`.
 
 ## Next step
 

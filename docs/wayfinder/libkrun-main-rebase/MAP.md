@@ -52,7 +52,11 @@ upstream `b9f27258` - this round as fork tip `f8c18a1c`, published as
 `v2.0.0-cang.6` - is green on its own (`cargo test`, the libkrun test matrix, the
 pinned `nix build .#cang`, the Chromium/venus waypipe smoke), and the 2x2 A/B of
 ticket 15 shows the guest's VA-API decode passes on both bases **without** upstream
-PR 889 and fails on both **with** it: the PR is what must not be carried as-is.
+PR 889 and fails on both **with** it. Bob's call was to drop it and re-cut: the
+branch is now `421247f6`, released as `v2.0.0-cang.7` and pinned, with the VA-API
+arm green. Because the PR returns with upstream main, why it blanks the decode is
+now [ticket 16](tickets/16-pr-889-mechanism.md), whose split and load arms are in
+`notes/15-pr-889-vaapi-arms.md`.
 
 ### The GPU regression in one paragraph
 

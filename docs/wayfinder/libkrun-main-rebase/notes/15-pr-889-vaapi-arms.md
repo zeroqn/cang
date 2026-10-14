@@ -72,3 +72,33 @@ branch is back on the pushed tip `f8c18a1c`. Rebuild each with
   `/dev/vsock` is present, so PR 889 does not stall timesync delivery.
 - Chromium/venus arm (`smoke-rebase6`, waypipe mode) passes with PR 889 carried,
   so the regression is specific to the vrend decode read-back, not the whole GPU.
+
+## PR 889 split, after the re-cut (2026-10-14)
+
+Both halves of the PR blank the decode on their own, and CPU load does not flip
+either arm:
+
+| build | arm 2 |
+| --- | --- |
+| branch tip `421247f6` + `drain_rxq()` with the signal removed (`900cce0a`) | FAIL `f22b572f` |
+| branch tip `421247f6` + `signal_used_queue()` each iteration, no drain (`db052624`) | FAIL `f22b572f` |
+| PR 889 + three guest CPU hogs | FAIL `f22b572f` |
+| pre-rebase tip + three guest CPU hogs | PASS `3006d5a7` |
+| pre-rebase tip + 28 host CPU hogs | PASS `3006d5a7` |
+| PR 889, nothing else on the host | FAIL `f22b572f` |
+
+Guest-side facts (probe3, `/home/dev/cang/disk/probe5-*`, `probe6-*`, `probe3-*`):
+
+- the software decode of the same staged clip is byte-identical in every arm
+  (`3006d5a7…`), so the input, the file path and the guest's userspace are the same;
+- the hardware decode reports no error and produces 60 frames / 20736000 bytes in
+  both states (`null_rc=0 frame=60`), and the guest kernel logs nothing during it;
+- at `-loglevel debug` the ffmpeg/libva logs of a PASS and a FAIL arm are the same
+  size (48435 B) and differ only in where `Map surface` / `Unmap surface` / `Slice
+  ... data buffer` interleave, i.e. the decode does the same work and only the
+  read-back's ordering moves;
+- the virtio-gpu feature word the guest negotiates is identical in both states,
+  including bit 5 absent (the cang kernel's `FENCE_PASSING`), so the guest-handle /
+  fence-passing bits are not in play;
+- the failing picture is the guest driver's cleared surface: luma 0, chroma 128,
+  the first frame's surface entirely zero.

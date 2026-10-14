@@ -101,7 +101,13 @@ A libkrun update is therefore:
    blob, which is not a workspace member and vendors from its own
    `init/init-binary/Cargo.lock`). `nix build .#cang` reports whichever
    mismatches first.
-5. Re-verify with a live boot and the Chromium GPU smoke, not just a green build.
+5. Re-verify with a live boot and **both** smokes, not just a green build:
+   `tools/chromium-cang-smoke` (GPU and `--waypipe` modes) and
+   `tools/virglrenderer-cang-smoke` (the Chromium smoke plus its VA-API
+   encode/decode arms and host-side attribution). Chromium/venus being green does
+   not cover the vrend VA-API path: the first re-base release after PR 889 shipped
+   with Chromium passing and the guest's hardware decode blank - see
+   `wayfinder/libkrun-main-rebase/tickets/15-pr-889-breaks-vaapi-decode.md`.
 
 ### Updating the rutabaga_gfx fork
 
