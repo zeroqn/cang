@@ -57,9 +57,10 @@ branch is now `421247f6`, released as `v2.0.0-cang.7` and pinned, with the VA-AP
 arm green. Because the PR returns with upstream main, why it blanks the decode became
 [ticket 16](tickets/16-pr-889-mechanism.md): the decode's inputs are GL-written and
 VA-read with nothing ordering the two, the gap the encode direction already closed.
-`nix/pkgs/patches/virglrenderer-decode-upload-fence.patch` closes it and the whole
-VA-API arm passes with PR 889 present, so the fork can carry the PR again and cang
-is not exposed when upstream ships it.
+`nix/pkgs/patches/virglrenderer-decode-upload-fence.patch` was the first candidate,
+but **it is not sufficient**: with it in the renderer the arm still fails with PR
+889 in the current stack, so cang stays pinned to `v2.0.0-cang.7` (no PR 889) and the
+mechanism hunt continues from the guest-write -> host-read direction.
 
 ### The GPU regression in one paragraph
 

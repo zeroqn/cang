@@ -189,3 +189,41 @@ passes all thirteen checks, `virglrenderer-helper` included, with the pre-rebase
 PSNR. The shipped `libvirglrenderer.so.1.11.0` hashes `82771340082907f3…` against
 the previous pin's `3afe8165ff9ac76e…`, so the artefact that ships is the fenced
 one.
+
+## Correction (2026-10-14, late): the fence is not sufficient
+
+Putting PR 889 back into the fork - the `cang` branch, `v2.0.0-cang.8` - and running
+the arm again against the **shipped** fenced renderer says the fence is not the fix
+it looked like. Same fresh container image, same 0.13.0 guest-init, same store:
+
+  fork without PR 889 (421247f6) + shipped fenced renderer   PASS  y 46.633758
+  fork with PR 889 (a01c0b79)   + shipped fenced renderer    FAIL  y 5.372522
+  fork with PR 889, again (isolated run)                     FAIL  y 5.372522
+
+The fence is provably in the renderer that ran: `virgl_video_end_frame` in the
+shipped `libvirglrenderer.so.1.11.0` disassembles with an indirect GL call
+immediately before `vaEndPicture`, the same fingerprint as the locally built
+renderer that passed once - and the pre-fix pin's library has nothing there. The
+control above also rules out the image, the guest-init and the cang build on their
+own, since the same ones pass without the PR.
+
+So the single earlier PASS (PR 889 + a locally built fenced renderer + the image
+that happened to be in the store) was timing, not a fix: the fence narrows the
+window without closing it. The decode is a race, and one run in either direction is
+not evidence - which is exactly how that result was over-read.
+
+**What stands:** the fence is defensible on its own terms (the encode direction has
+had the same one since `virglrenderer-encode-upload-fence.patch`, and the decode
+side genuinely had no ordering between its GL-written inputs and `vaEndPicture`),
+and it ships in the renderer. **What does not stand:** any claim that it fixes PR
+889. cang stays pinned to `v2.0.0-cang.7` (`421247f6`, no PR 889), which is the last
+state the arm passes in, and `v2.0.0-cang.8` is left published as a superseded tag
+like `v2.0.0-cang.6` before it.
+
+**Next hypothesis.** The window that matters may not be the host's GL at all, but
+the guest-write -> host-read direction across the virtio ring: the decoder's inputs
+arrive as buffers the guest writes, and PR 889's extra used-queue signals change
+*when the guest sees those writes retired*, not when the host's GL executes.
+Instrumenting the guest's submission (a locally built `virglrenderer` with a log
+line on the decode path, the route that produced the fence) is the way to see it;
+more host-side fences are not.
