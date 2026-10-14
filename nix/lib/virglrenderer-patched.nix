@@ -82,6 +82,14 @@ virglrenderer.overrideAttrs (old: {
     # it is exported, and the export does not synchronise (the encode direction
     # already waits here). Without it the reader gets the previous frame.
     ../pkgs/patches/virglrenderer-decode-surface-sync.patch
+    # Order the decode's submission against the uploads it reads: the coded
+    # bitstream and the parameter buffers are written by GL commands and read by
+    # vaEndPicture(), and nothing orders the two - the same gap the encode upload
+    # fence above closes on its side. A guest that gets ahead of the host loses
+    # that race and reads inputs whose writes have not executed, so the decode
+    # comes out neutral. Upstream's vsock rxq drain makes the guest get ahead on
+    # every frame.
+    ../pkgs/patches/virglrenderer-decode-upload-fence.patch
   ];
 
   # venus-protocol generates its headers with mako, which nixpkgs' pyyaml-only

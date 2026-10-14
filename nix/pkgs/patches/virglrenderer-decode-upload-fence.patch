@@ -1,0 +1,18 @@
+--- a/src/vrend/virgl_video.c
++++ b/src/vrend/virgl_video.c
+@@ -3717,6 +3717,15 @@
+         return -1;
+     }
+ 
++    /* The picture's inputs - the coded bitstream and the parameter buffers - were
++     * written into this process' shared memory by GL commands, and the VA
++     * submission below is what reads them. Nothing orders the two: the encode
++     * direction fences its own upload (virglrenderer-encode-upload-fence.patch)
++     * and this side did not, so a decode can start on inputs whose writes have
++     * not executed yet and come out neutral. A guest that gets ahead of the host
++     * hits it every frame. */
++    glFinish();
++
+     va_stat = vaEndPicture(va_dpy, codec->va_ctx);
+     if (VA_STATUS_SUCCESS != va_stat) {
+         virgl_error("end picture failed, err = 0x%x\n", va_stat);
