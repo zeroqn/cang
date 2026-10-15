@@ -338,3 +338,250 @@ at all when they carry the same patches - build environment (the prebuilt is bui
 by `build-virglrenderer.yml` on a CI runner), the toolchain, or something the
 workflow sets. The controlled pair is one no-PR-889 arm with the pinned prebuilt
 (expected PASS) against the same arm built from the local source (measured FAIL).
+
+
+## Correction (2026-10-15): the fence is on the wrong side, and the source build is not a different renderer
+
+Two things were settled while re-basing the fork onto the current upstream main
+tip (`dc1a18ad` = `b9f27258` + PR 889 as *upstream history*, not a cherry-pick;
+the 26 fork commits replay clean and the only tree delta is `muxer_thread.rs`).
+
+**The `glFinish()` cannot order anything on the decode path.**
+`vrend_video_decode_bitstream()` copies the coded bitstream out of the guest's
+buffer with `virgl_read_from_iovec(res->iov, ..., res->ptr, size)` and hands that
+host copy to `vaCreateBuffer()`; the picture descriptor is read the same way,
+into a local struct. Nothing on the decode input path is written by GL, so the
+`glFinish()` `virglrenderer-decode-upload-fence.patch` adds immediately before
+`vaEndPicture()` has nothing to order - the single PASS it was credited with was
+timing. A missing `glFinish` is also not this bug's general shape: vrend fences
+every command with `glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE)` + `glFlush()`
+(`vrend_renderer_create_fence()`), and cang's gpu worker retires that fence only
+once `vrend_renderer_check_fences()` sees `glClientWaitSync` complete, so every
+GL write issued before the fence - the read-back's `glTexSubImage2D` included -
+is already ordered. The patch should be dropped once the failure is understood
+from the correct direction.
+
+**The local source build is not a different renderer.** The CI prebuilt and a
+fresh `.#virglrenderer-release-build` of this tree have byte-identical `.text`
+for both `lib/libvirglrenderer.so.1.11.0` and `libexec/virgl_render_server`
+(`objcopy -O binary --only-section=.text` of the pinned tarball's copies, sha256
+`23950f3880e183fa...` and `568831129057f958...`), and both embed the same
+`/nix/store/fs40l7nirc58danf1nlmx5ibqz1qmc00-virglrenderer-1.3.0` out path and
+the same libdrm/libgbm/libva/glibc inputs. So "a locally built source
+virglrenderer blanks the decode on its own" is a **wiring artefact, not a build
+difference**: the instrumented runs above were invalidated by the wiring, not by
+the build, and a locally built instrumented renderer is a legitimate tool as long
+as the mapped library is confirmed from `/proc/<pid>/maps` (the trap that
+section records).
+
+**Where that leaves the hunt.** No GL ordering is missing, so the lever is not
+*when a fence retires*; it is *what* crosses the guest/host boundary. The failing
+picture is still the cleared decode surface copied faithfully (luma 0, chroma
+128), i.e. the host's decoder produced no picture from a valid bitstream, and the
+guest's ffmpeg debug runs differ only in where its `Map surface`/`Unmap surface`
+lines sit against the slice buffers - a guest-side difference, not a host-side
+one. Also unmeasured: the ticket's own split is incompletely recorded -
+"signal only" still called `drain_rxq()`, so **the drain has never been compared
+against the signal**, and `signal_used_queue()` on the vsock cannot reach the
+gpu device at all (each virtio-mmio device owns its own irqfd and irq line;
+`src/libkrun/src/vmm/device_manager/kvm/mmio.rs`). The only host state the two
+share is the process-wide `IrqChip = Arc<Mutex<IrqChipDevice>>`, which is
+contention, not a channel.
+
+**Next measurement (ready, blocked on the host) - an interleaved A/B.** The
+"deterministic per build" claim that the whole attribution rests on was measured
+with grouped runs; the pair to re-run alternately (`ABAB`) is
+`e2a12ec8` (main tip + PR 889) against `7d6e091e` (the same tree + `git revert
+dc1a18ad`), both built with `--override-input libkrun-src`, one VM each, with a
+fresh console log per run. Separately, the un-measured split is cheap: PR 889
+with `drain_rxq()` neutralised (returns `false`, touches nothing) against PR 889
+with the signal removed - that isolates the drain from the signal.
+
+**Fork state.** The rebase's tree is `e2a12ec8` and the "latest main with the
+decode green" fork tip is `7d6e091e` (rebase + `Revert "vsock: drain rxq in
+muxer thread"`), which is the interim policy this ticket already recorded. Live
+verification is blocked: cang's only implemented task-rootfs backend is
+`btrfs-snapshot`, and the host's btrfs loop is not mounted (`/home/dev/cang/disk`
+is empty, `btrfs.img` is unattached, `sudo mount -o loop
+/home/dev/cang/btrfs.img /home/dev/cang/disk` needs root; `unshare -rm` +
+`mount -o loop` fails with EPERM). Underneath the pickle the fence patch would
+have to be dropped from `nix/lib/virglrenderer-patched.nix`, which moves the
+prebuilt pin's patch hash.
+
+
+## Measured (2026-10-15): the drain blanks the decode; the used-queue signal does not
+
+The earlier attribution rested on grouped runs. Re-run **interleaved** (ABAB) on one
+hermetic store, one loaded image, one guest-init, one renderer, one kernel, with a
+fresh cang build per tip - six arms, ~40 s each:
+
+| arm (order run) | tip | behaviour | arm 2 |
+| --- | --- | --- | --- |
+| `no889` | `7d6e091e` rebase + revert(dc1a18ad) | PR 889 absent | **PASS** `y:46.633758 u:44.227307 v:44.408519` |
+| `rebase` | `e2a12ec8` main tip | drain + signal | **FAIL** `y:5.372522 u:9.994820 v:9.662058` |
+| `inert` | `55d81a89` | `drain_rxq()` returns false; **no locks, no drain, no signal** | **PASS** `y:46.633758 ...` |
+| `drain` | `c25366f6` | drain runs, `signal_used_queue()` removed | **FAIL** `y:5.372522 ...` |
+| `rebase2` | `e2a12ec8` | repeat | **FAIL** |
+| `no889-2` | `7d6e091e` | repeat | **PASS** |
+
+Reproduced 2/2 for both states, interleaved, so this is a per-build property and not
+run order or leftover state. Two things follow, and they correct the record twice
+over:
+
+- **The signal is not the mechanism.** `drain` keeps the drain and drops the
+  interrupt and still fails identically; `rebase` signals and fails. Whatever
+  blanks the decode rides on the drain *executing*, not on the guest being told.
+- **The drain does not need to do anything to be innocent.** `inert` leaves the
+  code in place (the same call in the same loop, returning immediately) and passes:
+  the failure needs `drain_rxq()` to actually pop the rx virtqueue and recycle
+  descriptors from the muxer thread.
+
+What the four tips are and how they were built (`--override-input
+libkrun-src "git+file://<clone>?ref=<branch>"`, cang 0.13.1):
+
+- `cang-rebase` = `/nix/store/j1bsf05l0q4wxxyl2fv0933gllcccvib-cang-0.13.1`
+- `cang-no889` = `/nix/store/c07m4xlj45b8j25wzbn12wgcw5zi0n39-cang-0.13.1`
+- `v-inert-pr889` = `/nix/store/dymd34i8ayj07k486ysfm54ka63aaniz-cang-0.13.1`
+- `v-drain-nosignal` = `/nix/store/zk50l68sk727rgdkmbq6zhdk9i5jiavs-cang-0.13.1`
+
+Command per arm (`--skip-chromium`; the runner, the image and the store were fixed
+across all six):
+
+```
+export CONTAINERS_STORAGE_CONF=<store>/storage.conf
+nix develop --command tools/virglrenderer-cang-smoke/virglrenderer-smoke.sh \
+  --cang <tip>/bin/cang --guest-init <.#cang-musl>/bin/cang-guest-init \
+  --container localhost/cang:latest --out-dir <out> \
+  --mem 4 --timeout 900 --frames 60 --skip-chromium
+```
+
+Raw evidence: `/home/dev/cang/disk/nctx/pr889/matrix.log` and the per-arm
+`run-<tag>/` trees. The leftover `.#container` rebuild was skipped - all arms run
+the archive already rooted by `result-container-final`, so they share one image.
+
+Two witnesses that did **not** discriminate: the guest's ffmpeg logs report 60
+frames with no error in every arm, and the guest console is byte-identical (both
+arms also show the known, tolerated `hwdownload` filter segfault at
+`run-guest-vaapi.sh:232`). The guest sees a successful decode in the failing arms -
+consistent with the failing picture being the guest's cleared surface read back.
+
+
+## Root cause (2026-10-15): vrend leaves the decode's VA parameter buffers uninitialised
+
+**The question is answered, and neither of the two candidates was it.** vrend's
+`h264_decode_bitstream()` fills only the members the H.264 picture descriptor
+carries and hands the three VA parameter buffers to the host's VA driver with the
+rest of their bytes holding whatever the stack held:
+
+```c
+VAPictureParameterBufferH264  pic_param;    /* never memset by upstream vrend */
+VAIQMatrixBufferH264          iq_matrix;
+VASliceParameterBufferH264    slice_param;
+```
+
+`h264_fill_slice_param()` in the pinned revision even leaves every slice-header
+field commented out (`//vasp->slice_data_size;` ... `//vasp->slice_type;`), and
+mesa's decode-side `fill_h264_picture_desc()` sends no slice information at all -
+the protocol carries `slice_count` and the reference list, nothing per slice. So
+the buffer radeonsi reads is built here, from H.264 syntax vrend does not parse.
+
+radeonsi reads one of those fields and gates on it (`si_video_dec.c`,
+`si_dec_h264`):
+
+```c
+/* Need at least one reference for P/B frames */
+if (h264->curr_pic_ref_frame_num == 0) {
+   for (uint32_t i = 0; i < pic->slice_count; i++)
+      if (pic->slice_parameter.slice_type[i] % 5 != 2)
+         return 1;
+}
+```
+
+`slice_type % 5 != 2` refuses the picture unless it says I - which an I/IDR
+picture does. A `P` (0, 3, 6, 9) or `B` (1, 4, 7, 8) value costs the opening
+pictures of a decode, and with them the picture the read-back packs: the surface
+comes back cleared (luma 0, chroma 128), which is exactly the neutral picture
+every failing arm produced (y:5.372522).
+
+PR 889 is what *exposed* it, not what causes it: the rxq drain changes when the
+host's vrend worker runs the decode relative to the guest, so the stack the
+parameter buffers are built on holds a different value, and whether a decode
+succeeds becomes a property of that timing. Measured, with the same renderer and
+the same image:
+
+| renderer packaging | no889 (PR 889 absent) | rebase (main + PR 889) |
+| --- | --- | --- |
+| pinned prebuilt | PASS | FAIL |
+| source build of the same tree | FAIL | FAIL |
+
+The two renderer builds are code-identical (`.text` matches, one `DT_RUNPATH`
+string differs), and both flip with the drain. A build whose stack happens to hold
+`192` (`% 5 == 2`) decodes; one that holds `0` refuses every picture.
+
+### The fix
+
+`nix/pkgs/patches/virglrenderer-decode-slice-params.patch`: clear the three
+buffers, then fill what the syntax cannot answer -
+
+- `picture_width_in_mbs_minus1` / `picture_height_in_mbs_minus1` from the target
+  surface (upstream vrend leaves the commented-out assignments);
+- the slice buffer's `slice_data_size` / `slice_data_offset` /
+  `slice_data_flag` / `first_mb_in_slice` from the submission;
+- `slice_type` read from the first coded slice NAL's slice header
+  (`first_mb_in_slice` ue(v), then `slice_type` ue(v), emulation-prevention bytes
+  dropped) - the field radeonsi gates on.
+
+Measured against the rebased tree, all four checks the smoke makes (decode,
+encode, round trip, first-GOP-equals-software) with a fresh image, guest-init,
+kernel and renderer per arm:
+
+| arm | tip | decode PSNR |
+| --- | --- | --- |
+| `rebase-real` | `e2a12ec8` (main + PR 889) | PASS `y:46.633758 u:44.227307 v:44.408519` |
+| `no889-real` | `7d6e091e` (revert) | PASS, same values |
+| `drain-real` | `c25366f6` (drain, no signal) | PASS, same values |
+| `rebase-real-b` | `e2a12ec8` again | PASS, same values |
+
+All 11 smoke checks PASS in each arm (`vaapi-first-gop` included, the check that
+compares every plane of every frame of the first GOP against the software
+decode). The same tips without the patch FAIL (the table above). The parser is
+verified against the real bitstream: `00 00 01 65` -> 2 (I), `00 00 01 41` -> 0
+(P), `00 00 01 01` -> 1 (B).
+
+Raw evidence: `/home/dev/cang/disk/nctx/pr889/final2.log` and the per-arm
+`run-*-real/` trees (11 PASS lines each).
+
+### Corrections this makes to the record above
+
+- The `glFinish()` in `virglrenderer-decode-upload-fence.patch` is **not** the
+  mechanism, and the PASS it was credited with came from a stack value that
+  happened to be `2 (mod 5)`. Its premise is wrong for the decode inputs: vrend
+  copies the coded bitstream and the descriptor out of the guest resource with
+  `virgl_read_from_iovec()` into a host buffer, and nothing GL writes them -
+  though the capture resources themselves arrive by transfer, so whether the fence
+  also matters is untested. It is kept (untested, not the fix).
+- The `v0.13.1` release note in `docs/maintenance.md` ("the missing ordering
+  behind the guest's blank VA-API hardware decode") states that same wrong cause.
+  It is a historical entry for a published release and is left alone; the next
+  release entry should carry the parameter-buffer cause.
+- The interim policy "latest main plus a revert of PR 889" is no longer needed:
+  main including PR 889 decodes correctly with the fix, so the fork branch tracks
+  upstream main unmodified (`e2a12ec8`), and `7d6e091e` is kept only as the
+  regression control.
+
+### Still to do
+
+1. Push the rebased fork branch (26 fork commits onto `dc1a18ad`; `e2a12ec8` on
+   scratch clone `<session>.scratch/libkrun-rebase`, also at
+   `/home/dev/cang/disk/nctx/pr889/libkrun`); this sandbox cannot reach a remote
+   git server.
+2. Re-cut the virglrenderer prebuilt asset so it carries the fix
+   (`.github/workflows/build-virglrenderer.yml`, then
+   `scripts/update-virglrenderer-prebuilt.sh`), and drop the temporary
+   `if false then` override in `nix/lib/virglrenderer-cang.nix`.
+3. Move the two references naming the libkrun revision together - the
+   `deps/libkrun` submodule pointer and the `libkrun-src` flake input - and
+   refresh `krunInitCargoDeps` in the same commit.
+4. Consider sending the parameter-buffer fix upstream (virglrenderer's
+   `vrend_video.c` / `virgl_video.c`): the defect is upstream's, and any guest
+   VA-API decode is stack-dependent without it.
