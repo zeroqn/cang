@@ -269,4 +269,12 @@ in
   # published asset per platform; while a platform is absent,
   # nix/lib/zvec-grep-cang.nix falls back to building the same source, so the
   # container build stays reproducible before an asset exists.
+  zgPrebuiltRelease = {
+    owner = "zeroqn";
+    repo = "cang";
+    tag = "alpha";
+    version = "0.3.0";
+    revision = "88777bd1f722a77f96ebc378897fcc262470dac9";
+    systems = { };
+  };
 }

@@ -66,10 +66,14 @@ goes to the input instead of the checkout:
   as `zg`. Upstream publishes no Rust binary (its release assets and platform
   npm packages are the TypeScript build), so `nix/pkgs/zvec-grep.nix` compiles
   it against the pinned `zvecRustLib` C API release asset and Nixpkgs' ONNX
-  Runtime. Built with nixpkgs-unstable, because the workspace's
-  `rust-version = "1.98"` and `ort`'s 1.27 ONNX Runtime API are newer than the
-  26.05 input's rustc 1.95 / onnxruntime 1.24; it is the only package that comes
-  from unstable.
+  Runtime and `nix/lib/zvec-grep-cang.nix` prefers cang's published prebuilt of
+  that derivation when one is pinned for the system. Built with
+  nixpkgs-unstable, because the workspace's `rust-version = "1.98"` and `ort`'s
+  1.27 ONNX Runtime API are newer than the 26.05 input's rustc 1.95 /
+  onnxruntime 1.24; it is the only package that comes from unstable.
+- `.#zvec-grep-release-build`: the source build of the same derivation, which
+  `.github/workflows/build-zg.yml` builds, tars and publishes as the per-system
+  release assets that `.#zvec-grep` then consumes as a prebuilt.
 - `.#dolt-prebuilt`: install the pinned `dolthub/dolt` Linux release tarball
   binary for the current system. The cang image includes this package as
   `dolt` in the agent layer.

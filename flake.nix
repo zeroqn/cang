@@ -111,7 +111,7 @@
           rtkPrebuilt = import ./nix/pkgs/rtk-prebuilt.nix {
             inherit pkgs pins;
           };
-          zvecGrep = import ./nix/pkgs/zvec-grep.nix {
+          zvecGrep = import ./nix/lib/zvec-grep-cang.nix {
             pkgs = zgPkgs;
             inherit pins;
           };
@@ -275,6 +275,13 @@
           # builds, tars and publishes as the per-system release assets that
           # `mesa-cang` / `overlays.default` then consume as prebuilts.
           mesa-release-build = (import ./nix/lib/mesa-patched.nix) pkgs.mesa;
+          # The source build of the Rust zg: what `.github/workflows/build-zg.yml`
+          # builds, tars and publishes as the per-system release asset that
+          # nix/lib/zvec-grep-cang.nix then consumes as a prebuilt.
+          zvec-grep-release-build = import ./nix/pkgs/zvec-grep.nix {
+            pkgs = zgPkgs;
+            inherit pins;
+          };
         }
       );
 

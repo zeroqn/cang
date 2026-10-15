@@ -547,6 +547,17 @@ there is no release to default to; the updater rejects a revision without
 nix develop --command ./scripts/update-zvec-grep.sh --rev <revision-or-tag>
 ```
 
+`nix/pins.nix` also pins `zvecRustLib` (the zvec C API release asset the Rust
+workspace links) and cang's own prebuilt `zg`, and
+`.github/workflows/build-zg.yml` fills the per-system `zgPrebuiltRelease` asset
+(name and SRI hash) whenever the pinned revision, the `zg` stamp or a
+`nixpkgs-unstable` move requires a rebuild. The pin is normally written by that
+workflow; refresh it by hand to re-pin an already published asset:
+
+```bash
+nix develop --command ./scripts/update-zg-prebuilt.sh
+```
+
 ### wl-cross-domain-proxy subtree
 
 `deps/wl-cross-domain-proxy` is a git subtree of
