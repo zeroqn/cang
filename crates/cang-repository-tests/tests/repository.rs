@@ -1408,6 +1408,105 @@ fn virglrenderer_fix_is_shipped_for_the_cang_build_and_for_hosts() {
     );
 }
 
+/// The image's `zg` is the zvec-grep Rust rewrite, built from the pinned
+/// revision's `rust/` workspace - upstream publishes no Rust binary - and cang
+/// publishes a prebuilt of the same derivation through the same
+/// selector/workflow/updater shape mesa and virglrenderer use, so a container
+/// build can skip the llama.cpp/bindgen compile once an asset exists.
+#[test]
+fn zg_is_built_from_the_zvec_grep_rust_workspace_with_a_prebuilt_asset_path() {
+    const ZVEC_GREP_NIX: &str = include_str!("../../../nix/pkgs/zvec-grep.nix");
+    const ZVEC_RUST_LIB_NIX: &str = include_str!("../../../nix/pkgs/zvec-rust-lib.nix");
+    const ZVEC_GREP_CANG_NIX: &str = include_str!("../../../nix/lib/zvec-grep-cang.nix");
+    const ZVEC_GREP_PREBUILT_NIX: &str = include_str!("../../../nix/pkgs/zvec-grep-prebuilt.nix");
+    const BUILD_ZG_WORKFLOW: &str = include_str!("../../../.github/workflows/build-zg.yml");
+    const UPDATE_ZG_SCRIPT: &str = include_str!("../../../scripts/update-zg-prebuilt.sh");
+
+    // The Rust workspace, not the published npm package: it lives under `rust/`
+    // with its own lock, and the stamp has to be substituted into the source
+    // because the workspace version never moves (which is also why `cargoLock`
+    // reads that lock rather than a vendor hash).
+    for required in [
+        "rustPlatform.buildRustPackage",
+        "cargoRoot = \"rust\";",
+        "buildAndTestSubdir = \"rust\";",
+        "cargoLock.lockFile = \"${finalAttrs.src}/rust/Cargo.lock\";",
+        "zvec-rust-lib.nix",
+        "ZVEC_LIB_DIR",
+        "ORT_LIB_LOCATION",
+        "env!(\"CARGO_PKG_VERSION\")",
+    ] {
+        assert!(
+            ZVEC_GREP_NIX.contains(required),
+            "nix/pkgs/zvec-grep.nix should mention {required}"
+        );
+    }
+    assert!(
+        !ZVEC_GREP_NIX.contains("buildNpmPackage"),
+        "the agent layer's zg is the Rust binary, not the npm package"
+    );
+    assert!(
+        ZVEC_RUST_LIB_NIX.contains("libzvec_c_api.so")
+            && ZVEC_RUST_LIB_NIX.contains("autoPatchelfHook"),
+        "nix/pkgs/zvec-rust-lib.nix should reconstruct the pinned zvec C API release asset"
+    );
+
+    // The selector prefers cang's prebuilt asset when one is pinned for the
+    // system and otherwise builds the same source, exactly like mesa and
+    // virglrenderer; the prebuilt consumer reconstructs the tarball with
+    // autoPatchelfHook.
+    assert!(
+        ZVEC_GREP_CANG_NIX.contains("zgPrebuiltRelease")
+            && ZVEC_GREP_CANG_NIX.contains("zvec-grep-prebuilt.nix")
+            && ZVEC_GREP_CANG_NIX.contains("nix/pkgs/zvec-grep.nix"),
+        "nix/lib/zvec-grep-cang.nix should fall back from the prebuilt to the source build"
+    );
+    assert!(
+        ZVEC_GREP_PREBUILT_NIX.contains("fetchurl")
+            && ZVEC_GREP_PREBUILT_NIX.contains("autoPatchelfHook"),
+        "the prebuilt zg package should fetch and reconstruct a release asset"
+    );
+
+    for required in [
+        "zvecGrep = import ./nix/lib/zvec-grep-cang.nix",
+        "zvec-grep-release-build",
+        "zvec-grep = zvecGrep;",
+    ] {
+        assert!(
+            FLAKE_NIX.contains(required),
+            "flake.nix should expose {required}"
+        );
+    }
+    // zg is the only package built against nixpkgs-unstable: the 26.05 input's
+    // rustc 1.95 and ONNX Runtime 1.24 are too old for the workspace.
+    assert!(
+        FLAKE_NIX.contains("zgPkgs = import nixpkgs-unstable { inherit system; };"),
+        "flake.nix should build zg against nixpkgs-unstable"
+    );
+
+    for required in ["zvecGrep", "zvecRustLib", "zgPrebuiltRelease"] {
+        assert!(
+            PINS_NIX.contains(required),
+            "nix/pins.nix should carry {required}"
+        );
+    }
+    for required in [
+        "zvec-grep-release-build",
+        "zgPrebuiltRelease",
+        "zvecGrep",
+        "force_rebuild",
+    ] {
+        assert!(
+            BUILD_ZG_WORKFLOW.contains(required),
+            "the zg workflow should mention {required}"
+        );
+    }
+    assert!(
+        UPDATE_ZG_SCRIPT.contains("zgPrebuiltRelease"),
+        "the zg updater should write the pinned release"
+    );
+}
+
 /// Ticket 08's host escape hatch is a knob and a `dlopen` interposer, not a
 /// bundled mesa. A rename of the knob, the package-relative default directory,
 /// the libva request suffix it matches, or the exported symbol would silently
