@@ -298,6 +298,11 @@ in
     tag = "alpha";
     version = "0.3.0";
     revision = "88777bd1f722a77f96ebc378897fcc262470dac9";
-    systems = { };
+    systems = {
+      x86_64-linux = {
+        asset = "zg-0.3.0-88777bd1-x86_64-linux.tar.gz";
+        hash = "sha256-+0NQkfRta920mRsF70GTMQBE5j0ycn6ILrNIMQ4TZis=";
+      };
+    };
   };
 }
