@@ -569,19 +569,39 @@ Raw evidence: `/home/dev/cang/disk/nctx/pr889/final2.log` and the per-arm
   upstream main unmodified (`e2a12ec8`), and `7d6e091e` is kept only as the
   regression control.
 
-### Still to do
+### Done (2026-10-15)
 
-1. Push the rebased fork branch (26 fork commits onto `dc1a18ad`; `e2a12ec8` on
-   scratch clone `<session>.scratch/libkrun-rebase`, also at
-   `/home/dev/cang/disk/nctx/pr889/libkrun`); this sandbox cannot reach a remote
-   git server.
-2. Re-cut the virglrenderer prebuilt asset so it carries the fix
-   (`.github/workflows/build-virglrenderer.yml`, then
-   `scripts/update-virglrenderer-prebuilt.sh`), and drop the temporary
-   `if false then` override in `nix/lib/virglrenderer-cang.nix`.
-3. Move the two references naming the libkrun revision together - the
-   `deps/libkrun` submodule pointer and the `libkrun-src` flake input - and
-   refresh `krunInitCargoDeps` in the same commit.
-4. Consider sending the parameter-buffer fix upstream (virglrenderer's
-   `vrend_video.c` / `virgl_video.c`): the defect is upstream's, and any guest
-   VA-API decode is stack-dependent without it.
+1. **Pushed and released.** The re-based branch (26 fork commits onto `dc1a18ad`)
+   is `e2a12ec8`, force-pushed to `zeroqn/libkrun`'s `cang` branch - the old line
+   stays reachable: `v2.0.0-cang.7` = `421247f6`, `v2.0.0-cang.8` = `a01c0b79` -
+   and tagged `v2.0.0-cang.9`. Both CI runs published their assets.
+2. **The prebuilt was re-cut and is what ships.** Pushing the patch set to cang's
+   `main` ran `build-virglrenderer.yml`, which rebuilt the asset as
+   `virglrenderer-1.3.0-c8e3fc3b-peabcc329` (the version carries the patch set's
+   hash) and committed the moved pin itself. The temporary `if false then`
+   override in `nix/lib/virglrenderer-cang.nix` is gone; `.#virglrenderer` is the
+   prebuilt again.
+3. **The pins moved together.** `deps/libkrun` and the `libkrun-src` flake input
+   are both on `e2a12ec8`. Nothing else moves with them: libkrun's `Cargo.toml`
+   and both of its locks (`Cargo.lock`, `init/init-binary/Cargo.lock`) are
+   byte-identical between `421247f6` and `e2a12ec8`, so neither cang's
+   `Cargo.lock` nor `krunInitCargoDeps` changes.
+4. **Verified live on the shipped artifacts.** `tools/virglrenderer-cang-smoke
+   --skip-chromium` against a cang built from this pin with the prebuilt (not the
+   source build): every check PASS, `vaapi-psnr-decode` at `y:46.633758
+   u:44.227307 v:44.408519` - the same numbers the patched source build gives -
+   and the smoke's own attribution resolves every `libvirglrenderer.so.1` mapping
+   of the run to
+   `/nix/store/8jxs9z7iizrlbj776g7z1k7pkqpyixz7-virglrenderer-1.3.0-c8e3fc3b-peabcc329`.
+   Evidence: `/home/dev/cang/disk/nctx/pr889/run-shipped/` and `final-run.log`.
+
+### Still open
+
+- Send the parameter-buffer fix upstream (virglrenderer's
+  `src/vrend/virgl_video.c`): the defect is upstream's, and any guest VA-API
+  decode is stack-dependent without it. One detail worth carrying: the warning
+  the patch's "no slice NAL" fallback would print is dead code
+  (`VASliceParameterBufferH264.slice_type` is an `unsigned char`, so
+  `slice_type < 0` is always false and GCC drops the branch and its string), and
+  the assignment still lands `255` there - which the driver refuses, the same
+  outcome the `2` it meant to write would not have guaranteed anyway.

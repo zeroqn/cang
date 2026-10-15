@@ -62,6 +62,13 @@ but **it is not sufficient**: with it in the renderer the arm still fails with P
 889 in the current stack, so cang stays pinned to `v2.0.0-cang.7` (no PR 889) and the
 mechanism hunt continues from the guest-write -> host-read direction.
 
+**Resolved (2026-10-15).** The mechanism is not GL ordering at all: vrend hands
+the host's VA driver H.264 parameter buffers it never cleared, and radeonsi gates
+on the slice type it finds there. [Ticket 16](tickets/16-pr-889-mechanism.md)
+carries the fix, the re-cut prebuilt that ships it and the live smoke on the
+shipped pair. The fork is re-based onto upstream main again - this time with PR
+889 as upstream history - and released as `v2.0.0-cang.9`, which cang pins.
+
 ### The GPU regression in one paragraph
 
 ABI 2's device code dropped two things the fork's vendored rutabaga used to do:
