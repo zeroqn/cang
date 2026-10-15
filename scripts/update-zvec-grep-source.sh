@@ -20,7 +20,7 @@ trap cleanup EXIT
 
 usage() {
   cat <<'USAGE'
-Usage: update-zvec-grep.sh --rev <git-revision-or-tag>
+Usage: update-zvec-grep-source.sh --rev <git-revision-or-tag>
 
 Refresh the pinned zvec-ai/zvec-grep Rust rewrite in nix/pins.nix. The image and
 downstream consumers get `zg` from the `rust/` workspace of this repository (see

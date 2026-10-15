@@ -235,10 +235,11 @@ in
     };
   };
 
-  # Pinned by scripts/update-zvec-grep.sh (rev + srcHash). The revision carries the
-  # Rust rewrite under `rust/`, which is what the image and downstream consumers
-  # get as `zg`; upstream publishes no Rust binary (its release assets and platform
-  # npm packages are the TypeScript build), so nix/pkgs/zvec-grep.nix compiles it.
+  # Pinned by scripts/update-zvec-grep-source.sh (rev + srcHash). The revision
+  # carries the Rust rewrite under `rust/`, which is what the image and downstream
+  # consumers get as `zg`; upstream publishes no Rust binary (its release assets
+  # and platform npm packages are the TypeScript build), so
+  # nix/pkgs/zvec-grep.nix compiles it.
   # The Rust workspace never bumps `[workspace.package] version`, so `version` is
   # the stamp the package applies; `zvecRustLib` below is pinned to the crate
   # version that workspace's `zvec-rust`/`zvec-rust-build` deps require.

@@ -544,7 +544,7 @@ there is no release to default to; the updater rejects a revision without
 `zvecRustLib` release asset:
 
 ```bash
-nix develop --command ./scripts/update-zvec-grep.sh --rev <revision-or-tag>
+nix develop --command ./scripts/update-zvec-grep-source.sh --rev <revision-or-tag>
 ```
 
 `nix/pins.nix` also pins `zvecRustLib` (the zvec C API release asset the Rust
