@@ -76,15 +76,15 @@ in
   herdrPrebuiltRelease = {
     owner = "herdrdev";
     repo = "herdr";
-    tag = "v0.9.1";
+    tag = "v0.9.5";
     systems = {
       x86_64-linux = {
         asset = "herdr-linux-x86_64";
-        hash = "sha256-KgL+0WvrZR7wBuHUPwSPZSyk3FitBTzS1ERQVj1cVLc=";
+        hash = "sha256-FNnovItKngEY13wyJm921GHwm0A0LrI3UpYL2J9Zkp0=";
       };
       aarch64-linux = {
         asset = "herdr-linux-aarch64";
-        hash = "sha256-9Mz03nRfLLmjmpg+m6NwPa1Q7CpY3qgwJs6rchu9jZ4=";
+        hash = "sha256-F9dTby2lCFlSNoDvJ53/ysjkojX05G/o2mwuxEFBiXw=";
       };
     };
   };
@@ -94,15 +94,15 @@ in
   freshPrebuiltRelease = {
     owner = "sinelaw";
     repo = "fresh";
-    tag = "v0.5.2";
+    tag = "v0.5.3";
     systems = {
       x86_64-linux = {
         asset = "fresh-editor-x86_64-unknown-linux-musl.tar.gz";
-        hash = "sha256-Ld4dTn9ZVv2/9cNlYVJcmM7OJCLihJN8iX/y6xfEA30=";
+        hash = "sha256-Ad1A+HO5Qg35tfCicaEs7WcUDb1KmQ6egmcJHF91zbU=";
       };
       aarch64-linux = {
         asset = "fresh-editor-aarch64-unknown-linux-musl.tar.gz";
-        hash = "sha256-pg+h6xm8SDt1hu//Ig03+zz9B58bHLNKSKGhmwnfXwg=";
+        hash = "sha256-ISlHWXilDdgQa7n1ij1o6GdAplVFBMPfNSGAhu5licY=";
       };
     };
   };
@@ -225,12 +225,12 @@ in
   rtkPrebuiltRelease = {
     owner = "rtk-ai";
     repo = "rtk";
-    tag = "v0.49.0";
+    tag = "v1.0.1";
     systems = {
       x86_64-linux = {
         asset = "rtk-x86_64-unknown-linux-musl.tar.gz";
         binary = "rtk";
-        hash = "sha256-cngjHf1+anMKSrf4R7GVvPAiicLVdiKw2rdaZBEQDI8=";
+        hash = "sha256-W5GcO8y3mbZ6YYZtDmF0EKT83xc+JhREDlneL6IANDY=";
       };
     };
   };
