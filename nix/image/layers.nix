@@ -6,6 +6,7 @@
   rmuxPrebuilt,
   rtkPrebuilt,
   zvecGrep,
+  waypipe,
   doltPrebuilt,
   beadsPrebuilt,
   freshPrebuilt,
@@ -467,7 +468,7 @@ let
       pkgs.fontconfig.out
       pkgs.perf
       pkgs.strace
-      pkgs.waypipe
+      waypipe
       wl-cross-domain-proxy
     ];
   imagePathPackages =
@@ -484,7 +485,7 @@ let
       browserImageLayer
       pkgs.perf
       pkgs.strace
-      pkgs.waypipe
+      waypipe
       wl-cross-domain-proxy
     ];
   imagePath = pkgs.lib.makeBinPath (

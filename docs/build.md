@@ -61,6 +61,11 @@ goes to the input instead of the checkout:
 - `.#fresh-prebuilt`: install the pinned `sinelaw/fresh` static-musl Linux
   release tarball for the current system. The cang image includes this package
   as `fresh` in the agent layer.
+- `.#waypipe-bin`: the guest image's `waypipe` - zeroqn/headless's published
+  prebuilt release asset when one is pinned for the system, otherwise Nixpkgs'
+  own build. The image ships it as the guest's `waypipe` (what `cang --waypipe`
+  execs), and a host installs the same output as the matching client, so both
+  ends of the transport come from one build. See `nix/lib/waypipe-cang.nix`.
 - `.#zvec-grep` (`x86_64-linux`): the Rust `zg`, the rewrite in the pinned
   `zvec-ai/zvec-grep` revision's `rust/` workspace, which the agent layer ships
   as `zg`. Upstream publishes no Rust binary (its release assets and platform

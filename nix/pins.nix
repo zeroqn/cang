@@ -73,6 +73,28 @@ in
     };
   };
 
+  # The prebuilt waypipe the guest image ships. It is zeroqn/headless's published
+  # `waypipe-bin` release asset - that repository's `waypipe/prebuilt-package.nix`
+  # recipe, built from the upstream revision below with the fork's
+  # vsock-buffer-128m patch - taken from its rolling `main-build` prerelease, so
+  # the asset name (not the tag) carries the revision. The guest's waypipe server
+  # and a host client built from the same asset then speak the same waypipe
+  # protocol. `systems` mirrors that repository's `release-assets.json`, which
+  # `scripts/update-waypipe-prebuilt.sh` refreshes.
+  waypipePrebuiltRelease = {
+    owner = "zeroqn";
+    repo = "headless";
+    tag = "main-build";
+    version = "0.11.2-unstable-2026-09-26";
+    revision = "6cccb84b74f2e9e5e88a77d004a58c7a87f5b97e";
+    systems = {
+      x86_64-linux = {
+        asset = "waypipe-6cccb84b-x86_64-linux.tar.gz";
+        hash = "sha256-Kea6UcUGiVgFszJeHWMluECRHFeB/sqnXfuiDxvtomw=";
+      };
+    };
+  };
+
   herdrPrebuiltRelease = {
     owner = "herdrdev";
     repo = "herdr";

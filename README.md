@@ -621,3 +621,10 @@ that want the same Rust build the agent layer gets:
 ```nix
 cang.packages.${pkgs.system}.zvec-grep
 ```
+
+The guest image's `waypipe` is the same way: the output is the build the image
+ships, so a host can install it as the matching client for `cang --waypipe`:
+
+```nix
+cang.packages.${pkgs.system}.waypipe-bin
+```

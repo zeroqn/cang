@@ -206,7 +206,7 @@ if [ "$skip_chromium" -eq 0 ]; then
   [ -n "$weston_bin" ] && [ -x "$weston_bin" ] || die "arm 1 needs weston; nix build nixpkgs#weston, or pass --weston <path>
        (run with --skip-chromium for the VA-API arm only)"
   if [ -z "$waypipe_bin" ]; then waypipe_bin="$(command -v waypipe || true)"; fi
-  [ -n "$waypipe_bin" ] && [ -x "$waypipe_bin" ] || die "arm 1 needs waypipe; nix build nixpkgs#waypipe, or pass --waypipe-bin <path>"
+  [ -n "$waypipe_bin" ] && [ -x "$waypipe_bin" ] || die "arm 1 needs waypipe; nix build .#waypipe-bin (the build the image ships), or pass --waypipe-bin <path>"
   if [ -z "$python_bin" ]; then
     python_bin="$(resolve_bin nixpkgs#python3 bin/python3 || true)"
     [ -n "$python_bin" ] || python_bin="$(command -v python3 || true)"

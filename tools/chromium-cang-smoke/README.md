@@ -295,11 +295,11 @@ works; it fails up front only if that resolution produces no file.
 Waypipe mode (needs weston + waypipe + python3; see *--waypipe mode* below):
 
 ```bash
-nix build nixpkgs#weston nixpkgs#waypipe
+nix build nixpkgs#weston .#waypipe-bin
 nix develop --command tools/chromium-cang-smoke/chromium-smoke.sh \
   --waypipe \
   --weston      /nix/store/...-weston-15.0.1/bin/weston \
-  --waypipe-bin /nix/store/...-waypipe-0.11.0/bin/waypipe \
+  --waypipe-bin /nix/store/...-waypipe-0.11.2-unstable-2026-09-26/bin/waypipe \
   --cang "$PWD/roots/cang-prebuilt/bin/cang" \
   --guest-init "$PWD/roots/cang-musl/bin/cang-guest-init" \
   --container  "$PWD/roots/container" \
@@ -313,7 +313,7 @@ needs `--waypipe`, and it drops `--gpu=drm` itself):
 nix develop --command tools/chromium-cang-smoke/chromium-smoke.sh \
   --waypipe --software-renderer \
   --weston      /nix/store/...-weston-15.0.1/bin/weston \
-  --waypipe-bin /nix/store/...-waypipe-0.11.0/bin/waypipe \
+  --waypipe-bin /nix/store/...-waypipe-0.11.2-unstable-2026-09-26/bin/waypipe \
   --cang "$PWD/roots/cang-prebuilt/bin/cang" \
   --guest-init "$PWD/roots/cang-musl/bin/cang-guest-init" \
   --container  "$PWD/roots/container" \
@@ -387,7 +387,7 @@ it, so the screenshot names the hardware renderer by itself; and the same work
 | `--waypipe` | off | run the presenting run and its control, and score them |
 | `--software-renderer` | off | with `--waypipe`: run without `--gpu=drm` and score the software-renderer pin (see `--software-renderer` mode) |
 | `--weston <path>` | `$WESTON_BIN`, else PATH | compositor binary (`nix build nixpkgs#weston`) |
-| `--waypipe-bin <path>` | `$WAYPIPE_BIN`, else PATH | waypipe binary (`nix build nixpkgs#waypipe`) |
+| `--waypipe-bin <path>` | `$WAYPIPE_BIN`, else PATH | waypipe binary; the image ships this same build as the guest server (`nix build .#waypipe-bin`) |
 | `--weston-renderer <gl\|pixman>` | `gl` | compositor renderer; `pixman` is an explicit opt-in (software compositing, so transport evidence only) |
 | `--present-wait <secs>` | 30 | first compositor screenshot after launch; a second follows 30s later |
 | `--python <path>` | `$PYTHON`, else PATH | reads the screenshot pixels (stdlib zlib; `nix develop` provides python3) |
@@ -538,8 +538,8 @@ not need the amdgpu-backed `/dev/dri/renderD*` prerequisite.
   cang state home live under `--out-dir`, and `btrfs-snapshot` is the only
   implemented task-rootfs backend. On non-btrfs the smoke exits 2 up front.
 - `--waypipe` additionally needs **weston** and **waypipe**
-  (`nix build nixpkgs#weston nixpkgs#waypipe`; both resolve in the current pin)
-  and **python3** for the PNG pixel check (`nix develop` provides it). Each is a
+  (`nix build nixpkgs#weston .#waypipe-bin`; the image ships that same waypipe as
+  the guest server) and **python3** for the PNG pixel check (`nix develop` provides it). Each is a
   hard failure with the build command in the message, never a silent skip.
 - **Disk space**: the cang image (with the in-image Chromium) decompresses to
   ~7.7 GiB. The smoke keeps a 12 GiB free-space preflight on the output

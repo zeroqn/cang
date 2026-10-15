@@ -6,6 +6,7 @@
   rmuxPrebuilt,
   rtkPrebuilt,
   zvecGrep,
+  waypipe,
   doltPrebuilt,
   beadsPrebuilt,
   freshPrebuilt,
@@ -27,6 +28,7 @@ let
       rmuxPrebuilt
       rtkPrebuilt
       zvecGrep
+      waypipe
       doltPrebuilt
       beadsPrebuilt
       freshPrebuilt
@@ -56,6 +58,7 @@ let
       rmuxPrebuilt
       rtkPrebuilt
       zvecGrep
+      waypipe
       doltPrebuilt
       beadsPrebuilt
       freshPrebuilt

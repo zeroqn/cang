@@ -6,6 +6,7 @@
   rmuxPrebuilt,
   rtkPrebuilt,
   zvecGrep,
+  waypipe,
   doltPrebuilt,
   beadsPrebuilt,
   freshPrebuilt,
@@ -27,6 +28,7 @@ let
       rmuxPrebuilt
       rtkPrebuilt
       zvecGrep
+      waypipe
       doltPrebuilt
       beadsPrebuilt
       freshPrebuilt
@@ -466,7 +468,13 @@ let
         grep -F './usr/lib/cang-fontconfig' ${containerSourceFile}
         grep -F 'ln -s ${"$"}{pkgs.fontconfig.out} ./usr/lib/cang-fontconfig' ${containerSourceFile}
         test -f ${pkgs.fontconfig.out}/etc/fonts/fonts.conf
-        test -x ${pkgs.waypipe}/bin/waypipe
+        # The guest's waypipe is zeroqn/headless's prebuilt asset where one is
+        # pinned (see nix/lib/waypipe-cang.nix), so run it: the loader resolving
+        # its DT_NEEDED set is what proves autoPatchelfHook rewrote the tarball's
+        # rpath, and the store path carries the pinned version.
+        test -x ${waypipe}/bin/waypipe
+        echo "${waypipe}" | grep -F 'waypipe-${waypipe.version}'
+        HOME="$TMPDIR" ${waypipe}/bin/waypipe --version | grep -F 'waypipe'
         ${browserContracts}
         case ":${layers.imagePath}:" in
           *":${layers.browserImageLayer}/bin:"*) ;;
@@ -481,7 +489,7 @@ let
           *) exit 1 ;;
         esac
         case ":${layers.imagePath}:" in
-          *":${pkgs.waypipe}/bin:"*) ;;
+          *":${waypipe}/bin:"*) ;;
           *) exit 1 ;;
         esac
 

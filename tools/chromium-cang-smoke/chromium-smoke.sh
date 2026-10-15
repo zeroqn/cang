@@ -314,7 +314,7 @@ if [ "$waypipe_mode" -eq 1 ]; then
     exit 2
   }
   [ -x "$waypipe_bin" ] || {
-    echo "FATAL: --waypipe needs waypipe; build it with 'nix build nixpkgs#waypipe' and pass --waypipe-bin <path>" >&2
+    echo "FATAL: --waypipe needs waypipe; build it with 'nix build .#waypipe-bin' (the build the image ships) and pass --waypipe-bin <path>" >&2
     exit 2
   }
   [ -n "$python_bin" ] && [ -x "$python_bin" ] || {

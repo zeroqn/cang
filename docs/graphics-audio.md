@@ -68,6 +68,12 @@ ssh -R /tmp/cang-waypipe.sock:"$XDG_RUNTIME_DIR/cang-waypipe.sock" cang-host
 ./result/bin/cang --waypipe=/tmp/other-waypipe.sock exec TASK -- gui-application
 ```
 
+Both ends of that transport should come from one build. The guest's `waypipe` -
+the server guest-init execs - is the image's own (zeroqn/headless's prebuilt
+asset where one is pinned for the system), and `nix build .#waypipe-bin` is that
+same package for the workstation, so the client and the server speak one
+protocol version.
+
 cang validates that the selected workspace is an absolute directory and each
 valued socket path is absolute and already exists as a Unix socket. The guest
 command is optional; when omitted, cang starts the normal interactive fish

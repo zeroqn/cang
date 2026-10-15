@@ -536,6 +536,18 @@ enough too:
 nix develop --command ./scripts/update-fresh-prebuilt.sh
 ```
 
+Refresh the pinned `waypipe` prebuilt release metadata (version, upstream
+revision and the per-system asset hash) in `nix/pins.nix` from zeroqn/headless's
+`release-assets.json` - the file that repository's own flake reads and its
+`update-release-assets` app writes. That asset lives on the repository's rolling
+`main-build` prerelease, so the asset name, not the tag, carries the revision.
+The updater recomputes each asset's SRI hash from the download and reports a
+disagreement with the published one:
+
+```bash
+nix develop --command ./scripts/update-waypipe-prebuilt.sh
+```
+
 Refresh the pinned `zvec-ai/zvec-grep` revision in `nix/pins.nix` (the `rev` and
 `srcHash` of the `rust/` workspace `nix/pkgs/zvec-grep.nix` compiles). Pass the
 revision explicitly - upstream's release tags still name the TypeScript build, so

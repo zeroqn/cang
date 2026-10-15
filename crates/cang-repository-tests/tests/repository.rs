@@ -1507,6 +1507,72 @@ fn zg_is_built_from_the_zvec_grep_rust_workspace_with_a_prebuilt_asset_path() {
     );
 }
 
+/// The guest image's `waypipe` is zeroqn/headless's prebuilt release asset - the
+/// same artifact that repository's flake names `waypipe-bin` - and the flake
+/// re-exports that package so a host can install the matching client. The image
+/// must not quietly keep nixpkgs' waypipe: the guest server and the host client
+/// have to speak one waypipe protocol.
+#[test]
+fn waypipe_is_the_headless_prebuilt_for_the_image_and_for_hosts() {
+    const WAYPIPE_CANG_NIX: &str = include_str!("../../../nix/lib/waypipe-cang.nix");
+    const WAYPIPE_PREBUILT_NIX: &str = include_str!("../../../nix/pkgs/waypipe-prebuilt.nix");
+    const UPDATE_WAYPIPE_SCRIPT: &str = include_str!("../../../scripts/update-waypipe-prebuilt.sh");
+
+    // The pin names zeroqn/headless's rolling prerelease and the upstream
+    // revision its asset was built from (the tag does not carry either).
+    for required in [
+        "waypipePrebuiltRelease",
+        "owner = \"zeroqn\"",
+        "repo = \"headless\"",
+        "revision = \"6cccb84b74f2e9e5e88a77d004a58c7a87f5b97e\"",
+        "asset = \"waypipe-6cccb84b-x86_64-linux.tar.gz\"",
+    ] {
+        assert!(
+            PINS_NIX.contains(required),
+            "nix/pins.nix should carry {required}"
+        );
+    }
+
+    // The prebuilt package reconstructs that asset with autoPatchelfHook, and the
+    // selector prefers it while keeping nixpkgs' build only as the fallback for a
+    // system zeroqn/headless publishes no asset for.
+    for required in ["fetchurl", "autoPatchelfHook", "runtimeDependencies"] {
+        assert!(
+            WAYPIPE_PREBUILT_NIX.contains(required),
+            "nix/pkgs/waypipe-prebuilt.nix should mention {required}"
+        );
+    }
+    assert!(
+        WAYPIPE_CANG_NIX.contains("waypipePrebuiltRelease")
+            && WAYPIPE_CANG_NIX.contains("waypipe-prebuilt.nix")
+            && WAYPIPE_CANG_NIX.contains("pkgs.waypipe"),
+        "nix/lib/waypipe-cang.nix should prefer the prebuilt and fall back to nixpkgs' waypipe"
+    );
+
+    // The image ships the selector's package, never nixpkgs' `pkgs.waypipe`, and
+    // the wrapper contracts run what it shipped.
+    assert!(
+        LAYERS.contains("      waypipe\n") && !LAYERS.contains("pkgs.waypipe"),
+        "nix/image/layers.nix should ship the waypipe output instead of pkgs.waypipe"
+    );
+    assert!(
+        CONTAINER_NIX.contains("waypipe")
+            && IMAGE_CHECKS_NIX.contains("${waypipe}/bin/waypipe")
+            && !IMAGE_CHECKS_NIX.contains("pkgs.waypipe"),
+        "the image should thread waypipe through and the wrapper contracts should run it"
+    );
+    assert!(
+        FLAKE_NIX.contains("waypipe = import ./nix/lib/waypipe-cang.nix")
+            && FLAKE_NIX.contains("waypipe-bin = waypipe;"),
+        "flake.nix should re-export the image's waypipe as .#waypipe-bin"
+    );
+    assert!(
+        UPDATE_WAYPIPE_SCRIPT.contains("waypipePrebuiltRelease")
+            && UPDATE_WAYPIPE_SCRIPT.contains("release-assets.json"),
+        "the waypipe updater should refresh the pin from zeroqn/headless's release metadata"
+    );
+}
+
 /// Ticket 08's host escape hatch is a knob and a `dlopen` interposer, not a
 /// bundled mesa. A rename of the knob, the package-relative default directory,
 /// the libva request suffix it matches, or the exported symbol would silently

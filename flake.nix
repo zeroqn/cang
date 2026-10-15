@@ -115,6 +115,12 @@
             pkgs = zgPkgs;
             inherit pins;
           };
+          # The guest's waypipe and the matching host client: zeroqn/headless's
+          # prebuilt release asset where one is pinned for the system, otherwise
+          # nixpkgs' own waypipe. See nix/lib/waypipe-cang.nix.
+          waypipe = import ./nix/lib/waypipe-cang.nix {
+            inherit pkgs pins;
+          };
           doltPrebuilt = import ./nix/pkgs/dolt-prebuilt.nix {
             inherit pkgs pins;
           };
@@ -210,6 +216,7 @@
                 rmuxPrebuilt
                 rtkPrebuilt
                 zvecGrep
+                waypipe
                 doltPrebuilt
                 beadsPrebuilt
                 freshPrebuilt
@@ -243,6 +250,7 @@
           container-ci-sccache = cangImageCiSccache;
           container-lib-policy-seccomp-json = containerLibPolicySeccompJson;
           zvec-grep = zvecGrep;
+          waypipe-bin = waypipe;
           dolt-prebuilt = doltPrebuilt;
           beads-prebuilt = beadsPrebuilt;
           fresh-prebuilt = freshPrebuilt;
@@ -304,6 +312,7 @@
             rmuxPrebuilt = packages.rmux-prebuilt;
             rtkPrebuilt = packages.rtk-prebuilt or null;
             zvecGrep = packages.zvec-grep;
+            waypipe = packages.waypipe-bin;
             doltPrebuilt = packages.dolt-prebuilt;
             beadsPrebuilt = packages.beads-prebuilt;
             freshPrebuilt = packages.fresh-prebuilt;

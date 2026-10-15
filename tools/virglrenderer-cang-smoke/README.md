@@ -182,7 +182,7 @@ happen to succeed.
 - **Disk space**: the image unpacks to ~7.7 GiB per hermetic store; the smoke
   keeps a 12 GiB free-space preflight on the output filesystem.
 - Arm 1 needs weston and waypipe (resolved with `nix build nixpkgs#weston
-  nixpkgs#waypipe`, or `--weston`/`--waypipe-bin`) and python3.
+  .#waypipe-bin`, or `--weston`/`--waypipe-bin`) and python3.
 - Arm 2 runs the image's own `ffmpeg` and `vainfo` (agent layer:
   `pkgs.ffmpeg-headless`, `pkgs.libva-utils`). They cannot be host tools: the
   guest's `/nix/store` is the **image's closure** (a few hundred paths, not the
