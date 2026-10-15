@@ -85,11 +85,14 @@ virglrenderer.overrideAttrs (old: {
     # Order the decode's submission against the uploads it reads: the coded
     # bitstream and the parameter buffers are written by GL commands and read by
     # vaEndPicture(), and nothing orders the two - the same gap the encode upload
-    # fence above closes on its side. A guest that gets ahead of the host loses
-    # that race and reads inputs whose writes have not executed, so the decode
-    # comes out neutral. Upstream's vsock rxq drain makes the guest get ahead on
-    # every frame.
+    # fence above closes on its side.
     ../pkgs/patches/virglrenderer-decode-upload-fence.patch
+    # Fill the decode's VA parameter buffers deterministically. h264_fill_*()
+    # leaves most of VAPictureParameterBufferH264/VASliceParameterBufferH264 to
+    # whatever the stack held, and the host's VA driver reads fields from there -
+    # radeonsi takes slice_data_size and picture_width_in_mbs - so the decode's
+    # result depended on stack garbage and flipped with unrelated timing changes.
+    ../pkgs/patches/virglrenderer-decode-slice-params.patch
   ];
 
   # venus-protocol generates its headers with mako, which nixpkgs' pyyaml-only

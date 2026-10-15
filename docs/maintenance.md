@@ -68,6 +68,29 @@ published asset:
 nix develop --command ./scripts/update-virglrenderer-prebuilt.sh
 ```
 
+### The virglrenderer decode parameter buffers
+
+cang's `virglrenderer-decode-slice-params.patch` clears the decode's VA parameter
+buffers (`VAPictureParameterBufferH264`, `VAIQMatrixBufferH264`,
+`VASliceParameterBufferH264`) before vrend fills them, and fills in the members
+the H.264 syntax it is handed cannot answer: the picture's macroblock geometry and
+the slice's type, the latter read from the first coded slice NAL.
+
+Upstream vrend fills only the members the picture descriptor carries, so the rest
+of each buffer holds whatever the stack held. radeonsi reads the slice type from
+that buffer and refuses a picture whose `slice_type % 5` is not 2 (I) while it
+holds no reference frame of its own, so a `P` value left on the stack costs the
+opening pictures of every decode and the surface comes back cleared - which
+presents as a guest VA-API decode that depends on unrelated timing (an unpatched
+vrend with upstream libkrun's vsock rxq drain decodes to grey, without it to the
+source).
+
+The pinned prebuilt asset predates this patch, so
+`nix/lib/virglrenderer-cang.nix` builds the renderer from source today. Re-cut the
+asset (the workflow, then the pin script above) and drop that override to go back
+to the prebuilt path.
+
+
 libkrun itself is no longer pinned as an asset: cang links libkrun's Rust API
 compiled from source (see the next section), so `nix/pkgs/libkrun.nix`,
 `scripts/update-libkrun.sh`, the `libkrunRelease` pin and the

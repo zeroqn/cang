@@ -1,0 +1,148 @@
+--- a/src/vrend/virgl_video.c
++++ b/src/vrend/virgl_video.c
+@@ -1762,6 +1762,105 @@
+     param->framerate_flags.bits.temporal_id = temporal_id;
+ }
+ 
++/* Reads the RBSP bit stream of a NAL, dropping the emulation prevention bytes
++ * (a 0x03 that follows two zero bytes is not part of the syntax). */
++struct h264_bits {
++    const unsigned char *p;
++    unsigned nbytes;
++    unsigned byte;
++    unsigned bit;
++};
++
++static unsigned h264_bit(struct h264_bits *b)
++{
++    unsigned bit;
++
++    if (b->byte >= b->nbytes)
++        return 0;
++    if (b->byte > 1 && b->p[b->byte] == 0x03 &&
++        b->p[b->byte - 1] == 0x00 && b->p[b->byte - 2] == 0x00) {
++        b->byte++;
++        b->bit = 0;
++        if (b->byte >= b->nbytes)
++            return 0;
++    }
++
++    bit = (b->p[b->byte] >> (7 - b->bit)) & 1;
++    if (++b->bit == 8) {
++        b->bit = 0;
++        b->byte++;
++    }
++
++    return bit;
++}
++
++/* ue(v): leading zero bits, then that many bits of value. */
++static unsigned h264_ue(struct h264_bits *b)
++{
++    unsigned zeros = 0, val = 0, i;
++
++    while (!h264_bit(b)) {
++        if (++zeros > 31)
++            return 0;
++    }
++    for (i = 0; i < zeros; i++)
++        val = (val << 1) | h264_bit(b);
++
++    return (1u << zeros) - 1 + val;
++}
++
++/*
++ * The slice type the VA API asks for, read from the slice header of the first
++ * coded slice NAL in this submission. Two syntax elements - first_mb_in_slice
++ * and slice_type, both ue(v) - so a bit reader, not a parser.
++ *
++ * The host needs it and the protocol does not carry it: on the decode path
++ * mesa's fill_h264_picture_desc() sends no slice information at all (only
++ * slice_count and the reference list), and this slice parameter buffer is what
++ * the host's VA driver sees. radeonsi reads that field - it refuses a picture
++ * whose slice_type % 5 is not 2 (I) whenever it holds no reference frame of its
++ * own yet ("Need at least one reference for P/B frames" in si_video_dec.c) - so
++ * a P value, or whatever the stack held, turns the picture into a refused
++ * submission and the surface comes back cleared.
++ *
++ * Returns -1 when the submission holds no NAL this can read a slice header from.
++ */
++static int h264_first_slice_type(unsigned num_buffers,
++                                 const void * const *buffers,
++                                 const unsigned *sizes)
++{
++    unsigned i;
++
++    for (i = 0; i < num_buffers; i++) {
++        const unsigned char *p = buffers[i];
++        unsigned n = sizes[i], off;
++        struct h264_bits bits;
++        unsigned char nal_type;
++
++        /* start code 00 00 01, optionally preceded by a zero byte */
++        for (off = 0; off + 3 < n; off++) {
++            if (p[off] == 0 && p[off + 1] == 0 && p[off + 2] == 1)
++                break;
++        }
++        if (off + 3 >= n)
++            continue;
++
++        off += 3;
++        nal_type = p[off] & 0x1f;
++        if (nal_type != 1 && nal_type != 5)  /* non-IDR slice, IDR slice */
++            continue;
++
++        bits.p = p + off + 1;
++        bits.nbytes = n - off - 1;
++        bits.byte = 0;
++        bits.bit = 0;
++        (void)h264_ue(&bits);               /* first_mb_in_slice */
++        return (int)(h264_ue(&bits) % 5);    /* slice_type, 5-9 repeat 0-4 */
++    }
++
++    return -1;
++}
++
+ static int h264_decode_bitstream(struct virgl_video_codec *codec,
+                                  struct virgl_video_buffer *target,
+                                  const struct virgl_h264_picture_desc *desc,
+@@ -1783,15 +1882,39 @@
+         return -1;
+     }
+ 
++    /* h264_fill_*() sets only the members the H.264 syntax they are handed can
++     * answer, so the rest of each buffer would hold whatever the stack held and
++     * the decode's result would depend on it. Clear them, then fill in what the
++     * syntax cannot provide (the picture's geometry, and the slice's type, which
++     * has to come from the coded data - see h264_first_slice_type()). */
++    memset(&pic_param, 0, sizeof(pic_param));
+     h264_fill_picture_param(codec, target, desc, &pic_param);
++    pic_param.picture_width_in_mbs_minus1 = (target->width - 1) / 16;
++    pic_param.picture_height_in_mbs_minus1 = (target->height - 1) / 16;
+     vaCreateBuffer(va_dpy, codec->va_ctx, VAPictureParameterBufferType,
+                    sizeof(pic_param), 1, &pic_param, &pic_param_buf);
+ 
++    memset(&iq_matrix, 0, sizeof(iq_matrix));
+     h264_fill_iq_matrix(desc, &iq_matrix);
+     vaCreateBuffer(va_dpy, codec->va_ctx, VAIQMatrixBufferType,
+                    sizeof(iq_matrix), 1, &iq_matrix, &iq_matrix_buf);
+ 
++    memset(&slice_param, 0, sizeof(slice_param));
+     h264_fill_slice_param(desc, &slice_param);
++    slice_param.slice_data_size = num_buffers ? sizes[0] : 0;
++    slice_param.slice_data_offset = 0;
++    slice_param.slice_data_flag = VA_SLICE_DATA_FLAG_ALL;
++    slice_param.first_mb_in_slice = 0;
++    slice_param.slice_type = h264_first_slice_type(num_buffers, buffers, sizes);
++    if (slice_param.slice_type < 0) {
++        /* No NAL this can read a slice header from. Leave the I value rather
++         * than the P a zeroed field would mean: the driver refuses a P it has
++         * no reference for, and a submission it cannot identify is better
++         * handed over for it to reject on the data. */
++        virgl_warn("%s: no slice NAL among %u buffer(s), slice type unknown\n",
++                   __func__, num_buffers);
++        slice_param.slice_type = 2;
++    }
+     vaCreateBuffer(va_dpy, codec->va_ctx, VASliceParameterBufferType,
+                    sizeof(slice_param), 1, &slice_param, &slice_param_buf);
+ 
