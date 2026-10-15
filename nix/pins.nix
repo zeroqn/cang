@@ -63,12 +63,12 @@ in
     owner = "zeroqn";
     repo = "cang";
     tag = "alpha";
-    version = "1.3.0-c8e3fc3b-p440d7bb5";
+    version = "1.3.0-c8e3fc3b-peabcc329";
     revision = "c8e3fc3bd2f367d92fb1027061fe51afeec5136e";
     systems = {
       x86_64-linux = {
-        asset = "virglrenderer-1.3.0-c8e3fc3b-p440d7bb5-x86_64-linux.tar.gz";
-        hash = "sha256-3h7WNpXIgAwvzp4kNuH50RukAn98NsINhfRjIsLIpQk=";
+        asset = "virglrenderer-1.3.0-c8e3fc3b-peabcc329-x86_64-linux.tar.gz";
+        hash = "sha256-nshbUuBPoxsr6yv9bOamMw2RVvVVI4zhTZ4venm9YdA=";
       };
     };
   };
