@@ -443,6 +443,19 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.13.1` (`5169870`) - the guest image's Waypipe is the prebuilt revision
+  `zeroqn/headless` publishes for its own hosts (upstream plus the fork's
+  128 MiB vsock buffer patch, so a guest server and a host client built from
+  `.#waypipe-bin` speak one protocol version) instead of nixpkgs' 0.11.0, and
+  the agent layer's `zg` is the Rust rewrite in the same upstream repository,
+  built from a pinned revision with its own published prebuilt, rather than the
+  Node package. The host's `virglrenderer` fences the decoder's inputs before
+  `vaEndPicture` - the missing ordering behind the guest's blank VA-API hardware
+  decode - and the prebuilt pin keys on the patch set as well as the source
+  revision, so a patch change republishes the asset the image ships. The pinned
+  Pi coding agent is v1.2.0 and the pinned packages are herdr v0.9.5, fresh
+  v0.5.3 and rtk v1.0.1; x86_64 asset sha256
+  `6da2a3bff5989f3495ee9d3aace1021d3c82da7fa9e7865fa5f3e877353e8fbe`.
 - `v0.13.0` (`a3b9fed`) - the host GPU runtime becomes diagnosable and the
   guest's VA-API decode works. `cang doctor` reports the host's GPU runtime, the
   render-server environment points at cang's own mesa (renamed `mesa-cang`) and
@@ -504,12 +517,14 @@ nix build .#libkrunfw
 
 Each of these is the hash its release publishes, and each was reproduced locally
 from the tagged tree with the `overrideAttrs` recipe above (v0.9.0 while
-validating that recipe; v0.9.1, v0.10.1, v0.11.0, v0.11.1, v0.11.2, v0.12.0 and
-v0.13.0 before their pins went in - for v0.10.1, v0.11.0, v0.11.2, v0.12.0 and
-v0.13.0 the main-branch run of the same commit published the same bytes as the
-rolling `sha-<shortsha>` artifact first, while for v0.11.1 that run's build step
-failed and the tag run published the bytes the local recipe had already
-produced), so a freshly published `.sha256` that disagrees with this list means
+validating that recipe; v0.9.1, v0.10.1, v0.11.0, v0.11.1, v0.11.2, v0.12.0,
+v0.13.0 and v0.13.1 before their pins went in - for v0.10.1, v0.11.0, v0.11.2,
+v0.12.0, v0.13.0 and v0.13.1 the main-branch run of the same commit published
+the same bytes as the rolling `sha-<shortsha>` artifact first, while for v0.11.1
+that run's build step failed and the tag run published the bytes the local
+recipe had already produced; v0.13.1 was reproduced from three separate
+`.#cang-ci-sccache` builds - two `SCCACHE_DIR` values and the tagged tree -
+before the tag moved), so a freshly published `.sha256` that disagrees with this list means
 the build inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache`
 attribute first.
 
