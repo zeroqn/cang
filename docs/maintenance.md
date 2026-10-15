@@ -85,10 +85,12 @@ presents as a guest VA-API decode that depends on unrelated timing (an unpatched
 vrend with upstream libkrun's vsock rxq drain decodes to grey, without it to the
 source).
 
-The pinned prebuilt asset predates this patch, so
-`nix/lib/virglrenderer-cang.nix` builds the renderer from source today. Re-cut the
-asset (the workflow, then the pin script above) and drop that override to go back
-to the prebuilt path.
+The pinned prebuilt asset carries this patch: a patch-set change moves the asset
+name (`nix/pins.nix`'s `virglrendererPrebuiltRelease`, whose version ends in the
+patch set's hash), and `.github/workflows/build-virglrenderer.yml` rebuilds the
+asset and commits the moved pin on the same push. `nix/lib/virglrenderer-cang.nix`
+therefore ships the prebuilt, and falls back to the source build only for a
+system the release has no asset for.
 
 
 libkrun itself is no longer pinned as an asset: cang links libkrun's Rust API

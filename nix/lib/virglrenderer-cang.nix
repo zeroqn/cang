@@ -28,14 +28,7 @@ let
     vulkan-loader
   ];
 in
-# The prebuilt asset named in `pins.virglrendererPrebuiltRelease` was cut before
-# the decode fix in virglrenderer-decode-slice-params.patch, and an unpatched
-# vrend leaves the decode's VA slice parameter buffer uninitialised, which makes
-# a guest VA-API decode depend on stack layout (see docs/maintenance.md,
-# "The virglrenderer decode parameter buffers"). Build from source until a
-# prebuilt carrying the fix is published and pinned, then restore the next line.
-# if builtins.hasAttr system systems then
-if false then
+if builtins.hasAttr system systems then
   let
     asset = builtins.getAttr system systems;
     prebuilt = pkgs.callPackage ../pkgs/virglrenderer-prebuilt.nix {
