@@ -88,6 +88,11 @@
           # `virglrenderer` with the prebuilt-or-source selector, which is what
           # consumers want but not what CI can build the asset from.
           rawPkgs = import nixpkgs { inherit system; };
+          # zg's Rust workspace pins `rust-version = "1.98"` and a 1.27 ONNX
+          # Runtime API the 26.05 input does not carry (its rustc is 1.95 and its
+          # onnxruntime 1.24). Only zg builds against unstable, so the image stays
+          # on 26.05; see nix/pkgs/zvec-grep.nix.
+          zgPkgs = import nixpkgs-unstable { inherit system; };
           piCodingAgent = import ./nix/pkgs/pi-coding-agent.nix {
             inherit pkgs pins;
           };
@@ -107,7 +112,8 @@
             inherit pkgs pins;
           };
           zvecGrep = import ./nix/pkgs/zvec-grep.nix {
-            inherit pkgs pins;
+            pkgs = zgPkgs;
+            inherit pins;
           };
           doltPrebuilt = import ./nix/pkgs/dolt-prebuilt.nix {
             inherit pkgs pins;

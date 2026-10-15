@@ -1,69 +1,118 @@
+# The Rust `zg` — zvec-grep's rewrite under `rust/` in the same upstream
+# repository — which is what the zvec-grep pi extension drives.
+#
+# Upstream publishes no Rust binary at all: their workflow packs npm tarballs and
+# Actions artifacts only, the platform packages declared in
+# `rust/npm/platforms.json` (`@zvec/zvec-grep-linux-x64-gnu`) answer 404 on the
+# registry, and the released `@zvec/zvec-grep` is still the TypeScript build. So
+# the binary is compiled here (and, once published,
+# `.github/workflows/build-zg.yml` reuses this same derivation to build the
+# prebuilt asset nix/lib/zvec-grep-cang.nix can prefer). Nothing below needs node
+# or npm.
+#
+# `pkgs` must be a nixpkgs whose rustc satisfies the workspace's
+# `rust-version = "1.98"` and whose ONNX Runtime is the 1.27 ABI `ort`'s `api-27`
+# feature wants; the flake passes nixpkgs-unstable for both.
 { pkgs, pins }:
 
 let
   zvecGrep = pins.zvecGrep;
+  zvecRustLib = pins.zvecRustLib;
+
+  zvecLib = pkgs.callPackage ./zvec-rust-lib.nix {
+    releaseAsset = zvecRustLib // {
+      url = "https://github.com/${zvecRustLib.owner}/${zvecRustLib.repo}/releases/download/v${zvecRustLib.version}/${zvecRustLib.asset}";
+    };
+  };
 in
-pkgs.buildNpmPackage {
+pkgs.rustPlatform.buildRustPackage (finalAttrs: {
   pname = "zvec-grep";
+  # The Rust workspace still says 0.0.1 (`[workspace.package]` in rust/Cargo.toml,
+  # never bumped since the rewrite landed), so the release is stamped here. The
+  # extension's argv generation is keyed on `>= 0.2.1` (`styleForVersion` in
+  # extensions/packages/zvec-grep/src/cli.ts), and a workspace manifest the node
+  # CLI seeded is refused outright, so the stamp says what the binary actually is.
   version = zvecGrep.version;
 
   src = pkgs.fetchFromGitHub {
-    owner = zvecGrep.owner;
-    repo = zvecGrep.repo;
-    rev = zvecGrep.rev;
+    inherit (zvecGrep) owner repo rev;
     hash = zvecGrep.srcHash;
   };
 
-  npmDepsHash = zvecGrep.npmDepsHash;
-  npmDepsFetcherVersion = 2;
-  npmRebuildFlags = [ "--ignore-scripts" ];
+  # The Cargo workspace lives in `rust/`, not at the repository root, and
+  # `buildAndTestSubdir` has to be said twice: `cargoLock` reads the lock from
+  # `cargoRoot`, while `cargoBuildHook` builds in `buildAndTestSubdir`.
+  cargoRoot = "rust";
+  buildAndTestSubdir = "rust";
+  cargoLock.lockFile = "${finalAttrs.src}/rust/Cargo.lock";
 
-  nativeBuildInputs = [ pkgs.makeWrapper ];
+  # The extension asks the binary for its version, so stamp the source rather
+  # than the manifest: `cargoLock` vendors from the lock shipped in `src`, and
+  # cargoSetupPostPatchHook fails the build if the tree's Cargo.lock no longer
+  # matches it byte for byte — so bumping `[workspace.package] version` (plus the
+  # lock entries for the workspace crates) is not available here. This is every
+  # `env!("CARGO_PKG_VERSION")` site: `--version`, `--help`, the daemon handshake
+  # version and the MCP server's.
+  postPatch = ''
+    substituteInPlace \
+      rust/crates/zg/src/main.rs \
+      rust/crates/zg-cli/src/render.rs \
+      rust/crates/zg-daemon/src/runtime.rs \
+      rust/crates/zg-transport-mcp/src/lib.rs \
+      --replace-fail 'env!("CARGO_PKG_VERSION")' '"${finalAttrs.version}"'
+  '';
 
-  # The kept prebuilt .node files resolve glibc/libstdc++ through the Nix node's
-  # RUNPATH, so no rpath rewriting is needed and the prebuilt ELF images must not
-  # be modified.
-  dontPatchELF = true;
+  # `llama-cpp-sys-2` compiles the llama.cpp it vendors (`zg-engine` takes
+  # llama-cpp-2 with default-features = false, so the openmp and common features
+  # are off) and drives bindgen off libclang; that is the slow part of this build.
+  nativeBuildInputs = [
+    pkgs.cmake
+    pkgs.autoPatchelfHook
+    pkgs.rustPlatform.bindgenHook
+  ];
 
+  # In `buildInputs`, not only in `env`, so `autoPatchelfHook` writes the rpath the
+  # binary needs to find both later: upstream only emits `$ORIGIN` and
+  # `$ORIGIN/../lib`, which is where its own package puts them. It resolves every
+  # `NEEDED` entry against these, so the C++ runtime the zvec C API and llama.cpp
+  # pull in has to be here too — `libstdc++.so.6` and `libgcc_s.so.1` both come
+  # from `cc.cc.lib`, which is what nixpkgs' own C++-linking packages list.
+  buildInputs = [
+    zvecLib
+    pkgs.onnxruntime
+    pkgs.stdenv.cc.cc.lib
+  ];
+
+  env = {
+    ZVEC_LIB_DIR = "${zvecLib}/lib";
+    # `ort-sys` takes a system ONNX Runtime over its `download-binaries` path when
+    # ORT_LIB_LOCATION is set, and links it dynamically only when asked to.
+    ORT_LIB_LOCATION = "${pkgs.onnxruntime}/lib";
+    ORT_PREFER_DYNAMIC_LINK = "1";
+  };
+
+  # The suite wants network and downloaded models; this package is the binary.
+  doCheck = false;
+
+  # nixpkgs' cargoBuildHook always passes `--target <triple>`, so the artifact is
+  # under the target subdirectory of `target/`, not `target/release/` — the same
+  # subdirectory its own install hook copies from.
   installPhase = ''
     runHook preInstall
-
-    mkdir -p "$out/lib/zvec-grep"
-    cp -R dist "$out/lib/zvec-grep/dist"
-    cp -R node_modules "$out/lib/zvec-grep/node_modules"
-    cp package.json "$out/lib/zvec-grep/package.json"
-
-    # Upstream ships one prebuilt payload per platform. Drop the ones this
-    # x86_64 glibc image can never load: the musl copies need
-    # libc.musl-x86_64.so.1, and the CUDA/cross-arch llama binaries and the
-    # arm64 onnxruntime cannot run in the guest.
-    rm -rf \
-      "$out/lib/zvec-grep/node_modules/@img/sharp-linuxmusl-x64" \
-      "$out/lib/zvec-grep/node_modules/@img/sharp-libvips-linuxmusl-x64" \
-      "$out/lib/zvec-grep/node_modules/@node-llama-cpp/linux-arm64" \
-      "$out/lib/zvec-grep/node_modules/@node-llama-cpp/linux-armv7l" \
-      "$out/lib/zvec-grep/node_modules/@node-llama-cpp/linux-x64-cuda" \
-      "$out/lib/zvec-grep/node_modules/@node-llama-cpp/linux-x64-cuda-ext" \
-      "$out/lib/zvec-grep/node_modules/onnxruntime-node/bin/napi-v3/linux/arm64"
-
-    makeWrapper ${pkgs.nodejs}/bin/node "$out/bin/zg" \
-      --add-flags "$out/lib/zvec-grep/dist/cli/index.js"
-
+    install -Dm755 "target/${pkgs.stdenv.targetPlatform.rust.cargoShortTarget}/$cargoBuildType/zg" $out/bin/zg
     runHook postInstall
   '';
 
   passthru = {
+    inherit zvecLib;
     sourceUrl = "https://github.com/${zvecGrep.owner}/${zvecGrep.repo}/tree/${zvecGrep.rev}";
-    npmRegistryUrl = "https://www.npmjs.com/package/@zvec/zvec-grep";
   };
 
   meta = {
-    description = "Local-first hybrid workspace search CLI (zg)";
+    description = "Agent-friendly workspace search (Rust rewrite of zvec-grep)";
     homepage = "https://github.com/${zvecGrep.owner}/${zvecGrep.repo}";
     license = pkgs.lib.licenses.asl20;
-    mainProgram = "zg";
-    # The installPhase prunes to the x86_64 glibc payload set.
     platforms = [ "x86_64-linux" ];
-    sourceProvenance = [ pkgs.lib.sourceTypes.fromSource ];
+    mainProgram = "zg";
   };
-}
+})

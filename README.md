@@ -614,3 +614,10 @@ seccomp policy via:
 ```nix
 cang.packages.${pkgs.system}.container-lib-policy-seccomp-json
 ```
+
+The `zg` workspace search CLI the image ships is a package output too, for hosts
+that want the same Rust build the agent layer gets:
+
+```nix
+cang.packages.${pkgs.system}.zvec-grep
+```

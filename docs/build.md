@@ -61,10 +61,15 @@ goes to the input instead of the checkout:
 - `.#fresh-prebuilt`: install the pinned `sinelaw/fresh` static-musl Linux
   release tarball for the current system. The cang image includes this package
   as `fresh` in the agent layer.
-- `.#zvec-grep` (`x86_64-linux`): install the pinned `zvec-ai/zvec-grep` (`zg`)
-  hybrid workspace search CLI from the GitHub source archive, wrapped around
-  Nixpkgs Node.js. The agent layer keeps the glibc x86_64 native payloads and
-  prunes the musl, CUDA, and cross-arch copies the image cannot load.
+- `.#zvec-grep` (`x86_64-linux`): the Rust `zg`, the rewrite in the pinned
+  `zvec-ai/zvec-grep` revision's `rust/` workspace, which the agent layer ships
+  as `zg`. Upstream publishes no Rust binary (its release assets and platform
+  npm packages are the TypeScript build), so `nix/pkgs/zvec-grep.nix` compiles
+  it against the pinned `zvecRustLib` C API release asset and Nixpkgs' ONNX
+  Runtime. Built with nixpkgs-unstable, because the workspace's
+  `rust-version = "1.98"` and `ort`'s 1.27 ONNX Runtime API are newer than the
+  26.05 input's rustc 1.95 / onnxruntime 1.24; it is the only package that comes
+  from unstable.
 - `.#dolt-prebuilt`: install the pinned `dolthub/dolt` Linux release tarball
   binary for the current system. The cang image includes this package as
   `dolt` in the agent layer.

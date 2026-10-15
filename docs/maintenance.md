@@ -536,12 +536,15 @@ enough too:
 nix develop --command ./scripts/update-fresh-prebuilt.sh
 ```
 
-Refresh pinned `zvec-ai/zvec-grep` source and npm dependency metadata in
-`nix/pins.nix` (the updater also rejects a release whose `bin.zg` no longer
-points at `dist/cli/index.js`, which `nix/pkgs/zvec-grep.nix` installs):
+Refresh the pinned `zvec-ai/zvec-grep` revision in `nix/pins.nix` (the `rev` and
+`srcHash` of the `rust/` workspace `nix/pkgs/zvec-grep.nix` compiles). Pass the
+revision explicitly - upstream's release tags still name the TypeScript build, so
+there is no release to default to; the updater rejects a revision without
+`rust/Cargo.lock` or whose `zvec-rust` crate version no longer matches the pinned
+`zvecRustLib` release asset:
 
 ```bash
-nix develop --command ./scripts/update-zvec-grep.sh
+nix develop --command ./scripts/update-zvec-grep.sh --rev <revision-or-tag>
 ```
 
 ### wl-cross-domain-proxy subtree

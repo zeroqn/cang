@@ -199,8 +199,12 @@ let
   zvecGrepContracts = ''
     grep -F 'zvecGrep' ${layersSourceFile}
     test -x ${layers.agentImageLayer}/bin/zg
-    ${layers.agentImageLayer}/bin/zg --help >/dev/null
-    HOME="$TMPDIR" ${pkgs.nodejs}/bin/node ${./zvec-grep-native-load-check.mjs} ${layers.agentImageLayer}/lib/zvec-grep
+    # The agent layer ships the Rust zg, not the retired Node wrapper: run it so a
+    # missing rpath entry (the zvec C API, ONNX Runtime, libstdc++) fails here
+    # rather than in a guest, and assert the stamped version the extension keys
+    # its argv style on.
+    HOME="$TMPDIR" ${layers.agentImageLayer}/bin/zg --help >/dev/null
+    HOME="$TMPDIR" ${layers.agentImageLayer}/bin/zg --version | grep -F '${zvecGrep.version}'
     case ":${layers.imagePath}:" in
       *":${layers.agentImageLayer}/bin:"*) ;;
       *) exit 1 ;;

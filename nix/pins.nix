@@ -235,13 +235,38 @@ in
     };
   };
 
-  # Pinned by scripts/update-zvec-grep.sh (srcHash + npmDepsHash).
+  # Pinned by scripts/update-zvec-grep.sh (rev + srcHash). The revision carries the
+  # Rust rewrite under `rust/`, which is what the image and downstream consumers
+  # get as `zg`; upstream publishes no Rust binary (its release assets and platform
+  # npm packages are the TypeScript build), so nix/pkgs/zvec-grep.nix compiles it.
+  # The Rust workspace never bumps `[workspace.package] version`, so `version` is
+  # the stamp the package applies; `zvecRustLib` below is pinned to the crate
+  # version that workspace's `zvec-rust`/`zvec-rust-build` deps require.
   zvecGrep = {
-    version = "0.2.0";
+    version = "0.3.0";
     owner = "zvec-ai";
     repo = "zvec-grep";
-    rev = "v0.2.0";
-    srcHash = "sha256-2o/6QWyeZqOy7O8ikO8puqMXmtvWdjS9Y1rNW/SD/Bc=";
-    npmDepsHash = "sha256-xEK245edmpn5yG2cT0b8/X6ONs4KmLNxxN1jRt5RZe0=";
+    rev = "88777bd1f722a77f96ebc378897fcc262470dac9";
+    srcHash = "sha256-7qSuEsfiiEGdieotYNLQ1JcWEIpPLaG0OyydzMrcPFI=";
   };
+
+  # zvec's C API shared library (`libzvec_c_api.so` plus the jieba dictionary the
+  # Rust bindings load relative to it), taken from zvec-ai/zvec-rust's own prebuilt
+  # release asset for the crate version the zvec-grep workspace pins.
+  # `zvec-rust-build` resolves `ZVEC_LIB_DIR` before downloading or CMake-building
+  # the C++ vector database, so pointing it here keeps the ABI matched and the Nix
+  # build offline.
+  zvecRustLib = {
+    version = "0.7.2";
+    owner = "zvec-ai";
+    repo = "zvec-rust";
+    asset = "zvec-prebuilt-x86_64-unknown-linux-gnu.tar.gz";
+    hash = "sha256-EjveZO2LquXqgTkHr1qzV1ETKB64H8pTEPKKD+T/uSs=";
+  };
+
+  # Prebuilt zg built from the zvecGrep revision above.
+  # `.github/workflows/build-zg.yml` builds it and fills `systems` with the
+  # published asset per platform; while a platform is absent,
+  # nix/lib/zvec-grep-cang.nix falls back to building the same source, so the
+  # container build stays reproducible before an asset exists.
 }

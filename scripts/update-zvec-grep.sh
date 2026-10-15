@@ -5,9 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pins_file="$repo_root/nix/pins.nix"
 owner="zvec-ai"
 repo="zvec-grep"
-release_tag=""
 rev=""
-work_dir="$(mktemp -d)"
 completed=0
 original_pins="$(mktemp)"
 cp "$pins_file" "$original_pins"
@@ -17,31 +15,34 @@ cleanup() {
     cp "$original_pins" "$pins_file"
   fi
   rm -f "$original_pins"
-  rm -rf "$work_dir"
 }
 trap cleanup EXIT
 
 usage() {
   cat <<'USAGE'
-Usage: update-zvec-grep.sh [--tag <release-tag>] [--rev <git-revision>]
+Usage: update-zvec-grep.sh --rev <git-revision-or-tag>
 
-Refresh the pinned zvec-grep source and npm dependency hashes in nix/pins.nix by
-fetching the GitHub source archive and prefetching the upstream npm lockfile.
+Refresh the pinned zvec-ai/zvec-grep Rust rewrite in nix/pins.nix. The image and
+downstream consumers get `zg` from the `rust/` workspace of this repository (see
+nix/pkgs/zvec-grep.nix); upstream's release tags still name the TypeScript build,
+so the revision to pin has to be given explicitly.
 
-Defaults:
-  --tag  latest GitHub release tag
-  --rev  same as --tag
+The updater prefetches the GitHub archive, records its SRI hash, and refuses a
+revision without `rust/Cargo.lock` or whose `zvec-rust` crate version does not
+match the pinned `zvecRustLib` release asset in nix/pins.nix.
+
+The Rust workspace never bumps `[workspace.package] version`, so `zvecGrep.version`
+stays the `zg` stamp (0.3.0); this updater does not change it.
+
+Options:
+  --rev <rev>  git revision or tag to pin (required; --tag is an alias)
 USAGE
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --tag)
-      release_tag="${2:?missing value for --tag}"
-      shift 2
-      ;;
-    --rev)
-      rev="${2:?missing value for --rev}"
+    --rev|--tag)
+      rev="${2:?missing value for $1}"
       shift 2
       ;;
     -h|--help)
@@ -56,27 +57,17 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-for cmd in curl jq python3 nix nix-prefetch-url; do
+for cmd in nix nix-prefetch-url python3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "missing required command: $cmd" >&2
     exit 1
   fi
 done
 
-if [ -z "$release_tag" ]; then
-  release_tag="$(
-    curl -fsSL "https://api.github.com/repos/$owner/$repo/releases/latest" |
-      jq -r '.tag_name // empty'
-  )"
-fi
-
-if [ -z "$release_tag" ]; then
-  echo "failed to determine latest zvec-grep release tag; pass --tag explicitly" >&2
-  exit 1
-fi
-
 if [ -z "$rev" ]; then
-  rev="$release_tag"
+  echo "missing required --rev <git-revision-or-tag>" >&2
+  usage >&2
+  exit 1
 fi
 
 archive_url="https://github.com/$owner/$repo/archive/$rev.tar.gz"
@@ -89,99 +80,57 @@ src_hash_base32="${prefetch_output[0]}"
 src_path="${prefetch_output[1]}"
 src_hash_sri="$(nix hash convert --hash-algo sha256 --to sri "$src_hash_base32")"
 
-source_copy="$work_dir/source"
-cp -R "$src_path" "$source_copy"
-chmod -R u+w "$source_copy"
-
-package_json="$source_copy/package.json"
-lockfile="$source_copy/package-lock.json"
-if [ ! -f "$package_json" ]; then
-  echo "failed to locate package.json in unpacked zvec-grep source" >&2
+workspace_manifest="$src_path/rust/Cargo.toml"
+if [ ! -f "$workspace_manifest" ]; then
+  echo "the pinned revision has no rust/Cargo.toml; $rev predates the Rust zg rewrite" >&2
   exit 1
 fi
-if [ ! -f "$lockfile" ]; then
-  echo "failed to locate package-lock.json in unpacked zvec-grep source" >&2
+if [ ! -f "$src_path/rust/Cargo.lock" ]; then
+  echo "the pinned revision has no rust/Cargo.lock; nix/pkgs/zvec-grep.nix vendors from it" >&2
   exit 1
 fi
 
-version="$(jq -r '.version // empty' "$package_json")"
-if [ -z "$version" ]; then
-  echo "failed to read zvec-grep version from $package_json" >&2
+workspace_zvec_version="$(sed -n 's/^zvec-rust = "=\(.*\)"$/\1/p' "$workspace_manifest" | head -1)"
+if [ -z "$workspace_zvec_version" ]; then
+  echo "failed to read the zvec-rust crate version from $workspace_manifest" >&2
+  exit 1
+fi
+pinned_zvec_version="$(cd "$repo_root" && nix eval --raw --impure --expr '(import ./nix/pins.nix).zvecRustLib.version')"
+if [ "$workspace_zvec_version" != "$pinned_zvec_version" ]; then
+  echo "the Rust workspace pins zvec-rust $workspace_zvec_version but nix/pins.nix zvecRustLib.version is $pinned_zvec_version" >&2
+  echo "update the zvecRustLib release asset (version, asset, hash) in nix/pins.nix in the same change" >&2
   exit 1
 fi
 
-bin_target="$(jq -r '.bin.zg // empty' "$package_json")"
-if [ "$bin_target" != "dist/cli/index.js" ]; then
-  echo "zvec-grep package.json bin.zg is '$bin_target', expected 'dist/cli/index.js'" >&2
-  echo "update nix/pkgs/zvec-grep.nix installPhase before pinning this release" >&2
-  exit 1
-fi
-
-prefetch_npm_deps="$(nix build --no-link --print-out-paths nixpkgs#prefetch-npm-deps)/bin/prefetch-npm-deps"
-npm_cache="$work_dir/npm-cache"
-for attempt in 1 2 3; do
-  rm -rf "$npm_cache"
-  if NPM_FETCHER_VERSION=2 "$prefetch_npm_deps" "$lockfile" "$npm_cache"; then
-    break
-  fi
-  if [ "$attempt" -eq 3 ]; then
-    echo "failed to prefetch zvec-grep npm dependencies after $attempt attempts" >&2
-    exit 1
-  fi
-  echo "npm dependency prefetch failed; retrying ($attempt/3)" >&2
-  sleep 2
-done
-
-npm_deps_hash="$(nix hash path "$npm_cache")"
-nix store add-path --name "zvec-grep-$version-npm-deps" "$npm_cache" >/dev/null
-
-python3 - "$pins_file" "$version" "$owner" "$repo" "$rev" "$src_hash_sri" "$npm_deps_hash" <<'PY'
+python3 - "$pins_file" "$rev" "$src_hash_sri" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 pins_path = Path(sys.argv[1])
-version = sys.argv[2]
-owner = sys.argv[3]
-repo = sys.argv[4]
-rev = sys.argv[5]
-src_hash = sys.argv[6]
-npm_deps_hash = sys.argv[7]
-
-replacement = "\n".join(
-    [
-        "  zvecGrep = {",
-        f'    version = "{version}";',
-        f'    owner = "{owner}";',
-        f'    repo = "{repo}";',
-        f'    rev = "{rev}";',
-        f'    srcHash = "{src_hash}";',
-        f'    npmDepsHash = "{npm_deps_hash}";',
-        "  };",
-    ]
-)
+rev = sys.argv[2]
+src_hash = sys.argv[3]
 
 text = pins_path.read_text()
-updated, count = re.subn(
-    r"  zvecGrep = \{\n.*?\n  \};",
-    replacement,
-    text,
-    count=1,
-    flags=re.S,
-)
-if count != 1:
+block_match = re.search(r'(  zvecGrep = \{\n)(?P<body>.*?)(\n  \};)', text, re.S)
+if block_match is None:
     raise SystemExit("failed to locate zvecGrep block in nix/pins.nix")
 
-pins_path.write_text(updated)
+body = block_match.group(2)
+body, rev_count = re.subn(r'rev = "[^"]*";', f'rev = "{rev}";', body, count=1)
+if rev_count != 1:
+    raise SystemExit("failed to update zvecGrep.rev in nix/pins.nix")
+body, hash_count = re.subn(r'srcHash = "[^"]*";', f'srcHash = "{src_hash}";', body, count=1)
+if hash_count != 1:
+    raise SystemExit("failed to update zvecGrep.srcHash in nix/pins.nix")
+
+pins_path.write_text(text[: block_match.start()] + block_match.group(1) + body + block_match.group(3) + text[block_match.end() :])
 PY
 
 completed=1
 cat <<EOF_SUMMARY
 updated nix/pins.nix:
-  zvecGrep.version = "$version";
-  zvecGrep.owner = "$owner";
-  zvecGrep.repo = "$repo";
   zvecGrep.rev = "$rev";
   zvecGrep.srcHash = "$src_hash_sri";
-  zvecGrep.npmDepsHash = "$npm_deps_hash"
+  zvecGrep.version = "$(cd "$repo_root" && nix eval --raw --impure --expr '(import ./nix/pins.nix).zvecGrep.version')" (unchanged)
 EOF_SUMMARY
