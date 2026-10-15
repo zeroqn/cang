@@ -5,13 +5,13 @@ in
   cangVersion = cargoToml.workspace.package.version;
 
   piCodingAgent = {
-    version = "1.1.0";
+    version = "1.2.0";
     owner = "earendil-works";
     repo = "pi";
-    rev = "v1.1.0";
-    srcHash = "sha256-lwjspkMGrW+8Fl/yBEDEFsHZJA57OKOhmVQmi6zfej4=";
-    npmDepsHash = "sha256-5v7AwgOWlX+nRDB1i4R5PyZVQl5PCSrKM6eS16hKdNI=";
-    aiNpmTarballHash = "sha256-bKqzPOxXSA7QLFf+N0KKAwp3zCoGYoFLQ1pc+JMq2Ck=";
+    rev = "v1.2.0";
+    srcHash = "sha256-IjNJvVxjzRur2foQDWPA5iM9sa3ThBoZU1/LT5pU6jc=";
+    npmDepsHash = "sha256-spuYviVFadLRdkd2v/gLY2zrUPgo6WjPrYmkEmIB8rc=";
+    aiNpmTarballHash = "sha256-w+aUI7yrlxLzGn5bbTRIrjVq+EQ57GvHAfYm9uoWRTU=";
   };
 
   # Pinned by scripts/update-herdr.sh (tag + per-system asset hashes).
