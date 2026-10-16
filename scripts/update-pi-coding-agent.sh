@@ -137,7 +137,15 @@ PY
 rm -f "$source_copy/package-lock.json"
 (
   cd "$source_copy"
-  npm_config_audit=false npm_config_fund=false npm install --package-lock-only --ignore-scripts
+  # `--min-release-age=0` overrides the supply-chain cooldown the upstream
+  # `.npmrc` sets (`min-release-age=2`, a two-day delay). The lock generated
+  # here is for the release under test, and that release's own packages - the
+  # `@earendil-works/*` members the restricted `workspaces` list above leaves
+  # out of the workspace, so npm resolves them from the registry - were
+  # published the same day; the cooldown would exclude exactly what this script
+  # exists to pin. What actually lands is fixed by the lockfile and by the
+  # `npmDepsHash` recorded in nix/pins.nix, not by the resolution window.
+  npm_config_audit=false npm_config_fund=false npm install --package-lock-only --ignore-scripts --min-release-age=0
 )
 
 package_json="$source_copy/packages/coding-agent/package.json"

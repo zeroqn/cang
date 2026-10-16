@@ -70,6 +70,7 @@ pub(super) const IMAGE_CANG_ENV_ALLOWLIST: &[&str] = &[
     "CANG_GRAPHENE_HARDENED_MALLOC_LIB",
     "CANG_REAL_PODMAN",
     "MONTY_BIN",
+    "ONNXRUNTIME_LIB_PATH",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

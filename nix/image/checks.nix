@@ -13,6 +13,7 @@
   containerLibPolicySeccompJson,
   libkrunfw,
   wl-cross-domain-proxy,
+  onnxruntimeShim,
   bun,
   cangMuslPackage,
 }:
@@ -47,6 +48,7 @@ let
       cangMuslPackage
       configPayloads
       layers
+      onnxruntimeShim
       ;
   };
 
@@ -133,6 +135,11 @@ let
   );
   piSourceFile = pkgs.writeText "cang-pi-coding-agent-nix-source.txt" (
     builtins.readFile ../pkgs/pi-coding-agent.nix
+  );
+  # The image-env allowlist the guest bootstrap filters the OCI image Env
+  # through: an image variable that is not in it never reaches the guest.
+  guestEnvModelFile = pkgs.writeText "cang-guest-env-model-rs.txt" (
+    builtins.readFile ../../crates/cang/src/runtime/launch/config/model.rs
   );
 
   # The directory the pi wrapper exposes to prebuilt extension addons, and the
@@ -305,13 +312,18 @@ let
   # `sharp` and `onnxruntime-node`) are glibc ELF objects with
   # `DT_NEEDED libstdc++.so.6`, while the pi binary is a bun standalone artifact
   # with no RUNPATH and no libstdc++ in its own DT_NEEDED - and the guest has no
-  # default library path that supplies it. The wrapper is what carries the
-  # soname into the process, so assert both halves of that wiring and that the
-  # wrapper really hands the variable to its child.
+  # default library path that supplies it. The same addon imports
+  # `OrtGetApiBase@VERS_1.24.3`, which nixpkgs' ONNX Runtime does not define, so
+  # the directory also carries the ABI shim that does. The wrapper is what
+  # carries both into the process, so assert both halves of that wiring and that
+  # the wrapper really hands its children the variable the shim reads.
   nativeAddonRuntimeContracts = ''
     grep -F 'nativeAddonRuntimeDir' ${piSourceFile}
+    grep -F 'onnxruntimeShim' ${piSourceFile}
     grep -F 'makeWrapper $out/lib/pi-coding-agent/pi $out/bin/pi' ${piSourceFile}
     test -e ${nativeAddonRuntimeDir}/lib/libstdc++.so.6
+    test -e ${nativeAddonRuntimeDir}/lib/libonnxruntime.so.1
+    test -e ${nativeAddonRuntimeDir}/lib/libonnxrtabi24.so.1
     test -x ${piCodingAgent}/lib/pi-coding-agent/pi
     # The wrapper, not a symlink to the raw bun binary, is what the image runs.
     test ! -L ${piCodingAgent}/bin/pi
@@ -328,6 +340,30 @@ let
     fi
     chmod +x native-addon-wrapper-env
     ./native-addon-wrapper-env | grep -F "LD_LIBRARY_PATH=${nativeAddonRuntimeDir}/lib"
+    ./native-addon-wrapper-env | grep -F "ONNXRUNTIME_LIB_PATH=${onnxruntimeShim.onnxruntimeLibDir}"
+    # Behavioural, and through *this directory* rather than the shim's own: each
+    # of the three consumer shapes (the vendored binding's soname and node,
+    # `zg`'s node, and a binding patched to ask the shim for itself) has to load
+    # the shim from the path the wrapper hands pi's children and reach the real
+    # ONNX Runtime through it.
+    export LD_LIBRARY_PATH=${nativeAddonRuntimeDir}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+    ${onnxruntimeShim.probes}/bin/onnxruntime-abi-probe | grep -F 'answered GetApi(24)'
+    ${onnxruntimeShim.probes}/bin/onnxruntime-abi-probe-zg | grep -F 'answered GetApi(27)'
+    ${onnxruntimeShim.probes}/bin/onnxruntime-abi-probe-patched-name | grep -F 'answered GetApi(24)'
+    # ... and the exported override reaches it: a directory with no ONNX
+    # Runtime in it must fail rather than fall back to the compiled-in one.
+    if ONNXRUNTIME_LIB_PATH="$TMPDIR" ${onnxruntimeShim.probes}/bin/onnxruntime-abi-probe 2>/dev/null; then
+      echo "native addon runtime: ONNXRUNTIME_LIB_PATH did not reach the ONNX Runtime shim" >&2
+      exit 1
+    fi
+    # The image exports the same directory, and cang's image-env allowlist
+    # carries it into the guest (see IMAGE_CANG_ENV_ALLOWLIST) - without that
+    # entry the guest bootstrap drops the variable and only the shim's
+    # compiled-in fallback would remain.
+    grep -F 'ONNXRUNTIME_LIB_PATH=' ${configSourceFile}
+    grep -F 'ONNXRUNTIME_NODE_INSTALL=skip' ${imageConfigFile}
+    grep -F 'ONNXRUNTIME_LIB_PATH=${onnxruntimeShim.onnxruntimeLibDir}' ${imageConfigFile}
+    grep -F '"ONNXRUNTIME_LIB_PATH",' ${guestEnvModelFile}
   '';
 
   rootCargoAbsent = pkgs.runCommand "cang-image-root-cargo-absent-check" { } ''

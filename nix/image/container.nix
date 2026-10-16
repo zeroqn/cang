@@ -13,6 +13,7 @@
   containerLibPolicySeccompJson,
   libkrunfw,
   wl-cross-domain-proxy,
+  onnxruntimeShim,
   bun,
   cangMuslPackage,
 }:
@@ -47,6 +48,7 @@ let
       cangMuslPackage
       configPayloads
       layers
+      onnxruntimeShim
       ;
   };
   imageChecks = import ./checks.nix {
@@ -65,6 +67,7 @@ let
       containerLibPolicySeccompJson
       libkrunfw
       wl-cross-domain-proxy
+      onnxruntimeShim
       bun
       cangMuslPackage
       ;

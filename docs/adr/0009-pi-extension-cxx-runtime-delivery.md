@@ -38,6 +38,54 @@ before its own initialisation - from 3.3.2 to 3.5.3, built by the same nixpkgs;
 `docs/wayfinder/pi-native-addons/notes/10-raw-preload-early-call.md` carry that
 half. The decision here is unaffected: the guest keeps `mimalloc`.)
 
+(Amended 2026-10-16: the directory also carries the ONNX Runtime ABI shim
+`libonnxruntime.so.1` (`nix/pkgs/onnxruntime-shim.nix`), installed under its
+second name `libonnxrtabi24.so.1`. Two consumers in this image need
+`OrtGetApiBase` from a library named `libonnxruntime.so.1` and import it under
+*different* version nodes: a vendored `onnxruntime-node` binding NEEDs that
+soname while its own `$ORIGIN` holds no library, and imports
+`OrtGetApiBase@VERS_1.24.3`; `zg` NEEDs the same soname and imports
+`@VERS_1.27.1`. No nixpkgs ONNX Runtime answers both - each release exports its
+own node (`@@VERS_1.24.4`, `@@VERS_1.27.1`) and the loader checks the node before
+ONNX Runtime's own append-only `OrtApi` negotiation can run - so one file defines
+the symbol under both nodes and forwards both to one real library,
+nixpkgs-unstable's 1.27.1: the `@VERS_1.27.1` caller wants the 1.27 `OrtApi`,
+while the `@VERS_1.24.3` caller only wants the 1.24 table, which a 1.27 library
+still serves because ONNX Runtime only appends to that vtable. That is also why
+the shim is the same *input* as `zg`'s ONNX Runtime rather than the image's older
+1.24.4: it is the only choice that can satisfy both nodes' callers. The file is
+installed under both names and its SONAME is `libonnxruntime.so.1`, the string the
+consumers' `DT_NEEDED` carries - glibc matches a lookup against the *file* name in
+the search path, so `libonnxrtabi24.so.1` serves a binding built with
+`patchelf --replace-needed` to ask the shim for itself, and `libonnxruntime.so.1`
+serves the unpatched one. The real library is named by `ONNXRUNTIME_LIB_PATH` -
+the wrapper sets it as a *default* and the image exports it, which is also why
+that variable is on cang's image-env allowlist (`IMAGE_CANG_ENV_ALLOWLIST`),
+since an image variable outside it never reaches the guest.
+
+Two consequences are load bearing rather than incidental. First, because
+`LD_LIBRARY_PATH` outranks every binary's own run path, this directory *is* the
+ONNX Runtime of everything pi launches - `zg` included, which is why the shim has
+to answer `@VERS_1.27.1` as well; and a consumer importing a node the shim does
+not define (a binding built against a newer ONNX Runtime than 1.27) will fail to
+load until its node joins the shim's version script. Second, glibc tolerates
+generation mixing in one direction only, and only when the older generation has
+not already been pulled into the process: on 2026-10-16 a 26.05-built consumer
+dlopening the unstable 1.27.1 ONNX Runtime died with `librt.so.1: undefined
+symbol: __pointer_chk_guard, version GLIBC_PRIVATE`, and in this host's shell -
+whose `/etc/ld-nix.so.preload` malloc provider carries the *host's* glibc - the
+same load died with ``libm.so.6: version `GLIBC_2.43' not found``, while in a
+cang guest the same probe loaded that library and answered `GetApi(27)` (the
+guest's `mimalloc` preload pulls no libc-generation-bound library). The guest is
+what this decision has to fit, and it is one of the reasons `pi` is compiled by
+nixpkgs-unstable's bun - the release Magic Context's build scripts already
+require - since a bun standalone binary keeps the dynamic linkage of the bun that
+compiled it, so the process the extension loads the binding in runs on glibc
+2.44. `nativeAddonRuntimeDir`'s probes (the binding's soname and node, `zg`'s
+node, and a patched binding's name) and `container-wrapper-contracts` assert the
+sonames, the exported variable, the allowlist entry and that each consumer shape
+reaches the real library through the shim.)
+
 The guest keeps `mimalloc` as its default allocator. `cang --alloc=hardened`
 incidentally makes the same addons load, because that allocator library carries
 `libstdc++` in its own `DT_NEEDED`; it is documented as a stopgap, not promoted

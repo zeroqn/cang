@@ -317,7 +317,8 @@ the launch path still consumes the encoded private handoff format.
 
   In `fish` the same failure reads `'zg --version' terminated by signal SIGSEGV
   (Address boundary error)`: the fault is in the loader, not in the program. The
-  wrapper's directory holds one `libstdc++.so.6`, and because
+  wrapper's directory holds a single `libstdc++.so.6` (next to the ONNX Runtime
+  ABI shim, which nothing else asks for), and because
   `LD_LIBRARY_PATH` is searched ahead of a binary's own `DT_RUNPATH`, that one
   file is the C++ runtime **ceiling** for every process `pi` launches. A package
   built against a newer libstdc++ than the directory exposes therefore cannot
@@ -327,6 +328,50 @@ the launch path still consumes the encoded private handoff format.
   (nixpkgs-unstable's gcc, because `zg`'s ONNX Runtime is built against it); if
   the guest's `...-cang-native-addon-runtime/lib/libstdc++.so.6` still resolves
   into a `gcc-15.3.0-lib`, the image predates that and its ceiling is too low.
+
+- An extension's `onnxruntime-node` binding fails to load, or `zg` stops
+  starting once it does:
+
+  ```text
+  version `VERS_1.24.3' not found (required by .../onnxruntime_binding.node)
+  version `VERS_1.27.1' not found (required by /nix/store/...-zvec-grep-.../bin/zg)
+  ```
+
+  Both consumers NEED a library named `libonnxruntime.so.1` and import
+  `OrtGetApiBase` under different version nodes (`@VERS_1.24.3` for a vendored
+  binding whose own `$ORIGIN` holds no library, `@VERS_1.27.1` for `zg`), and no
+  nixpkgs ONNX Runtime exports both - each release exports its own node
+  (`@@VERS_1.24.4`, `@@VERS_1.27.1`), and the loader checks the node before ONNX
+  Runtime's own append-only `OrtApi` negotiation can run. Current images answer
+  both with one ABI shim, installed in the pi wrapper's addon-runtime directory as
+  `libonnxruntime.so.1` and `libonnxrtabi24.so.1` (see ADR 0009); an image whose
+  runtime directory holds only `libstdc++.so.6` predates it. The shim loads the
+  real library from `ONNXRUNTIME_LIB_PATH` (the image exports it; the wrapper
+  defaults it), so a wrong value there fails with the shim's own message on
+  stderr:
+
+  ```text
+  onnxruntime ABI shim (libonnxruntime.so.1): cannot load the real ONNX Runtime from '<path>': ...
+  ```
+
+  The path has to name a *directory* containing `libonnxruntime.so.1`
+  (`ORT_SHIM_REAL_LIB` is the exact-file form, for tests). Two further traps are
+  worth knowing. A node the shim does not define cannot be served at all - if a
+  vendored binding is rebuilt against a newer ONNX Runtime, its node has to be
+  added to `versionScript` in `nix/pkgs/onnxruntime-shim.nix`. And because the
+  shim's directory precedes every binary's own run path, it is the ONNX Runtime of
+  everything `pi` launches, including `zg` as a child - which is exactly why it
+  answers `zg`'s node too, and why its forwarded library has to be at least as new
+  as the newest node it advertises. A *host* can still fail where a guest does
+  not: on 2026-10-16 the unstable 1.27.1 ONNX Runtime died in this host's shell
+  with ``libm.so.6: version `GLIBC_2.43' not found`` - its
+  `/etc/ld-nix.so.preload` malloc provider carries the host's older glibc into the
+  process - and with `librt.so.1: undefined symbol: __pointer_chk_guard, version
+  GLIBC_PRIVATE` under a 26.05-built consumer, while the same probes loaded it and
+  answered `GetApi(27)` in a cang guest. Masking the preload for one command
+  (`unshare -r -m sh -c 'mount --bind /dev/null /etc/ld-nix.so.preload; exec
+  <probe>'`) is the quickest way to tell the two causes apart.
+
 
 - A tool dies by signal at startup in a guest but runs on the host, as `zg` did:
 

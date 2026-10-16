@@ -3,6 +3,7 @@
   cangMuslPackage,
   configPayloads,
   layers,
+  onnxruntimeShim,
 }:
 
 let
@@ -32,6 +33,22 @@ let
     "MONTY_BIN=${layers.montyPackage}/bin/monty"
   ];
 
+  # The ONNX Runtime the ABI shim in the pi wrapper (`libonnxruntime.so.1` /
+  # `libonnxrtabi24.so.1`) loads. The shim falls back to the same directory when
+  # the variable is not exported, so this is what makes the choice inspectable
+  # and replaceable in the guest - and it is the reason the variable is on
+  # cang's image-env allowlist. See ADR 0009.
+  #
+  # `ONNXRUNTIME_NODE_INSTALL=skip` keeps the published `onnxruntime-node`
+  # postinstall from fetching its ~301 MiB of CUDA/TensorRT providers, which
+  # nothing in this image requests (the binding runs CPU-only). The image's own
+  # build already installs npm dependencies with `--ignore-scripts`, so this is
+  # for a later `npm install` of that package inside the guest.
+  onnxRuntimeEnv = [
+    "ONNXRUNTIME_LIB_PATH=${onnxruntimeShim.onnxruntimeLibDir}"
+    "ONNXRUNTIME_NODE_INSTALL=skip"
+  ];
+
   cangEnv = [
     "CANG_FISH_CONFIG_SOURCE=${configPayloads.fishConfig}/share/cang/fish/conf.d/cang-starship.fish"
     "CANG_STARSHIP_CONFIG_SOURCE=${configPayloads.starshipConfig}/share/cang/starship.toml"
@@ -47,5 +64,5 @@ in
     "--"
   ];
   WorkingDir = "/workspace";
-  Env = commonEnv ++ cangEnv;
+  Env = commonEnv ++ cangEnv ++ onnxRuntimeEnv;
 }

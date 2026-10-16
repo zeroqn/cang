@@ -1,6 +1,16 @@
 {
   pkgs,
   pins,
+  # The toolchain `bun build --compile` runs under. The flake passes
+  # nixpkgs-unstable's bun rather than `pkgs.bun`: Magic Context's own build
+  # scripts refuse to run below bun 1.4 (`scripts/check-bun.mjs`), and the
+  # standalone binary keeps the compiler's dynamic linkage - so this is also
+  # what decides which glibc `pi` runs on, and with it whether the ONNX Runtime
+  # the ABI shim loads (an unstable build) can be opened in pi's process.
+  bun,
+  # The ONNX Runtime ABI shim (`libonnxruntime.so.1` / `libonnxrtabi24.so.1`)
+  # this package's wrapper exposes, described in nix/pkgs/onnxruntime-shim.nix.
+  onnxruntimeShim,
   nativeAddonCxxRuntime,
 }:
 
@@ -31,9 +41,18 @@ let
   # here is the 26.05 input whose gcc stops a release earlier. libstdc++ keeps
   # its ABI backward compatible, so the newer file still serves an addon built
   # against an older one.
+  # The directory carries exactly the three sonames those consumers lack, and
+  # nothing else: `libstdc++.so.6` because the addons NEED it, and the ONNX
+  # Runtime ABI shim under both of its names - `libonnxruntime.so.1` for a
+  # binding whose `DT_NEEDED` carries that soname, `libonnxrtabi24.so.1` for one
+  # built to ask the shim for itself. The shim answers `@VERS_1.24.3` (the
+  # binding) and `@VERS_1.27.1` (`zg`, which inherits this search path) from one
+  # file; see nix/pkgs/onnxruntime-shim.nix.
   nativeAddonRuntimeDir = pkgs.runCommand "cang-native-addon-runtime" { } ''
     mkdir -p "$out/lib"
     ln -s ${nativeAddonCxxRuntime}/lib/libstdc++.so.6 "$out/lib/libstdc++.so.6"
+    ln -s ${onnxruntimeShim}/lib/libonnxruntime.so.1 "$out/lib/libonnxruntime.so.1"
+    ln -s ${onnxruntimeShim}/lib/libonnxrtabi24.so.1 "$out/lib/libonnxrtabi24.so.1"
   '';
 in
 pkgs.buildNpmPackage {
@@ -66,7 +85,7 @@ pkgs.buildNpmPackage {
   '';
 
   nativeBuildInputs = [
-    pkgs.bun
+    bun
     pkgs.makeWrapper
   ];
   npmBuildScript = "build:binary";
@@ -79,9 +98,13 @@ pkgs.buildNpmPackage {
     chmod +x $out/lib/pi-coding-agent/pi
 
     # `bin/pi` is a wrapper so that native addons loaded by extensions can find
-    # the C++ runtime they need; `lib/pi-coding-agent/pi` stays the raw binary.
+    # the C++ runtime and the ONNX Runtime shim they need;
+    # `lib/pi-coding-agent/pi` stays the raw binary. `ONNXRUNTIME_LIB_PATH` is
+    # the directory the shim loads the real library from, and a *default*: the
+    # image exports it too, and an exported value has to win.
     makeWrapper $out/lib/pi-coding-agent/pi $out/bin/pi \
-      --prefix LD_LIBRARY_PATH : ${nativeAddonRuntimeDir}/lib
+      --prefix LD_LIBRARY_PATH : ${nativeAddonRuntimeDir}/lib \
+      --set-default ONNXRUNTIME_LIB_PATH ${onnxruntimeShim.onnxruntimeLibDir}
 
     install -Dm644 packages/coding-agent/README.md $out/share/doc/pi-coding-agent/README.md
     install -Dm644 packages/coding-agent/CHANGELOG.md $out/share/doc/pi-coding-agent/CHANGELOG.md

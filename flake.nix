@@ -93,6 +93,22 @@
           # onnxruntime 1.24). Only zg builds against unstable, so the image stays
           # on 26.05; see nix/pkgs/zvec-grep.nix.
           zgPkgs = import nixpkgs-unstable { inherit system; };
+          # The ONNX Runtime ABI shim the pi wrapper exposes as
+          # `libonnxruntime.so.1`/`libonnxrtabi24.so.1`: the vendored
+          # `onnxruntime-node` binding NEEDs that soname and imports
+          # `OrtGetApiBase@VERS_1.24.3`, while `zg` NEEDs it too and imports
+          # `@VERS_1.27.1` - and no nixpkgs ONNX Runtime exports both nodes, so
+          # one file has to carry both and forward them. It is built *and*
+          # targeted by this input (unstable, the same ONNX Runtime `zg` links
+          # and the image already carries): the 1.27.1 library is what the
+          # `@VERS_1.27.1` caller's `OrtApi` needs, and it loads in a guest,
+          # measured - the preloaded-malloc failure of 1.27.1 that the earlier
+          # 26.05-input attempt hit belongs to this *#host* shell, not the guest.
+          # See nix/pkgs/onnxruntime-shim.nix.
+          onnxruntimeShim = import ./nix/pkgs/onnxruntime-shim.nix {
+            pkgs = zgPkgs;
+            onnxruntime = zgPkgs.onnxruntime;
+          };
           # The single `libstdc++.so.6` the pi wrapper injects is a ceiling for
           # every process pi launches, because `LD_LIBRARY_PATH` is searched
           # ahead of each binary's own run path. It therefore has to be the
@@ -100,7 +116,12 @@
           # nixpkgs-unstable's gcc: `zg` links an ONNX Runtime built against
           # `GLIBCXX_3.4.35/36`, while the 26.05 input's gcc-15 stops at 3.4.34.
           piCodingAgent = import ./nix/pkgs/pi-coding-agent.nix {
-            inherit pkgs pins;
+            inherit
+              pkgs
+              pins
+              bun
+              onnxruntimeShim
+              ;
             nativeAddonCxxRuntime = zgPkgs.stdenv.cc.cc.lib;
           };
           herdrPrebuilt = import ./nix/pkgs/herdr-prebuilt.nix {
@@ -230,6 +251,7 @@
                 containerLibPolicySeccompJson
                 libkrunfw
                 wl-cross-domain-proxy
+                onnxruntimeShim
                 bun
                 ;
               inherit cangMuslPackage;
@@ -240,6 +262,7 @@
         {
           default = rustPackages.rustPackage;
           pi-coding-agent = piCodingAgent;
+          onnxruntime-shim = onnxruntimeShim;
           rmux-prebuilt = rmuxPrebuilt;
           symposium = symposium;
           cang = rustPackages.rustPackage;
@@ -319,6 +342,7 @@
             rmuxPrebuilt = packages.rmux-prebuilt;
             rtkPrebuilt = packages.rtk-prebuilt or null;
             zvecGrep = packages.zvec-grep;
+            onnxruntimeShim = packages.onnxruntime-shim;
             waypipe = packages.waypipe-bin;
             doltPrebuilt = packages.dolt-prebuilt;
             beadsPrebuilt = packages.beads-prebuilt;
@@ -331,6 +355,11 @@
         in
         {
           container-nix-db-metadata = cangImageChecks.imageConfigNixDbRefs;
+          # The shim's own loader check: builds the three consumer shapes (the
+          # binding's node and name, `zg`'s node, and a patched binding's name)
+          # and runs each against the real ONNX Runtime, including the
+          # ONNXRUNTIME_LIB_PATH and ORT_SHIM_REAL_LIB overrides.
+          onnxruntime-shim-probe = packages.onnxruntime-shim.probes;
           container-codex-absent = cangImageChecks.codexAbsent;
           container-omx-absent = cangImageChecks.omxAbsent;
           container-omp-absent = cangImageChecks.ompAbsent;
