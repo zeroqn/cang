@@ -1,4 +1,8 @@
-{ pkgs, krunInitBinary, libkrunfw }:
+{
+  pkgs,
+  krunInitBinary,
+  libkrunfw,
+}:
 
 pkgs.mkShell {
   # Building cang now compiles libkrun's Rust API out of `deps/libkrun`, which
@@ -30,6 +34,7 @@ pkgs.mkShell {
     pkgs.fish
     pkgs.fuse-overlayfs
     pkgs.jq
+    pkgs.nixfmt
     pkgs.passt
     pkgs.podman
     pkgs.python3

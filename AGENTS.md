@@ -63,6 +63,12 @@ nix build .#cang
 nix build .#container
 ```
 
+Enable the repo's git hooks once per clone with
+`git config core.hooksPath .githooks`. The `pre-commit` hook runs `nixfmt` over
+the staged `.nix` files and stages the result, so a commit never carries
+unformatted Nix; a file `nixfmt` cannot parse fails the commit, and
+`git commit --no-verify` skips the hook.
+
 To run the CLI from a built artifact:
 
 ```bash

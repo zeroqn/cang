@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Format the Nix files in this commit with nixfmt.
+#
+# Enabled per clone with `git config core.hooksPath .githooks` (see AGENTS.md).
+# Bypass a run with `git commit --no-verify`.
+#
+# Only what is staged is rewritten, and only in the index: a file whose working
+# tree copy holds staged content exactly is also written back, so the commit and
+# the checkout stay in step, while a partially staged file keeps its unstaged
+# edits untouched. A file nixfmt cannot parse fails the commit.
+#
+# nixfmt comes from `PATH` when the commit runs inside `nix develop` (the
+# devshell carries it), otherwise from the devshell through one `nix develop`
+# call whose result is cached in `$GIT_DIR/cang-nixfmt` - a flake evaluation
+# costs seconds, which a cache keeps off every later commit. Delete that file to
+# re-resolve it.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+git diff --cached --name-only --diff-filter=ACMR -z -- '*.nix' > "$tmp/files"
+[ -s "$tmp/files" ] || exit 0
+
+# $1: the path to nixfmt, or nothing and a non-zero status.
+resolve_nixfmt() {
+  if command -v nixfmt >/dev/null 2>&1; then
+    command -v nixfmt
+    return 0
+  fi
+
+  cache="$(git rev-parse --absolute-git-dir)/cang-nixfmt"
+  if [ -f "$cache" ] && [ -x "$(cat "$cache")" ]; then
+    cat "$cache"
+    return 0
+  fi
+
+  command -v nix >/dev/null 2>&1 || return 1
+  resolved="$(nix develop --command sh -c 'command -v nixfmt' 2>/dev/null)" || return 1
+  [ -x "$resolved" ] || return 1
+  printf '%s' "$resolved" > "$cache"
+  printf '%s' "$resolved"
+}
+
+if ! nixfmt_bin="$(resolve_nixfmt)"; then
+  echo "pre-commit: no nixfmt (not on PATH, not cached, and nix could not supply it); skipping Nix formatting" >&2
+  exit 0
+fi
+
+reformatted=0
+while IFS= read -r -d '' f; do
+  staged_blob=$(git rev-parse ":$f")
+  git cat-file blob "$staged_blob" > "$tmp/staged.nix"
+
+  if ! "$nixfmt_bin" - < "$tmp/staged.nix" > "$tmp/formatted.nix" 2> "$tmp/error"; then
+    echo "pre-commit: nixfmt cannot parse $f" >&2
+    sed 's/^/pre-commit:   /' "$tmp/error" >&2
+    exit 1
+  fi
+
+  cmp -s "$tmp/staged.nix" "$tmp/formatted.nix" && continue
+
+  mode=$(git ls-files -s -- "$f" | cut -d' ' -f1)
+  blob=$(git hash-object -w -- "$tmp/formatted.nix")
+  git update-index --cacheinfo "$mode,$blob,$f"
+
+  # Keep the checkout in step, but never overwrite edits that are not staged.
+  if [ -f "$f" ] && [ "$(git hash-object -- "$f")" = "$staged_blob" ]; then
+    cat "$tmp/formatted.nix" > "$f"
+  fi
+
+  echo "pre-commit: formatted $f"
+  reformatted=$((reformatted + 1))
+done < "$tmp/files"
+
+if [ "$reformatted" -gt 0 ]; then
+  echo "pre-commit: nixfmt rewrote $reformatted file(s); staged the result"
+fi
+exit 0
