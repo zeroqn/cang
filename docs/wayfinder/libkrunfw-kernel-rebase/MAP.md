@@ -22,10 +22,20 @@ that kernel. Evidence, the release layout and the traps are in
 [notes/02](notes/02-two-kernel-lines-and-lto.md); the patch-level detail is in
 [notes/01](notes/01-rebase-findings.md).
 
+**Follow-up (2026-10-16): the line moved on to linux-7.2.10-hardened1**, the
+next linux-hardened release, published as **`v5.6.2-cang.4`**. A patch-level bump
+of the same line, not a new branch: one hunk needed re-authoring (linux-7.2.9
+backported upstream's `1e3b08de` revert, so the guest-blob PRIME-import gate the
+fork's patch 0023 extends had changed shape), the four x86_64 configs were
+refreshed, and both live smokes pass on the pinned `-kvm-lto` bytes with the
+7.2.7 baseline's VA-API numbers to the digit:
+[notes/03](notes/03-rebase-7.2.10-and-the-lto-kernel.md).
+
 ## Notes
 
 - [The 7.2.7 re-base: what dropped, what was re-authored, what runs](notes/01-rebase-findings.md)
 - [Two kernel lines, the versioned releases, and the LTO kernel on the GPU smoke](notes/02-two-kernel-lines-and-lto.md)
+- [The 7.2.10 follow-up: the upstream revert that landed, and the pinned LTO kernel](notes/03-rebase-7.2.10-and-the-lto-kernel.md)
 - The procedure and its pitfalls are recorded in
   [docs/maintenance.md](../../maintenance.md#re-basing-the-libkrunfw-guest-kernel),
   next to the fork-update procedure it belongs to.
@@ -42,3 +52,7 @@ that kernel. Evidence, the release layout and the traps are in
   line continues `v5.6.2-cang.<n>` and the LTS line starts `v5.6.2-cang-lts.<n>`.
 - **Refresh the LTO configs and smoke them.** All four x86_64 configs are built
   and refreshed; the LTO variant is the one the smoke ran on.
+- **A patch-level kernel bump rides the same line.** linux-hardened cutting a
+  later stable series (`v7.2.10-hardened1`) re-bases the `cang` branch and takes
+  the next `v5.6.2-cang.<n>`; it is not a new branch, and the LTS line is not
+  dragged along.

@@ -211,7 +211,15 @@ version bump:
    `make -f MakefileLto package HOSTCC=gcc HOSTCXX=g++ 'CLANG=clang -nostartfiles'`
    with `nixpkgs#llvmPackages.clang-unwrapped` and
    `nixpkgs#llvmPackages.bintools-unwrapped` on `PATH`; CI's stock clang needs
-   none of that.
+   none of that. `nix shell` supplies only `bin`, so a build outside `nix
+   develop` also has to be handed, through the environment, what a devshell
+   gives for free: libelf for `tools/objtool` (`CPATH` = `elfutils.dev`'s
+   `include`, `LIBRARY_PATH` += elfutils' `lib`), the GCC library directories
+   (`dirname "$(gcc -print-file-name=libgcc.a)"`, the same for `libgcc_s.so` and
+   `libc.so` - the unwrapped clang has no configured GCC installation, so the
+   final link otherwise fails with `unable to find library -lgcc_s`), and
+   `PYTHONPATH` for pyelftools, which `bin2cbundle.py` imports
+   (`python3Packages.pyelftools`'s `lib/python3.*/site-packages`).
 4. Build the kernel (`make` in the fork checkout, or
    `nix build .#cang-dev --override-input libkrunfw-src path:$PWD/deps/libkrunfw`)
    and **boot a real guest** with the built firmware
@@ -221,7 +229,7 @@ version bump:
    refreshed and its build is verified, and cut and pin the fork release as in
    the scheme above.
 
-Two traps worth knowing, both found the hard way in the 7.2.7 re-base:
+Traps worth knowing, all found the hard way:
 
 - **Virtualization feature bits collide with upstream.** The fork's
   `VIRTIO_GPU_F_FENCE_PASSING` and upstream's `VIRTIO_GPU_F_BLOB_ALIGNMENT` are
@@ -237,6 +245,22 @@ Two traps worth knowing, both found the hard way in the 7.2.7 re-base:
   three-way merge can also drop a closing brace or a `break` at a hunk boundary
   without complaining, so compile every touched file - the kernel build is the
   only check that matters.
+
+- **A stable point release can backport a revert of the commit a fork patch
+  extends.** linux-7.2.9 picked up upstream's `1e3b08de` (a revert of the 3D
+  PRIME-import patch the fork's `CREATE_GUEST_HANDLE` hunk builds on,
+  stable `bed76f2c0f9e`), so a hunk whose context was `if
+  (!vgdev->has_resource_blob)` on 7.2.7 stopped applying on 7.2.10 - the new tree
+  already read `if (!vgdev->has_resource_blob || vgdev->has_virgl_3d)`. Read the
+  new base's actual file (`git.kernel.org`'s `plain/<path>?h=vX.Y.Z` is enough)
+  and the stable `ChangeLog-X.Y.Z` for the revert, rather than assuming a
+  patch-level bump only moves feature bits.
+- **The release asset's hash is not reproducible across CI runs.** `tar czf`
+  stores member mtimes, so re-running the publish workflow for the same commit
+  re-uploads the same `libkrunfw.so.5.6.2` inside a `.tgz` with a different
+  sha256. Pin only after the last workflow run for that tag has finished (a
+  queued or re-triggered run `--clobber`s the assets and silently invalidates a
+  pin taken earlier), and compare builds by the library's own sha256.
 
 `deps/libkrunfw` works the same way: its **`libkrunfw-src` input** (the kernel
 source `.#cang-dev` builds) moves with the **submodule pointer**, while the
@@ -304,8 +328,8 @@ them.
 `zeroqn/libkrunfw` keeps one kernel line per branch, so a kernel re-base never
 has to drag a second line along:
 
-- **`cang`** is the newest kernel line (currently linux-7.2.7 + linux-hardened
-  v7.2.7-hardened1). cang's `libkrunfw-src` input and the primary
+- **`cang`** is the newest kernel line (currently linux-7.2.10 + linux-hardened
+  v7.2.10-hardened1). cang's `libkrunfw-src` input and the primary
   `libkrunfwRelease` pin follow it.
 - **`cang-lts`** is the LTS line (linux-6.12.109 + v6.12.109-hardened1). It also
   carries the fork's arm64 patches; a re-base of the newest line drops them.
@@ -320,7 +344,7 @@ for `cang-lts`.
 Pin a permanent libkrunfw release, and use it for any tagged cang release:
 
 ```bash
-nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.3
+nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.4
 nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang-lts.1
 nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang-lts.1
 ```

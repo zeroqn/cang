@@ -127,6 +127,42 @@ so the screenshot names it too.
 **GPU acceleration works**: Chromium in the cang microVM renders WebGL through
 the host GPU via `virtio-gpu` venus (`--gpu=drm`), with RADV on the host.
 
+### Baseline update (2026-10-16): libkrunfw `v5.6.2-cang.4`, guest kernel 7.2.10-hardened1, clang ThinLTO
+
+Re-measured for the fork's move to linux-7.2.10 + linux-hardened
+v7.2.10-hardened1 (fork commit `901412d`, released as `v5.6.2-cang.4`), on the
+**`-kvm-lto`** firmware - the asset cang's `libkrunfwRelease` pin consumes,
+here the published one, and this time through cang's own package (the
+`.#cang-prebuilt` wrapper, no `CANG_LIBKRUNFW_LIBRARY`), against `.#container`:
+
+```text
+PASS  version       Chromium 155.0.8059.39
+PASS  chromium-rc   gpu-dom=0 webgl=0 dom=0  (all three Chromium runs exit 0)
+PASS  webgl-vulkan  ANGLE (AMD, Vulkan 1.4.343 (Virtio-GPU Venus (AMD Radeon RX 7600M XT (RADV NAVI33)) (0x00007480)), venus)
+PASS  webgl-png     non-empty PNG screenshot
+PASS  waypipe-transport / venus-presenting / frame-presented / renderer-on-frame / control-no-frame
+INFO  gpu-dom       rc=0 captured; unscored (feature table is shadow DOM)
+VERDICT: PASS — evidence: <out>/workspace/evidence (fresh, 25 files)
+```
+
+The run's own `gpu-diag.txt` line 1 reads `uname: Linux localhost
+7.2.10-hardened1 ...`, so the venus renderer above is that kernel's. The same
+firmware also passes `tools/virglrenderer-cang-smoke` (`--skip-chromium`) with
+per-plane PSNR identical to the 7.2.7 baseline - decode
+`y:46.633758 u:44.227307 v:44.408519`, encode and roundtrip
+`y:46.537574 u:43.627419 v:42.909682` - as does the gcc `-kvm` variant. The
+re-base's traps (an upstream revert that landed in 7.2.9 and changed the shape
+of the fork's PRIME-import gate) are in
+`docs/wayfinder/libkrunfw-kernel-rebase/notes/03-*`.
+
+Note for anyone re-reading an asset hash: the `.tgz` hash moves between CI runs
+of the same commit, because `tar czf` stores member mtimes, while the
+`libkrunfw.so.5.6.2` inside is byte-identical (here
+`bd4cd0e54601da9981cba7bf5c92b2b082e942ee462e41bc715a19ce07fab3ec`, 24,643,416
+bytes; the pinned archive is
+`1d718e70f08fbd7705f2888eea674704c9dfb69b931508b97436778a1e7b6bc3`, 9,608,644
+bytes).
+
 ### Baseline update (2026-09-30): libkrunfw `v5.6.2-cang.3` (unreleased at the time), guest kernel 7.2.7-hardened1, clang ThinLTO
 
 Re-measured for the fork's 7.2.7 kernel line (linux-7.2.7 +
