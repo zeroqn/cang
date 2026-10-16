@@ -1,0 +1,17 @@
+# Host-side zg matrix (uncommitted fix, 2026-10-16)
+# harness: notes/10-raw-host-zg-probe.sh, run as `unshare -r -m bash <script>`
+# environment: unshare -r -m, /etc/ld-nix.so.preload bound to /dev/null
+# Z=/nix/store/30swk6s3s01n03h9ikdv8ij9jnhwk061-zvec-grep-0.3.0/bin/zg
+# M332=...-mimalloc-3.3.2/lib/libmimalloc.so  M353=...-mimalloc-3.5.3/lib/libmimalloc.so
+# OLD=/nix/store/dqj57l1prad38vjrad4bs9d977i4q5zm-gcc-15.3.0-lib/lib   (26.05, pre-fix wrapper)
+# NEW=/nix/store/j7qx4s4mr17j1wqgvqdzj33lmrnzb387-gcc-16.2.0-lib/lib  (unstable, fixed wrapper)
+inherited LD_LIBRARY_PATH=[/nix/store/42wmsp2dm54w19db3526yizvc6ail1jf-cang-native-addon-runtime/lib]
+A clean (no preload, no LD_LIBRARY_PATH)       rc=0    0.3.0
+B mimalloc 3.5.3 (fixed allocator)             rc=0    0.3.0
+C mimalloc 3.3.2 (pre-fix allocator)           rc=139  
+D LD_LIBRARY_PATH=26.05 gcc (pre-fix wrapper)  rc=1    /nix/store/30swk6s3s01n03h9ikdv8ij9jnhwk061-zvec-grep-0.3.0/bin/zg: /nix/store/dqj57l1prad38vjrad4bs9d977i4q5z
+E LD_LIBRARY_PATH=unstable gcc (fixed wrapper) rc=0    0.3.0
+F pre-fix combo (332 + 26.05)                  rc=1    /nix/store/30swk6s3s01n03h9ikdv8ij9jnhwk061-zvec-grep-0.3.0/bin/zg: /nix/store/dqj57l1prad38vjrad4bs9d977i4q5z
+G FIXED combo (3.5.3 + unstable)               rc=0    0.3.0
+H half-fixed (3.5.3 + 26.05)                   rc=1    /nix/store/30swk6s3s01n03h9ikdv8ij9jnhwk061-zvec-grep-0.3.0/bin/zg: /nix/store/dqj57l1prad38vjrad4bs9d977i4q5z
+I half-fixed (3.3.2 + unstable)                rc=139  

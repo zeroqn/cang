@@ -1,4 +1,8 @@
-{ pkgs, pins }:
+{
+  pkgs,
+  pins,
+  nativeAddonCxxRuntime,
+}:
 
 let
   piAiNpmTarball = pkgs.fetchurl {
@@ -16,9 +20,20 @@ let
   # back on. This directory exposes exactly the soname those addons are missing
   # and nothing else, because `LD_LIBRARY_PATH` is searched ahead of a binary's
   # own `DT_RUNPATH`.
+  #
+  # Being searched ahead of every binary's own run path also makes the one file
+  # here a *ceiling* for the whole process tree: an injected libstdc++ older than
+  # what some consumer in the image was built against leaves that consumer
+  # unstartable, because a `GLIBCXX_3.4.x` version need cannot be satisfied by a
+  # file that does not define it (`zg`'s ONNX Runtime is such a consumer). So
+  # `nativeAddonCxxRuntime` has to be the newest C++ runtime the image's
+  # consumers need - the flake fills it from nixpkgs-unstable's gcc, while `pkgs`
+  # here is the 26.05 input whose gcc stops a release earlier. libstdc++ keeps
+  # its ABI backward compatible, so the newer file still serves an addon built
+  # against an older one.
   nativeAddonRuntimeDir = pkgs.runCommand "cang-native-addon-runtime" { } ''
     mkdir -p "$out/lib"
-    ln -s ${pkgs.stdenv.cc.cc.lib}/lib/libstdc++.so.6 "$out/lib/libstdc++.so.6"
+    ln -s ${nativeAddonCxxRuntime}/lib/libstdc++.so.6 "$out/lib/libstdc++.so.6"
   '';
 in
 pkgs.buildNpmPackage {

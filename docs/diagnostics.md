@@ -309,6 +309,49 @@ the launch path still consumes the encoded private handoff format.
   probing with `node` hides the problem: node links `libstdc++` itself and loads
   the addon even when the guest cannot, so use `bun` (or `pi`) to reproduce it.
 
+- A C++ binary the agent runs fails to start once `pi` has set its environment:
+
+  ```text
+  /nix/store/...-zvec-grep-0.3.0/bin/zg: /nix/store/...-cang-native-addon-runtime/lib/libstdc++.so.6: version `GLIBCXX_3.4.35' not found (required by /nix/store/...-onnxruntime-1.27.1/lib/libonnxruntime.so.1)
+  ```
+
+  In `fish` the same failure reads `'zg --version' terminated by signal SIGSEGV
+  (Address boundary error)`: the fault is in the loader, not in the program. The
+  wrapper's directory holds one `libstdc++.so.6`, and because
+  `LD_LIBRARY_PATH` is searched ahead of a binary's own `DT_RUNPATH`, that one
+  file is the C++ runtime **ceiling** for every process `pi` launches. A package
+  built against a newer libstdc++ than the directory exposes therefore cannot
+  start from `pi` (or from any process `pi` started), while the same binary runs
+  from a plain shell or under `env -u LD_LIBRARY_PATH zg ...`. Current images
+  fill the directory from the newest C++ runtime the image needs
+  (nixpkgs-unstable's gcc, because `zg`'s ONNX Runtime is built against it); if
+  the guest's `...-cang-native-addon-runtime/lib/libstdc++.so.6` still resolves
+  into a `gcc-15.3.0-lib`, the image predates that and its ceiling is too low.
+
+- A tool dies by signal at startup in a guest but runs on the host, as `zg` did:
+
+  ```text
+  'zg --version' terminated by signal SIGSEGV (Address boundary error)
+  ```
+
+  The guest preloads `pkgs.mimalloc` into every nix-linked process - that is the
+  default allocator - and ld.so initialises a preload's constructor *after* the
+  binary's dependency initialisers, so whatever those do first runs on an
+  allocator that has not been through its own initialisation yet. `zg` dies in
+  that window: libstdc++'s static initialiser runs there, and under the glibc the
+  unstable toolchain brings (2.44, newer than the 2.42 the preloaded object was
+  built against) mimalloc 3.3.2 faults in it, so `zg` is killed before `main`. The
+  same nixpkgs' 3.5.3 does not fault, with nothing else changed. `free(NULL)`
+  alone is not enough to trigger it, which is why the culprit looked like the
+  locale path. Only the guest shows it, because the development host preloads
+  `hardened_malloc` instead. Confirm it by
+  masking the preload for one command (`unshare -r -m sh -c 'mount --bind
+  /dev/null /etc/ld-nix.so.preload; exec zg --version'`, which prints the
+  version) or by booting `--alloc=glibc`; leaving the allocator out of the
+  picture entirely is what `--alloc=glibc` does. Images whose
+  `/nix/store/*-mimalloc-3.3.2` is the preload predate the fix; current ones
+  preload mimalloc 3.5.x.
+
 ## Host GPU runtime (`cang doctor`)
 
 cang's GPU path needs two host libraries that are not stock upstream: the

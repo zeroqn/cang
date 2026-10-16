@@ -93,8 +93,15 @@
           # onnxruntime 1.24). Only zg builds against unstable, so the image stays
           # on 26.05; see nix/pkgs/zvec-grep.nix.
           zgPkgs = import nixpkgs-unstable { inherit system; };
+          # The single `libstdc++.so.6` the pi wrapper injects is a ceiling for
+          # every process pi launches, because `LD_LIBRARY_PATH` is searched
+          # ahead of each binary's own run path. It therefore has to be the
+          # newest C++ runtime any consumer in the image needs, and that is
+          # nixpkgs-unstable's gcc: `zg` links an ONNX Runtime built against
+          # `GLIBCXX_3.4.35/36`, while the 26.05 input's gcc-15 stops at 3.4.34.
           piCodingAgent = import ./nix/pkgs/pi-coding-agent.nix {
             inherit pkgs pins;
+            nativeAddonCxxRuntime = zgPkgs.stdenv.cc.cc.lib;
           };
           herdrPrebuilt = import ./nix/pkgs/herdr-prebuilt.nix {
             inherit pkgs pins;

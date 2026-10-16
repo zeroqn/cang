@@ -833,7 +833,7 @@ fn cang_image_includes_root_only_as_dev_helper() {
 #[test]
 fn image_materializes_mimalloc_default_and_hardened_allocator_metadata() {
     for required in [
-        r#"mimallocLib = "${pkgs.mimalloc}/lib/libmimalloc.so""#,
+        r#"mimallocLib = "${mimalloc}/lib/libmimalloc.so""#,
         r#"hardenedMallocLib = "${grapheneHardenedMalloc}/lib/libhardened_malloc.so""#,
         r#"printf '%s\n' '${layers.mimallocLib}' > ./etc/ld-nix.so.preload"#,
         "cat > ./etc/nix-allocator-libs <<EOF_NIX_ALLOCATOR_LIBS",
@@ -853,6 +853,25 @@ fn image_materializes_mimalloc_default_and_hardened_allocator_metadata() {
     }
     assert!(!CONTAINER_NIX.contains("LD_PRELOAD=${layers.hardenedMallocLib}"));
     assert!(!CONTAINER_NIX.contains("LD_PRELOAD=${layers.mimallocLib}"));
+}
+
+#[test]
+fn image_preloads_a_mimalloc_that_survives_early_initialisation() {
+    // The preloaded allocator is called before its own initialisation (ld.so runs
+    // a preload's constructor after the binary's dependency initialisers) and
+    // mimalloc 3.3.2 does not survive that under the glibc the unstable input
+    // brings: while the image carried 3.3.2 the image's `zg` died with a SIGSEGV
+    // before `main`, where the same nixpkgs' 3.5.3 does not. The image therefore
+    // builds its own mimalloc from the same nixpkgs, so the preloaded object still
+    // carries this image's glibc; see docs/diagnostics.md.
+    for required in [
+        "mimalloc = pkgs.mimalloc.overrideAttrs",
+        r#"repo = "mimalloc";"#,
+        r#"tag = "v3.5.3";"#,
+        r#"hash = "sha256-GmLMWdUR2/VXJY7A8dZtwoV9FJIx0sxj8KWI4kG8IrU=";"#,
+    ] {
+        assert!(LAYERS.contains(required), "missing {required}");
+    }
 }
 
 #[test]

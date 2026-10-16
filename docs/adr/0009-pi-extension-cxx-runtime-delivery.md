@@ -15,6 +15,29 @@ The directory is scoped to the single soname. `LD_LIBRARY_PATH` is searched
 ahead of a binary's own `DT_RUNPATH`, so a directory carrying gcc's other
 libraries would pre-empt the run paths of unrelated nix binaries.
 
+(Amended 2026-10: one soname is not the whole story, because that file's
+*version* also applies to the whole tree. It is a ceiling - a consumer built
+against a newer libstdc++ cannot start under it, since `LD_LIBRARY_PATH` outranks
+the consumer's own `DT_RUNPATH`. `zg`, whose ONNX Runtime comes from
+nixpkgs-unstable's gcc, died in the loader with
+`version 'GLIBCXX_3.4.35' not found (required by libonnxruntime.so.1)` - and
+under `fish` as `'zg --version' terminated by signal SIGSEGV (Address boundary
+error)`, because the fault is in the loader - while the same binary ran from a
+shell that did not inherit the wrapper's variable. The directory is now filled
+from the newest C++ runtime the image's consumers need: `flake.nix` passes
+nixpkgs-unstable's gcc in, and `container-wrapper-contracts` runs `zg` under the
+injected directory, so lowering the ceiling below a consumer's requirement fails
+the build. libstdc++ keeps its ABI backward compatible, so the newer file still
+serves an addon built against an older one - the gcc-16 file defines
+`GLIBCXX_3.4.36` where gcc-15's stopped at `3.4.34`, and both need no glibc
+symbol newer than `GLIBC_2.38`, so the newer file is safe on the image's and the
+host's glibc 2.42 alike. The same session moved the image's preloaded mimalloc -
+the guest's default allocator, and therefore on every process's startup path
+before its own initialisation - from 3.3.2 to 3.5.3, built by the same nixpkgs;
+`docs/diagnostics.md` and
+`docs/wayfinder/pi-native-addons/notes/10-raw-preload-early-call.md` carry that
+half. The decision here is unaffected: the guest keeps `mimalloc`.)
+
 The guest keeps `mimalloc` as its default allocator. `cang --alloc=hardened`
 incidentally makes the same addons load, because that allocator library carries
 `libstdc++` in its own `DT_NEEDED`; it is documented as a stopgap, not promoted
@@ -94,3 +117,8 @@ repository by a wiring check, so undoing the wrapper fails loudly.
 - **Making `hardened_malloc` the default allocator**: fixes the whole class for
   free in the guest, at the cost of an allocator policy chosen for performance
   and hardening reasons, and with the same fragility.
+- **The flake's default `pkgs` C++ runtime** (`pkgs.stdenv.cc.cc.lib`, gcc-15's
+  libstdc++): what the directory shipped first. Rejected 2026-10 as the older of
+  the two C++ generations in the image - it capped `GLIBCXX` below what `zg`'s
+  ONNX Runtime needs, so `zg` could not start in any process `pi` launched (see
+  Consequences).

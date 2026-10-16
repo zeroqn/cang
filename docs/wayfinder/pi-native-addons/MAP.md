@@ -24,6 +24,12 @@ change through the cang flake input in `/home/dev/nix/disp`.
   the mechanism ships in the image and on the host, and its wiring is guarded by
   the `container-wrapper-contracts` flake check.
 
+- **Status (2026-10-16): a follow-on regression in the same wiring is closed as
+  ticket 10.** Ticket 05 fixes the *missing* soname; it did not bound the
+  *version* of the one file it injects, and the preloaded allocator was still
+  called before its own initialisation. Both made `zg` unstartable in the guest,
+  and both are now guarded by `container-wrapper-contracts`.
+
 - **Domain**: the extension host is the bun-compiled `pi` binary built by
   `nix/pkgs/pi-coding-agent.nix` (`pins.piCodingAgent`, v0.87.1 pinned; this host
   runs 0.85.1 of the same derivation) and installed at
@@ -165,7 +171,8 @@ onnxruntime failure verbatim under `bun`, and `node` passing as a trap).
   printing only the unrelated `[rtk] rtk binary not found in PATH` line, so
   neither imports the extension's addons. Answering it needs a live session.
 - **Per-arch coverage** - the mechanism itself is arch-independent (the runtime
-  directory is built from `pkgs.stdenv.cc.cc.lib` for whatever system the image
+  directory is built from the newest input's `stdenv.cc.cc.lib` (nixpkgs-unstable,
+  so it stays ahead of every image consumer) for whatever system the image
   targets, and the wrapper is a shell script), so the only open part is whether
   a given addon package publishes an arm64 build at all - which is the addon's
   business, not cang's. Revisit only if an aarch64 guest actually loads one.

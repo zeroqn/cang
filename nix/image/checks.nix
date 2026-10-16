@@ -148,6 +148,15 @@ let
     grep -F 'hardened=' ${containerSourceFile}
     grep -F 'CANG_MIMALLOC_LIB=' ${configSourceFile}
     ! grep -F 'LD_PRELOAD=' ${containerSourceFile}
+    # The preloaded allocator has to survive being called before its own
+    # initialisation, which is where ld.so puts a preload's constructor: a
+    # mimalloc 3.3.2 preload killed the image's zg with a SIGSEGV before `main`,
+    # inside libstdc++'s static initialiser. Run the image's own zg the way the
+    # guest runs it.
+    if ! LD_PRELOAD=${layers.mimallocLib} ${layers.agentImageLayer}/bin/zg --version | grep -F '${zvecGrep.version}'; then
+      echo "the preloaded allocator did not let zg start; see docs/diagnostics.md" >&2
+      exit 1
+    fi
   '';
   terminalMultiplexerContracts = ''
     grep -F 'rmuxPrebuilt' ${layersSourceFile}
@@ -207,6 +216,13 @@ let
     # its argv style on.
     HOME="$TMPDIR" ${layers.agentImageLayer}/bin/zg --help >/dev/null
     HOME="$TMPDIR" ${layers.agentImageLayer}/bin/zg --version | grep -F '${zvecGrep.version}'
+    # And it has to start under the one libstdc++.so.6 the pi wrapper injects
+    # into every process it launches: LD_LIBRARY_PATH pre-empts a binary's own
+    # run path, so a runtime directory whose libstdc++ is older than what this
+    # binary links is fatal for it (its ONNX Runtime needs GLIBCXX_3.4.35/36).
+    # Every agent process, in the guest and on the host, inherits that variable.
+    HOME="$TMPDIR" LD_LIBRARY_PATH=${nativeAddonRuntimeDir}/lib \
+      ${layers.agentImageLayer}/bin/zg --version | grep -F '${zvecGrep.version}'
     case ":${layers.imagePath}:" in
       *":${layers.agentImageLayer}/bin:"*) ;;
       *) exit 1 ;;
