@@ -299,12 +299,12 @@ in
     owner = "zeroqn";
     repo = "cang";
     tag = "alpha";
-    version = "0.3.0";
+    version = "0.3.1";
     revision = "88777bd1f722a77f96ebc378897fcc262470dac9";
     systems = {
       x86_64-linux = {
-        asset = "zg-0.3.0-88777bd1-x86_64-linux.tar.gz";
-        hash = "sha256-+0NQkfRta920mRsF70GTMQBE5j0ycn6ILrNIMQ4TZis=";
+        asset = "zg-0.3.1-88777bd1-x86_64-linux.tar.gz";
+        hash = "sha256-Tbr5Ssf9auHkzgiYXR808Kke8UvZIf7uBhIAhPtsnFY=";
       };
     };
   };
