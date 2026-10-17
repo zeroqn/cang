@@ -38,6 +38,15 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
     inherit (zvecGrep) owner repo rev;
     hash = zvecGrep.srcHash;
   };
+  # The format catalog is an explicit registry, and ArkTS and GLSL are not in
+  # it: an unregistered extension is not chunked as text, it is recorded as
+  # `SkippedFileReason::Unsupported`, so a HarmonyOS project's `.ets` sources
+  # and its `.frag`/`.vert` shaders never reach the index. Registering them as
+  # plain-text `[Code]` formats is the path `.sh`, `.css`, `.kt` and `.swift`
+  # already take.
+  patches = [
+    ./patches/zvec-grep-arkts-glsl-formats.patch
+  ];
 
   # The Cargo workspace lives in `rust/`, not at the repository root, and
   # `buildAndTestSubdir` has to be said twice: `cargoLock` reads the lock from

@@ -1,0 +1,20 @@
+diff --git a/rust/crates/zg-engine/src/domain/source/format/catalog.rs b/rust/crates/zg-engine/src/domain/source/format/catalog.rs
+index 093676f..3cc0a8d 100644
+--- a/rust/crates/zg-engine/src/domain/source/format/catalog.rs
++++ b/rust/crates/zg-engine/src/domain/source/format/catalog.rs
+@@ -39,6 +39,7 @@ file_formats! {
+     Eps => ("eps", [Image], ["eps"], []),
+     Epub => ("epub", [Document], ["epub"], []),
+     Erlang => ("erlang", [Code], ["erl", "hrl"], []),
++    Ets => ("ets", [Code], ["ets"], []),
+     Excel => ("excel", [Document], ["xls", "xlsb", "xlsm", "xlsx", "xlt", "xltm", "xltx", "xla", "xlam", "XLS", "XLSB", "XLSM", "XLSX", "XLT", "XLTM", "XLTX", "XLA", "XLAM", "Xls", "Xlsb", "Xlsm", "Xlsx", "Xlt", "Xltm", "Xltx", "Xla", "Xlam"], []),
+     Fish => ("fish", [Code], ["fish"], []),
+     Flac => ("flac", [Audio], ["flac", "FLAC", "Flac"], []),
+@@ -46,6 +47,7 @@ file_formats! {
+     Gettext => ("gettext", [Data], ["po", "pot"], []),
+     Gif => ("gif", [Image], ["gif", "GIF", "Gif"], []),
+     Git => ("git", [Data], ["gitignore", "gitattributes", "gitconfig", "gitmodules", "mailmap"], [".gitignore", ".gitattributes", ".gitconfig", ".gitmodules", ".mailmap"]),
++    Glsl => ("glsl", [Code], ["glsl", "frag", "vert"], []),
+     Go => ("go", [Code], ["go"], []),
+     Graphql => ("graphql", [Code], ["graphql", "gql", "graphqls"], []),
+     Graphviz => ("graphviz", [Code], ["gv", "dot"], []),
