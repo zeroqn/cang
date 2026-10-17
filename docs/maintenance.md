@@ -492,6 +492,35 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.14.0` (`7b7184e`) - the guest's VA-API decode is fixed where it broke:
+  vrend's `h264_decode_bitstream()` filled only the members the H.264 picture
+  descriptor carried, so the host's VA driver read the slice type out of whatever
+  the stack held and refused the opening pictures of a decode ("Need at least one
+  reference for P/B frames") - which is why an unrelated libkrun change could
+  blank it. `virglrenderer-decode-slice-params.patch` clears
+  `VAPictureParameterBufferH264`, `VAIQMatrixBufferH264` and
+  `VASliceParameterBufferH264` and fills the geometry, size/offset and slice type
+  the syntax it is handed cannot answer; the prebuilt pin keys on the patch set as
+  well as the source revision (`1.3.0-c8e3fc3b-peabcc329`), so a patch change
+  republishes the asset the image ships. The libkrun fork is re-based onto
+  upstream main with upstream PR 889 merged (`v2.0.0-cang.9`), so holding the fork
+  one PR behind main is over, and the guest kernel moves to
+  linux-7.2.10-hardened1 (`v5.6.2-cang.4`), which needed one re-authored kernel
+  patch because an earlier stable release backported the 3D PRIME-import revert
+  the fork's series extends. The image starts its own `zg`: the wrapper's
+  `LD_LIBRARY_PATH` carried gcc-15's `libstdc++` (a `GLIBCXX_3.4.34` ceiling under
+  a `3.4.35/36` consumer) and the preloaded mimalloc 3.3.2 faulted before its own
+  initialiser under glibc 2.44, so the wrapper carries gcc-16's `libstdc++` and the
+  image builds mimalloc 3.5.3 from its own nixpkgs; and `onnxruntime-node` and
+  `zg` both get `OrtGetApiBase` from one versioned-symbol shim
+  (`nix/pkgs/onnxruntime-shim.nix`), since no nixpkgs ONNX Runtime exports both
+  `@VERS_1.24.3` and `@VERS_1.27.1`. The pinned Pi coding agent is v1.3.0, the
+  pinned zg prebuilt 0.3.0, and a pre-commit hook runs `nixfmt` over staged Nix
+  files. The released tree passes `tools/virglrenderer-cang-smoke` end to end
+  (Chromium on venus over Waypipe, and VA-API decode/encode/round trip) at the
+  pre-re-base PSNR; x86_64 asset sha256
+  `773a90b9c9b225c42ff6240949fe2b1a053b735be0dc3c1eac94772479b2462f`.
+
 - `v0.13.1` (`5169870`) - the guest image's Waypipe is the prebuilt revision
   `zeroqn/headless` publishes for its own hosts (upstream plus the fork's
   128 MiB vsock buffer patch, so a guest server and a host client built from
@@ -567,13 +596,14 @@ nix build .#libkrunfw
 Each of these is the hash its release publishes, and each was reproduced locally
 from the tagged tree with the `overrideAttrs` recipe above (v0.9.0 while
 validating that recipe; v0.9.1, v0.10.1, v0.11.0, v0.11.1, v0.11.2, v0.12.0,
-v0.13.0 and v0.13.1 before their pins went in - for v0.10.1, v0.11.0, v0.11.2,
-v0.12.0, v0.13.0 and v0.13.1 the main-branch run of the same commit published
-the same bytes as the rolling `sha-<shortsha>` artifact first, while for v0.11.1
-that run's build step failed and the tag run published the bytes the local
-recipe had already produced; v0.13.1 was reproduced from three separate
-`.#cang-ci-sccache` builds - two `SCCACHE_DIR` values and the tagged tree -
-before the tag moved), so a freshly published `.sha256` that disagrees with this list means
+v0.13.0, v0.13.1 and v0.14.0 before their pins went in - for v0.10.1, v0.11.0,
+v0.11.2, v0.12.0, v0.13.0, v0.13.1 and v0.14.0 the main-branch run of the same
+commit published the same bytes as the rolling `sha-<shortsha>` artifact first,
+while for v0.11.1 that run's build step failed and the tag run published the
+bytes the local recipe had already produced; v0.13.1 was reproduced from three
+separate `.#cang-ci-sccache` builds - two `SCCACHE_DIR` values and the tagged
+tree - before the tag moved, and v0.14.0 from two `SCCACHE_DIR` values before
+its pin went in), so a freshly published `.sha256` that disagrees with this list means
 the build inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache`
 attribute first.
 
