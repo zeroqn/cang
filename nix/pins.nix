@@ -28,7 +28,7 @@ in
     systems = {
       x86_64-linux = {
         asset = "mesa-26.1.8-x86_64-linux.tar.gz";
-        hash = "sha256-5gR4Laz5yRvvYZYNIdFFiY8XzFKk4bTLcmPVPLYeWCk=";
+        hash = "sha256-e/r1gokyHX4elEz01yINKwpnt6Ua4QzlfDteBSpPf+E=";
       };
     };
   };
