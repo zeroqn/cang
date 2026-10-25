@@ -1,9 +1,9 @@
 ---
 label: wayfinder:grilling
 title: Which non-caching virtio-fs change ships first, and in what API shape?
-status: open
+status: closed
 blocked_by: [02]
-claimed_by: ""
+claimed_by: pi (2026-10-26)
 ---
 
 ## Question
@@ -53,3 +53,48 @@ Decide:
 ## Resolution
 
 (to follow)
+
+## Resolution (2026-10-26, pi) - **no worker pool: the single worker is 88% idle**
+
+Ticket 02 produced the number this ticket was waiting for. Per-thread CPU of the
+VMM during a full `JOBS=26` guest-virtiofs arm (314 s build, 1 Hz sampling):
+
+- **`fs_worker` - the only thread serving the share, one request queue - used 12%
+  of one core on average.**
+- The guest's own vCPUs used ~65% (busiest) and ~22% each of the rest.
+
+A worker pool lifts throughput only when the serving thread is the constraint. At
+12% it is idle 88% of the time, so the pool would add complexity (used-ring and
+notification ownership, a shared server, join semantics on reset) to a thread
+that has nothing to do. The measured penalty is **per-request round-trip
+latency**, paid in the guest (`fuse` client + virtio ring) and in a host syscall
+per op, not a serialized server.
+
+Rejected, with reasons, so nobody re-derives them:
+
+- **worker pool** - above.
+- **multiqueue** - strictly more work than the pool for the same non-existent
+  saturation; also needs a guest-side driver request.
+- **DAX** - ticket 05 (drop).
+- **writeback cache / symlink caching / handle reuse** - ticket 03: cang promises
+  host-immediate visibility, so no guest caching of any kind.
+- **NO_OPEN_SUPPORT** - the one remaining round-trip saving that is *not*
+  caching of data (it reuses an open handle for a `LOOKUP+OPEN` pair). Worth
+  measuring only if the map is redrawn to allow a handle-table change; today there
+  is no evidence it is worth it either, and 5s of guest round trips per build is
+  what 12% worker utilisation already says is small.
+- **FUSE passthrough / io_uring** - note 01 §4: not reachable when the exporter is
+  the VMM.
+
+**What the numbers say instead:** most of the guest's slowness is the VM itself
+(2.2x the host), and the virtio-fs share adds ~30% on top of that floor. So the
+"rustc is slow in a cang guest" complaint is answered by *fewer round trips per
+build* (a compiler-side question: `-Z` options, unit counts, sccache) or by VM
+sizing, not by the transport.
+
+The one virtio-fs change this effort did ship is a correctness fix (ticket 08:
+`f3167a42`, the worker no longer dies on a malformed guest descriptor chain), not
+a performance one. Whether the map's destination ("at least one virtio-fs change
+shipped **on that evidence**") is met by that, or whether the destination changes
+to "measured and explained, no lever worth shipping", is bob's call - recorded in
+the map.

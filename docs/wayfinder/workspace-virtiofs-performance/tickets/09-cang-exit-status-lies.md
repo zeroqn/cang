@@ -67,3 +67,47 @@ The benchmark harness works around all of it (result files with unique tags, an
 inner log written into the shared workspace, a 10 s linger before the payload
 exits, and a pre-flight refusal when the workspace already has a running task) -
 but these are workarounds for defects this ticket has to fix, not contracts.
+
+### Mechanism (2026-10-26, code read; no behaviour changed yet)
+
+Three separate code paths explain everything measured above, and only the third
+is a design gap rather than a bug:
+
+1. **A guest *command* never reports its status.** `cang -- cmd` puts `cmd` in
+   `plan.guest_command` (`launch/plan.rs:51`) and guest-init runs it; the host
+   then only waits for the VM process
+   (`supervisor/command.rs:216-230`: `child.wait()` -> `ChildStatus::exited(code)`
+   of the *helper*). A guest that powers off cleanly gives 0.
+2. **The managed-session path already propagates the guest's code.** When there is
+   no guest command, cang attaches (the interactive shell) and
+   `attach::..._with_exit_observer` reports the guest's exit code; it is persisted
+   as `managed-exit.status` (`supervisor/command.rs:169`) and used in
+   `managed_helper_exit_result` (`:371-376`: `if status.success() { return
+   Ok(ChildStatus::exited(guest_code)) }`). So the *shell* path is honest; the
+   command path is not.
+3. **The intended mechanism is half-built in the fork.** `augment_fs.rs:753-758`
+   handles `VIRTIO_IOC_EXIT_CODE_REQ = 0x7602` by storing the argument into the
+   VMM's `exit_code` atomic, which `vmm/mod.rs:517-519` prefers over the vCPU
+   exit code. **Nothing in the guest ever sends that ioctl** (`grep -rn 7602
+   crates/` is empty), which is why a dead guest still reports 0.
+
+#### Proposed fix (small, one side at a time)
+
+- **guest-init**: after the guest command exits with status `n`, open an fd on the
+  virtio-fs mount (e.g. `/workspace`, `O_RDONLY|O_DIRECTORY`) and
+  `ioctl(fd, 0x7602, n)` before powering off - the fork's device intercepts it and
+  the VM exits with `n`, which cang already maps to its own exit code. Nothing in
+  the host needs to change; the ioctl is one syscall, and the FUSE ioctl opcode is
+  already served (`server.rs`, `HAS_IOCTL_DIR` is advertised).
+- **cang**: make a launch into a workspace with a running task **fail** instead of
+  doing nothing (today: exit 0, no output).
+- **cang**: forward a guest command's stdout (it is captured into
+  `helper.stdout.log` today, so the data exists; the launch just does not relay
+  it).
+
+Open decisions for bob, because (1) changes user-visible semantics:
+- Should `cang -- cmd` exit with the command's status (scripts then see failures),
+  or keep today's "the VM finished" semantics and document it? The first is
+  almost certainly what everyone assumes, but it *is* a behaviour change.
+- Should a failing payload abort the run, or still allow the guest to finish its
+  own teardown? (It must not lose the status either way.)

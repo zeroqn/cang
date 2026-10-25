@@ -54,7 +54,10 @@ changed from "guest container disk" to "guest `/dev/shm`" because a plain cang
 guest attaches no containers disk (`/dev/vdb` absent, `/home/dev/.local/share/
 containers` not writable) - recorded in the README.
 
-Not closed yet: spread across repeated runs, and the `--workload cang` arm.
+Not closed yet, deliberately: the numbers above were recorded while **another
+agent session may have been running a live smoke on the same host**, so they are
+±, not canonical - see [ticket 12](12-clean-window-re-record.md). The `--workload
+cang` guest arms are blocked by [ticket 11](11-image-ships-cang-build-inputs.md).
 
 ### First recorded numbers (2026-10-25/26, clean windows, one VM at a time)
 
