@@ -10,7 +10,8 @@ use crate::runtime::seccomp::{AuditMode, SeccompMode};
 use crate::runtime::vm::gpu::GpuMode;
 use crate::runtime::vm::libkrun::DirectLibkrunLauncher;
 use crate::runtime::vm::libkrun::launcher::{
-    PROFILE_KERNEL_CMDLINE_APPEND, guest_nofile_rlimit_entry, with_audit_start_marker_hook_for_test,
+    GUEST_KERNEL_CMDLINE_APPEND, PROFILE_KERNEL_CMDLINE_APPEND, guest_nofile_rlimit_entry,
+    with_audit_start_marker_hook_for_test,
 };
 use anyhow::{Result, anyhow, bail};
 use cang_libkrun::{CANG_LIBKRUN_COMPAT_NET_FEATURES, LibkrunApi};
@@ -635,6 +636,7 @@ fn fake_api_records_direct_libkrun_v2_call_order() {
             Call::MmioDeviceManagerAdd(DEVICES, CONSOLE_DEVICE_BASE),
             Call::FsOverlayNew,
             Call::PayloadLoadKrunfw,
+            Call::PayloadAppendCmdline(PAYLOAD, GUEST_KERNEL_CMDLINE_APPEND.to_owned()),
             Call::InitConfigBuilder,
             Call::InitBuilderArgs(
                 INIT_BUILDER,
@@ -1368,6 +1370,47 @@ fn audit_markers_are_not_emitted_outside_audit_mode() {
     );
 }
 
+/// The libkrunfw kernel defaults to `CONFIG_TRANSPARENT_HUGEPAGE_MADVISE`, which
+/// leaves every guest process that does not opt in on 4 KiB pages. The launcher
+/// asks for `always` on every launch, profiled or not, and does it before the
+/// init config consumes the payload.
+#[test]
+fn every_launch_asks_the_guest_kernel_for_always_transparent_hugepages() {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))
+        .start_enter(&config())
+        .expect("launch should succeed");
+
+    let calls = calls.borrow();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call, Call::PayloadAppendCmdline(..)))
+            .count(),
+        1,
+        "an unprofiled launch appends the THP fragment and nothing else"
+    );
+    let append_index = calls
+        .iter()
+        .position(|call| matches!(call, Call::PayloadAppendCmdline(..)))
+        .expect("the THP fragment should be appended");
+    assert_eq!(
+        calls[append_index],
+        Call::PayloadAppendCmdline(PAYLOAD, GUEST_KERNEL_CMDLINE_APPEND.to_owned())
+    );
+    assert_eq!(GUEST_KERNEL_CMDLINE_APPEND, "transparent_hugepage=always");
+    let payload_index = calls
+        .iter()
+        .position(|call| matches!(call, Call::PayloadLoadKrunfw))
+        .expect("the payload should be loaded");
+    let apply_index = calls
+        .iter()
+        .position(|call| matches!(call, Call::InitConfigApplyIn(..)))
+        .expect("the init config should be applied");
+    assert!(payload_index < append_index);
+    assert!(append_index < apply_index);
+}
+
 #[test]
 fn profile_setup_runs_after_init_config_and_before_pre_enter_hook() {
     let calls = Rc::new(RefCell::new(Vec::new()));
@@ -1418,7 +1461,9 @@ fn profile_setup_runs_after_init_config_and_before_pre_enter_hook() {
         .expect("profile path should be configured");
     let set_cmdline_index = calls
         .iter()
-        .position(|call| matches!(call, Call::PayloadAppendCmdline(..)))
+        .position(|call| {
+            matches!(call, Call::PayloadAppendCmdline(_, fragment) if fragment == PROFILE_KERNEL_CMDLINE_APPEND)
+        })
         .expect("profile cmdline diagnostics should be configured");
     let start_index = calls
         .iter()
