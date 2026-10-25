@@ -124,7 +124,7 @@ before/after numbers come from live guests, not from a compile or a CI green.
     `SCCACHE_DIR=/home/dev/.cache/sccache` plus `RUSTC_WRAPPER` -> bundled
     sccache, both on virtiofs.
 
-## Numbers on the table (2026-10-25/26)
+## Numbers on the table (2026-10-25/26, **contended window** - see ticket 12)
 
 The measurement this map was missing exists, and it reframes the effort.
 Synthetic workload (2401 crates, 16801 sources), cold `target/`, rustc 1.95.0,
@@ -145,7 +145,17 @@ control:
 - `--workload cang` (this repo, 1356 files, heavy per-unit compile): host 55.9 s
   recorded; the guest arms are blocked by
   [ticket 11](tickets/11-image-ships-cang-build-inputs.md) (the image has no
-  virglrenderer, which the build needs).
+  virglrenderer, which the build needs - and mounting the host's store path does
+  not help, because the guest's store is a different store).
+- **Where the penalty comes from (the decisive number):** during a full `JOBS=26`
+  guest-virtiofs arm, the single FUSE **`fs_worker` thread used 12% of one core**
+  while the guest's own vCPUs used ~65% + ~22% each. The worker is 88% idle, so
+  the cost is per-request round-trip latency, not worker serialization.
+- **Caveat:** another agent session may have been running a live smoke during
+  these runs (bob, 2026-10-26). The ratios are consistent across runs and the
+  worker-idle finding is contention-safe in the conservative direction (a
+  co-tenant inflates the worker's share), but the absolute seconds are ±;
+  [ticket 12](tickets/12-clean-window-re-record.md) re-records them cleanly.
 
 ## Decisions so far## Decisions so far
 
@@ -179,12 +189,32 @@ control:
 1. **Is ~30% worth the worker pool?** Numbers: host 104 s, guest-local (/dev/shm)
    232 s, guest-virtiofs 299-311 s. Options: do the pool (ticket 04) / try
    NO_OPEN_SUPPORT first / document and stop.
-2. **How to unblock the in-guest cang workload?** The image has no
+2. **Should `cang -- cmd` report the command's exit status, and forward its
+   stdout?** Today a guest command's status is lost (`cang -- false` exits 0) and
+   its stdout is not relayed; the *shell* path already reports the code, and the
+   fork already has the `0x7602` exit-code ioctl that nothing sends. Fixing it is
+   ~20 lines in guest-init + two small host changes, but it changes user-visible
+   semantics ([ticket 09](tickets/09-cang-exit-status-lies.md)).
+3. **How to unblock the in-guest cang workload?** The image has no
    `virglrenderer`, which `deps/rutabaga_gfx/build.rs` needs. Options: add
    `pkgs.virglrenderer` to `cToolchainImagePackages` (ticket 11, recommended) /
    build only crates the image already supports / keep that workload host-only.
 
 ## Not yet specified
+
+- **What the remaining ~30% would take.** With the pool dead and caching ruled
+  out, the only untried lever that is not caching *data* is `NO_OPEN_SUPPORT`
+  (handle reuse for a `LOOKUP+OPEN` pair) - and the 12%-busy worker says there is
+  little to win. If bob wants the penalty gone rather than explained, the
+  candidates are all outside this map's scope: `/workspace` on a block device, a
+  share split so `target/` can be cached and sources cannot, or accepting the VM
+  penalty instead (2.2x the host dwarfs the 1.3x share).
+- **Whether the VM penalty itself is worth attacking** (2.2x the host, i.e. the
+  larger half): CPU model, `vdso`/`virtio` interrupt affinity, vCPU count vs
+  `JOBS`, transparent hugepages (the concurrent THP effort), sccache inside the
+  guest. Nothing here is virtio-fs, so it is a candidate for a *new* map rather
+  than this one.
+
 
 - **Whether the pool is even reachable under exact visibility.** `NO_OPEN_SUPPORT`
   and handle reuse interact with "a host `git status` agrees with the guest":

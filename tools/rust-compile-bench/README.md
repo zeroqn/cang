@@ -85,4 +85,58 @@ produced "silent" failures:
 
 ## Baseline
 
-<!-- FILLED IN BY THE FIRST RECORDED RUN, per workload, once guest arms pass -->
+Measured 2026-10-25/26 on `7.2.11-xanmod1`, 28 CPUs, 24 GiB RAM, cang 0.14.0,
+image `ghcr.io/zeroqn/cang:latest` (rustc/cargo 1.95.0), 26 vCPUs in the guest,
+cold `target/`, `CARGO_BUILD_JOBS=26`, sccache off, incremental off.
+
+> **Window caveat.** These runs were taken while another agent session may have
+> been running its own live smoke on the same host, so treat them as ±, not as
+> canonical. The *ratios* are what this tool reports and they are stable across
+> runs; a clean-window re-record is pending (wayfinder ticket 12). One number is
+> contention-safe in the conservative direction: the FUSE worker thread's CPU
+> share can only be *inflated* by a co-tenant on the host.
+
+### synthetic workload (2401 crates, 16801 sources, 151 MB)
+
+| arm | runs (s) | vs host | vs guest-local |
+|---|---|---|---|
+| host | 104.2, 104.7 | 1.00x | - |
+| guest-local (`/dev/shm`, no FUSE) | 232.0, 232.9, 235.1 | 2.2x | 1.00x |
+| guest-virtiofs (`/workspace`) | 298.9, 306.5, 311.4, 314.4 | 2.9x | **1.29-1.34x** |
+
+Run-to-run spread: host ~2%, guest-local ~1%, guest-virtiofs ~4%. A change must
+beat ~5% on the guest-virtiofs arm to mean anything.
+
+Low-concurrency check, `JOBS=4`: guest-virtiofs **683.9 s**. The penalty is not a
+high-concurrency artefact - it is present, and larger, when the build leans
+harder on per-operation latency.
+
+### Where the time goes (the number that decided the fork work)
+
+Per-thread CPU of the VMM during a full `JOBS=26` guest-virtiofs arm (314 s,
+1 Hz sampling, `docs/wayfinder/workspace-virtiofs-performance/notes/`):
+
+- the single **`fs_worker`** thread (the only thread serving the share, one
+  request queue): **12% of one core** on average;
+- the guest's own vCPUs: ~65% on the busiest and ~22% on each of the rest,
+  i.e. the guest is doing the work and waiting.
+
+So the share's cost is **per-request round-trip latency, not worker
+serialization** - a worker pool over that single queue would find an 88%-idle
+thread. What would actually cut it is fewer round trips (guest caching, which
+cang now rules out because it would break host-immediate visibility) or a
+cheaper op path (FUSE passthrough / io_uring, unavailable to a VMM-hosted
+server).
+
+### cang workload (this repo, 1356 files, heavy per-unit compile)
+
+| arm | build |
+|---|---|
+| host | 55.9 s |
+
+The guest arms are blocked: the image's `/nix` closure ships clang, libclang,
+gcc, rustc, cargo, pkg-config, mesa-libgbm and libdrm but **no `virglrenderer`**,
+which `deps/rutabaga_gfx/build.rs` requires, and a `cang -v` of a host store path
+does not help because the guest's store is a *different* store (same package
+versions, different hashes). Unblocking it is an image decision
+(`docs/wayfinder/workspace-virtiofs-performance/tickets/11-image-ships-cang-build-inputs.md`).
