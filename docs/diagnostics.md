@@ -241,6 +241,27 @@ comparison is still optional and threshold-free; absent or unusable rmux records
 a structured skip/failure without editing `/mnt/rmux`. The `--tmux` hook still
 records a structured skip until an isolated finite tmux comparison is added.
 
+## rust build benchmark over `/workspace`
+
+`tools/rust-compile-bench/` measures what the mounted workspace costs a rustc
+build, in three arms: `host` (no VM), `guest-virtiofs` (built in the mounted
+`/workspace`) and `guest-local` (the same tree in the guest's `/dev/shm`, so no
+FUSE is involved). `guest-virtiofs / guest-local` is the virtio-fs penalty;
+`host / guest-local` is the VM penalty.
+
+```bash
+nix build .#cang
+tools/rust-compile-bench/run.sh --runs 3
+```
+
+It writes `logs/<arm>-<n>.log` and `summary-synthetic.tsv` under `$BENCH_ROOT`
+(default `/home/dev/cang-bench`), and its README carries the recorded numbers.
+Two cang behaviours to know about when reading the harness: a guest command's
+stdout is not forwarded and its exit status is not propagated (`cang -- false`
+exits 0), and a launch into a workspace that already has a running task does
+nothing at all - so the arms report through files in the shared workspace, and
+the harness refuses to start while a task is running there.
+
 ## Inspecting a preserved `launch.conf`
 
 To inspect a preserved task `launch.conf`, decode its internal hex line format:
