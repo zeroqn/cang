@@ -60,9 +60,36 @@ tools/rust-compile-bench/gen-workload.sh /tmp/w       # workload only (LEAVES/MO
 ```
 
 Artifacts land in `$BENCH_ROOT` (default `/home/dev/cang-bench`):
-`logs/<arm>-<n>.log` per run and `summary-<workload>.tsv` (appended, never
-rewritten). Run guest arms one at a time on an otherwise idle host: two live VMs,
-or a concurrent GPU job, distort the numbers more than any tuning under test.
+`logs/<arm>-<n>.log` per run, `logs/threads-<arm>-<n>.txt` (per-thread CPU capture
+of the VMM during a guest arm) and `summary-<workload>.tsv` (appended, never
+rewritten).
+
+```bash
+tools/rust-compile-bench/run.sh --report      # the ratio table, from the summary
+```
+
+Run guest arms one at a time on an otherwise idle host: two live VMs, or a
+concurrent GPU job, distort the numbers more than any tuning under test. A run
+taken while another session was busy is a different measurement - say so when
+you record it.
+
+## Reading a number, not just taking one
+
+Each guest arm samples the VMM's threads at 1 Hz (`mon-threads.sh`), and the
+summary carries the mean CPU of the thread that serves the share:
+
+```bash
+tools/rust-compile-bench/summarise-threads.sh "$BENCH_ROOT/logs/threads-guest-virtiofs-1.txt"
+#  12.3%  fs_worker              (span 315s)
+#  65.1%  fc_vcpu_0              (span 323s)
+```
+
+`fs_worker` is the **only** thread serving the FUSE share, so its utilisation
+decides whether a faster *server* can help at all: at 12% of a core it cannot -
+the cost is per-request round-trip latency, and only fewer round trips (caching,
+which cang rules out) or a cheaper op path would move it. That is how the worker
+pool in `docs/wayfinder/workspace-virtiofs-performance/tickets/04-*` was rejected
+on measurement rather than taste.
 
 ## Two cang behaviours this harness has to work around
 
