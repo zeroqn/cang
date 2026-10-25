@@ -18,13 +18,15 @@
 #   workload-<kind>/   the tree: `synthetic` (gen-workload.sh) or `cang`
 #                      (a copy of this repo at HEAD, submodule trees included)
 #   <arm>/             that arm's private copy (rebuilt per arm, never reused)
-#   logs/              one log per run, truncated before that run
+#   logs/              one log per run, plus a per-thread CPU capture per guest run
 #   summary.tsv        one row per completed run (appended)
 #
 # Result protocol: every arm writes `bench-result-<tag>.txt` with a unique tag
 # into the shared workspace and the harness reads BENCH_MS from it. The stream is
 # not usable for this: cang does not forward a guest command's stdout and does
 # not propagate its exit status (`cang -- false` exits 0).
+#
+#   --report           print the ratio table for the recorded runs and exit
 #
 # Env: CANG (default <repo>/result/bin/cang), IMAGE, BENCH_ROOT, RUNS, WORKLOAD,
 #      LEAVES/MODULES/LINES (synthetic size), JOBS (default 26 = a cang guest's
@@ -42,6 +44,7 @@ linger=${LINGER:-10}
 workload_kind=${WORKLOAD:-synthetic}
 arms=host,guest-virtiofs,guest-local
 rebuild_workload=0
+report=0
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -54,6 +57,7 @@ while [ $# -gt 0 ]; do
         --rebuild-workload) rebuild_workload=1; shift ;;
         --bench-root) bench_root=$2; shift 2 ;;
         --bench-root=*) bench_root=${1#*=}; shift ;;
+        --report) report=1; shift ;;
         -h|--help) sed -n '2,42p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "run.sh: unknown argument $1" >&2; exit 2 ;;
     esac
@@ -64,7 +68,7 @@ tarball=$bench_root/workload-$workload_kind.tar
 summary=$bench_root/summary-$workload_kind.tsv
 mkdir -p "$bench_root/logs"
 if [ ! -s "$summary" ]; then
-    printf 'arm\trun\tbench_ms\touter_ms\tworkload\trustc\tcargo\n' >"$summary"
+    printf 'arm\trun\tbench_ms\touter_ms\tworkload\tfs_worker_pct\trustc\tcargo\n' >"$summary"
 fi
 
 # Extra read-only host paths to bind-mount into a guest arm at the same absolute
@@ -82,6 +86,61 @@ if [ "$workload_kind" = cang ]; then
 fi
 if [ -n "${EXTRA_VOLUMES:-}" ]; then
     for v in $EXTRA_VOLUMES; do guest_volumes+=(-v "$v"); done
+fi
+
+report_table() {
+    [ -s "$summary" ] || { echo "run.sh: no recorded runs in $summary" >&2; return 1; }
+    awk -F'\t' '
+        NR > 1 {
+            arm = $1
+            n[arm]++
+            sum[arm] += $3
+            if ($6 != "" && $6 != "-") { ws[arm] += $6; wsn[arm]++ }
+        }
+        END {
+            for (a in sum) {
+                mean[a] = sum[a] / n[a] / 1000
+                if (a == "host") host = mean[a]
+                if (a == "guest-local") local = mean[a]
+            }
+            printf "%-14s %5s %9s %9s %15s\n", "arm", "runs", "mean s", "vs host", "vs guest-local"
+            split("host guest-virtiofs guest-local", order, " ")
+            for (i = 1; i <= 3; i++) {
+                a = order[i]
+                if (!(a in mean)) continue
+                printf "%-14s %5d %9.1f %9s %15s", a, n[a], mean[a],
+                    (host ? sprintf("%.2fx", mean[a] / host) : "-"),
+                    (local ? sprintf("%.2fx", mean[a] / local) : "-")
+                if (a in wsn) printf "   fs_worker %.0f%% of a core", ws[a] / wsn[a]
+                printf "\n"
+            }
+        }' "$summary"
+    echo
+    echo "guest-virtiofs / guest-local is the virtio-fs penalty (the number the share costs);"
+    echo "host / guest-local is the VM penalty (CPU and scheduling, which no share change touches)."
+}
+
+start_sampler() { # start_sampler <capture-file>
+    "$repo/tools/rust-compile-bench/mon-threads.sh" "$1" 1 >/dev/null 2>&1 &
+    sampler_pid=$!
+}
+
+stop_sampler() { # stop_sampler <capture-file>; prints mean fs_worker CPU% or nothing
+    local capture=$1
+    if [ -n "${sampler_pid:-}" ]; then
+        kill "$sampler_pid" 2>/dev/null || true
+        wait "$sampler_pid" 2>/dev/null || true
+        sampler_pid=
+    fi
+    if [ -s "$capture" ]; then
+        "$repo/tools/rust-compile-bench/summarise-threads.sh" "$capture" '^fs_worker$' \
+            | awk 'NR == 1 { sub(/%/, "", $1); printf "%s", $1 }'
+    fi
+}
+
+if [ "$report" = 1 ]; then
+    report_table
+    exit 0
 fi
 
 prepare_workload() {
@@ -216,8 +275,8 @@ prepare_arm() {
 
 result_of() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1; }
 
-record() { # record <arm> <run> <resultfile> <outer_ms> <log>
-    local resultfile=$3 outer_ms=$4 log=$5 bench_ms rustc_ver cargo_ver
+record() { # record <arm> <run> <resultfile> <outer_ms> <log> [fs_worker_pct]
+    local resultfile=$3 outer_ms=$4 log=$5 fs_worker_pct=${6:--} bench_ms rustc_ver cargo_ver
     if [ ! -s "$resultfile" ]; then
         echo "run.sh: $1 run $2 wrote no result file ($resultfile); log $log" >&2
         return 1
@@ -229,9 +288,11 @@ record() { # record <arm> <run> <resultfile> <outer_ms> <log>
     fi
     rustc_ver=$(result_of "$resultfile" RUSTC)
     cargo_ver=$(result_of "$resultfile" CARGO)
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$1" "$2" "$bench_ms" "$outer_ms" "$workload_kind" "${rustc_ver:-?}" "${cargo_ver:-?}" >>"$summary"
-    printf '%-14s run %s  build %ss  outer %ss\n' "$1" "$2" "$(secs "$bench_ms")" "$(secs "$outer_ms")"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$1" "$2" "$bench_ms" "$outer_ms" "$workload_kind" "$fs_worker_pct" \
+        "${rustc_ver:-?}" "${cargo_ver:-?}" >>"$summary"
+    printf '%-14s run %s  build %ss  outer %ss  fs_worker %s%%\n' \
+        "$1" "$2" "$(secs "$bench_ms")" "$(secs "$outer_ms")" "$fs_worker_pct"
 }
 
 for arm in ${arms//,/ }; do
@@ -250,6 +311,9 @@ for arm in ${arms//,/ }; do
         result=$dir/bench-result-$tag.txt
         : >"$log"
         rm -f "$result"
+        capture=$bench_root/logs/threads-$arm-$n.txt
+        sampler_pid=
+        case $arm in guest-*) start_sampler "$capture" ;; esac
         start=$(now_ms)
         case $arm in
         host)
@@ -281,10 +345,13 @@ for arm in ${arms//,/ }; do
             ;;
         esac
         outer=$(( $(now_ms) - start ))
-        record "$arm" "$n" "$result" "$outer" "$log"
+        fs_worker_pct=$(stop_sampler "$capture")
+        record "$arm" "$n" "$result" "$outer" "$log" "${fs_worker_pct:--}"
     done
 done
 
 echo
 echo "summary: $summary"
 column -t -s $'\t' "$summary" 2>/dev/null || cat "$summary"
+echo
+report_table
