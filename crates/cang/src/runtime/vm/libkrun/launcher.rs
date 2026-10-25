@@ -17,6 +17,15 @@ use cang_libkrun::{CANG_FS_ROOT_TAG, CANG_LIBKRUN_COMPAT_NET_FEATURES, Handle, L
 
 pub(in crate::runtime::vm::libkrun) const PROFILE_KERNEL_CMDLINE_APPEND: &str =
     "ignore_loglevel loglevel=7 printk.time=1 initcall_debug";
+/// The libkrunfw kernel is built with `CONFIG_TRANSPARENT_HUGEPAGE_MADVISE`, so
+/// the guest hands out 4 KiB pages to everything that does not call
+/// `madvise(MADV_HUGEPAGE)` first - which glibc malloc, rustc and Chromium
+/// never do. Every launch therefore asks the guest kernel for an `always`
+/// default, which is what an allocation-heavy guest workload (compiler, browser,
+/// agent toolchain) buys its TLB and page-fault savings from. A workload that
+/// wants its old behaviour back can still call `madvise(MADV_NOHUGEPAGE)`.
+pub(in crate::runtime::vm::libkrun) const GUEST_KERNEL_CMDLINE_APPEND: &str =
+    "transparent_hugepage=always";
 /// `KRUN_TSI_FLAGS_HIJACK_INET`: the guest's TCP/UDP traffic is hijacked to the
 /// host when no virtio-net device is configured.
 const CANG_TSI_FLAG_HIJACK_INET: u32 = 1;
@@ -230,6 +239,17 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
         tracing::debug!(builder = *builder, "krun_payload_load_krunfw: begin");
         let payload = setup("krun_payload_load_krunfw", self.api.payload_load_krunfw())?;
         tracing::debug!(payload, "krun_payload_load_krunfw: complete");
+        tracing::debug!(
+            payload,
+            fragment = GUEST_KERNEL_CMDLINE_APPEND,
+            "krun_payload_append_cmdline: begin"
+        );
+        setup(
+            "krun_payload_append_cmdline",
+            self.api
+                .payload_append_cmdline(payload, GUEST_KERNEL_CMDLINE_APPEND),
+        )?;
+        tracing::debug!(payload, "krun_payload_append_cmdline: complete");
         self.configure_init_config(overlay, payload, config, host_nofile_hard_limit)?;
 
         tracing::debug!(
