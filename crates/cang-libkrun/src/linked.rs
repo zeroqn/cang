@@ -340,8 +340,9 @@ impl LibkrunApi for LinkedLibkrunApi {
     fn block_device_new(&mut self, id: &str, path: &Path, read_only: bool) -> Result<Handle> {
         let path = path_str(path, "disk image path")?;
         let mut device = BlockDevice::new(id, path, DiskFormat::Raw)?;
-        // libkrun's default is serialized reads; a guest's parallel block I/O
-        // otherwise stalls on this one device thread.
+        // The fork defaults reads to its thread pool, but set it explicitly so
+        // the behaviour survives a fork re-base that drops that default: a
+        // guest's parallel block I/O otherwise stalls on one device thread.
         device.set_parallel_reads(true);
         device.set_read_only(read_only);
         Ok(self.push(Slot::BlockDevice(device)))

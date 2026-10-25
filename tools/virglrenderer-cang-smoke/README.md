@@ -23,11 +23,10 @@ reimplemented. Arm 2 is new here, because nothing under `tools/` covered VA-API.
 
 ```bash
 # cang's only implemented task-rootfs backend is btrfs-snapshot, so the output
-# (hermetic podman graphroot + cang state) has to be on a btrfs filesystem:
-sudo mount -o loop /home/dev/cang/btrfs.img /home/dev/cang/disk
-
+# (hermetic podman graphroot + cang state) has to be on a btrfs filesystem
+# (/home/dev/disp/disk on this host; no loop image needed):
 nix develop --command tools/virglrenderer-cang-smoke/virglrenderer-smoke.sh \
-  --out-dir /home/dev/cang/disk/virglrenderer-smoke
+  --out-dir /home/dev/disp/disk/virglrenderer-smoke
 ```
 
 Everything is resolved from the flake (cang, cang-musl's guest-init,
@@ -40,7 +39,7 @@ nix develop --command tools/virglrenderer-cang-smoke/virglrenderer-smoke.sh \
   --cang "$PWD/roots/cang-prebuilt/bin/cang" \
   --guest-init "$PWD/roots/cang-musl/bin/cang-guest-init" \
   --container  "$PWD/roots/container" \
-  --out-dir /home/dev/cang/disk/virglrenderer-smoke --mem 4 --timeout 900 \
+  --out-dir /home/dev/disp/disk/virglrenderer-smoke --mem 4 --timeout 900 \
   --frames 60
 ```
 
@@ -177,8 +176,8 @@ happen to succeed.
 - **A btrfs `--out-dir`.** `btrfs-snapshot` is the only implemented task-rootfs
   backend and it snapshots the Buildah graphroot; `fuse-overlay` is not
   implemented. On a non-btrfs output the smoke exits 2 up front. On this host
-  that means mounting the loop image first (`sudo mount -o loop
-  /home/dev/cang/btrfs.img /home/dev/cang/disk`).
+  `/home/dev/disp/disk` is btrfs and already mounted, so it is the `--out-dir`
+  parent.
 - **Disk space**: the image unpacks to ~7.7 GiB per hermetic store; the smoke
   keeps a 12 GiB free-space preflight on the output filesystem.
 - Arm 1 needs weston and waypipe (resolved with `nix build nixpkgs#weston
