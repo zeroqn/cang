@@ -218,6 +218,17 @@ control:
    `pkgs.virglrenderer` to `cToolchainImagePackages` (ticket 11, recommended) /
    build only crates the image already supports / keep that workload host-only.
 
+## Awaiting implementation
+
+- **The worker pool** (ticket 04, in progress): readdirplus is the one class the
+  single `fs worker` really serialises (70% of a core at *one* guest thread, 95% at
+  64, scan p50 21.8 ms -> 1048 ms). Bounded pool behind the single queue,
+  virtiofsd's shape; A/B on note 20's probe and a full arm.
+- **Zero-message open** (ticket 19, next): `FUSE_NO_OPEN_SUPPORT` removes
+  `OPEN`+`RELEASE` per file and `OPENDIR`+`RELEASEDIR` per directory - the op class
+  the pool cannot help, and the one rustc hammers. Needs a per-inode fd cache so
+  `READ`/`WRITE` can arrive with `handle == 0`.
+
 ## Not yet specified
 
 - **What the remaining ~30% would take.** With the pool dead and caching ruled
