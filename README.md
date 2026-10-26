@@ -522,7 +522,7 @@ The container provides:
 - narrow hardcoded-interpreter compatibility for `/bin/sh`, `/bin/bash`,
   `/bin/python`, and `/bin/python3`; `/bin/python` resolves to Python 3
   (not broad FHS compatibility)
-- common tools (`curl`, `jq`, `openssl`, `tmux`, `rmux`, etc.); `tmux` comes
+- common tools (`curl`, `jq`, `lsof`, `openssl`, `tmux`, `rmux`, etc.); `tmux` comes
   from Nixpkgs in the cang image, and the pinned `rmux`
   release remains available separately as `rmux`. `/etc/rmux.conf` is the
   image-level rmux config path. In the cang image, the default config disables
