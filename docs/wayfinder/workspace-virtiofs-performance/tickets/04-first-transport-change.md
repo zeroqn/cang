@@ -1,7 +1,7 @@
 ---
 label: wayfinder:grilling
 title: Which non-caching virtio-fs change ships first, and in what API shape?
-status: closed
+status: open
 blocked_by: [02]
 claimed_by: pi (2026-10-26)
 ---
@@ -98,3 +98,30 @@ a performance one. Whether the map's destination ("at least one virtio-fs change
 shipped **on that evidence**") is met by that, or whether the destination changes
 to "measured and explained, no lever worth shipping", is bob's call - recorded in
 the map.
+
+### Status 2026-10-26: reopened with a split verdict (note 20)
+
+Measured with the concurrency-scaling probe (`tools/rust-compile-bench/
+concurrency-scaling.sh`, note 20), one guest boot, 4096-file tree, `/dev/shm` as
+the no-FUSE control:
+
+| op class | ops/s scaling 16/1 | `fs worker` CPU% (1 -> 64 thr) | verdict |
+|---|---|---|---|
+| `open` (open+close) | 3.85x | 13.7 -> 26.1 | not serialised |
+| `read` (+`FUSE_READ`) | 3.16x | 13.6 -> 26.8 | not serialised |
+| `statx` (forced) | 4.63x | 12.1 -> 22.9 | not serialised |
+| `readdirplus` | 1.29x | **70.1 -> 95.2** | **serialised** |
+
+Per-op latency budget at one thread: `open` 934 us wall / 411 us guest CPU /
+128 us worker CPU; `read` 1189 / 511 / 162; `statx` 357 / 161 / 43; and
+`readdirplus` **14.9 ms per 4096-entry scan**, of which **10.5 ms is that one
+thread**. At 64 threads a scan's p50 goes 21.8 ms -> 1048 ms.
+
+So the fork's one-worker design costs little on the file-at-a-time path - the
+round trip is paid in the guest's FUSE client, not in the server - but it *is*
+the limit for directory scans, which rustc/cargo do for every crate and every
+`target/` walk. **The pool is worth building for that class**, and the open work
+is: (a) size the win with the real workload (how much of the 70 s penalty is
+`readdirplus`? note 20's tooling can count it), (b) implement the pool per note
+15's inventory (~6 sites, `Vec<QueueConfig>` + per-queue threads), (c) fork tag,
+submodule pin + `flake.lock`, and the live smoke set (rules #223/#229).
