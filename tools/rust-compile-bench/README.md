@@ -204,6 +204,14 @@ Thread counts 1/4/16/32/64 run a small C workload compiled *in the guest*
 while it runs the host samples the VMM's `fs worker` at 4 Hz: state, wchan,
 utime+stime, `schedstat` runtime and runqueue wait, voluntary context switches.
 
+It also samples the fs **pool** threads (`fs work N`, spawned by the libkrun
+fork's `krun_fs_device_set_worker_threads`) the same way, and reports them as
+`pool%` - the runtime of the pool threads summed, also a percentage of one core.
+That column is what separates the two ways a run can look faster: the work moved
+off the dispatcher into the pool (the `fs_worker%` drops and `pool%` rises by
+about what left it), or it did not (both are unchanged). With no pool in the
+build the column is 0 everywhere, so a single script prices both arms.
+
 ```bash
 tools/rust-compile-bench/concurrency-scaling.sh                 # 4096 files, 3 rounds
 tools/rust-compile-bench/concurrency-scaling.sh --modes read --threads "1 16" --rounds 2
@@ -231,7 +239,7 @@ for the server thread its runtime%, `R/S/D` sample split and the share of
 samples parked in `epoll_wait`), plus the raw per-cell and sampler files:
 
 ```
-fs       mode    threads  cells   ops/s  ratio  p50us  p99us benchcpu% fs_worker%  R/S/D %  epoll% vcpucpu%
+fs       mode    threads  cells   ops/s  ratio  p50us  p99us benchcpu% fs_worker%  R/S/D %  epoll% vcpucpu% ... pool%
 ```
 
 Read it the way note 20 of `docs/wayfinder/workspace-virtiofs-performance/` does:

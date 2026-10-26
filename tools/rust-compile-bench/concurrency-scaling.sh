@@ -28,7 +28,11 @@
 #
 # While the payload runs, the VMM's `fs worker` thread is sampled at 4 Hz
 # (state, wchan, utime+stime, schedstat runtime + runqueue wait, voluntary
-# context switches) and the vCPU threads' ticks are summed. The fields are read
+# context switches) and the vCPU threads' ticks are summed. The fs pool
+# threads (`fs work N`, the pool built by the libkrun fork's
+# `krun_fs_device_set_worker_threads`) are summed the same way into their own
+# columns, so a pool-armed run can say who did the work: a dispatcher that got
+# cheaper while the pool did the rest is the pool working. The fields are read
 # from after the LAST ')' of /proc/<pid>/task/<tid>/stat on purpose: the comm is
 # literally "fs worker" and a naive awk field index silently reads the wrong
 # fields (that bug cost this map a headline number).
@@ -546,6 +550,7 @@ has_fs_worker_task()
 sampler_tick()
 {
     local pid=$1 ts=$2 fsrc_tid="" fs_state="?" fs_ticks=0 fs_run=0 fs_wait=0 fs_vcs=0 wchan=0
+    local pool_ticks=0 pool_run=0 pool_n=0
     local vcpu=0 vlist="" t c line rest state ut st run_ns wait_ns l
     for t in /proc/"$pid"/task/*; do
         [ -r "$t/stat" ] || continue
@@ -582,6 +587,14 @@ sampler_tick()
             fs_vcs=$(awk '/^voluntary_ctxt_switches:/{print $2; f=1} END{exit !f}' \
                 "$t/status" 2>/dev/null) || fs_vcs=$v
             ;;
+        # Pool threads are named `fs work N`; the exact-match arm above is the
+        # dispatcher, and `fs work ` (with the space) is deliberately not a
+        # prefix of `fs worker`.
+        "fs work "*)
+            pool_ticks=$((pool_ticks + ut + st))
+            pool_n=$((pool_n + 1))
+            read -r prun_ns _ <"$t/schedstat" 2>/dev/null && pool_run=$((pool_run + ${prun_ns:-0}))
+            ;;
         fc_vcpu*)
             vcpu=$((ut + st))
             vlist="${vlist:+$vlist,}$vcpu"
@@ -589,8 +602,9 @@ sampler_tick()
         esac
     done
     [ -z "$vlist" ] && vlist=-
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$ts" "$fs_state" "${wchan:-0}" "$fs_ticks" "$fs_run" "$fs_wait" "$fs_vcs" "$vlist" "${fsrc_tid:-none}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$ts" "$fs_state" "${wchan:-0}" "$fs_ticks" "$fs_run" "$fs_wait" "$fs_vcs" "$vlist" "${fsrc_tid:-none}" \
+        "$pool_ticks" "$pool_run" "$pool_n"
 }
 
 run_sampler()
@@ -687,9 +701,11 @@ awk -F'\t' '
         for (i = 1; i <= nc; i++) {
             if (ts >= seg[i, "beg"] && ts <= seg[i, "end"]) {
                 if (!(i in s0)) {
-                    s0[i] = $5; t0[i] = $4; r0[i] = $6; v0[i] = $8; tb[i] = ts
+                    s0[i] = $5; t0[i] = $4; r0[i] = $6; v0[i] = $8
+                    p0[i] = $11; pn[i] = $12; tb[i] = ts
                 }
                 s1[i] = $5; t1[i] = $4; r1[i] = $6; v1[i] = $8; te[i] = ts
+                p1[i] = $11; pnl[i] = $12
                 n[i]++
                 st[i, $2]++
                 if ($2 == "S") {
@@ -715,11 +731,13 @@ awk -F'\t' '
                     if (d > vmax) vmax = d
                 }
             }
-            printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.1f\t%.1f\t%.0f\t%.0f\n",
+            pool = (i in p1 && span > 0) ? (p1[i] - p0[i]) * 100.0 / (span * 1e9) : 0
+            printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.1f\t%.1f\t%.0f\t%.0f\t%.1f\t%d\n",
                 fs[i], md[i], th[i], n[i] + 0, st[i, "R"] + 0, st[i, "S"] + 0,
                 st[i, "D"] + 0, ep[i] + 0, oth[i] + 0, rt, tk,
                 (span > 0 ? vsum * 100.0 / (span * 100) : 0),
-                (span > 0 ? vmax * 100.0 / (span * 100) : 0)
+                (span > 0 ? vmax * 100.0 / (span * 100) : 0),
+                pool, (i in pnl ? pnl[i] + 0 : 0)
         }
     }' "$run/cells.tsv" "$run/samples.txt" >"$run/percell.tsv"
 
@@ -740,14 +758,15 @@ awk -F'\t' '
         nn[key] += $4; R[key] += $5; S[key] += $6; D[key] += $7
         ep[key] += $8; oth[key] += $9
         rt[key] += $10; tk[key] += $11; vc[key] += $12; vcm[key] += $13
+        pl[key] += $14; pln[key] += $15
         ncell[key]++
     }
     END {
         split("virtiofs shm", fss, " ")
         split("open read stat statwarm readdirplus", mds, " ")
-        printf "%-8s %-11s %7s %6s %10s %8s %7s %7s %9s %10s %11s %8s %9s %9s %9s\n",
+        printf "%-8s %-11s %7s %6s %10s %8s %7s %7s %9s %10s %11s %8s %9s %9s %9s %9s\n",
             "fs", "mode", "threads", "cells", "ops/s", "ratio", "p50us", "p99us",
-            "benchcpu%", "fs_worker%", "R/S/D %", "epoll%", "vcpusum%", "busyvcpu%", "gcpu%"
+            "benchcpu%", "fs_worker%", "R/S/D %", "epoll%", "vcpusum%", "busyvcpu%", "gcpu%", "pool%"
         for (fi = 1; fi <= 2; fi++) for (mi = 1; mi <= 5; mi++) {
             base = 0
             for (ti = 1; ti <= 128; ti++) {
@@ -768,13 +787,14 @@ awk -F'\t' '
                 } else {
                     r = s_ = d = epq = rtv = vcv = vcmv = 0
                 }
-                printf "%-8s %-11s %7d %6d %10.0f %8s %7.1f %7.1f %9.0f %10.1f %4.0f/%3.0f/%3.0f %8.0f %9.0f %9.0f %9.0f\n",
+                printf "%-8s %-11s %7d %6d %10.0f %8s %7.1f %7.1f %9.0f %10.1f %4.0f/%3.0f/%3.0f %8.0f %9.0f %9.0f %9.0f %9.1f\n",
                     fss[fi], mds[mi], ti, n[key], mean,
                     (base > 0 ? sprintf("%.2fx", mean / base) : "-"),
                     (n[key] > 0 ? p50[key] / n[key] : 0),
                     (n[key] > 0 ? p99[key] / n[key] : 0),
                     (n[key] > 0 ? cpus[key] / n[key] : 0),
-                    rtv, r, s_, d, epq, vcv, vcmv, (n[key] > 0 ? gc[key] / n[key] : 0)
+                    rtv, r, s_, d, epq, vcv, vcmv, (n[key] > 0 ? gc[key] / n[key] : 0),
+                    (ncell[key] > 0 ? pl[key] / ncell[key] : 0)
             }
         }
     }' "$run/cells.tsv" "$run/percell.tsv" | tee "$run/table.txt"
@@ -782,5 +802,5 @@ awk -F'\t' '
 echo
 echo "clock offset guest->host: ${offset}s (start ping), ${offset_end}s (end ping)"
 echo "raw cells:  $run/results/cells.txt"
-echo "sampler:    $run/samples.txt  (4 Hz; ts state wchan ticks run_ns wait_ns vcsw vcpu_ticks_csv tid, "-" when vcpu=1)"
-echo "per-cell:   $run/percell.tsv  (fs mode threads samples R S D epoll other fs_runtime% tick% vcpusum% busyvcpu%)"
+echo "sampler:    $run/samples.txt  (4 Hz; ts state wchan ticks run_ns wait_ns vcsw vcpu_ticks_csv tid pool_ticks pool_run_ns pool_threads, "-" when vcpu=1)"
+echo "per-cell:   $run/percell.tsv  (fs mode threads samples R S D epoll other fs_runtime% tick% vcpusum% busyvcpu% pool_runtime% pool_threads)"
