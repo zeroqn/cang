@@ -269,9 +269,23 @@ of every request to zero.
    `pkgs.virglrenderer` to `cToolchainImagePackages` (ticket 11, recommended) /
    build only crates the image already supports / keep that workload host-only.
 
-## Awaiting implementation
+## Shipped (2026-10-26)
 
-- **The worker pool** (ticket 04, in progress): readdirplus is the one class the
+- Fork **`v2.0.0-cang.11`** (commit `9e423e76`, assets published) carries three
+  virtio-fs changes: the worker-robustness fix, the request thread pool, and
+  **zero-message open**. cang pins it in the submodule and in `flake.lock`
+  (`libkrun-src`), and the live smoke gate (Chromium-on-venus over `--waypipe`,
+  VA-API decode, VA-API encode + round trip, attribution) passed on that commit
+  before the tag was cut.
+- **Result on the map's own workload**: cold 2401-crate rustc build 427.1 s ->
+  **176.0 s** (2.42x, 4 interleaved runs per side, verified twice); 1.35x the host
+  and 1.34x the true no-FUSE floor, where it was 3.28x. The share's cost fell from
+  296 s to 45 s. Cost: 5 s close-to-open lag for in-place host rewrites, accepted
+  by bob.
+
+## Withdrawn / superseded
+
+- **The worker pool** (ticket 04): readdirplus is the one class the
   single `fs worker` really serialises (70% of a core at *one* guest thread, 95% at
   64, scan p50 21.8 ms -> 1048 ms). Bounded pool behind the single queue,
   virtiofsd's shape; A/B on note 20's probe and a full arm.
