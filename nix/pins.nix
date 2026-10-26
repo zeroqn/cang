@@ -239,7 +239,7 @@ in
         # /lib64/ld-linux-x86-64.so.2 --set-rpath ""`), so it is the byte-identical
         # asset the tag push uploads. Recompute it the same way for the next
         # release; see the cang release scheme in docs/maintenance.md.
-        hash = "sha256-GM48tNjMgU1MGSIGmDMpW8IynQFn2E7aokWH+4kCSGM=";
+        hash = "sha256-1HPfSRB9XX26l86iFF9ujNVuJGw93PjeG/YQNTDnX5M=";
       };
     };
   };
