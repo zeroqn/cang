@@ -167,3 +167,77 @@ which `deps/rutabaga_gfx/build.rs` requires, and a `cang -v` of a host store pat
 does not help because the guest's store is a *different* store (same package
 versions, different hashes). Unblocking it is an image decision
 (`docs/wayfinder/workspace-virtiofs-performance/tickets/11-image-ships-cang-build-inputs.md`).
+
+## Does the share scale with concurrency? (`concurrency-scaling.sh`)
+
+`run.sh` prices a whole build; this one prices the *server*. It answers whether
+the single virtio-fs request queue and its single `fs worker` thread serialise
+the guest's FUSE traffic, or whether the cost is per-request latency the guest
+pays no matter how many server threads exist.
+
+One guest boot, two filesystems inside it, alternating rounds so host drift hits
+both arms:
+
+| arm | where | what it is |
+|---|---|---|
+| `virtiofs` | `/workspace/tree` | the single root share: 1 request queue, 1 `fs worker` thread |
+| `shm` | `/dev/shm/tree` | the same tree on guest tmpfs: the no-FUSE control |
+
+Thread counts 1/4/16/32/64 run a small C workload compiled *in the guest*
+(`gcc -O2 -pthread`, executed from `/tmp` because `/dev/shm` is `noexec`), and
+while it runs the host samples the VMM's `fs worker` at 4 Hz: state, wchan,
+utime+stime, `schedstat` runtime and runqueue wait, voluntary context switches.
+
+```bash
+tools/rust-compile-bench/concurrency-scaling.sh                 # 4096 files, 3 rounds
+tools/rust-compile-bench/concurrency-scaling.sh --modes read --threads "1 16" --rounds 2
+tools/rust-compile-bench/concurrency-scaling.sh --help
+```
+
+Modes, and why there are five of them:
+
+| mode | op per iteration | FUSE traffic |
+|---|---|---|
+| `open` | `openat(O_RDONLY)` + `close` | `FUSE_OPEN` + `FUSE_RELEASE` per op |
+| `read` | open + `fadvise(DONTNEED)` + `read` + close | adds a real `FUSE_READ` |
+| `stat` | `statx(AT_STATX_FORCE_SYNC)` | forces a `FUSE_GETATTR` |
+| `statwarm` | `statx(flags=0)` | guest attribute cache only - the **control** |
+| `readdirplus` | `opendir`/full `readdir`/`closedir` | `FUSE_READDIRPLUS` batches |
+
+The share is created with `attr_timeout = entry_timeout = 5 s`, so a repeated
+`statx`/read of a small file set is served by the guest caches and never reaches
+the server: `statwarm` shows that arm (millions of ops/s) and is why `stat` and
+`read` defeat the caches explicitly. A concurrency table built without that
+distinction measures the guest VFS and nothing else.
+
+Output: the table (ops/s, `ops/s(T)/ops/s(1)`, p50/p99, guest CPU burned, and
+for the server thread its runtime%, `R/S/D` sample split and the share of
+samples parked in `epoll_wait`), plus the raw per-cell and sampler files:
+
+```
+fs       mode    threads  cells   ops/s  ratio  p50us  p99us benchcpu% fs_worker%  R/S/D %  epoll% vcpucpu%
+```
+
+Read it the way note 20 of `docs/wayfinder/workspace-virtiofs-performance/` does:
+a flat curve with `fs_worker` at ~100% is server serialisation (a pool helps);
+a flat curve with the worker below ~30% is the guest / latency (nothing
+server-side helps); a rising curve with the guest's vCPUs saturating is the
+guest's own cost.
+
+Two instrumentation traps this script encodes, both of which have produced wrong
+numbers in this repo before: `/proc/<tid>/stat` must be parsed from after the
+LAST `)` (the comm is literally `fs worker`, so a naive field index sums the
+wrong pair and silently drops `stime`), and `/proc/<tid>/wchan` has no trailing
+newline, so `read -r x < .../wchan || x=0` discards every value and reports 0
+for a sleeping thread. `/proc/<tid>/syscall` is not readable for the VMM at all
+(it is non-dumpable), which is why the sampler uses `wchan`.
+
+What it found (2026-10-26, the probe behind note 20 of the map): the
+`open`/`read`/`stat` mix plateaus at **3.2-4.7x** between 16 and 64 guest threads
+while the `fs worker` stays at **12-27% of one core** - it is waiting, not
+computing, and its serialised service is 96-162 us against a 1.2-23 ms round
+trip, so a pool or io_uring buys essentially nothing there. `readdirplus` is the
+exception: the same thread is at **70% of a core with one guest thread** and 95%
+at 64, throughput is flat (1.3-1.5x) and p50 latency grows **48x** - that is the
+one op class a pool would fix, and whether it is worth fixing depends on the
+class's share of a build, which this probe does not measure.
