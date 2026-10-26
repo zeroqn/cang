@@ -1,10 +1,33 @@
 ---
 label: wayfinder:task
 title: Zero-message open - remove the OPEN/RELEASE round trip from every file open
-status: open
+status: done
 blocked_by: []
-claimed_by: ""
+claimed_by: pi zero-message-open child (2026-10-26)
 ---
+
+## Outcome
+
+**Implemented and measured** - [note 23](../notes/23-zero-message-open-results.md).
+A full synthetic rustc arm went **372.8 s -> 140.2 s mean (2.66x)**, four
+interleaved runs per side; the `open` probe cell 1788 -> 4788 ops/s at one thread
+(p50 542 -> 165 us). The opcode histogram the ticket asked for is in the note: at
+the 1,000,000th request of a real build, OPEN 7.90% + RELEASE 8.48% + OPENDIR
+0.75% + RELEASEDIR 0.75% = **17.9% of every request is the class this lever
+deletes**, and READ fell 35.76% -> 3.26% because the page cache now survives an
+open (the half of the win the ticket did not model). `readdirplus` went 129 ->
+4446 ops/s at one guest thread, so the pool's headline from note 21 is superseded
+for repeated scans.
+
+Two corrections to the ticket's own assumptions, both implemented: this fork
+**did** negotiate `FUSE_ATOMIC_O_TRUNC`, so `O_TRUNC` needed the flag dropped from
+`supported` or truncate-on-open would have silently kept the old contents; and a
+`CREATE` reply must stop handing out a handle once `no_open` is set, because the
+kernel then never sends `RELEASE` for it (one leaked descriptor per created file).
+
+The implementation is on by default with `CANG_FS_ZERO_MESSAGE_OPEN=0` as the
+hatch, and it owes one user decision:
+[ticket 20](20-zero-message-open-coherence-contract.md).
 
 ## Question
 

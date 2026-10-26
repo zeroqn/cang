@@ -348,6 +348,28 @@ impl LibkrunApi for LinkedLibkrunApi {
         }
     }
 
+    fn fs_device_set_zero_message_open(&mut self, handle: Handle, enabled: bool) -> Result<()> {
+        match self.slots.get_mut(handle) {
+            Some(Slot::FsDevice(device)) => {
+                device.set_zero_message_open(enabled);
+                Ok(())
+            }
+            Some(_) => bail!("libkrun fs device handle {handle} holds a different object kind"),
+            None => bail!("libkrun fs device handle {handle} is not live"),
+        }
+    }
+
+    fn fs_device_set_opcode_stats(&mut self, handle: Handle, enabled: bool) -> Result<()> {
+        match self.slots.get_mut(handle) {
+            Some(Slot::FsDevice(device)) => {
+                device.set_opcode_stats(enabled);
+                Ok(())
+            }
+            Some(_) => bail!("libkrun fs device handle {handle} holds a different object kind"),
+            None => bail!("libkrun fs device handle {handle} is not live"),
+        }
+    }
+
     fn block_device_new(&mut self, id: &str, path: &Path, read_only: bool) -> Result<Handle> {
         let path = path_str(path, "disk image path")?;
         let mut device = BlockDevice::new(id, path, DiskFormat::Raw)?;

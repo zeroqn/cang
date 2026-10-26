@@ -50,6 +50,8 @@ pub trait LibkrunApi {
     fn fs_device_new(&mut self, tag: &str, host_path: &Path, read_only: bool) -> Result<Handle>;
     fn fs_device_set_overlay(&mut self, device: Handle, overlay: Handle) -> Result<()>;
     fn fs_device_set_worker_threads(&mut self, device: Handle, threads: usize) -> Result<()>;
+    fn fs_device_set_zero_message_open(&mut self, device: Handle, enabled: bool) -> Result<()>;
+    fn fs_device_set_opcode_stats(&mut self, device: Handle, enabled: bool) -> Result<()>;
     fn block_device_new(&mut self, id: &str, path: &Path, read_only: bool) -> Result<Handle>;
     fn net_device_new_unixstream_fd(
         &mut self,
