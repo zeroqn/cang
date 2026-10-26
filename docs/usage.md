@@ -58,6 +58,19 @@ relaunch them with the current version before using `cang exec`.
   redraw. This restore state is not persisted across helper or VM restart.
 - Only one attach client is supported at a time. A second attach attempt receives
   a busy error instead of sharing the PTY.
+- `cang -- <command>` behaves like a process launcher: the command's output is
+  streamed to cang's stdout while it runs, and cang exits with the command's
+  status. A command killed by a signal reports `128 + signal` (a SIGTERM-killed
+  command exits 143), so a killed command is never mistaken for a success. Host
+  stdin bytes are forwarded to the command, and when stdin ends (a pipe, a
+  redirect, `/dev/null`) cang keeps the session and hands the command the guest
+  PTY's end-of-input instead of detaching. The command still runs on the
+  managed guest PTY, so its stderr shares the stream with its stdout. The guest
+  reports the status through the fork's virtio-fs exit-code ioctl before the VM
+  ends, so it also survives a teardown that ends the attach session first.
+- A launch into a workspace that already has a running cang task is refused
+  with an error naming the task and its handle. Wait for it to finish,
+  `cang attach` it, or `cang kill` it before launching again.
 - Terminal and TUI programs inside the PTY are in scope, including
   `cang -- <interactive-command>`. Graphical X11/Wayland application
   preservation is not implemented; display sockets and GUI reconnect semantics

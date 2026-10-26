@@ -22,9 +22,10 @@
 #   summary.tsv        one row per completed run (appended)
 #
 # Result protocol: every arm writes `bench-result-<tag>.txt` with a unique tag
-# into the shared workspace and the harness reads BENCH_MS from it. The stream is
-# not usable for this: cang does not forward a guest command's stdout and does
-# not propagate its exit status (`cang -- false` exits 0).
+# into the shared workspace and the harness reads BENCH_MS from it. The harness
+# does not scrape the guest command's stdout for it: the arm needs a structured
+# record per run, and a file in the workspace survives an arm whose cang CLI is
+# killed early.
 #
 #   --report           print the ratio table for the recorded runs and exit
 #
@@ -218,9 +219,9 @@ echo "inner: done"
 now_ms() { date +%s%3N; }
 secs() { awk -v ms="${1:-0}" 'BEGIN { printf "%.1f", ms / 1000 }'; }
 
-# cang keys a task by workspace directory name, and a launch into a workspace
-# that already has a running task does nothing at all (exit 0, no output), so a
-# leftover VM from an interrupted run silently poisons every later measurement.
+# cang keys a task by workspace directory name and refuses a launch into a
+# workspace that already has a running task, so a leftover VM from an interrupted
+# run would make every later measurement fail instead of measuring.
 require_workspace_free() {
     local ws busy
     ws=$(basename "$1")
@@ -233,8 +234,8 @@ require_workspace_free() {
 }
 
 # Launch a guest arm and wait for its result file rather than for `cang` to
-# return: the CLI can come back immediately while the guest is still working (or
-# after the VM died), which would both lose the result and leave an orphan VM.
+# return: the CLI can come back while the guest is still working (or after the
+# VM died), which would both lose the result and leave an orphan VM.
 # The VM is always killed afterwards, and a VM that died without a result has its
 # VMM log tail appended, because that is where a virtio-fs death is visible.
 launch_guest_arm() {
