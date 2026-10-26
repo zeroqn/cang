@@ -53,7 +53,7 @@ Decide:
 ## Resolution (2026-10-26, shipped)
 
 **Both changes this ticket weighed shipped in one fork tag (`v2.0.0-cang.11`,
-fork `9e423e76`), and both were judged on measurement rather than prediction.**
+fork `d00b6d70`), and both were judged on measurement rather than prediction.**
 
 - The **pool** (option 1) is in, 4 threads by default, `set_worker_threads(1)`
   restores the old behaviour: readdirplus at 16 guest threads 154 -> 316 ops/s,

@@ -26,12 +26,12 @@ so nothing needs undoing - but it is not the workflow.)
 ## Submodule gotcha, seen immediately after the pull
 
 `git pull` moves a gitlink, never submodule contents, so `deps/libkrun` showed up
-as `M deps/libkrun`: `main` records `9e423e76` while that clone was still at
+as `M deps/libkrun`: `main` records `d00b6d70` while that clone was still at
 `7160f48f` and had never fetched it. Fix:
 
 ```
 cd deps/libkrun && git fetch origin cang
-cd ../.. && git submodule update deps/libkrun      # -> 9e423e76, clean status
+cd ../.. && git submodule update deps/libkrun      # -> d00b6d70, clean status
 ```
 
 The same equality matters for builds: `flake.lock`'s `libkrun-src` and the
@@ -41,7 +41,7 @@ grade the wrong fork earlier in this session).
 
 ## What the branch actually changed
 
-Fork tag `v2.0.0-cang.11` (commit `9e423e76`, assets published): a worker-robustness
+Fork tag `v2.0.0-cang.11` (commit `d00b6d70`, assets published): a worker-robustness
 fix, a request thread pool, and zero-message open. Measured on a cold 2401-crate
 rustc build: 427.1 s -> 176.0 s (2.42x), the share's cost over the same build on
 guest tmpfs from 3.28x to 1.34x. Details: `MAP.md` in the map, note 23, ticket 19.

@@ -81,7 +81,7 @@ lands after ticket 04's pool is in and measured, not in parallel.
 
 ## Resolution (2026-10-26, shipped)
 
-**Shipped, on by default, and tagged.** Fork `9e423e76`, tag `v2.0.0-cang.11`
+**Shipped, on by default, and tagged.** Fork `d00b6d70`, tag `v2.0.0-cang.11`
 (assets published), cang `fe63e69` + submodule `efac572` + `flake.lock` `cf16dda`.
 
 - **Measured, verified twice independently**: a cold 2401-crate rustc build goes

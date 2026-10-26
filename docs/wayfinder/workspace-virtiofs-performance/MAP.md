@@ -271,7 +271,7 @@ of every request to zero.
 
 ## Shipped (2026-10-26)
 
-- Fork **`v2.0.0-cang.11`** (commit `9e423e76`, assets published) carries three
+- Fork **`v2.0.0-cang.11`** (commit `d00b6d70`, assets published) carries three
   virtio-fs changes: the worker-robustness fix, the request thread pool, and
   **zero-message open**. cang pins it in the submodule and in `flake.lock`
   (`libkrun-src`), and the live smoke gate (Chromium-on-venus over `--waypipe`,
