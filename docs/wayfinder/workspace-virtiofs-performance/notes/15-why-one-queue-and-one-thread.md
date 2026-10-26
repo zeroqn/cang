@@ -6,6 +6,15 @@ blocked_by: []
 claimed_by: pi research child (2026-10-26)
 ---
 
+
+> **Floor correction (2026-10-26).** Any "no-FUSE floor" quoted in this note as
+> 232 s was a **lever-off** measurement, not a no-FUSE one: `/` is itself the
+> virtio-fs share (`/proc/mounts`: `/dev/root / virtiofs`), so the guest-local arm
+> launched 2401 `rustc`/`ld` binaries off the same connection and paid
+> OPEN+RELEASE for each (OPEN 87,871-89,374). With zero-message open the same
+> tmpfs arm runs 111.0-164.9 s, and the true no-FUSE floor is ~131 s. See
+> `MAP.md` ("The governor fact that reorders everything") and note 23's
+> independent re-measurement for the numbers and the method.
 # 15 - One request queue, one serving thread: origin, guest side, and what changing it would buy
 
 Ticket: this note exists because [ticket 04](04-first-transport-change.md) closed the
