@@ -18,6 +18,7 @@
 #   workload-<kind>/   the tree: `synthetic` (gen-workload.sh) or `cang`
 #                      (a copy of this repo at HEAD, submodule trees included)
 #   <arm>/             that arm's private copy (rebuilt per arm, never reused)
+#   toolchain/         virglrenderer + static krun-init, mounted at /cang-toolchain
 #   logs/              one log per run, plus a per-thread CPU capture per guest run
 #   summary.tsv        one row per completed run (appended)
 #
@@ -31,7 +32,9 @@
 #
 # Env: CANG (default <repo>/result/bin/cang), IMAGE, BENCH_ROOT, RUNS, WORKLOAD,
 #      LEAVES/MODULES/LINES (synthetic size), JOBS (default 26 = a cang guest's
-#      vcpu count on a 28-CPU host), GUEST_TIMEOUT (default 3000 s).
+#      vcpu count on a 28-CPU host), GUEST_TIMEOUT (default 3000 s),
+#      TOOLCHAIN_DIR (default <bench-root>/toolchain: virglrenderer + krun-init
+#      the guest cang-workload arm resolves its dependencies from).
 set -euo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -72,18 +75,71 @@ if [ ! -s "$summary" ]; then
     printf 'arm\trun\tbench_ms\touter_ms\tworkload\tfs_worker_pct\trustc\tcargo\n' >"$summary"
 fi
 
-# Extra read-only host paths to bind-mount into a guest arm at the same absolute
-# path. The cang workload needs `virglrenderer`, which the image's /nix closure
-# does not ship (ticket 11); mounting the host's store path keeps the measurement
-# possible without an image rebuild, and is exactly what a `cang -v` is for.
-guest_volumes=()
-if [ "$workload_kind" = cang ]; then
+# Everything a cang build needs that the image does not ship, in one directory
+# the guest sees at /cang-toolchain (cang-workload-env.sh resolves it there).
+toolchain_dir=${TOOLCHAIN_DIR:-$bench_root/toolchain}
+stage_toolchain() {
+    local pc dir
+    mkdir -p "$toolchain_dir"
     for pc in /nix/store/*virglrenderer-*/lib/pkgconfig; do
         [ -e "$pc" ] || continue
         dir=${pc%/lib/pkgconfig}
-        guest_volumes+=(-v "$dir:$dir:ro")
+        if [ ! -e "$toolchain_dir/virglrenderer" ]; then
+            cp -a "$dir" "$toolchain_dir/virglrenderer" 2>/dev/null || true
+        fi
         break
     done
+    for init in /nix/store/*krun-init-static-*/bin/krun-init; do
+        [ -e "$init" ] || continue
+        if [ ! -e "$toolchain_dir/krun-init" ]; then
+            cp -a "$init" "$toolchain_dir/krun-init" 2>/dev/null || true
+            chmod +x "$toolchain_dir/krun-init" 2>/dev/null || true
+        fi
+        break
+    done
+}
+
+# bob's rule for this workload: do not fight `--offline`, warm the registry. A
+# cang guest mounts an EMPTY per-workspace state dir at /home/dev/.cargo, so a
+# guest build would otherwise start with no crates at all; seeding it from the
+# host's populated ~/.cargo (one copy, reused across runs) makes the timed arm a
+# build rather than a fetch, which is what a second build looks like in practice.
+state_root() {
+    awk -F'"' '/^location/ { print $2 }' "${CANG_CONFIG:-$HOME/.config/cang/cang.toml}" 2>/dev/null
+}
+
+warm_cargo_registry() { # warm_cargo_registry <workspace-dir>
+    local ws root cargo_home
+    ws=$(basename "$1")
+    root=$(state_root)
+    if [ -z "$root" ]; then
+        echo "run.sh: cannot read cang's state root; skipping registry warm" >&2
+        return 0
+    fi
+    cargo_home=$root/cang/$ws/cargo
+    if [ -d "$cargo_home/registry/cache" ] && [ -n "$(ls -A "$cargo_home/registry/cache" 2>/dev/null)" ]; then
+        return 0
+    fi
+    if [ ! -d "$HOME/.cargo/registry/cache" ]; then
+        echo "run.sh: no host cargo registry to warm from; the arm may fail" >&2
+        return 0
+    fi
+    mkdir -p "$cargo_home"
+    cp -a "$HOME/.cargo/registry" "$cargo_home/" 2>/dev/null || true
+    cp -a "$HOME/.cargo/config.toml" "$cargo_home/" 2>/dev/null || true
+    echo "run.sh: warmed the guest cargo home $cargo_home from $HOME/.cargo"
+}
+
+guest_volumes=()
+if [ "$workload_kind" = cang ]; then
+    # The image ships the C/Rust toolchain but not two things a cang build needs:
+    # virglrenderer (rutabaga_gfx's build script probes virglrenderer.pc) and a
+    # prebuilt static krun-init (init-blob's build script wants one, or a musl
+    # target to build its own). Both are staged into $bench_root/toolchain and
+    # mounted at a stable guest path, because the guest's /nix is the *image's*
+    # store, not the host's, so a host store path is invisible there.
+    stage_toolchain
+    guest_volumes+=(-v "$toolchain_dir:/cang-toolchain:ro")
 fi
 if [ -n "${EXTRA_VOLUMES:-}" ]; then
     for v in $EXTRA_VOLUMES; do guest_volumes+=(-v "$v"); done
@@ -162,7 +218,7 @@ prepare_workload() {
             --exclude=./.cang --exclude=./.pi --exclude=./result \
             -cf - . | tar -C "$workload" -xf -
         cp "$repo/tools/rust-compile-bench/cang-workload-env.sh" "$workload/cang-workload-env.sh"
-        build_cmd='cargo build --offline -p cang'
+        build_cmd='cargo build -p cang'
         ;;
     *) echo "run.sh: unknown workload '$workload_kind' (synthetic|cang)" >&2; exit 2 ;;
     esac
@@ -267,6 +323,16 @@ launch_guest_arm() {
     fi
 }
 
+# The guest's cargo home is NOT the host's: cang mounts an empty per-workspace
+# state dir at /home/dev/.cargo, so a guest build starts with no registry. Warm it
+# once from the host's ~/.cargo (already populated by normal development) so the
+# measured arm is a *build*, not a fetch - the fetch belongs outside the timer,
+# exactly as it would in a real second build.
+state_root() {
+    awk -F'"' '/^location/ { print $2 }' "${CANG_CONFIG:-$HOME/.config/cang/cang.toml}" 2>/dev/null
+}
+
+
 prepare_arm() {
     rm -rf "$bench_root/$1"
     cp -a "$workload" "$bench_root/$1"
@@ -305,7 +371,12 @@ done
 
 for arm in ${arms//,/ }; do
     dir=$bench_root/$arm
-    case $arm in guest-*) require_workspace_free "$dir" ;; esac
+    case $arm in
+    guest-*)
+        require_workspace_free "$dir"
+        if [ "$workload_kind" = cang ]; then warm_cargo_registry "$dir"; fi
+        ;;
+    esac
     for n in $(seq 1 "$runs"); do
         log=$bench_root/logs/$arm-$n.log
         tag=$arm-$n-$(date +%s)
