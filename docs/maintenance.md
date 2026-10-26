@@ -425,7 +425,14 @@ Release a version in this order:
    ```
 
    and, as below, treat the branch push's `.sha256` as the authoritative value
-   before the tag goes out - that cross-check is what catches a mismatch.
+   before the tag goes out - that cross-check is what catches a mismatch. v0.15.1
+   cut its pin from the host's 0.15.2 and published a stream 2241 bytes bigger
+   (`18ce3cb4` locally, `d473df49` published); re-normalizing the same store
+   build with the runner's 0.19.2 reproduced the published bytes exactly. A pin
+   that misses can be corrected without a new version: rewrite the SRI from the
+   published asset, commit, and re-create the tag at that commit - the asset
+   bytes do not change, so the re-run uploads the same file. `nix build
+   .#cang-prebuilt` is the check that the pin holds (it fetches the asset).
 
    The `.#cang-ci-sccache` attribute hard-codes `SCCACHE_DIR=/nix/var/cache/sccache`
    (the CI runner creates it), so a local build dies in that directory with
