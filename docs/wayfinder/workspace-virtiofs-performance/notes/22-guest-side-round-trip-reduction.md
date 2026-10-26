@@ -222,7 +222,7 @@ unmeasured, which is §4's first task.
 | 1 | **zero-message open** `FUSE_NO_OPEN_SUPPORT` + `FUSE_NO_OPENDIR_SUPPORT` | **2 of 2** per file open+close; **2 of 2** per directory open | server replies `-ENOSYS` to the first `FUSE_OPEN`/`FUSE_OPENDIR`; server opens the host file lazily at the first `FUSE_READ`/`WRITE` and keys it by inode (fh arrives as 0) | the OPEN+RELEASE share of the build's requests; eliminates the entire `open` row (934 us -> the `statwarm` scale) | **do this** |
 | 2 | **INIT-reply flags never acked**: `FUSE_MAX_PAGES` (32 -> 256 pages), `FUSE_ASYNC_READ`, `FUSE_CACHE_SYMLINKS` | 0 directly; up to **8x fewer** `FUSE_READ`s for sequential/readahead reads, and pipelined instead of blocking | 1 line each in `passthrough.rs:899-910`; max_pages must stay <= the server's 1 MiB buffer | the read/readahead class only; the probe's 4 KiB `read` mode would not move | **do this** |
 | 3 | attribute/entry cache extension (5 s now), `FUSE_EXPLICIT_INVAL_DATA` | 0 (already cached) | nothing | none - `statwarm` at 3.7 us/op is what "cached" costs | skip |
-| 4 | `FUSE_PASSTHROUGH` (inode passthrough) | would remove **all** data round trips | a `/dev/fuse` file in the guest - impossible for a virtio-fs connection (§3) | 0 here | **impossible** |
+| 4 | `FUSE_PASSTHROUGH` (inode passthrough) | would remove **all** data round trips | a `/dev/fuse` file **bound to the virtio-fs connection** - impossible (§3, note 24) | 0 here | **impossible** |
 | 5 | `FUSE_IO_URING` / fuse-uring (`CONFIG_FUSE_IO_URING=y`, `config-...:2894`) | would remove the server's read/write on the fuse device | the fuse-device owner and `IORING_OP_URING_CMD`; a virtqueue server has neither (§3) | 0 here | **impossible** |
 | 6 | per-inode DAX (`FUSE_HAS_INODE_DAX`) | removes `FUSE_READ`/`WRITE` for mapped ranges | a DAX window + `FUSE_SETUPMAPPING` per 2 MiB region | closed by note 05 (whole-root connection, no fallback when the window fills) | **already rejected** |
 | 7 | kick coalescing / `VIRTIO_F_EVENT_IDX` | 0 | already negotiated (`fs/device.rs:77`), already drained with the spec's disable/re-enable loop (`fs/fuse/virtio_fs.c:841-853`, virtio 1.2 §2.7.14) | a one-deep synchronous caller cannot batch (virtio 1.2 §2.7.13 steps 1-2 "MAY be performed repeatedly if batching is possible") | exhausted |
@@ -345,7 +345,15 @@ one round trip per 128 KiB of directory entries.
 
 ## 3 What is impossible here
 
-### 3.1 FUSE_PASSTHROUGH: the mechanism needs a `/dev/fuse` file that a virtio-fs guest does not have
+### 3.1 FUSE_PASSTHROUGH: the mechanism needs a `/dev/fuse` file bound to the virtio-fs connection
+
+> **Correction (2026-10-26, note 24).** This heading used to claim the guest has no
+> `/dev/fuse`. It does: `CONFIG_FUSE_FS=y` + `CONFIG_DEVTMPFS_MOUNT=y` in the pinned
+> kernel give the guest a `fuse` misc device node. What it has no instance of is a
+> `/dev/fuse` **file whose connection is the virtio-fs one** - the driver allocates
+> its `fuse_dev`s and installs them straight on the virtqueues
+> (`fs/fuse/virtio_fs.c:1588-1612`), so no userspace file ever refers to that
+> connection. Conclusion unchanged; premise corrected.
 
 Passthrough is the only mechanism that makes data I/O cost **zero** FUSE round
 trips, and it does work as advertised where it applies: the server registers a
