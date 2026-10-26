@@ -156,6 +156,9 @@ impl LaunchConfig {
         if self.zero_copy_shm {
             push_field(&mut out, "zero_copy_shm", "1");
         }
+        if self.no_zero_message_open {
+            push_field(&mut out, "no_zero_message_open", "1");
+        }
         if !self.new_perms.is_empty() {
             push_field(&mut out, "permissions", &self.new_perms.to_string());
         }
@@ -389,6 +392,7 @@ impl LaunchConfig {
                     | "network_mode"
                     | "gpu_mode"
                     | "zero_copy_shm"
+                    | "no_zero_message_open"
                     | "permissions"
                     | "workdir"
                     | "exec_path"
@@ -446,6 +450,8 @@ impl LaunchConfig {
                 .unwrap_or(GpuMode::Off.as_config_value()),
         )?;
         let zero_copy_shm = fields.get("zero_copy_shm").map(String::as_str) == Some("1");
+        let no_zero_message_open =
+            fields.get("no_zero_message_open").map(String::as_str) == Some("1");
         let new_perms = fields
             .get("permissions")
             .map_or(
@@ -489,6 +495,7 @@ impl LaunchConfig {
             network_mode,
             gpu_mode,
             zero_copy_shm,
+            no_zero_message_open,
             new_perms,
             publish: publish.into_values().collect(),
             workdir: required("workdir")?,

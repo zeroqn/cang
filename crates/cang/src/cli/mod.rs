@@ -278,6 +278,13 @@ pub(crate) struct Cli {
     zero_copy_shm: bool,
 
     #[arg(
+        long = "no-zero-message-open",
+        help = "Disable virtio-fs zero-message opens (strict close-to-open reads)",
+        long_help = "Disable virtio-fs zero-message opens, which cang asks for by default. With zero-message opens the guest kernel stops sending FUSE_OPEN/FUSE_RELEASE and keeps a file's page cache across opens, which is worth ~2x on a rust build but means a host-side IN-PLACE rewrite of a file the guest has already read can take up to the attr_timeout (5 s) to appear. A file the host replaces by rename (every editor, git checkout, sed -i) is a new inode and is unaffected. Use this flag for a launch that needs strict close-to-open visibility back."
+    )]
+    no_zero_message_open: bool,
+
+    #[arg(
         long = "wayland",
         help = "Enable guest Wayland passthrough through wl-cross-domain-proxy",
         long_help = "Enable guest Wayland passthrough through wl-cross-domain-proxy. This starts a guest-local Wayland proxy and enables libkrun virtio-gpu DRM native-context support."
@@ -603,6 +610,7 @@ impl Cli {
                 self.gpu.into()
             },
             zero_copy_shm: self.zero_copy_shm,
+            no_zero_message_open: self.no_zero_message_open,
             wayland: self.wayland,
             workspace: self.workspace,
             waypipe: self.waypipe,
@@ -645,6 +653,7 @@ pub(crate) struct RuntimeOptions {
     pub(crate) pulse: Option<PulseServer>,
     pub(crate) gpu_mode: GpuMode,
     pub(crate) zero_copy_shm: bool,
+    pub(crate) no_zero_message_open: bool,
     pub(crate) wayland: bool,
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) waypipe: Option<Option<PathBuf>>,
@@ -2097,4 +2106,19 @@ fn images_words_after_delimiter_remain_guest_command() {
     let options = cli.into_runtime_options();
 
     assert_eq!(options.guest_command, ["images", "list"]);
+}
+
+#[test]
+fn no_zero_message_open_flag_disables_the_default() {
+    let cli = Cli::try_parse_from(["cang", "--no-zero-message-open", "--", "true"])
+        .expect("--no-zero-message-open should parse");
+    let options = cli.into_runtime_options();
+    assert!(options.no_zero_message_open);
+
+    let cli = Cli::try_parse_from(["cang", "--", "true"]).expect("plain launch should parse");
+    let options = cli.into_runtime_options();
+    assert!(
+        !options.no_zero_message_open,
+        "zero-message open is the default; the flag is what turns it off"
+    );
 }

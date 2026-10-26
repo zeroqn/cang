@@ -157,6 +157,7 @@ fn maintenance_launch_config(
         network_mode: NetworkMode::Tsi,
         gpu_mode: GpuMode::Off,
         zero_copy_shm: false,
+        no_zero_message_open: false,
         new_perms: crate::runtime::launch::config::GuestPermissions::default(),
         publish: Vec::new(),
         workdir: "/".to_owned(),
