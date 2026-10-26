@@ -614,3 +614,14 @@ half for free; the pool is the only lever that raises the ceiling of both.
   rust compile - it matters only if something in the guest asks for xattrs
   (`cp --preserve=xattr`, `rsync -X`, a container layer). Recorded so nobody
   re-derives it as a candidate.
+
+## Correction (2026-10-26, ticket 15)
+
+`VIRTIO_F_MULTIQUEUE` **does not exist for virtio-fs**. Section 1.2's "an honest
+change offers VIRTIO_F_MULTIQUEUE" is wrong: the virtqueues a virtio-fs device
+has are fixed by its config word (`num_request_queues`), and the guest driver
+reads that word and creates exactly that many request queues (Linux v7.2
+`fs/fuse/virtio_fs.c:963-971`, zero `MULTIQUEUE` hits in the driver or in the
+spec's virtio-fs device). The fork's single queue is therefore a hard-coded
+design constant (`NUM_QUEUES = 2`), not a withheld feature - see
+[15-why-one-queue-and-one-thread](15-why-one-queue-and-one-thread.md).

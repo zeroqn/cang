@@ -94,11 +94,12 @@ green.
     `~/.cache/sccache` are all **inside that single share** (the workspace is a
     bind graft into the prepared root, `prepared_root/mod.rs:113`).
   - The device offers **one** request queue: `defs::NUM_QUEUES = 2`
-    (`HIPQ_INDEX` + `REQ_INDEX`), `queue_config()` returns that static array,
-    `config.num_request_queues = 1`, and `avail_features` is
-    `VIRTIO_F_VERSION_1 | VIRTIO_RING_F_EVENT_IDX` - **VIRTIO_F_MULTIQUEUE is
-    never offered**, so the guest driver cannot ask for more queues however it
-    is configured.
+    (`HIPQ_INDEX` + `REQ_INDEX`), `queue_config()` returns that static array and
+    `config.num_request_queues = 1`. **Correction (ticket 15): virtio-fs has no
+    `VIRTIO_F_MULTIQUEUE` feature bit at all** - the queue count is purely the
+    device's config word (kernel `virtio_fs.c:963-971`), so there is nothing to
+    negotiate; the limit is a hard-coded constant inherited from crosvm's 2019
+    device, not a withheld feature.
   - One `FsWorker` thread serves that queue serially (`worker.rs::process_queue`
     -> `server.handle_message` inline), so rustc's stat/open/read/write stream
     is a single-threaded request loop.
