@@ -422,9 +422,9 @@ read keeps the contents it read until its attributes refresh - the virtio-fs
 - Only a **host-side in-place rewrite** of a file the guest has already read
   (e.g. `echo >> file` from the host) can lag by up to 5 s.
 
-`cang --no-zero-message-open` restores strict close-to-open visibility for a launch
-that needs it, at the cost of the round trips (`CANG_FS_ZERO_MESSAGE_OPEN=0` does
-the same thing from the environment, which is what makes a one-binary A/B
+`cang --fs=zero-message-open:off` restores strict close-to-open visibility for a
+launch that needs it, at the cost of the round trips (`CANG_FS_ZERO_MESSAGE_OPEN=0`
+does the same thing from the environment, which is what makes a one-binary A/B
 possible). `CANG_FS_STATS=1` makes the
 share log the opcode mix it served when the VM stops, for measuring a workload
 without a guest-side tracer.

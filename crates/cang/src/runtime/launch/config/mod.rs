@@ -132,7 +132,7 @@ impl LaunchConfig {
             network_mode: spec.network_mode,
             gpu_mode: spec.gpu_mode,
             zero_copy_shm: spec.zero_copy_shm,
-            no_zero_message_open: spec.no_zero_message_open,
+            zero_message_open: spec.zero_message_open,
             new_perms: spec.new_perms,
             publish: spec.publish.to_vec(),
             workdir: components::process::workdir_from_image(
