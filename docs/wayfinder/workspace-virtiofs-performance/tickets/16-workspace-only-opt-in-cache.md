@@ -1,9 +1,9 @@
 ---
 label: wayfinder:prototype
-title: Opt-in caching for /workspace only, with a corruption warning on every launch
-status: open
+title: Caching for /workspace: auto is already on, writeback is rejected
+status: closed
 blocked_by: []
-claimed_by: ""
+claimed_by: pi + bob (2026-10-26)
 ---
 
 ## Question
@@ -57,3 +57,27 @@ Decide, on the cache-semantics research (`notes/13-cache-semantics-and-scoping.m
 ## Resolution
 
 (to follow)
+
+## Resolution (2026-10-26, bob's verdict on note 13)
+
+**No cache change ships from this ticket: `auto` is already the behaviour, and
+writeback is rejected because a cang guest can exit ungracefully.**
+
+- **`cache=auto` is a no-op here.** It is the *absence* of per-open `KEEP_CACHE`
+  and `FOPEN_DIRECT_IO` flags plus per-reply timeouts - which is exactly what the
+  fork does today. Nothing to enable.
+- **`WRITEBACK_CACHE` is the only connection-wide lever, and bob ruled it out**:
+  a cang guest can be killed, OOM-killed or lost with dirty pages still in its
+  page cache, and there is no `FUSE_NOTIFY_INVAL_*` channel in this server, so the
+  loss window has no bound the host can detect. It also suppresses mtime/size
+  invalidation for **every** regular file on the connection (note 13), which makes
+  the host's view stale even after the writes do land.
+- **What survives** as a candidate is per-path and per-open, which needs no
+  writeback: keeping `KEEP_CACHE` for read-mostly paths, or - bob's block-device
+  question - putting only `target/` on a non-virtiofs device so sources stay live
+  and build output stops paying FUSE round trips. The second one needs no cache
+  semantics change at all, which is why it is the better next experiment (see the
+  block-device ticket).
+
+Recorded for the map: the launch warning bob asked for is only needed if a
+caching mode ever ships; with `auto` there is nothing to warn about.

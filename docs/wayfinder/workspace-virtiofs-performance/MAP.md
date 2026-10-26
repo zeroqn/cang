@@ -142,9 +142,18 @@ control:
 |---|---|---|---|
 | host | 104.2, 104.7 (+ 104.5, 105.6, 106.4 earlier) | 1.00x | - |
 | guest-local (`/dev/shm`, no FUSE) | 232.0, 232.9, 235.1 | 2.2x | 1.00x |
-| guest-virtiofs (`/workspace`) | 298.9, 306.5, 311.4 | 2.9x | **1.29-1.34x** |
+| guest-virtiofs (`/workspace`) | 298.9, 306.5, 311.4, 326.5 | 2.9x | **1.29-1.36x** |
 
 - **The virtio-fs penalty is ~30%**, and it is a *floor*: the control is RAM.
+- **Correction (2026-10-26): the FUSE worker uses ~26% of one core, not 12%.**
+  The sampler summed the wrong `/proc/<tid>/stat` fields because the thread's comm
+  is `fs worker` *with a space*, which shifts every field index by one;
+  `utime+stime` and `schedstat` runtime now agree at 19.7 s of a 77 s window
+  (25.6%). It is still not *blocked* (runqueue wait 0.06%, most samples in
+  `do_epoll_wait`, ~3000 wakes/s), so little is available to overlap - but the
+  ceiling for pool/io_uring work is a quarter of a core, not an eighth, and
+  whether the guest's FUSE path scales with concurrency is now measured directly
+  (note 20).
 - **The VM penalty is 2.2x the host** - twice the FUSE penalty, and no virtio-fs
   change can touch it.
 - Run-to-run spread: host ~2%, guest-local ~1%, guest-virtiofs ~4%. A shipped
@@ -156,6 +165,8 @@ control:
   not help, because the guest's store is a different store).
 - **Where the penalty comes from (the decisive number):** during a full `JOBS=26`
   guest-virtiofs arm, the single FUSE **`fs_worker` thread used 12% of one core**
+  (a measurement since corrected to ~26%: same thread, a field-index bug in the
+  sampler, see the note below)
   while the guest's own vCPUs used ~65% + ~22% each. The worker is 88% idle, so
   the cost is per-request round-trip latency, not worker serialization.
 - **Caveat:** another agent session may have been running a live smoke during
@@ -211,7 +222,7 @@ control:
 
 - **What the remaining ~30% would take.** With the pool dead and caching ruled
   out, the only untried lever that is not caching *data* is `NO_OPEN_SUPPORT`
-  (handle reuse for a `LOOKUP+OPEN` pair) - and the 12%-busy worker says there is
+  (handle reuse for a `LOOKUP+OPEN` pair) - and the quarter-busy worker says there is
   little to win. If bob wants the penalty gone rather than explained, the
   candidates are all outside this map's scope: `/workspace` on a block device, a
   share split so `target/` can be cached and sources cannot, or accepting the VM
