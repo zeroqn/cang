@@ -410,6 +410,23 @@ Release a version in this order:
 
    Run this from `nix develop`, which provides `readelf` and `sha256sum`.
 
+   The `nixpkgs#patchelf` in that snippet comes from the *flake registry*, not
+   from this repo's pinned `nixpkgs`, so which patchelf normalizes the asset
+   depends on the host's registry: on CI it resolves to nixpkgs-unstable's
+   (0.19.2 as of v0.15.0), while a NixOS host's channel registry may still
+   resolve an older one (0.15.2), and patchelf 0.18 changed where
+   `--set-interpreter` places the interpreter - a 0.15.2-normalized asset is a
+   different byte stream (different size, different hash) from CI's, so the pin
+   silently misses. Fetch the same patchelf CI uses instead of trusting `nixpkgs#`:
+
+   ```bash
+   curl -L https://github.com/NixOS/patchelf/releases/download/0.19.2/patchelf-0.19.2-x86_64.tar.gz | tar xz -C /tmp
+   /tmp/bin/patchelf --version
+   ```
+
+   and, as below, treat the branch push's `.sha256` as the authoritative value
+   before the tag goes out - that cross-check is what catches a mismatch.
+
    The `.#cang-ci-sccache` attribute hard-codes `SCCACHE_DIR=/nix/var/cache/sccache`
    (the CI runner creates it), so a local build dies in that directory with
    `sccache: failed to create directory /nix/var/cache/sccache/preprocessor:
