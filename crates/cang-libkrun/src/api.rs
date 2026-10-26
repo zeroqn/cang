@@ -49,6 +49,7 @@ pub trait LibkrunApi {
     fn mmio_device_manager_add(&mut self, devices: Handle, device: Handle) -> Result<()>;
     fn fs_device_new(&mut self, tag: &str, host_path: &Path, read_only: bool) -> Result<Handle>;
     fn fs_device_set_overlay(&mut self, device: Handle, overlay: Handle) -> Result<()>;
+    fn fs_device_set_worker_threads(&mut self, device: Handle, threads: usize) -> Result<()>;
     fn block_device_new(&mut self, id: &str, path: &Path, read_only: bool) -> Result<Handle>;
     fn net_device_new_unixstream_fd(
         &mut self,
