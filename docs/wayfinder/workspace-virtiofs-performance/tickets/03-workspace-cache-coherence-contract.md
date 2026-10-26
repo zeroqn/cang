@@ -85,3 +85,17 @@ writeback cache from the map entirely.** Decisions:
 and the pool - the pool (or nothing) is the first structural change, and the
 map's expected win is now smaller and must be shown by ticket 02's numbers
 rather than assumed from ticket 01's ranking.
+
+### Superseded in part (2026-10-26, bob)
+
+bob reopened caching with a narrower rule than this ticket's: **cache is allowed,
+but only for `/workspace`, only opt-in, and only with a launch warning that
+host-side access to the mounted workspace can corrupt what the guest sees.**
+"Never cache writes" therefore no longer holds as an absolute; what holds is that
+the *default* stays exact and that nothing outside `/workspace` is ever cached.
+
+Consequences: `WRITEBACK_CACHE` returns as a candidate **for the workspace share
+only** (which needs a second virtiofs device - see
+[the opt-in workspace cache ticket](16-workspace-only-opt-in-cache.md)), while the
+regression gates named here remain the price of the flag. The root share stays
+uncached, so `/nix`, `~/.cargo` and sccache keep today's semantics.

@@ -31,6 +31,9 @@ const FRAME_HEADER_LEN: usize = 5;
 const MAX_ATTACH_PAYLOAD_LEN: usize = 16 * 1024 * 1024;
 const HOST_OUTPUT_BATCH_MAX_FRAMES: usize = 16;
 const HOST_OUTPUT_BATCH_MAX_BYTES: usize = IO_BUF_SIZE;
+/// The PTY's end-of-input byte: a canonical-mode tty turns it into a read() that
+/// returns 0, which is how a guest command sees the end of the host's stdin.
+const PTY_END_OF_INPUT_BYTE: u8 = 0x04;
 const FOCUS_GAINED_INPUT: &[u8] = b"\x1b[I";
 const FOCUS_LOST_INPUT: &[u8] = b"\x1b[O";
 const FOCUS_REPORT_ENABLE_OUTPUT: &[u8] = b"\x1b[?1004h";
@@ -40,6 +43,28 @@ const FOCUS_REPORT_GUARD_WINDOW: Duration = Duration::from_millis(750);
 pub(crate) struct AttachInputPolicy {
     suppress_focus_input: bool,
     focus_report_guard: Option<Arc<Mutex<FocusReportGuard>>>,
+    stdin_eof: StdinEofPolicy,
+}
+
+/// What the host does when its own stdin reaches EOF.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum StdinEofPolicy {
+    /// Treat it as a request to leave the session attached no longer. This is
+    /// right for an interactive shell session, whose stdin is the host terminal.
+    #[default]
+    Detach,
+    /// Keep the session and end its input instead. This is what a process
+    /// launcher needs: `cang -- <command>` is routinely started with stdin on
+    /// /dev/null or a closed pipe, and detaching there threw away the command's
+    /// output and its exit status while the command itself kept running.
+    EndInput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StdinEofAction {
+    Detach,
+    SendEndOfInput,
+    Nothing,
 }
 
 impl AttachInputPolicy {
@@ -48,6 +73,24 @@ impl AttachInputPolicy {
             suppress_focus_input,
             focus_report_guard: focus_report_guard
                 .then(|| Arc::new(Mutex::new(FocusReportGuard::default()))),
+            stdin_eof: StdinEofPolicy::default(),
+        }
+    }
+
+    /// Keep the attached session when the host's stdin ends, translating the
+    /// EOF into the guest PTY's end-of-input byte instead of a detach request.
+    pub(crate) fn end_session_input_on_stdin_eof(mut self) -> Self {
+        self.stdin_eof = StdinEofPolicy::EndInput;
+        self
+    }
+
+    fn stdin_eof_action(&self, stdin_is_tty: bool) -> StdinEofAction {
+        match self.stdin_eof {
+            StdinEofPolicy::Detach => StdinEofAction::Detach,
+            // A host terminal that returns EOF is a closed terminal, not a
+            // finished input stream, so nothing is invented for it.
+            StdinEofPolicy::EndInput if stdin_is_tty => StdinEofAction::Nothing,
+            StdinEofPolicy::EndInput => StdinEofAction::SendEndOfInput,
         }
     }
 
@@ -465,6 +508,7 @@ fn proxy_stdin(
     let mut input = std::io::stdin().lock();
     let mut buf = [0u8; IO_BUF_SIZE];
     let mut last_size = terminal_size(libc::STDIN_FILENO);
+    let stdin_is_tty = is_tty(libc::STDIN_FILENO);
     while active.load(Ordering::Acquire) {
         if let Some(size) = terminal_size_changed(&mut last_size) {
             trace_event_from_env(
@@ -507,8 +551,40 @@ fn proxy_stdin(
                     "host-to-guest-stdin-eof",
                     output,
                 );
-                trace_event_from_env("host", "detach", "direction=host-to-guest reason=stdin-eof");
-                let _ = write_to_guest(&writer, &Frame::Detach);
+                match input_policy.stdin_eof_action(stdin_is_tty) {
+                    StdinEofAction::Detach => {
+                        trace_event_from_env(
+                            "host",
+                            "detach",
+                            "direction=host-to-guest reason=stdin-eof",
+                        );
+                        let _ = write_to_guest(&writer, &Frame::Detach);
+                    }
+                    StdinEofAction::SendEndOfInput => {
+                        trace_event_from_env(
+                            "host",
+                            "stdin-eof",
+                            "direction=host-to-guest reason=stdin-eof action=end-input",
+                        );
+                        // The guest command reads the managed PTY, not the host's
+                        // stdin, so EOF has to arrive as the PTY's own
+                        // end-of-input byte for a command that reads stdin to
+                        // finish instead of waiting forever.
+                        let _ = write_host_input_data_to_guest(
+                            &writer,
+                            &input_policy,
+                            "host-to-guest-stdin-end-of-input",
+                            vec![PTY_END_OF_INPUT_BYTE],
+                        );
+                    }
+                    StdinEofAction::Nothing => {
+                        trace_event_from_env(
+                            "host",
+                            "stdin-eof",
+                            "direction=host-to-guest reason=stdin-eof action=keep-session",
+                        );
+                    }
+                }
                 return Ok(());
             }
             Ok(n) => n,
@@ -1901,6 +1977,54 @@ mod tests {
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         assert!(flags >= 0, "F_GETFL failed");
         flags & libc::O_NONBLOCK != 0
+    }
+
+    #[test]
+    fn stdin_eof_detaches_an_interactive_session() {
+        let policy = AttachInputPolicy::default();
+
+        assert_eq!(policy.stdin_eof_action(false), StdinEofAction::Detach);
+        assert_eq!(policy.stdin_eof_action(true), StdinEofAction::Detach);
+    }
+
+    #[test]
+    fn stdin_eof_ends_the_input_of_a_launcher_command_session() {
+        let policy = AttachInputPolicy::default().end_session_input_on_stdin_eof();
+
+        assert_eq!(
+            policy.stdin_eof_action(false),
+            StdinEofAction::SendEndOfInput
+        );
+        // A host terminal that returns EOF is a closed terminal, not a finished
+        // input stream, so no end-of-input byte is invented for it.
+        assert_eq!(policy.stdin_eof_action(true), StdinEofAction::Nothing);
+    }
+
+    #[test]
+    fn launcher_frame_stream_relays_output_before_the_exit_status() {
+        // A `cang -- <command>` launch streams the payload's merged output first
+        // and its exit status last; both have to survive the attach proxy, and
+        // stdout must be flushed before the status ends the proxy.
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        write_frame(&mut server, &Frame::Data(b"HI-OUT\r\n".to_vec())).unwrap();
+        write_frame(&mut server, &Frame::Data(b"HI-ERR\r\n".to_vec())).unwrap();
+        write_frame(&mut server, &Frame::Exit { code: 3 }).unwrap();
+        let mut stdout = CountingWriter::default();
+        let mut stderr = Vec::new();
+
+        let outcome = proxy_remote_unix_with_profile(
+            &mut client,
+            &mut stdout,
+            &mut stderr,
+            HostAttachProfiler::new(false),
+            &AttachInputPolicy::default().end_session_input_on_stdin_eof(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(outcome, AttachOutcome::Exited(3));
+        assert_eq!(stdout.bytes, b"HI-OUT\r\nHI-ERR\r\n");
+        assert_eq!(stdout.flushes, 1);
     }
 
     #[test]

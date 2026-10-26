@@ -5,17 +5,23 @@ title: Fast /workspace for rustc inside a cang guest (virtio-fs tuning + baselin
 
 ## Destination
 
-`cang` has a **committed, reproducible rust-compile benchmark** (two workloads:
-the generated high-file-count tree and a build of this repo itself; arms:
-host-native control, guest-over-virtiofs, guest-local-disk control) and `/workspace` over virtiofs
-**measurably closes on the guest-local-disk floor** for that workload, through
-the virtio-fs changes that benchmark attributes - carried through the fork's
-tag/pin and cang's build, so the next tuning change is judged against recorded
-numbers instead of a feeling.
+`cang` has a **committed, reproducible rust-compile benchmark** (a pinned small
+crate tree plus the repo itself as an optional workload; arms: host-native,
+guest-over-virtiofs, guest-local) and `/workspace` over virtiofs is **measurably
+faster for that workload** through changes that benchmark attributes - carried
+through the fork's tag/pin and cang's build, so the next tuning change is judged
+against recorded numbers instead of a feeling.
 
-"Reached" means: the harness exists in this repo and its recorded baseline is in
-the docs; at least one virtio-fs change is shipped on that evidence; and the
-before/after numbers come from live guests, not from a compile or a CI green.
+Since 2026-10-26 the intended shape of that win is **bob's**: an **opt-in cache
+scoped to `/workspace` only** (never `/nix`, never the cargo registry), which
+prints a warning on launch that host-side access to the mounted workspace can
+corrupt what the guest sees; and, if the host filesystem permits it, **per-inode
+DAX** rather than the mount-wide window ticket 05 dropped.
+
+"Reached" means: the harness exists and its recorded baseline is in the docs; the
+cache flag (and per-inode DAX, if possible) ship on fork tags pinned into cang;
+and the before/after numbers come from live guests, not from a compile or a CI
+green.
 
 ## Notes
 
@@ -184,7 +190,7 @@ control:
   inode-map refactor needed); passthrough/io_uring are unreachable from a VMM
   server. Detail: [note](notes/01-fuse-negotiation-and-queue-facts.md).
 
-## Awaiting bob (asked 2026-10-25/26, unanswered)
+## Awaiting bob (answered 2026-10-26, except where noted)
 
 1. **Is ~30% worth the worker pool?** Numbers: host 104 s, guest-local (/dev/shm)
    232 s, guest-virtiofs 299-311 s. Options: do the pool (ticket 04) / try
