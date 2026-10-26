@@ -141,7 +141,7 @@ control:
 | arm | runs (s) | vs host | vs guest-local |
 |---|---|---|---|
 | host | 104.2, 104.7 (+ 104.5, 105.6, 106.4 earlier) | 1.00x | - |
-| guest-local (`/dev/shm`, no FUSE) | 232.0, 232.9, 235.1 | 2.2x | 1.00x |
+| guest-local (`/dev/shm`, no FUSE) | 232.0, 232.9, 235.1 (**lever-off: see below**) | 2.2x | 1.00x |
 | guest-virtiofs (`/workspace`) | 298.9, 306.5, 311.4, 326.5 | 2.9x | **1.29-1.36x** |
 
 - **The virtio-fs penalty is ~30%**, and it is a *floor*: the control is RAM.
@@ -174,6 +174,46 @@ control:
   worker-idle finding is contention-safe in the conservative direction (a
   co-tenant inflates the worker's share), but the absolute seconds are ±;
   [ticket 12](tickets/12-clean-window-re-record.md) re-records them cleanly.
+
+
+## The governor fact that reorders everything (2026-10-26, verified twice)
+
+**`/` is itself the virtio-fs share.** `/proc/mounts` in a cang guest:
+`/dev/root / virtiofs rw,relatime` and `none /workspace virtiofs`. So *every*
+process launch (`rustc`, `ld`, `cc`) opens its binary over the same FUSE
+connection, and `target/` was never the only thing paying for it.
+
+That invalidates every "no-FUSE floor" this map used before zero-message open was
+measured: the guest-local arm still launched 2401 rustc/ld binaries off virtiofs,
+so it paid OPEN+RELEASE too (measured: **OPEN 87,871-89,374, RELEASE
+87,316-88,876** with the lever off, and 337.7/313.8 s; with it on, **OPEN 3,
+RELEASE 1** and 124.4/111.0 s).
+
+Measured again, one VM at a time, `JOBS=26`, 4 interleaved runs per side, with the
+host arm as a drift yardstick (the host itself measured 130.2 s this session vs
+104.2 s in note 15 - the host moved, so ratios are the only stable unit):
+
+| arm | mean (range) | /host | note |
+|---|---|---|---|
+| host | 130.2 s (119.5-140.9) | 1.00x | no VM, no FUSE |
+| guest tmpfs, zero-message open **on** | 131.5 s (111.0-164.9) | 1.01x | true no-FUSE floor |
+| guest virtiofs, **off** | 427.1 s (366.2-563.0) | 3.28x | pre-change behaviour |
+| guest virtiofs, **on** | 176.0 s (162.6-185.3) | **1.35x** | shipped |
+
+`ON/OFF = 2.42x`; requests fall 3.6 M -> 1.5 M; OPEN-class requests go from 18.9%
+of every request to zero.
+
+**What this does to the map's earlier conclusions:**
+- the ~70 s "virtiofs penalty" computed against the 232 s floor was an artefact of
+  mixed states; the real penalty *before* the change was 427 - 131 = **296 s**, and
+  it is now 176 - 131 = **45 s**;
+- the pool (ticket 04) was justified on `readdirplus` saturation - still true for a
+  *first* scan of a huge directory, but repeated scans are now answered from the
+  guest's directory cache (129 -> 4927 ops/s at one thread), so the pool's share of
+  a real build fell further;
+- DAX and every "remove a data round trip" design (notes 05/18/24) now have a much
+  smaller numerator still: the remaining gap is 45 s, spread over
+  LOOKUP/FLUSH/WRITE/GETXATTR, none of which is a data-path design.
 
 ## Decisions so far
 
