@@ -1,3 +1,19 @@
+# 14 - per-inode DAX viability (CORRECTED 2026-10-26)
+
+> **Correction (2026-10-26, note 18).** This note's *kernel reading* is right but
+> its *verdict framing* is wrong. Per-inode DAX does **not** require the host
+> filesystem to support DAX: the server `mmap`s the host file's **page-cache
+> pages** into the shared window, and the guest sets `S_DAX` purely from the
+> server's `FUSE_ATTR_DAX` (`fs/fuse/dax.c:1296-1316` consults only the mount
+> option, `fc->dax`, `fc->inode_dax` and the reply flag). So "no file on this
+> machine can ever report DAX" and the `statx(STATX_ATTR_DAX)` "deciding check"
+> below are both false; bob's recollection of a **size-based** policy
+> (`dax=filesize`, `st_size > 32 KiB`, Jeffle Xu's 2021 series) is a real design.
+> The disposition stands - **don't ship** - but on benefit, not capability: the
+> page cache already wins the reuse case, DAX addresses only first-touch read
+> latency, and the ceiling is a quarter-busy worker. See
+> [18-per-inode-dax-host-requirement](18-per-inode-dax-host-requirement.md).
+
 ---
 label: wayfinder:research
 title: Is per-inode DAX achievable on cang's root share, and what would "let virtiofs decide per inode" actually require?

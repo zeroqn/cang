@@ -1,8 +1,14 @@
 #!/bin/bash
 # 1 Hz per-thread CPU sampler for cang's VM worker, so "is the single FUSE worker
 # thread the bottleneck?" has a number instead of an opinion. Appends
-#   <ts>|<tid>|<comm>|<utime+stime ticks>
+#   <ts>|<tid>|<comm>|<utime+stime ticks>|<schedstat runtime ns>
 # per thread per second; summarise-threads.sh turns a capture into percentages.
+#
+# NOTE on parsing /proc/<tid>/stat: comm can contain SPACES (the FUSE worker's is
+# literally "fs worker"), so the fields must be read from after the LAST ')'. A
+# naive `awk '{print $14 + $15}'` then silently sums the wrong pair and reports
+# roughly half the thread's CPU - that mistake produced a "12% of a core" figure
+# for this very thread when the truth was ~26%.
 #
 # Usage: mon-threads.sh <outfile> [interval-seconds]
 set -u
@@ -21,8 +27,10 @@ while :; do
             [ -r "$t/stat" ] || continue
             tid=${t##*/}
             name=$(tr ' ' '_' <"$t/comm" 2>/dev/null)
-            ticks=$(awk '{ print $14 + $15 }' "$t/stat" 2>/dev/null)
-            printf '%s|%s|%s|%s\n' "$ts" "$tid" "$name" "$ticks" >>"$out"
+            tail_fields=$(sed 's/^.*) //' "$t/stat" 2>/dev/null) || continue
+            ticks=$(printf '%s' "$tail_fields" | awk '{ print $12 + $13 }')
+            sched=$(awk '{ print $1 }' "$t/schedstat" 2>/dev/null)
+            printf '%s|%s|%s|%s|%s\n' "$ts" "$tid" "$name" "${ticks:-0}" "${sched:-0}" >>"$out"
         done
     fi
     sleep "$interval"

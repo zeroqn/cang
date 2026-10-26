@@ -36,6 +36,15 @@ turns that into a decision:
   that rustc reads each source once and `mmap`s rlibs (ticket 05's analysis), and
   whether the answer is "measure after the cache change" instead of now.
 
+### Correction (2026-10-26, note 18)
+
+Two of this ticket's premises are wrong: per-inode DAX does **not** need the host
+filesystem to support DAX (the window maps host page-cache pages; the guest's
+`S_DAX` comes from the server's `FUSE_ATTR_DAX` alone), and a **size-based
+policy** (`dax=filesize`, >= 32 KiB) is a real upstream design, so bob's
+recollection is right. The resolution below therefore stands on **benefit**, not
+capability: implementable today, not worth it for rustc.
+
 ## Resolution (2026-10-26, pi research child-6)
 
 **No - and not because of cang: no file on this host can ever report DAX.**
