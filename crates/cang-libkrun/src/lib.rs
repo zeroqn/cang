@@ -24,6 +24,20 @@ pub use linked::LinkedLibkrunApi;
 /// Tag the guest kernel resolves as its root filesystem (`KRUN_FS_ROOT_TAG`).
 pub const CANG_FS_ROOT_TAG: &str = "/dev/root";
 
+/// Threads cang gives the virtio-fs request queue.
+///
+/// virtio-fs has one request queue with no multiqueue feature, so this is a pool
+/// behind that queue: the device thread reads the available ring and publishes
+/// used-ring entries, the pool threads run the FUSE op and write the reply. It
+/// pays off for exactly one measured class - a directory scan (`READDIRPLUS`),
+/// where a single guest thread already pins the one server thread at ~95% of a
+/// core while the guest itself is at 9-22% - and is close to free for
+/// open/read/stat, where that thread never passes ~27% (note 20/21 in the
+/// workspace-virtiofs-performance map). Four keeps the win without turning every
+/// share into a thread farm; `set_worker_threads(1)` is the pre-pool behaviour.
+/// No CLI flag: cang sets it, a user has no reason to.
+pub const CANG_FS_WORKER_THREADS: usize = 4;
+
 const CANG_NET_FEATURE_CSUM: u32 = 1 << 0;
 const CANG_NET_FEATURE_GUEST_CSUM: u32 = 1 << 1;
 const CANG_NET_FEATURE_GUEST_TSO4: u32 = 1 << 7;

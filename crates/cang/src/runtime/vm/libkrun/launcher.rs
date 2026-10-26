@@ -13,7 +13,9 @@ use crate::runtime::seccomp::{self, SeccompMode};
 use crate::runtime::session::supervisor::rlimits::host_nofile_hard_limit;
 use crate::runtime::vm::gpu::GpuMode;
 
-use cang_libkrun::{CANG_FS_ROOT_TAG, CANG_LIBKRUN_COMPAT_NET_FEATURES, Handle, LibkrunApi};
+use cang_libkrun::{
+    CANG_FS_ROOT_TAG, CANG_FS_WORKER_THREADS, CANG_LIBKRUN_COMPAT_NET_FEATURES, Handle, LibkrunApi,
+};
 
 pub(in crate::runtime::vm::libkrun) const PROFILE_KERNEL_CMDLINE_APPEND: &str =
     "ignore_loglevel loglevel=7 printk.time=1 initcall_debug";
@@ -266,6 +268,15 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
         setup(
             "krun_fs_device_set_overlay",
             self.api.fs_device_set_overlay(rootfs, overlay),
+        )?;
+        tracing::debug!(
+            threads = CANG_FS_WORKER_THREADS,
+            "krun_fs_device_set_worker_threads: begin"
+        );
+        setup(
+            "krun_fs_device_set_worker_threads",
+            self.api
+                .fs_device_set_worker_threads(rootfs, CANG_FS_WORKER_THREADS),
         )?;
         add_device(&mut self.api, devices, rootfs)?;
 
