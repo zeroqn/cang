@@ -404,6 +404,29 @@ Each run ensures these host-backed paths and grafts them into the prepared root:
 This keeps tool config/state and compiler-cache state outside the repo while
 matching the task-volume contract.
 
+### Host write visibility from inside the guest
+
+The guest reaches these host paths through one virtio-fs share, and cang asks the
+share for zero-message opens (the guest kernel stops sending `FUSE_OPEN`/
+`FUSE_RELEASE`, which is worth ~2.6x on a full rustc build - see
+`docs/wayfinder/workspace-virtiofs-performance/notes/23-zero-message-open-results.md`).
+The consequence to know about: with no open request to carry per-open flags, the
+guest kernel keeps its page cache across opens, so a file the guest has already
+read keeps the contents it read until its attributes refresh - the virtio-fs
+`attr_timeout`, 5 s.
+
+- Edits the host makes by **replacing** a file (every editor's atomic save, `git
+  checkout`, `sed -i`, `mv`) are a new inode and are visible on the guest's next
+  open, immediately.
+- **Files added** to a directory are visible immediately too.
+- Only a **host-side in-place rewrite** of a file the guest has already read
+  (e.g. `echo >> file` from the host) can lag by up to 5 s.
+
+`CANG_FS_ZERO_MESSAGE_OPEN=0` restores strict close-to-open visibility for a
+launch that needs it, at the cost of the round trips. `CANG_FS_STATS=1` makes the
+share log the opcode mix it served when the VM stops, for measuring a workload
+without a guest-side tracer.
+
 ---
 
 ## State root and config

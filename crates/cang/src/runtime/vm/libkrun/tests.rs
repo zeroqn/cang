@@ -58,6 +58,8 @@ enum Call {
     FsDeviceNew(String, String, bool),
     FsDeviceSetOverlay(usize, usize),
     FsDeviceSetWorkerThreads(usize, usize),
+    FsDeviceSetZeroMessageOpen(usize, bool),
+    FsDeviceSetOpcodeStats(usize, bool),
     BlockDeviceNew(usize, String, String, bool),
     NetDeviceNewUnixstreamFd(i32, u32, u32),
     BalloonDeviceNew,
@@ -270,6 +272,16 @@ impl LibkrunApi for FakeLibkrunApi {
     fn fs_device_set_worker_threads(&mut self, device: usize, threads: usize) -> Result<()> {
         self.record(Call::FsDeviceSetWorkerThreads(device, threads));
         self.checked("krun_fs_device_set_worker_threads")
+    }
+
+    fn fs_device_set_zero_message_open(&mut self, device: usize, enabled: bool) -> Result<()> {
+        self.record(Call::FsDeviceSetZeroMessageOpen(device, enabled));
+        self.checked("krun_fs_device_set_zero_message_open")
+    }
+
+    fn fs_device_set_opcode_stats(&mut self, device: usize, enabled: bool) -> Result<()> {
+        self.record(Call::FsDeviceSetOpcodeStats(device, enabled));
+        self.checked("krun_fs_device_set_opcode_stats")
     }
 
     fn block_device_new(&mut self, id: &str, path: &Path, read_only: bool) -> Result<usize> {
@@ -664,6 +676,8 @@ fn fake_api_records_direct_libkrun_v2_call_order() {
             Call::FsDeviceNew("/dev/root".to_owned(), "/rootfs".to_owned(), false),
             Call::FsDeviceSetOverlay(ROOTFS, OVERLAY),
             Call::FsDeviceSetWorkerThreads(ROOTFS, cang_libkrun::CANG_FS_WORKER_THREADS),
+            Call::FsDeviceSetZeroMessageOpen(ROOTFS, cang_libkrun::CANG_FS_ZERO_MESSAGE_OPEN),
+            Call::FsDeviceSetOpcodeStats(ROOTFS, false),
             Call::MmioDeviceManagerAdd(DEVICES, ROOTFS),
             Call::BlockDeviceNew(
                 BLOCK_DEVICE_BASE,

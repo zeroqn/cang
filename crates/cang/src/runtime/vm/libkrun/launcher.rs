@@ -14,7 +14,8 @@ use crate::runtime::session::supervisor::rlimits::host_nofile_hard_limit;
 use crate::runtime::vm::gpu::GpuMode;
 
 use cang_libkrun::{
-    CANG_FS_ROOT_TAG, CANG_FS_WORKER_THREADS, CANG_LIBKRUN_COMPAT_NET_FEATURES, Handle, LibkrunApi,
+    CANG_FS_ROOT_TAG, CANG_FS_STATS_ENV, CANG_FS_WORKER_THREADS, CANG_FS_ZERO_MESSAGE_OPEN,
+    CANG_FS_ZERO_MESSAGE_OPEN_ENV, CANG_LIBKRUN_COMPAT_NET_FEATURES, Handle, LibkrunApi,
 };
 
 pub(in crate::runtime::vm::libkrun) const PROFILE_KERNEL_CMDLINE_APPEND: &str =
@@ -64,6 +65,45 @@ const GPU_SHM_SIZE_BYTES: u64 = 256 * 1024 * 1024;
 /// Env var the supervisor sets on the VM worker carrying the parent end of the
 /// SOCK_SEQPACKET socketpair connected to the render-server runner.
 pub(crate) const RENDER_SERVER_FD_ENV: &str = "CANG_RENDER_SERVER_FD";
+
+/// Whether this launch asks for zero-message opens on the virtio-fs share.
+///
+/// cang's default is [`CANG_FS_ZERO_MESSAGE_OPEN`]; `CANG_FS_ZERO_MESSAGE_OPEN`
+/// in the environment overrides it so an A/B can run one binary twice. An
+/// unparseable value is refused rather than silently taking either arm, because
+/// an A/B that quietly ran the same arm on both sides is worse than a launch
+/// that failed.
+fn zero_message_open_enabled() -> bool {
+    match std::env::var(CANG_FS_ZERO_MESSAGE_OPEN_ENV) {
+        Ok(value) => match parse_env_flag(&value) {
+            Some(enabled) => enabled,
+            None => {
+                tracing::warn!(
+                    value = %value,
+                    "{CANG_FS_ZERO_MESSAGE_OPEN_ENV} is not 0/1, ignoring it"
+                );
+                CANG_FS_ZERO_MESSAGE_OPEN
+            }
+        },
+        Err(_) => CANG_FS_ZERO_MESSAGE_OPEN,
+    }
+}
+
+/// Whether this launch asks the fork to log the fuse opcode histogram.
+fn opcode_stats_enabled() -> bool {
+    std::env::var(CANG_FS_STATS_ENV)
+        .ok()
+        .and_then(|value| parse_env_flag(&value))
+        .unwrap_or(false)
+}
+
+fn parse_env_flag(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
 
 #[cfg(test)]
 type AuditStartMarkerHook = Box<dyn FnMut() -> Result<()>>;
@@ -277,6 +317,25 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             "krun_fs_device_set_worker_threads",
             self.api
                 .fs_device_set_worker_threads(rootfs, CANG_FS_WORKER_THREADS),
+        )?;
+        let zero_message_open = zero_message_open_enabled();
+        tracing::debug!(
+            enabled = zero_message_open,
+            "krun_fs_device_set_zero_message_open: begin"
+        );
+        setup(
+            "krun_fs_device_set_zero_message_open",
+            self.api
+                .fs_device_set_zero_message_open(rootfs, zero_message_open),
+        )?;
+        let opcode_stats = opcode_stats_enabled();
+        tracing::debug!(
+            enabled = opcode_stats,
+            "krun_fs_device_set_opcode_stats: begin"
+        );
+        setup(
+            "krun_fs_device_set_opcode_stats",
+            self.api.fs_device_set_opcode_stats(rootfs, opcode_stats),
         )?;
         add_device(&mut self.api, devices, rootfs)?;
 

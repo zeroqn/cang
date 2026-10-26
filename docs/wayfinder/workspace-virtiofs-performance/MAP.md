@@ -175,7 +175,18 @@ control:
   co-tenant inflates the worker's share), but the absolute seconds are ±;
   [ticket 12](tickets/12-clean-window-re-record.md) re-records them cleanly.
 
-## Decisions so far## Decisions so far
+## Decisions so far
+
+- [Zero-message open](tickets/19-zero-message-open.md): **implemented and
+  measured, shipped on by default** - a full synthetic rustc arm 372.8 s ->
+  140.2 s mean (2.66x, four interleaved runs per side), the `open` probe cell
+  1788 -> 4788 ops/s at one thread, `readdirplus` 129 -> 4446. It deletes 17.9%
+  of a build's requests (OPEN+RELEASE+OPENDIR+RELEASEDIR, counted server-side) and
+  keeps the page cache across opens, which is the larger half of the win. The one
+  cost - a host-side *in-place* rewrite of a file the guest has read is visible
+  within `attr_timeout` (5 s) instead of at the next open - is the decision in
+  [ticket 20](tickets/20-zero-message-open-coherence-contract.md). Numbers and
+  the opcode histogram: [note 23](notes/23-zero-message-open-results.md).
 
 - [Can a pinned databend tree be the real-world workload arm, offline and
   repeatably?](tickets/06-databend-workload.md): **superseded, no research done** -
