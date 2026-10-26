@@ -81,8 +81,10 @@ pub(in crate::guest_init) fn run(
     managed_debug("vsock bind begin");
     let listener = VsockListener::bind(config.port)?;
     managed_debug("vsock bind complete");
-    let pty_forwarding_mode = PtyForwardingMode::from_process_env();
-    let launcher_terminfo = LauncherTerminfo::from_process_env();
+    let modes = SessionModes {
+        pty_forwarding: PtyForwardingMode::from_process_env(),
+        launcher_terminfo: LauncherTerminfo::from_process_env(),
+    };
     attach_profile::clear_process_env();
     PtyForwardingMode::clear_process_env();
     LauncherTerminfo::clear_process_env();
@@ -93,9 +95,17 @@ pub(in crate::guest_init) fn run(
         drop_to_identity,
         listener,
         config.attach_profile,
-        pty_forwarding_mode,
-        launcher_terminfo,
+        modes,
     )
+}
+
+/// The two guest-side presentation modes a managed session runs under: how PTY
+/// output is normalized, and whether the PTY carries a terminal session or a
+/// launcher command's data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionModes {
+    pty_forwarding: PtyForwardingMode,
+    launcher_terminfo: LauncherTerminfo,
 }
 
 /// How the payload's PTY is configured, which depends on what started cang.
@@ -141,9 +151,10 @@ fn run_pre_start_event_loop(
     drop_to_identity: bool,
     listener: VsockListener,
     attach_profile: bool,
-    pty_forwarding_mode: PtyForwardingMode,
-    launcher_terminfo: LauncherTerminfo,
+    modes: SessionModes,
 ) -> Result<()> {
+    let pty_forwarding_mode = modes.pty_forwarding;
+    let launcher_terminfo = modes.launcher_terminfo;
     loop {
         managed_debug("pre-start accept begin");
         let client = listener.accept()?;

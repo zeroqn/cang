@@ -256,11 +256,12 @@ tools/rust-compile-bench/run.sh --runs 3
 
 It writes `logs/<arm>-<n>.log` and `summary-synthetic.tsv` under `$BENCH_ROOT`
 (default `/home/dev/cang-bench`), and its README carries the recorded numbers.
-Two cang behaviours to know about when reading the harness: a guest command's
-stdout is not forwarded and its exit status is not propagated (`cang -- false`
-exits 0), and a launch into a workspace that already has a running task does
-nothing at all - so the arms report through files in the shared workspace, and
-the harness refuses to start while a task is running there.
+The harness reports through a result file in the shared workspace rather than
+through a guest command's stdout, because it needs a `BENCH_MS` record keyed by
+tag and because an interrupted arm can leave an orphan VM behind. It also
+refuses to start an arm while its workspace has a running task: a launch there
+is refused by cang itself, and the harness turns that into a clear message
+instead of an arm that never produces a result.
 
 ## Inspecting a preserved `launch.conf`
 

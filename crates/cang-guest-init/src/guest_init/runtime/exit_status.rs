@@ -55,10 +55,10 @@ fn report_via(file: &File, code: i32) -> io::Result<()> {
 
 /// Report `code` and end this process with it.
 pub(in crate::guest_init) fn report_and_exit(code: i32) -> ! {
-    if let Err(err) = report(code) {
-        if guest_debug_enabled() {
-            eprintln!("cang-guest-init: debug: exit status report failed: {err}");
-        }
+    if let Err(err) = report(code)
+        && guest_debug_enabled()
+    {
+        eprintln!("cang-guest-init: debug: exit status report failed: {err}");
     }
     std::process::exit(code)
 }
