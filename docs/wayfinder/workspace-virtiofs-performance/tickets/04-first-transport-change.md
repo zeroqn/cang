@@ -1,7 +1,7 @@
 ---
 label: wayfinder:grilling
 title: Which non-caching virtio-fs change ships first, and in what API shape?
-status: open
+status: closed
 blocked_by: [02]
 claimed_by: pi (2026-10-26)
 ---
@@ -50,9 +50,23 @@ Decide:
   leaves the host tree usable; plus the Chromium/venus GPU smoke, the VA-API
   video arm (rules #223/#229), guest podman and `cang attach`.
 
-## Resolution
+## Resolution (2026-10-26, shipped)
 
-(to follow)
+**Both changes this ticket weighed shipped in one fork tag (`v2.0.0-cang.11`,
+fork `9e423e76`), and both were judged on measurement rather than prediction.**
+
+- The **pool** (option 1) is in, 4 threads by default, `set_worker_threads(1)`
+  restores the old behaviour: readdirplus at 16 guest threads 154 -> 316 ops/s,
+  at 64 threads 149 -> 325, dispatcher CPU 96-98% -> 4%. It does **not** move a
+  full build on its own (298-323 s either way).
+- **Zero-message open** (ticket 19, which this ticket did not originally consider)
+  is what moves the build: 427.1 -> 176.0 s, 2.42x - because the share is also
+  `/`, so every `rustc`/`ld` launch was paying OPEN+RELEASE too.
+- Judged against the corrected floor (131.5 s, not the lever-off 232 s), the
+  share's cost went from **296 s to 45 s**; what remains is LOOKUP/FLUSH/WRITE/
+  GETXATTR, which no data-path design in notes 05/18/24 touches.
+- The regression gates ticket 03 named all hold, and the live smoke gate
+  (Chromium-on-venus, VA-API decode/encode) passed on the tagged commit.
 
 ## Resolution (2026-10-26, pi) - **no worker pool: the single worker is 88% idle**
 

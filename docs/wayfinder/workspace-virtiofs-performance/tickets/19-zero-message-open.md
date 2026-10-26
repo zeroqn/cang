@@ -78,3 +78,31 @@ Do:
 
 Sequencing: same files as the pool (`worker.rs`-adjacent, `passthrough.rs`), so it
 lands after ticket 04's pool is in and measured, not in parallel.
+
+## Resolution (2026-10-26, shipped)
+
+**Shipped, on by default, and tagged.** Fork `9e423e76`, tag `v2.0.0-cang.11`
+(assets published), cang `fe63e69` + submodule `efac572` + `flake.lock` `cf16dda`.
+
+- **Measured, verified twice independently**: a cold 2401-crate rustc build goes
+  **427.1 s -> 176.0 s (2.42x)** over 4 interleaved runs per side; a parent rerun
+  came in at 150.5 s. Requests 3.6 M -> 1.5 M; OPEN 244k-248k -> 3.
+- **The build now sits at 1.35x the host** (was 3.28x) and **1.34x the same build
+  on guest tmpfs**, the true no-FUSE floor (131.5 s). The previously recorded
+  232 s "floor" was a lever-off measurement - see `MAP.md`, "The governor fact
+  that reorders everything".
+- **The second mechanism is the bigger half**: with no per-open handshake the guest
+  keeps `FOPEN_KEEP_CACHE`, so files stay cached across opens and `READ` falls to
+  3.3% of requests; repeated `readdirplus` scans are answered from the guest's
+  directory cache (129 -> 4927 ops/s at one thread).
+- **The one semantic, accepted by bob on 2026-10-26**: close-to-open consistency
+  for *in-place* host rewrites becomes "visible after `attr_timeout` (5 s)" -
+  "5s for host to saw the changes is ok". Rename-based replacement (editors,
+  `git checkout`, `sed -i`) is a new inode and unaffected; a host-added file in a
+  listed directory still appears immediately; the host still sees every guest
+  write immediately, which is the direction cang actually promises.
+- **Verified live before the tag**, per cang's own rule:
+  `tools/virglrenderer-cang-smoke` PASS on all three scored arms (Chromium on venus
+  over `--waypipe`; VA-API decode; VA-API encode + hardware round trip) plus the
+  `libvirglrenderer.so.1` attribution check, with no `virtio_fs_enqueue_req`
+  errors in either guest. `CANG_FS_ZERO_MESSAGE_OPEN=0` restores the old behaviour.
