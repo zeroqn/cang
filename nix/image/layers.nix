@@ -441,6 +441,7 @@ let
     pkgs."hostname-debian"
     pkgs.jq
     pkgs.less
+    pkgs.lsof
     pkgs.nix
     nixStoreDbCheck
     pkgs.diffutils
