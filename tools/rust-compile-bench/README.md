@@ -155,18 +155,34 @@ cang now rules out because it would break host-immediate visibility) or a
 cheaper op path (FUSE passthrough / io_uring, unavailable to a VMM-hosted
 server).
 
-### cang workload (this repo, 1356 files, heavy per-unit compile)
+### cang workload (this repo at HEAD, 1356 files, heavy per-unit compile)
 
-| arm | build |
-|---|---|
-| host | 55.9 s |
+| arm | build | notes |
+|---|---|---|
+| host | 55.9 s | `nix develop` toolchain, `JOBS=26`, offline |
+| guest-virtiofs | **285.3 s** | `JOBS=8`, warm registry, `/workspace` |
+| guest-local | not run | `/dev/shm` cannot hold the tree plus `target/` comfortably |
 
-The guest arms are blocked: the image's `/nix` closure ships clang, libclang,
-gcc, rustc, cargo, pkg-config, mesa-libgbm and libdrm but **no `virglrenderer`**,
-which `deps/rutabaga_gfx/build.rs` requires, and a `cang -v` of a host store path
-does not help because the guest's store is a *different* store (same package
-versions, different hashes). Unblocking it is an image decision
-(`docs/wayfinder/workspace-virtiofs-performance/tickets/11-image-ships-cang-build-inputs.md`).
+Two inputs a cang build needs are **not in the image's `/nix`** (which is the
+*image's* store, 676 entries - the host's store is not visible in a guest), so
+`run.sh` stages them into `$BENCH_ROOT/toolchain` and mounts that read-only at
+`/cang-toolchain`, where `cang-workload-env.sh` resolves them:
+
+- `virglrenderer` - `deps/rutabaga_gfx/build.rs` probes `virglrenderer.pc`;
+- a prebuilt static `krun-init` - `deps/libkrun/init/init-blob/build.rs` needs
+  one unless the host has a musl target to build its own.
+
+Dependencies come from a **warmed registry, not a vendor dir and not `--offline`
+in the timed path**: a cang guest mounts an *empty* per-workspace dir at
+`/home/dev/.cargo`, so `run.sh` seeds that state dir from the host's `~/.cargo`
+once (412 MB, reused). Without it a guest build cannot resolve even `clap`, which
+is what first looked like an offline-mode problem and was really a cold cargo home.
+
+`JOBS=8` for the guest is a memory decision, not a benchmark one: cang sizes a
+guest at 80% of host RAM (~19 GiB here) while the host has ~3 GiB genuinely free,
+and `JOBS=26` died mid-build (VM gone, no result). Record the guest's `JOBS`
+alongside the number.
+
 
 ## Does the share scale with concurrency? (`concurrency-scaling.sh`)
 
