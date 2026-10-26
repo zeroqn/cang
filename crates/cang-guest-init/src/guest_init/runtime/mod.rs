@@ -9,6 +9,7 @@ pub(in crate::guest_init) mod as_dev;
 mod attach_profile;
 pub(in crate::guest_init) mod cang;
 mod exec;
+mod exit_status;
 mod session;
 pub(in crate::guest_init) mod vsock;
 

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::env;
 use std::ffi::OsString;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -12,6 +13,7 @@ use crate::task_rootfs::TaskRootfsBackend;
 pub(crate) mod attach;
 mod attach_profile;
 pub(crate) mod exec;
+mod launcher_command;
 mod managed_attach_socket;
 pub(crate) mod nix_overlay;
 mod profile;
@@ -125,6 +127,22 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
         .context("failed to prepare cang terminal trace file")?;
     let plan =
         profiler.measure_result("launch_plan_build", || LaunchPlan::from_env(options, cwd))?;
+    // `cang -- <command>` is a process launcher, not an interactive session: its
+    // caller's stdin is a closed pipe or /dev/null in every scripted use, and
+    // reading that as a detach request dropped both the command's output and its
+    // exit status while the command itself kept running to completion.
+    let attach_input_policy = if plan.guest_command.is_empty() {
+        attach_input_policy
+    } else {
+        attach_input_policy.end_session_input_on_stdin_eof()
+    };
+    profiler.measure_result("workspace_task_gate", || {
+        task_control::ensure_workspace_has_no_running_task(
+            plan.state_layout.app_dir(),
+            &plan.workspace_dir,
+            &task_control::ProcfsInspector,
+        )
+    })?;
     profiler.record_metadata(
         "task_rootfs_backend",
         plan.task_rootfs_backend.as_config_value(),
@@ -318,6 +336,12 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                     if let Some(pair) =
                                         pty_raw_passthrough::guest_env_pair(pty.mode)
                                     {
+                                        env.push(pair);
+                                    }
+                                    if let Some(pair) = launcher_command::guest_env_pair(
+                                        &plan.guest_command,
+                                        std::io::stdin().is_terminal(),
+                                    ) {
                                         env.push(pair);
                                     }
                                     if let Some(pair) =

@@ -279,9 +279,16 @@ let
     muslBin
   ];
 
+  # `virglrenderer` is here for building cang *inside* a cang guest: the Rust
+  # workspace links libkrun, whose build scripts probe virglrenderer.pc through
+  # rutabaga_gfx. The image already carried the rest of that chain (clang,
+  # libclang, gcc, pkg-config, mesa-libgbm, libdrm, rustc, cargo), so without it
+  # `cargo build -p cang` in the guest failed at its first build script while the
+  # same build works on the host.
   cToolchainImagePackages = cToolchainPathPackages ++ [
     pkgs.libclang.lib
     pkgs.musl
+    pkgs.virglrenderer
   ];
 
   rustToolchainImageLayer = pkgs.buildEnv {
@@ -338,8 +345,9 @@ let
   # documents; `writeShellScriptBin` supplies the interpreter, so drop the
   # `#!/usr/bin/env bash` line the repository copy needs.
   cangChromium = pkgs.writeShellScriptBin "cang-chromium" (
-    pkgs.lib.removePrefix "#!/usr/bin/env bash\n"
-      (builtins.readFile ../../tools/cang-chromium/cang-chromium.sh)
+    pkgs.lib.removePrefix "#!/usr/bin/env bash\n" (
+      builtins.readFile ../../tools/cang-chromium/cang-chromium.sh
+    )
   );
 
   # Development browser for the cang guest GPU smoke. Wrapped

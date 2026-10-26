@@ -16,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::guest_init::runtime::attach_profile::{self, GuestAttachProfiler};
+use crate::guest_init::runtime::exit_status;
 use crate::guest_init::runtime::vsock::VsockListener;
 
 use crate::guest_init::components::env::GuestPermissions;
@@ -44,6 +45,7 @@ const DEFAULT_TERMINAL_COLS: u16 = 80;
 const MIN_TERMINAL_STATE_ROWS: u16 = 2;
 const TERMINAL_SCROLLBACK_ROWS: usize = 2_000;
 const PTY_RAW_PASSTHROUGH_ENV: &str = "CANG_PTY_RAW_PASSTHROUGH";
+const LAUNCHER_TERMINFO_ENV: &str = "CANG_LAUNCHER_TERMINFO";
 const GUEST_DEBUG_ENV: &str = "CANG_GUEST_DEBUG";
 const ENTER_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049h";
 const EXIT_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
@@ -80,8 +82,10 @@ pub(in crate::guest_init) fn run(
     let listener = VsockListener::bind(config.port)?;
     managed_debug("vsock bind complete");
     let pty_forwarding_mode = PtyForwardingMode::from_process_env();
+    let launcher_terminfo = LauncherTerminfo::from_process_env();
     attach_profile::clear_process_env();
     PtyForwardingMode::clear_process_env();
+    LauncherTerminfo::clear_process_env();
     run_pre_start_event_loop(
         command,
         identity,
@@ -90,7 +94,38 @@ pub(in crate::guest_init) fn run(
         listener,
         config.attach_profile,
         pty_forwarding_mode,
+        launcher_terminfo,
     )
+}
+
+/// How the payload's PTY is configured, which depends on what started cang.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LauncherTerminfo {
+    /// A terminal session: `cang`, or `cang -- <command>` from a terminal. The
+    /// line discipline keeps its terminal defaults.
+    Terminal,
+    /// A command launcher from a script: the caller's stdout is data, so the PTY
+    /// must not expand newlines or echo the caller's stdin back into the output.
+    DataPipe,
+}
+
+impl LauncherTerminfo {
+    fn from_process_env() -> Self {
+        Self::from_env_value(std::env::var(LAUNCHER_TERMINFO_ENV).ok().as_deref())
+    }
+
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value.filter(|value| pty_raw_passthrough_env_value_enabled(value)) {
+            Some(_) => Self::DataPipe,
+            None => Self::Terminal,
+        }
+    }
+
+    fn clear_process_env() {
+        // SAFETY: guest-init consumes this launcher flag during single-threaded
+        // managed-session setup before forking the user command.
+        unsafe { std::env::remove_var(LAUNCHER_TERMINFO_ENV) };
+    }
 }
 
 fn managed_debug(message: &str) {
@@ -107,6 +142,7 @@ fn run_pre_start_event_loop(
     listener: VsockListener,
     attach_profile: bool,
     pty_forwarding_mode: PtyForwardingMode,
+    launcher_terminfo: LauncherTerminfo,
 ) -> Result<()> {
     loop {
         managed_debug("pre-start accept begin");
@@ -125,6 +161,11 @@ fn run_pre_start_event_loop(
                         return Err(err);
                     }
                 };
+                if let Err(err) = apply_launcher_terminfo(pty.master.as_raw_fd(), launcher_terminfo)
+                {
+                    let _ = write_frame(&mut client, &Frame::Error(format!("{err:#}")));
+                    return Err(err);
+                }
                 let effective_size =
                     match apply_initial_winsize(pty.master.as_raw_fd(), initial_size) {
                         Ok(size) => size,
@@ -161,7 +202,7 @@ fn run_pre_start_event_loop(
                             pty_forwarding_mode,
                         );
                     }
-                    ClientResult::ChildExited(code) => std::process::exit(code),
+                    ClientResult::ChildExited(code) => exit_status::report_and_exit(code),
                 }
             }
         }
@@ -573,7 +614,9 @@ fn run_event_loop(
             fdwatch::record_and_warn(&tick);
         }
         if let Some(code) = reap_child(child)? {
-            std::process::exit(code);
+            // The session ended while nobody was attached, so the status is
+            // reported to the VMM instead of to an attach client.
+            exit_status::report_and_exit(code);
         }
         let mut fds = [
             libc::pollfd {
@@ -611,7 +654,7 @@ fn run_event_loop(
                 pty_forwarding_mode,
             )? {
                 ClientResult::Detached => continue,
-                ClientResult::ChildExited(code) => std::process::exit(code),
+                ClientResult::ChildExited(code) => exit_status::report_and_exit(code),
             }
         }
     }
@@ -1260,11 +1303,7 @@ fn reap_child(child: libc::pid_t) -> Result<Option<i32>> {
         }
         return Err(err).context("failed to wait for managed session child");
     }
-    if libc::WIFEXITED(status) {
-        Ok(Some(libc::WEXITSTATUS(status)))
-    } else {
-        Ok(Some(1))
-    }
+    Ok(Some(exit_status::wait_status_code(status)))
 }
 
 struct Pty {
@@ -1380,6 +1419,30 @@ fn apply_initial_winsize(fd: RawFd, initial_size: Option<PtySize>) -> Result<Pty
     Ok(effective_size)
 }
 
+/// Configure the payload's PTY for a command launch from a script.
+///
+/// `OPOST` is what turns a payload's `\n` into `\r\n` on the caller's stdout,
+/// and `ECHO` is what copies a piped stdin back into that stdout before the
+/// payload reads it, so a launcher turns both off and leaves the terminal
+/// session's defaults alone.
+fn apply_launcher_terminfo(fd: RawFd, launcher_terminfo: LauncherTerminfo) -> Result<()> {
+    if launcher_terminfo == LauncherTerminfo::Terminal {
+        return Ok(());
+    }
+    let mut settings = unsafe { std::mem::zeroed::<libc::termios>() };
+    if unsafe { libc::tcgetattr(fd, &mut settings) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("failed to read managed PTY launcher termios");
+    }
+    settings.c_oflag &= !libc::OPOST;
+    settings.c_lflag &= !libc::ECHO;
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &settings) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("failed to configure managed PTY launcher termios");
+    }
+    Ok(())
+}
+
 fn set_winsize(fd: RawFd, rows: u16, cols: u16) -> Result<()> {
     let size = libc::winsize {
         ws_row: rows,
@@ -1428,6 +1491,60 @@ mod tests {
     use std::ffi::{CStr, CString};
     use std::os::fd::IntoRawFd;
     use std::os::unix::net::{UnixListener, UnixStream};
+
+    #[test]
+    fn launcher_terminfo_defaults_to_a_terminal_session() {
+        assert_eq!(
+            LauncherTerminfo::from_env_value(None),
+            LauncherTerminfo::Terminal
+        );
+        assert_eq!(
+            LauncherTerminfo::from_env_value(Some("0")),
+            LauncherTerminfo::Terminal
+        );
+    }
+
+    #[test]
+    fn launcher_terminfo_accepts_the_host_launcher_flag() {
+        assert_eq!(
+            LauncherTerminfo::from_env_value(Some("1")),
+            LauncherTerminfo::DataPipe
+        );
+    }
+
+    #[test]
+    fn launcher_terminfo_leaves_a_terminal_session_line_discipline_alone() {
+        let pty = Pty::open().unwrap();
+        let before = read_termios(pty.master.as_raw_fd());
+
+        apply_launcher_terminfo(pty.master.as_raw_fd(), LauncherTerminfo::Terminal).unwrap();
+
+        let after = read_termios(pty.master.as_raw_fd());
+        assert_eq!(after.c_oflag, before.c_oflag);
+        assert_eq!(after.c_lflag, before.c_lflag);
+    }
+
+    #[test]
+    fn launcher_terminfo_stops_newline_expansion_and_input_echo() {
+        let pty = Pty::open().unwrap();
+        assert_ne!(
+            read_termios(pty.master.as_raw_fd()).c_oflag & libc::OPOST,
+            0
+        );
+        assert_ne!(read_termios(pty.master.as_raw_fd()).c_lflag & libc::ECHO, 0);
+
+        apply_launcher_terminfo(pty.master.as_raw_fd(), LauncherTerminfo::DataPipe).unwrap();
+
+        let settings = read_termios(pty.master.as_raw_fd());
+        assert_eq!(settings.c_oflag & libc::OPOST, 0);
+        assert_eq!(settings.c_lflag & libc::ECHO, 0);
+    }
+
+    fn read_termios(fd: RawFd) -> libc::termios {
+        let mut settings = unsafe { std::mem::zeroed::<libc::termios>() };
+        assert_eq!(unsafe { libc::tcgetattr(fd, &mut settings) }, 0);
+        settings
+    }
 
     #[test]
     fn managed_session_rejects_protocol_mismatch() {

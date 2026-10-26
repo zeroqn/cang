@@ -275,6 +275,49 @@ pub(crate) fn ensure_workspace_has_no_running_tasks(
     Ok(WorkspaceTaskGateReport { stale_task_ids })
 }
 
+/// Refuse to start a second task in a workspace that already runs one.
+///
+/// Until this gate existed a launch into a busy workspace produced a second VM
+/// whose attach socket nobody watched, and `cang -- <command>` there looked like
+/// it did nothing at all. The task records live under the workspace's own state
+/// root, but the workspace directory is compared as well: a shared state-location
+/// override can put several workspaces under one state root.
+pub(crate) fn ensure_workspace_has_no_running_task(
+    app_dir: &Path,
+    workspace_dir: &Path,
+    inspector: &impl ProcessInspector,
+) -> Result<()> {
+    let mut blockers = Vec::new();
+    for record in list_records(app_dir)? {
+        if record.workspace_dir != workspace_dir {
+            continue;
+        }
+        let status = inspector.status(&record.process);
+        match status {
+            ActiveTaskStatus::Running | ActiveTaskStatus::Unreadable => {
+                let handle = task_handle(&record.task_id).unwrap_or(&record.task_id);
+                blockers.push(format!(
+                    "task '{}' (handle {handle}, pid {}, status {})",
+                    record.task_id,
+                    record.process.pid,
+                    status.as_str()
+                ));
+            }
+            // A stale or pid-reused record describes a task that is already gone,
+            // so it must not block a fresh launch.
+            ActiveTaskStatus::Stale | ActiveTaskStatus::PidReused => {}
+        }
+    }
+    if blockers.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "workspace '{}' already has a running cang task: {}; wait for it to finish, run 'cang attach' to join it, or run 'cang kill <handle>' before launching again",
+        workspace_dir.display(),
+        blockers.join(", ")
+    )
+}
+
 fn render_ps(app_dir: &Path, inspector: &impl ProcessInspector) -> Result<String> {
     let rows = list_records(app_dir)?
         .into_iter()
@@ -1981,6 +2024,77 @@ mod tests {
             .expect_err("record read failure should block");
 
         assert!(format!("{err:#}").contains("failed to parse"));
+    }
+
+    #[test]
+    fn launch_gate_refuses_a_workspace_with_a_running_task() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let app_dir = dir.path().join("cang");
+        let workspace = PathBuf::from("/src/workspace-a");
+        let mut running = record(
+            "workspace-a-1234-1",
+            app_dir.join("workspace-a/tasks/task-a"),
+        );
+        running.workspace_dir = workspace.clone();
+        write_active_task_record(&running).expect("write task record");
+
+        let err = ensure_workspace_has_no_running_task(
+            &app_dir,
+            &workspace,
+            &StaticInspector::new(vec![ActiveTaskStatus::Running]),
+        )
+        .expect_err("a running task must block a second launch");
+        let message = format!("{err:#}");
+
+        assert!(message.contains("already has a running cang task"));
+        assert!(message.contains("workspace-a-1234"));
+        assert!(message.contains("handle workspace-a"));
+        assert!(message.contains("cang kill"));
+    }
+
+    #[test]
+    fn launch_gate_ignores_stale_records_and_other_workspaces() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let app_dir = dir.path().join("cang");
+        let workspace = PathBuf::from("/src/workspace-a");
+        let mut stale = record(
+            "workspace-a-1234-1",
+            app_dir.join("workspace-a/tasks/task-a"),
+        );
+        stale.workspace_dir = workspace.clone();
+        write_active_task_record(&stale).expect("write stale record");
+        let mut other = record(
+            "workspace-b-1234-1",
+            app_dir.join("workspace-b/tasks/task-b"),
+        );
+        other.workspace_dir = PathBuf::from("/src/workspace-b");
+        write_active_task_record(&other).expect("write other record");
+
+        ensure_workspace_has_no_running_task(
+            &app_dir,
+            &workspace,
+            &StaticInspector::new(vec![ActiveTaskStatus::Stale, ActiveTaskStatus::Running]),
+        )
+        .expect("stale records and other workspaces must not block a launch");
+    }
+
+    #[test]
+    fn launch_gate_reports_the_task_id_when_no_handle_can_be_derived() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let app_dir = dir.path().join("cang");
+        let workspace = PathBuf::from("/src/workspace-a");
+        let mut running = record("task-a", app_dir.join("workspace-a/tasks/task-a"));
+        running.workspace_dir = workspace.clone();
+        write_active_task_record(&running).expect("write task record");
+
+        let err = ensure_workspace_has_no_running_task(
+            &app_dir,
+            &workspace,
+            &StaticInspector::new(vec![ActiveTaskStatus::Running]),
+        )
+        .expect_err("a running task must block a second launch");
+
+        assert!(format!("{err:#}").contains("handle task-a"));
     }
 
     #[test]
