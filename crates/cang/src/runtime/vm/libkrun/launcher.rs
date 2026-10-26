@@ -73,21 +73,21 @@ pub(crate) const RENDER_SERVER_FD_ENV: &str = "CANG_RENDER_SERVER_FD";
 /// unparseable value is refused rather than silently taking either arm, because
 /// an A/B that quietly ran the same arm on both sides is worse than a launch
 /// that failed.
-fn zero_message_open_enabled(cli_disabled: bool) -> bool {
+fn zero_message_open_enabled(cli_choice: Option<bool>) -> bool {
     resolve_zero_message_open(
-        cli_disabled,
+        cli_choice,
         std::env::var(CANG_FS_ZERO_MESSAGE_OPEN_ENV).ok().as_deref(),
     )
 }
 
 /// Resolve the knob from the CLI flag and the environment override.
 ///
-/// Precedence: `--no-zero-message-open` (an instruction for this launch) wins
+/// Precedence: `--fs=zero-message-open:on|off` (an instruction for this launch) wins
 /// over the environment, which wins over cang's default. The environment stays
 /// because it is what makes an A/B run possible with one binary.
-fn resolve_zero_message_open(cli_disabled: bool, env_value: Option<&str>) -> bool {
-    if cli_disabled {
-        return false;
+fn resolve_zero_message_open(cli_choice: Option<bool>, env_value: Option<&str>) -> bool {
+    if let Some(choice) = cli_choice {
+        return choice;
     }
     match env_value {
         Some(value) => match parse_env_flag(value) {
@@ -333,7 +333,7 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             self.api
                 .fs_device_set_worker_threads(rootfs, CANG_FS_WORKER_THREADS),
         )?;
-        let zero_message_open = zero_message_open_enabled(config.no_zero_message_open);
+        let zero_message_open = zero_message_open_enabled(config.zero_message_open);
         tracing::debug!(
             enabled = zero_message_open,
             "krun_fs_device_set_zero_message_open: begin"
@@ -799,18 +799,20 @@ pub(in crate::runtime::vm::libkrun) fn guest_nofile_rlimit_entry(
 fn zero_message_open_precedence_is_flag_then_env_then_default() {
     // No flag, no override: cang's default (on).
     assert_eq!(
-        resolve_zero_message_open(false, None),
+        resolve_zero_message_open(None, None),
         CANG_FS_ZERO_MESSAGE_OPEN
     );
     // The environment is what makes a one-binary A/B possible.
-    assert!(!resolve_zero_message_open(false, Some("0")));
-    assert!(resolve_zero_message_open(false, Some("1")));
+    assert!(!resolve_zero_message_open(None, Some("0")));
+    assert!(resolve_zero_message_open(None, Some("1")));
     // An unparseable value does not silently pick an arm.
     assert_eq!(
-        resolve_zero_message_open(false, Some("yes-please")),
+        resolve_zero_message_open(None, Some("yes-please")),
         CANG_FS_ZERO_MESSAGE_OPEN
     );
-    // The CLI flag is an instruction for this launch and wins both ways.
-    assert!(!resolve_zero_message_open(true, None));
-    assert!(!resolve_zero_message_open(true, Some("1")));
+    // The CLI option is an instruction for this launch and wins both ways.
+    assert!(!resolve_zero_message_open(Some(false), None));
+    assert!(!resolve_zero_message_open(Some(false), Some("1")));
+    // An explicit on beats an environment that says off.
+    assert!(resolve_zero_message_open(Some(true), Some("0")));
 }

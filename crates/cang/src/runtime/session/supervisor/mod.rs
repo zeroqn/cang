@@ -207,7 +207,7 @@ mod tests {
             network_mode: NetworkMode::Tsi,
             gpu_mode: crate::runtime::vm::gpu::GpuMode::Off,
             zero_copy_shm: false,
-            no_zero_message_open: false,
+            zero_message_open: None,
             new_perms: crate::runtime::launch::config::GuestPermissions::default(),
             publish: Vec::new(),
             workdir: "/workspace".to_owned(),

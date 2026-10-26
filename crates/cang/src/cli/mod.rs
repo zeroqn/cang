@@ -278,11 +278,13 @@ pub(crate) struct Cli {
     zero_copy_shm: bool,
 
     #[arg(
-        long = "no-zero-message-open",
-        help = "Disable virtio-fs zero-message opens (strict close-to-open reads)",
-        long_help = "Disable virtio-fs zero-message opens, which cang asks for by default. With zero-message opens the guest kernel stops sending FUSE_OPEN/FUSE_RELEASE and keeps a file's page cache across opens, which is worth ~2x on a rust build but means a host-side IN-PLACE rewrite of a file the guest has already read can take up to the attr_timeout (5 s) to appear. A file the host replaces by rename (every editor, git checkout, sed -i) is a new inode and is unaffected. Use this flag for a launch that needs strict close-to-open visibility back."
+        long = "fs",
+        value_name = "KEY:VALUE",
+        value_parser = parse_fs_option,
+        help = "Set a virtio-fs share option",
+        long_help = "Set a virtio-fs share option as KEY:VALUE; repeat for more than one.\n\n  zero-message-open:on|off\n    `on` (cang's default) asks the share for zero-message opens: the guest kernel stops sending FUSE_OPEN/FUSE_RELEASE and keeps a file's page cache across opens, which is worth ~2x on a rust build but means a host-side IN-PLACE rewrite of a file the guest has already read can take up to the attr_timeout (5 s) to appear. A file the host replaces by rename (every editor, git checkout, sed -i) is a new inode and is unaffected. `off` keeps strict close-to-open visibility at the cost of the round trips."
     )]
-    no_zero_message_open: bool,
+    fs: Vec<FsOption>,
 
     #[arg(
         long = "wayland",
@@ -610,7 +612,7 @@ impl Cli {
                 self.gpu.into()
             },
             zero_copy_shm: self.zero_copy_shm,
-            no_zero_message_open: self.no_zero_message_open,
+            zero_message_open: fs_zero_message_open(&self.fs),
             wayland: self.wayland,
             workspace: self.workspace,
             waypipe: self.waypipe,
@@ -653,13 +655,61 @@ pub(crate) struct RuntimeOptions {
     pub(crate) pulse: Option<PulseServer>,
     pub(crate) gpu_mode: GpuMode,
     pub(crate) zero_copy_shm: bool,
-    pub(crate) no_zero_message_open: bool,
+    pub(crate) zero_message_open: Option<bool>,
     pub(crate) wayland: bool,
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) waypipe: Option<Option<PathBuf>>,
     pub(crate) publish: Vec<String>,
     pub(crate) volumes: Vec<VolumeSpec>,
     pub(crate) guest_command: Vec<String>,
+}
+
+/// One `--fs=KEY:VALUE` share option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FsOption {
+    ZeroMessageOpen(bool),
+}
+
+/// Parse `--fs=KEY:VALUE`. An unknown key or value is an error rather than a
+/// silently ignored flag, because a launch that asked for a behaviour it did not
+/// get is worse than a launch that failed.
+fn parse_fs_option(value: &str) -> Result<FsOption, String> {
+    let (key, raw) = value
+        .split_once(':')
+        .ok_or_else(|| format!("{value}: expected KEY:VALUE"))?;
+    let key = key.trim();
+    let raw = raw.trim();
+    match key {
+        "zero-message-open" => parse_on_off(raw)
+            .map(FsOption::ZeroMessageOpen)
+            .ok_or_else(|| format!("{value}: expected on or off")),
+        "" => Err(format!("{value}: expected KEY:VALUE")),
+        other => Err(format!(
+            "{other}: unknown virtio-fs option (supported: zero-message-open)"
+        )),
+    }
+}
+
+fn parse_on_off(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "on" | "1" | "true" | "yes" => Some(true),
+        "off" | "0" | "false" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// The launch's zero-message-open choice, from the `--fs` options: `None` keeps
+/// the environment override and then cang's default in play, `Some` is the user
+/// overriding both for this launch.
+fn fs_zero_message_open(options: &[FsOption]) -> Option<bool> {
+    // Last one wins, so a repeated option behaves like a flag given twice.
+    options
+        .iter()
+        .rev()
+        .map(|option| match option {
+            FsOption::ZeroMessageOpen(enabled) => *enabled,
+        })
+        .next()
 }
 
 fn parse_permissions_arg(value: &str) -> Result<GuestPermissions, String> {
@@ -2109,16 +2159,30 @@ fn images_words_after_delimiter_remain_guest_command() {
 }
 
 #[test]
-fn no_zero_message_open_flag_disables_the_default() {
-    let cli = Cli::try_parse_from(["cang", "--no-zero-message-open", "--", "true"])
-        .expect("--no-zero-message-open should parse");
-    let options = cli.into_runtime_options();
-    assert!(options.no_zero_message_open);
+fn fs_zero_message_open_option_is_parsed_and_overrides() {
+    let cli = Cli::try_parse_from(["cang", "--fs=zero-message-open:off", "--", "true"])
+        .expect("--fs=zero-message-open:off should parse");
+    assert_eq!(
+        cli.into_runtime_options().zero_message_open,
+        Some(false),
+        "an explicit off reaches the launcher as a choice, not as a default"
+    );
+
+    let cli = Cli::try_parse_from(["cang", "--fs=zero-message-open:on", "--", "true"])
+        .expect("--fs=zero-message-open:on should parse");
+    assert_eq!(cli.into_runtime_options().zero_message_open, Some(true));
 
     let cli = Cli::try_parse_from(["cang", "--", "true"]).expect("plain launch should parse");
-    let options = cli.into_runtime_options();
-    assert!(
-        !options.no_zero_message_open,
-        "zero-message open is the default; the flag is what turns it off"
+    assert_eq!(
+        cli.into_runtime_options().zero_message_open,
+        None,
+        "no option means cang's default, with the environment able to override it"
     );
+}
+
+#[test]
+fn fs_option_rejects_unknown_keys_and_values() {
+    assert!(Cli::try_parse_from(["cang", "--fs=no-such-thing:on", "--", "true"]).is_err());
+    assert!(Cli::try_parse_from(["cang", "--fs=zero-message-open:maybe", "--", "true"]).is_err());
+    assert!(Cli::try_parse_from(["cang", "--fs=zero-message-open", "--", "true"]).is_err());
 }
