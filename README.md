@@ -407,27 +407,45 @@ matching the task-volume contract.
 ### Host write visibility from inside the guest
 
 The guest reaches these host paths through one virtio-fs share, and cang asks the
-share for zero-message opens (the guest kernel stops sending `FUSE_OPEN`/
-`FUSE_RELEASE`, which is worth ~2.6x on a full rustc build - see
-`docs/wayfinder/workspace-virtiofs-performance/notes/23-zero-message-open-results.md`).
-The consequence to know about: with no open request to carry per-open flags, the
-guest kernel keeps its page cache across opens, so a file the guest has already
-read keeps the contents it read until its attributes refresh - the virtio-fs
-`attr_timeout`, 5 s.
+share for every request-removing trick the protocol has, because a FUSE round trip
+costs about the same per request whatever the opcode carries and a build issues
+millions of them:
+
+- **zero-message opens** - the guest kernel stops sending `FUSE_OPEN`/
+  `FUSE_OPENDIR` and completes the matching releases itself (~2.6x on a full
+  rustc build, and it is what keeps the page cache across opens -
+  `docs/wayfinder/workspace-virtiofs-performance/notes/23-zero-message-open-results.md`);
+- **no close-time flush** - the share answers `FUSE_FLUSH` with `-ENOSYS`, the
+  guest takes that as "this server has no close-time work" and stops sending it
+  (21% of a build's requests, and a share whose flush body is a `dup()`+`close()`
+  has nothing to report through it);
+- **cacheable negative lookups** - a lookup of a name that does not exist is
+  answered with the protocol's negative entry instead of `-ENOENT`, so the guest
+  can cache the answer for 250 ms (91.5% of a build's lookups are such misses;
+  caching them removes 72% of the lookups, and `-ENOENT` can never be cached).
+
+What that costs is bounded visibility, and the bounds are:
 
 - Edits the host makes by **replacing** a file (every editor's atomic save, `git
   checkout`, `sed -i`, `mv`) are a new inode and are visible on the guest's next
   open, immediately.
-- **Files added** to a directory are visible immediately too.
+- **Files the guest itself creates** are visible at once, and the host sees them
+  as soon as the guest's writes land.
+- A file the **host adds** to a directory can stay invisible to the guest for up
+  to 250 ms - the negative-entry lifetime, measured at 74 ms in practice - because
+  "this name is not there" is cached for that long.
 - Only a **host-side in-place rewrite** of a file the guest has already read
-  (e.g. `echo >> file` from the host) can lag by up to 5 s.
+  (e.g. `echo >> file` from the host) can lag by up to 5 s, the `attr_timeout`
+  the guest uses to revalidate attributes.
 
-`cang --fs=zero-message-open:off` restores strict close-to-open visibility for a
-launch that needs it, at the cost of the round trips (`CANG_FS_ZERO_MESSAGE_OPEN=0`
-does the same thing from the environment, which is what makes a one-binary A/B
-possible). `CANG_FS_STATS=1` makes the
-share log the opcode mix it served when the VM stops, for measuring a workload
-without a guest-side tracer.
+Measured together on a cold 2401-crate `cargo build`: 171.4 s before, 116.3 s
+with all three (the host itself builds the same tree in 115 s), i.e. the share
+costs ~1% where it used to cost 49%. Each lever can be turned off for a launch
+that needs the strict semantics - `--fs=zero-message-open:off`,
+`--fs=no-flush:off`, `--fs=negative-entry:off` (or a millisecond value) - and the
+matching `CANG_FS_*` environment variables do the same thing, which is what makes
+a one-binary A/B possible. `CANG_FS_STATS=1` makes the share log the opcode mix
+it served when the VM stops, for measuring a workload without a guest-side tracer.
 
 ---
 

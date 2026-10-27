@@ -359,6 +359,33 @@ impl LibkrunApi for LinkedLibkrunApi {
         }
     }
 
+    fn fs_device_set_no_flush(&mut self, handle: Handle, enabled: bool) -> Result<()> {
+        match self.slots.get_mut(handle) {
+            Some(Slot::FsDevice(device)) => {
+                device.set_no_flush(enabled);
+                Ok(())
+            }
+            Some(_) => bail!("libkrun fs device handle {handle} holds a different object kind"),
+            None => bail!("libkrun fs device handle {handle} is not live"),
+        }
+    }
+
+    fn fs_device_set_negative_entry(
+        &mut self,
+        handle: Handle,
+        enabled: bool,
+        timeout_millis: u64,
+    ) -> Result<()> {
+        match self.slots.get_mut(handle) {
+            Some(Slot::FsDevice(device)) => {
+                device.set_negative_entry(enabled, timeout_millis);
+                Ok(())
+            }
+            Some(_) => bail!("libkrun fs device handle {handle} holds a different object kind"),
+            None => bail!("libkrun fs device handle {handle} is not live"),
+        }
+    }
+
     fn fs_device_set_opcode_stats(&mut self, handle: Handle, enabled: bool) -> Result<()> {
         match self.slots.get_mut(handle) {
             Some(Slot::FsDevice(device)) => {
