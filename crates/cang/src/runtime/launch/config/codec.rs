@@ -163,6 +163,12 @@ impl LaunchConfig {
                 if enabled { "1" } else { "0" },
             );
         }
+        if let Some(enabled) = self.no_flush {
+            push_field(&mut out, "no_flush", if enabled { "1" } else { "0" });
+        }
+        if let Some(millis) = self.negative_entry_millis {
+            push_field(&mut out, "negative_entry_millis", &millis.to_string());
+        }
         if !self.new_perms.is_empty() {
             push_field(&mut out, "permissions", &self.new_perms.to_string());
         }
@@ -397,6 +403,8 @@ impl LaunchConfig {
                     | "gpu_mode"
                     | "zero_copy_shm"
                     | "zero_message_open"
+                    | "no_flush"
+                    | "negative_entry_millis"
                     | "permissions"
                     | "workdir"
                     | "exec_path"
@@ -455,6 +463,14 @@ impl LaunchConfig {
         )?;
         let zero_copy_shm = fields.get("zero_copy_shm").map(String::as_str) == Some("1");
         let zero_message_open = fields.get("zero_message_open").map(|value| value == "1");
+        let no_flush = fields.get("no_flush").map(|value| value == "1");
+        let negative_entry_millis =
+            match fields.get("negative_entry_millis") {
+                Some(value) => Some(value.parse::<u64>().map_err(|_| {
+                    anyhow::anyhow!("negative_entry_millis is not a number: {value}")
+                })?),
+                None => None,
+            };
         let new_perms = fields
             .get("permissions")
             .map_or(
@@ -499,6 +515,8 @@ impl LaunchConfig {
             gpu_mode,
             zero_copy_shm,
             zero_message_open,
+            no_flush,
+            negative_entry_millis,
             new_perms,
             publish: publish.into_values().collect(),
             workdir: required("workdir")?,

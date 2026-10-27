@@ -501,6 +501,8 @@ fn config() -> LaunchConfig {
         gpu_mode: GpuMode::Off,
         zero_copy_shm: false,
         zero_message_open: None,
+        no_flush: None,
+        negative_entry_millis: None,
         wayland: false,
         new_perms: crate::runtime::launch::config::GuestPermissions::default(),
         publish: &[],
@@ -858,6 +860,8 @@ fn drm_gpu_mode_enables_venus_render_server_flags_before_start() {
         gpu_mode: GpuMode::Drm,
         zero_copy_shm: false,
         zero_message_open: None,
+        no_flush: None,
+        negative_entry_millis: None,
         ..config()
     };
     let result = DirectLibkrunLauncher::new(FakeLibkrunApi::new(calls.clone()))

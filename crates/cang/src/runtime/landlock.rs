@@ -915,6 +915,8 @@ mod tests {
             gpu_mode: GpuMode::Off,
             zero_copy_shm: false,
             zero_message_open: None,
+            no_flush: None,
+            negative_entry_millis: None,
             new_perms: crate::runtime::launch::config::GuestPermissions::default(),
             publish: Vec::new(),
             workdir: "/workspace".to_owned(),

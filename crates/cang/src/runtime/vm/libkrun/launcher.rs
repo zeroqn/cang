@@ -108,14 +108,22 @@ fn resolve_zero_message_open(cli_choice: Option<bool>, env_value: Option<&str>) 
 }
 
 /// Whether this launch asks the share to answer `FUSE_FLUSH` with `-ENOSYS`.
-///
-/// cang's default is [`CANG_FS_NO_FLUSH`]; `CANG_FS_NO_FLUSH` in the environment
-/// overrides it. Same refusal rule as the zero-message-open switch: an
-/// unparseable value keeps the default and says so, rather than running an arm
-/// the caller did not ask for.
-fn no_flush_enabled() -> bool {
-    match std::env::var(CANG_FS_NO_FLUSH_ENV) {
-        Ok(value) => match parse_env_flag(&value) {
+fn no_flush_enabled(cli_choice: Option<bool>) -> bool {
+    resolve_no_flush(
+        cli_choice,
+        std::env::var(CANG_FS_NO_FLUSH_ENV).ok().as_deref(),
+    )
+}
+
+/// Resolve the no-flush knob: `--fs=no-flush:on|off` over the environment, which
+/// overrides cang's default. An unparseable environment value keeps the default
+/// and says so, rather than running an arm the caller did not ask for.
+fn resolve_no_flush(cli_choice: Option<bool>, env_value: Option<&str>) -> bool {
+    if let Some(choice) = cli_choice {
+        return choice;
+    }
+    match env_value {
+        Some(value) => match parse_env_flag(value) {
             Some(enabled) => enabled,
             None => {
                 tracing::warn!(
@@ -125,31 +133,43 @@ fn no_flush_enabled() -> bool {
                 CANG_FS_NO_FLUSH
             }
         },
-        Err(_) => CANG_FS_NO_FLUSH,
+        None => CANG_FS_NO_FLUSH,
     }
 }
 
-/// How long a lookup of a *missing* name may be cached in the guest.
-///
-/// cang's default is [`CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS`]; the same env var
-/// overrides it in milliseconds, and `0` turns the negative entry off (every
-/// miss costs a round trip again, and a file the host adds is visible at the very
-/// next lookup).
-fn negative_entry_timeout() -> Option<Duration> {
-    let millis = match std::env::var(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV) {
-        Ok(value) => match value.trim().parse::<u64>() {
-            Ok(millis) => millis,
+/// How long a lookup of a *missing* name may be cached in the guest, from
+/// `--fs=negative-entry:<milliseconds>` and then the environment.
+fn negative_entry_timeout(cli_choice: Option<u64>) -> Option<Duration> {
+    resolve_negative_entry_millis(
+        cli_choice,
+        std::env::var(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV)
+            .ok()
+            .as_deref(),
+    )
+    .filter(|millis| *millis > 0)
+    .map(Duration::from_millis)
+}
+
+/// Resolve the negative-entry lifetime in milliseconds; `0` turns the negative
+/// entry off (every miss costs a round trip again, and a file the host adds is
+/// visible at the very next lookup).
+fn resolve_negative_entry_millis(cli_choice: Option<u64>, env_value: Option<&str>) -> Option<u64> {
+    if let Some(choice) = cli_choice {
+        return Some(choice);
+    }
+    match env_value {
+        Some(value) => match value.trim().parse::<u64>() {
+            Ok(millis) => Some(millis),
             Err(_) => {
                 tracing::warn!(
                     value = %value,
                     "{CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV} is not milliseconds, ignoring it"
                 );
-                CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS
+                Some(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS)
             }
         },
-        Err(_) => CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS,
-    };
-    (millis > 0).then(|| Duration::from_millis(millis))
+        None => Some(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS),
+    }
 }
 
 /// Whether this launch asks the fork to log the fuse opcode histogram.
@@ -391,13 +411,13 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             self.api
                 .fs_device_set_zero_message_open(rootfs, zero_message_open),
         )?;
-        let no_flush = no_flush_enabled();
+        let no_flush = no_flush_enabled(config.no_flush);
         tracing::debug!(enabled = no_flush, "krun_fs_device_set_no_flush: begin");
         setup(
             "krun_fs_device_set_no_flush",
             self.api.fs_device_set_no_flush(rootfs, no_flush),
         )?;
-        let negative_entry = negative_entry_timeout();
+        let negative_entry = negative_entry_timeout(config.negative_entry_millis);
         tracing::debug!(
             timeout_ms = negative_entry.map(|t| t.as_millis()),
             "krun_fs_device_set_negative_entry: begin"
@@ -860,6 +880,45 @@ pub(in crate::runtime::vm::libkrun) fn guest_nofile_rlimit_entry(
         host_nofile_hard_limit,
         host_nofile_hard_limit
     )
+}
+
+#[test]
+fn no_flush_precedence_is_flag_then_env_then_default() {
+    assert_eq!(resolve_no_flush(None, None), CANG_FS_NO_FLUSH);
+    assert!(!resolve_no_flush(None, Some("0")));
+    assert!(resolve_no_flush(None, Some("1")));
+    // An unparseable environment value keeps the default rather than guessing.
+    assert_eq!(resolve_no_flush(None, Some("yes-please")), CANG_FS_NO_FLUSH);
+    // The flag wins over the environment in both directions.
+    assert!(!resolve_no_flush(Some(false), Some("1")));
+    assert!(resolve_no_flush(Some(true), Some("0")));
+}
+
+#[test]
+fn negative_entry_lifetime_is_flag_then_env_then_default() {
+    assert_eq!(
+        resolve_negative_entry_millis(None, None),
+        Some(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS)
+    );
+    assert_eq!(
+        resolve_negative_entry_millis(None, Some("1000")),
+        Some(1000)
+    );
+    assert_eq!(resolve_negative_entry_millis(None, Some("0")), Some(0));
+    assert_eq!(
+        resolve_negative_entry_millis(None, Some("soon")),
+        Some(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS)
+    );
+    assert_eq!(
+        resolve_negative_entry_millis(Some(500), Some("1000")),
+        Some(500)
+    );
+    // `0` is the switch that turns the cacheable reply off, so the timeout is
+    // absent rather than zero-length.
+    assert_eq!(
+        resolve_negative_entry_millis(Some(0), None).map(|millis| millis > 0),
+        Some(false)
+    );
 }
 
 #[test]

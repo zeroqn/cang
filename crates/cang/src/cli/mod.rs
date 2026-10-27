@@ -282,7 +282,7 @@ pub(crate) struct Cli {
         value_name = "KEY:VALUE",
         value_parser = parse_fs_option,
         help = "Set a virtio-fs share option",
-        long_help = "Set a virtio-fs share option as KEY:VALUE; repeat for more than one.\n\n  zero-message-open:on|off\n    `on` (cang's default) asks the share for zero-message opens: the guest kernel stops sending FUSE_OPEN/FUSE_RELEASE and keeps a file's page cache across opens, which is worth ~2x on a rust build but means a host-side IN-PLACE rewrite of a file the guest has already read can take up to the attr_timeout (5 s) to appear. A file the host replaces by rename (every editor, git checkout, sed -i) is a new inode and is unaffected. `off` keeps strict close-to-open visibility at the cost of the round trips."
+        long_help = "Set a virtio-fs share option as KEY:VALUE; repeat for more than one.\n\n  zero-message-open:on|off\n    `on` (cang's default) asks the share for zero-message opens: the guest kernel stops sending FUSE_OPEN/FUSE_RELEASE and keeps a file's page cache across opens, which is worth ~2x on a rust build but means a host-side IN-PLACE rewrite of a file the guest has already read can take up to the attr_timeout (5 s) to appear. A file the host replaces by rename (every editor, git checkout, sed -i) is a new inode and is unaffected. `off` keeps strict close-to-open visibility at the cost of the round trips.\n\n  no-flush:on|off\n    `on` (cang's default) answers FUSE_FLUSH with -ENOSYS, so the guest stops sending the close-time flush: 21% of the requests a rust build issues. The share has nothing to report through it (its flush body is a dup+close of the passthrough descriptor), so what is given up is only a deferred host error at close(2). `off` restores the round trip per close.\n\n  negative-entry:on|off|<milliseconds>\n    `on` (cang's default, 250 ms) answers a lookup of a name that does not exist with the FUSE negative entry, which the guest can cache for that long; `-ENOENT` cannot be cached at all, and 91% of a build's lookups are misses. It removes 72% of the lookups and 21% of the wall time, at the price of a file the HOST creates staying invisible to the guest for up to that lifetime (measured 74 ms at 250 ms). `off` disables it; a bare number sets the lifetime."
     )]
     fs: Vec<FsOption>,
 
@@ -489,7 +489,9 @@ pub(crate) enum ImagesCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CliAction {
-    Run(RuntimeOptions),
+    /// Boxed because a launch's option set is much larger than every other
+    /// action's payload; the indirection is one allocation at startup.
+    Run(Box<RuntimeOptions>),
     DecodeLaunchConf {
         path: PathBuf,
     },
@@ -566,7 +568,7 @@ impl Cli {
                 },
             }
         } else {
-            CliAction::Run(self.into_runtime_options())
+            CliAction::Run(Box::new(self.into_runtime_options()))
         }
     }
 
@@ -613,6 +615,8 @@ impl Cli {
             },
             zero_copy_shm: self.zero_copy_shm,
             zero_message_open: fs_zero_message_open(&self.fs),
+            no_flush: fs_no_flush(&self.fs),
+            negative_entry_millis: fs_negative_entry(&self.fs),
             wayland: self.wayland,
             workspace: self.workspace,
             waypipe: self.waypipe,
@@ -656,6 +660,8 @@ pub(crate) struct RuntimeOptions {
     pub(crate) gpu_mode: GpuMode,
     pub(crate) zero_copy_shm: bool,
     pub(crate) zero_message_open: Option<bool>,
+    pub(crate) no_flush: Option<bool>,
+    pub(crate) negative_entry_millis: Option<u64>,
     pub(crate) wayland: bool,
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) waypipe: Option<Option<PathBuf>>,
@@ -668,6 +674,10 @@ pub(crate) struct RuntimeOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FsOption {
     ZeroMessageOpen(bool),
+    NoFlush(bool),
+    /// Cacheable negative entries, as a lifetime in milliseconds; `0` keeps the
+    /// `-ENOENT` reply.
+    NegativeEntry(u64),
 }
 
 /// Parse `--fs=KEY:VALUE`. An unknown key or value is an error rather than a
@@ -683,9 +693,16 @@ fn parse_fs_option(value: &str) -> Result<FsOption, String> {
         "zero-message-open" => parse_on_off(raw)
             .map(FsOption::ZeroMessageOpen)
             .ok_or_else(|| format!("{value}: expected on or off")),
+        "no-flush" => parse_on_off(raw)
+            .map(FsOption::NoFlush)
+            .ok_or_else(|| format!("{value}: expected on or off")),
+        "negative-entry" => parse_negative_entry(raw)
+            .map(FsOption::NegativeEntry)
+            .ok_or_else(|| format!("{value}: expected on, off, or a lifetime in milliseconds")),
         "" => Err(format!("{value}: expected KEY:VALUE")),
         other => Err(format!(
-            "{other}: unknown virtio-fs option (supported: zero-message-open)"
+            "{other}: unknown virtio-fs option (supported: zero-message-open, \
+             no-flush, negative-entry)"
         )),
     }
 }
@@ -698,18 +715,45 @@ fn parse_on_off(value: &str) -> Option<bool> {
     }
 }
 
+/// `negative-entry`'s value: `on` takes cang's default lifetime, `off` disables
+/// the cacheable reply, and a bare number is a lifetime in milliseconds.
+fn parse_negative_entry(value: &str) -> Option<u64> {
+    if let Some(on) = parse_on_off(value) {
+        return Some(if on {
+            cang_libkrun::CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS
+        } else {
+            0
+        });
+    }
+    value.trim().parse::<u64>().ok()
+}
+
+/// The launch's `FUSE_FLUSH` choice, from the `--fs` options.
+fn fs_no_flush(options: &[FsOption]) -> Option<bool> {
+    options.iter().rev().find_map(|option| match option {
+        FsOption::NoFlush(enabled) => Some(*enabled),
+        _ => None,
+    })
+}
+
+/// The launch's negative-entry lifetime, in milliseconds, from the `--fs`
+/// options.
+fn fs_negative_entry(options: &[FsOption]) -> Option<u64> {
+    options.iter().rev().find_map(|option| match option {
+        FsOption::NegativeEntry(millis) => Some(*millis),
+        _ => None,
+    })
+}
+
 /// The launch's zero-message-open choice, from the `--fs` options: `None` keeps
 /// the environment override and then cang's default in play, `Some` is the user
 /// overriding both for this launch.
 fn fs_zero_message_open(options: &[FsOption]) -> Option<bool> {
     // Last one wins, so a repeated option behaves like a flag given twice.
-    options
-        .iter()
-        .rev()
-        .map(|option| match option {
-            FsOption::ZeroMessageOpen(enabled) => *enabled,
-        })
-        .next()
+    options.iter().rev().find_map(|option| match option {
+        FsOption::ZeroMessageOpen(enabled) => Some(*enabled),
+        _ => None,
+    })
 }
 
 fn parse_permissions_arg(value: &str) -> Result<GuestPermissions, String> {
@@ -2181,8 +2225,54 @@ fn fs_zero_message_open_option_is_parsed_and_overrides() {
 }
 
 #[test]
+fn fs_no_flush_and_negative_entry_options_are_parsed_and_overridden() {
+    let cli = Cli::try_parse_from(["cang", "--fs=no-flush:off", "--", "true"])
+        .expect("--fs=no-flush:off should parse");
+    assert_eq!(cli.into_runtime_options().no_flush, Some(false));
+
+    let cli = Cli::try_parse_from(["cang", "--fs=negative-entry:1000", "--", "true"])
+        .expect("--fs=negative-entry:1000 should parse");
+    assert_eq!(cli.into_runtime_options().negative_entry_millis, Some(1000));
+
+    let cli = Cli::try_parse_from(["cang", "--fs=negative-entry:off", "--", "true"])
+        .expect("--fs=negative-entry:off should parse");
+    assert_eq!(
+        cli.into_runtime_options().negative_entry_millis,
+        Some(0),
+        "off reaches the launcher as 0, which is the disabled lifetime"
+    );
+
+    let cli = Cli::try_parse_from(["cang", "--fs=negative-entry:on", "--", "true"])
+        .expect("--fs=negative-entry:on should parse");
+    assert_eq!(
+        cli.into_runtime_options().negative_entry_millis,
+        Some(cang_libkrun::CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS),
+        "on means cang's default lifetime, not every launch spelling its own number"
+    );
+
+    let cli = Cli::try_parse_from(["cang", "--", "true"]).expect("plain launch should parse");
+    let options = cli.into_runtime_options();
+    assert_eq!(options.no_flush, None);
+    assert_eq!(options.negative_entry_millis, None);
+
+    // The last occurrence of a key wins, so a repeated option behaves like a
+    // flag given twice rather than like an error.
+    let cli = Cli::try_parse_from([
+        "cang",
+        "--fs=no-flush:on",
+        "--fs=no-flush:off",
+        "--",
+        "true",
+    ])
+    .expect("repeated --fs keys should parse");
+    assert_eq!(cli.into_runtime_options().no_flush, Some(false));
+}
+
+#[test]
 fn fs_option_rejects_unknown_keys_and_values() {
     assert!(Cli::try_parse_from(["cang", "--fs=no-such-thing:on", "--", "true"]).is_err());
     assert!(Cli::try_parse_from(["cang", "--fs=zero-message-open:maybe", "--", "true"]).is_err());
     assert!(Cli::try_parse_from(["cang", "--fs=zero-message-open", "--", "true"]).is_err());
+    assert!(Cli::try_parse_from(["cang", "--fs=no-flush:maybe", "--", "true"]).is_err());
+    assert!(Cli::try_parse_from(["cang", "--fs=negative-entry:soon", "--", "true"]).is_err());
 }

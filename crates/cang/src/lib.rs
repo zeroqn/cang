@@ -36,7 +36,7 @@ pub fn entrypoint() -> ExitCode {
 
     match Cli::parse().into_action() {
         CliAction::Run(options) => run_with_logging(
-            options,
+            *options,
             runtime::RuntimeProfileScope::from_started_at(host_session_started_at),
         ),
         CliAction::ContainerStore { command, options } => {
