@@ -5,13 +5,13 @@ in
   cangVersion = cargoToml.workspace.package.version;
 
   piCodingAgent = {
-    version = "1.3.0";
+    version = "1.4.0";
     owner = "earendil-works";
     repo = "pi";
-    rev = "v1.3.0";
-    srcHash = "sha256-AsutbwnjiwwLkB5tqLW+1GdGZyLmXsU0W+SNdNhJu7U=";
-    npmDepsHash = "sha256-vNklhOW/L4liXhVujy7XIy73GoBQ7Mu+p86Nnr4fsYk=";
-    aiNpmTarballHash = "sha256-U0PhY5vzQ73DNE3zrWwxwFpQtoutB6xrzhCJDUtrimE=";
+    rev = "v1.4.0";
+    srcHash = "sha256-N9NOpiiZTbOMDMV+CxvJAgtLjJJ1/8NJBGS0cFHkhsc=";
+    npmDepsHash = "sha256-ojYDNOjSPQrJQIpSVSviayCRjpcoFIFc9FZH7wWZwhU=";
+    aiNpmTarballHash = "sha256-tA4rqLtvwzKQj4uW6DfcLR/ftF65zTgvWu0RFGKYHjw=";
   };
 
   # Neither nixpkgs input carries a fixed bun yet - both pin 1.4.2, whose
@@ -208,11 +208,11 @@ in
   # mismatch, and upstream may build a newer protocol than the published
   # client speaks.
   montyPrebuiltRelease = {
-    version = "1.1.0";
+    version = "1.4.0";
     systems = {
       x86_64-linux = {
-        asset = "monty-linux-x64-gnu-1.1.0.tgz";
-        hash = "sha256-o8roiBv2mqsGkBMSCFhMbIthHnGXtUcAF5pXPS/vFco=";
+        asset = "monty-linux-x64-gnu-1.4.0.tgz";
+        hash = "sha256-oB85Akj8K03yVY3nbPxtg2Tlzy6yBbMsvWXN/0sifdY=";
       };
     };
   };
