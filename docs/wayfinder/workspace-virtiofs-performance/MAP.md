@@ -217,6 +217,25 @@ of every request to zero.
 
 ## Decisions so far
 
+- [Issue #939 / the cache policy / metadata timeouts / what the remaining 45 s
+  is](notes/35-no-flush-and-negative-entry-shipped.md): **the cache policy is
+  already spent and the timeouts cannot help; two other request classes could,
+  and both shipped.** `CachePolicy::Always` only sets `FOPEN_KEEP_CACHE` in an
+  open reply, and zero-message open already leaves the guest with exactly that
+  flag as its no-open default, so `always` would change nothing measurable;
+  issue #939's attribute-remembering reply lives in `do_open`, which this share
+  no longer reaches. `entry_timeout` 5 s -> 60 s cut lookups 2.3% and returned
+  every one of them as a GETATTR (-0.2% wall), because 91.5% of lookups are
+  negative and an `-ENOENT` reply is never cacheable. Answering misses with the
+  protocol's negative entry (250 ms) removed **72% of the lookups**, and
+  answering `FUSE_FLUSH` with `-ENOSYS` removed **21% of all requests**; together
+  **171.4 s -> 116.3 s (-32.2%)**, against a 115 s host-native build, i.e. the
+  share costs ~1%. Shipped on by default in the fork's `v2.0.0-cang.13` and in
+  `crates/cang-libkrun/src/lib.rs`, each overridable per launch
+  (`CANG_FS_NO_FLUSH=0`, `CANG_FS_NEGATIVE_ENTRY_TIMEOUT=0` or a millisecond
+  value); the cost is bounded host->guest create invisibility, measured 74 ms at
+  the shipped setting.
+
 - [Zero-message open](tickets/19-zero-message-open.md): **implemented and
   measured, shipped on by default** - a full synthetic rustc arm 372.8 s ->
   140.2 s mean (2.66x, four interleaved runs per side), the `open` probe cell
@@ -282,6 +301,20 @@ of every request to zero.
   and 1.34x the true no-FUSE floor, where it was 3.28x. The share's cost fell from
   296 s to 45 s. Cost: 5 s close-to-open lag for in-place host rewrites, accepted
   by bob.
+
+## Shipped (2026-10-27)
+
+- Fork **`v2.0.0-cang.13`** (commit `e8a77159`) adds two request-removing
+  switches - answer `FUSE_FLUSH` with `-ENOSYS`, and answer a miss with a
+  cacheable negative entry - plus a positive/negative/error split in the opcode
+  histogram, and drops the temporary cheap-lookup counters. cang turns both on by
+  default (250 ms negative lifetime) with per-launch overrides, and pins the tag
+  in the submodule and `flake.lock`.
+- **Result on the map's own workload**: cold 2401-crate rustc build **171.4 s ->
+  116.3 s (-32.2%)** against a 115 s host-native build, i.e. the share now costs
+  ~1% where it cost 49% before zero-message open. Cost: a name the *host* creates
+  can stay invisible to the guest for up to 250 ms (measured 74 ms). Numbers,
+  dead ends and the ladder behind the lifetime: [note 35](notes/35-no-flush-and-negative-entry-shipped.md).
 
 ## Withdrawn / superseded
 
