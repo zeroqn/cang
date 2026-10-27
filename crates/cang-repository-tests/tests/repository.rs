@@ -1852,8 +1852,39 @@ fn one_pinned_fenix_rust_toolchain_serves_builds_the_devshell_and_the_image() {
         "the dev shell's lint gate should use the unstable cargo-deny"
     );
     // bun already came from that input; it and the two new packages must keep
-    // coming from it rather than from the 26.05 set.
-    assert!(FLAKE_NIX.contains("bun = unstablePkgs.bun;"));
+    // coming from it rather than from the 26.05 set - and bun goes through
+    // `nix/lib/bun-cang.nix`, which moves it to the release whose embedded root
+    // store rejects the compromised eMudhra intermediates (both inputs still
+    // pin 1.4.2). That helper is the only place the pin is applied, it is
+    // exported for downstream hosts, and the image checks read the same
+    // package, so an image cannot ship the input's unpatched bun unnoticed.
+    assert!(
+        FLAKE_NIX.contains("bun = bunCang (import nixpkgs-unstable { inherit system; });"),
+        "the image's bun has to come from the patch helper, not straight from the input"
+    );
+    assert!(
+        FLAKE_NIX.contains("./nix/lib/bun-cang.nix"),
+        "the flake has to take bun through nix/lib/bun-cang.nix"
+    );
+    assert!(
+        FLAKE_NIX.contains("\n          bun = bun;\n"),
+        "the patched bun has to be exported for downstream hosts"
+    );
+    assert!(
+        FLAKE_NIX.contains("bun = packages.bun;"),
+        "the image checks have to read the same bun the image ships"
+    );
+    let bun_pin = nix_top_level_attr_body(PINS_NIX, "bun");
+    for required in [
+        "version = \"1.4.4\";",
+        "bun-linux-x64-baseline.zip",
+        "bun-linux-aarch64.zip",
+    ] {
+        assert!(
+            bun_pin.contains(required),
+            "the bun pin should carry {required} (it is the release with the fixed root store)"
+        );
+    }
     assert!(FLAKE_NIX.contains("cargoDeny = zgPkgs.cargo-deny;"));
     assert!(FLAKE_NIX.contains("wild = zgPkgs.wild;"));
 }

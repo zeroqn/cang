@@ -314,6 +314,17 @@ let
     ''}
   '';
 
+  # The image's bun has to be the pinned release. bun embeds its own CA store
+  # instead of reading the system's, so a release that trusts a compromised CA
+  # cannot be repaired by configuration and every binary it compiles - the pi
+  # standalone binary among them - carries the same roots; which release the
+  # binary is (nix/lib/bun-cang.nix, nix/pins.nix) is what a build can assert
+  # about that store.
+  bunContracts = ''
+    test -x ${layers.toolingImageLayer}/bin/bun
+    ${layers.toolingImageLayer}/bin/bun --version | grep -Fx '${bun.version}'
+  '';
+
   # Prebuilt addons that pi extensions install at runtime (magic-context's
   # `sharp` and `onnxruntime-node`) are glibc ELF objects with
   # `DT_NEEDED libstdc++.so.6`, while the pi binary is a bun standalone artifact
@@ -465,6 +476,7 @@ let
         ${sqliteContracts}
         ${montyContracts}
         ${nativeAddonRuntimeContracts}
+        ${bunContracts}
 
         grep -F 'CANG_NIX_OVERLAY' ${layers.nixCommandCompat}/bin/nix
         grep -F 'cang-guest-init internal nix wait' ${layers.nixCommandCompat}/bin/nix

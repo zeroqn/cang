@@ -96,6 +96,27 @@ bump moves the dev shell, `nix build .#cang` and the guest together; nothing els
 needs editing. `wild`, `cargo-deny`, `rust-analyzer` and `sccache` are separate
 nixpkgs(-unstable) packages and do not move with it.
 
+### bun's embedded root store
+
+bun ships its own CA bundle inside the binary and does not read the host's, so a
+release that trusts a compromised CA stays broken however the system trust store
+is configured (`--use-system-ca` included), and every binary *compiled* with that
+bun carries the same roots - the image's `bun` and the pi standalone binary both
+do. nixpkgs pinned 1.4.2 in both inputs while 1.4.4 rejected the compromised
+eMudhra/emSign intermediates ([CVE-2026-111943](https://github.com/oven-sh/bun/pull/46159),
+[NixOS/nixpkgs#577354](https://github.com/NixOS/nixpkgs/pull/577354)), so
+`nix/pins.nix` pins 1.4.4 and `nix/lib/bun-cang.nix` applies it to
+nixpkgs-unstable's package for the two consumers (the image's tooling layer and
+pi's build) and exports it as `packages.<system>.bun`.
+
+The override is guarded on the version: once the input's bun reaches the pinned
+version the helper returns the input's package unchanged, so the pin does not
+hold an update back and there is nothing to remove. To bump it, change `version`
+and re-hash each asset (`nix store prefetch-file`), noting that x86_64-linux takes
+upstream's `baseline` zip - the variant nixpkgs packages - not the plain x64
+build. `checks.<system>.bun-cang-version` fails when the image's bun is not the
+pinned release.
+
 ### The virglrenderer decode parameter buffers
 
 cang's `virglrenderer-decode-slice-params.patch` clears the decode's VA parameter

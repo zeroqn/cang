@@ -100,6 +100,12 @@
       # it is exported for downstream hosts as `packages.virglrenderer` /
       # `overlays.default`.
       virglrendererCang = pkgs: import ./nix/lib/virglrenderer-cang.nix { inherit pkgs pins; };
+      # nixpkgs-unstable's bun moved to the release whose embedded root store
+      # rejects the compromised emSign intermediates (CVE-2026-111943): the root
+      # store lives inside the binary, so the image's `bun` and the pi standalone
+      # binary have to be built from it. Exported for downstream hosts as
+      # `packages.bun`. See nix/lib/bun-cang.nix.
+      bunCang = pkgs: import ./nix/lib/bun-cang.nix { inherit pkgs pins; };
     in
     {
       # Apply to a host's nixpkgs to give *its* VA-API driver the same fix the guest
@@ -123,7 +129,11 @@
           ...
         }:
         let
-          bun = (import nixpkgs-unstable { inherit system; }).bun;
+          # The image's `bun` and the toolchain that compiles pi: both from
+          # nixpkgs-unstable and both moved to the release with the fixed root
+          # store, because each of them carries that store. See
+          # nix/lib/bun-cang.nix.
+          bun = bunCang (import nixpkgs-unstable { inherit system; });
           # The un-overridden nixpkgs. `nix/lib/systems.nix` replaces
           # `virglrenderer` with the prebuilt-or-source selector, which is what
           # consumers want but not what CI can build the asset from.
@@ -353,6 +363,10 @@
           # the prebuilt release asset when one is pinned for the system, otherwise
           # the same patches built from source.
           mesa-cang = mesaCang pkgs;
+          # The same bun the image ships and compiles pi with, for a downstream
+          # host whose own bun users need the fixed embedded root store before its
+          # nixpkgs carries it (NixOS/nixpkgs#577354).
+          bun = bun;
           # The source build of the patches `.#virglrenderer` carries: what
           # `.github/workflows/build-virglrenderer.yml` builds, tars and publishes
           # as the per-system release assets that `virglrenderer-cang.nix` then
@@ -386,8 +400,11 @@
         }:
         let
           unstablePkgs = import nixpkgs-unstable { inherit system; };
-          bun = unstablePkgs.bun;
           packages = self.packages.${system};
+          # The checks must see the same bun the image does, patched root store
+          # included; taking it from the packages output is what keeps them in
+          # step.
+          bun = packages.bun;
           # The image ships nixpkgs-unstable's cargo-deny and its wild linker,
           # so these contracts resolve the same packages.
           cargoDeny = unstablePkgs.cargo-deny;
@@ -419,6 +436,19 @@
         in
         {
           container-nix-db-metadata = cangImageChecks.imageConfigNixDbRefs;
+          # The image's bun (and the toolchain behind pi) has to be the pinned
+          # release: the fix is a root store compiled into the binary, so which
+          # release the binary came from is the only thing a build can assert
+          # about it.
+          bun-cang-version =
+            pkgs.runCommand "bun-cang-version"
+              {
+                bun = packages.bun;
+              }
+              ''
+                $bun/bin/bun --version | grep -Fx '${pins.bun.version}'
+                touch $out
+              '';
           # The shim's own loader check: builds the three consumer shapes (the
           # binding's node and name, `zg`'s node, and a patched binding's name)
           # and runs each against the real ONNX Runtime, including the

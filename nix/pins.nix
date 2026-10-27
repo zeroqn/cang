@@ -14,6 +14,29 @@ in
     aiNpmTarballHash = "sha256-U0PhY5vzQ73DNE3zrWwxwFpQtoutB6xrzhCJDUtrimE=";
   };
 
+  # Neither nixpkgs input carries a fixed bun yet - both pin 1.4.2, whose
+  # embedded root store trusts the compromised eMudhra/emSign intermediates
+  # (CVE-2026-111943) - so cang pins the release that rejects them.
+  # nix/lib/bun-cang.nix applies this and makes itself a no-op once an input's
+  # bun reaches `version`. The hashes are the published release assets, the same
+  # ones NixOS/nixpkgs#577354 carries; x86_64-linux is upstream's `baseline` zip,
+  # the variant nixpkgs packages, not the plain x64 build. To bump: change
+  # `version` and re-hash each asset with
+  # `nix store prefetch-file https://github.com/oven-sh/bun/releases/download/bun-v<version>/<asset>`.
+  bun = {
+    version = "1.4.4";
+    systems = {
+      x86_64-linux = {
+        asset = "bun-linux-x64-baseline.zip";
+        hash = "sha256-4ERutVmVdy65iUvrrppr42jZhai5Jx7hJEhvmUbu3XY=";
+      };
+      aarch64-linux = {
+        asset = "bun-linux-aarch64.zip";
+        hash = "sha256-uqa7NvUdblhWHgK76oJQOKnfRU9nPW13bou/hvjHhQ4=";
+      };
+    };
+  };
+
   # Pinned by scripts/update-herdr.sh (tag + per-system asset hashes).
   # Prebuilt mesa carrying cang's VA-API encode fixes (nix/lib/mesa-patched.nix).
   # `.github/workflows/build-mesa.yml` builds it and fills `systems` with the

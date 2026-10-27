@@ -695,6 +695,7 @@ in
     cangImageLayeringPipeline
     cangImageMaxLayers
     browserImageLayer
+    toolingImageLayer
     imageContents
     imagePath
     realPodmanBin

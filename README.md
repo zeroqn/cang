@@ -217,6 +217,7 @@ nix build .#cang
 nix build .#cang-dev
 nix build .#cang-prebuilt
 nix build .#cang-musl
+nix build .#bun
 nix build .#rmux-prebuilt
 nix build .#rtk-prebuilt
 nix build .#herdr-prebuilt
@@ -516,6 +517,10 @@ The container provides:
   sandboxed Python kernel
 - cargo-deny and Symposium (`cargo-agents`, invoked as `cargo agents`)
 - Python 3 (`PyYAML`, Tree-sitter, Tree-sitter Rust parser), Node.js
+- `bun` 1.4.4, the release whose embedded root store rejects the compromised
+  eMudhra/emSign intermediates (`CVE-2026-111943`); both nixpkgs inputs still pin
+  1.4.2, so `nix/lib/bun-cang.nix` moves the package and the pi standalone binary
+  is compiled with the same one (a bun binary carries that root store inside it)
 - Rust toolchain (`cargo`, `rustc`, `clippy`, `rustfmt` from fenix's current
   stable - the same one the repository's dev shell and `nix build` use -
   plus `rust-analyzer`, `sccache` and `wild`)
@@ -689,4 +694,14 @@ ships, so a host can install it as the matching client for `cang --waypipe`:
 
 ```nix
 cang.packages.${pkgs.system}.waypipe-bin
+```
+
+The image's `bun` is a package output too. Both nixpkgs inputs still pin 1.4.2,
+whose embedded root store trusts the compromised eMudhra/emSign intermediates
+(`CVE-2026-111943`); the output is 1.4.4, the release that rejects them, so a
+host whose own bun users need the fix can take the same binary the image ships
+instead of waiting for its nixpkgs ([NixOS/nixpkgs#577354](https://github.com/NixOS/nixpkgs/pull/577354)):
+
+```nix
+cang.packages.${pkgs.system}.bun
 ```
