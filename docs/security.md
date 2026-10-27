@@ -193,6 +193,15 @@ per-user containers config to override it. To refresh the policy, update the
   environment, or a policy file. A capability-bearing subtree still needs to drop its
   capabilities before invoking programs such as Bubblewrap that reject unexpected
   permitted capabilities.
+- The guest kernel (`linux-hardened`) boots with
+  `kernel.unprivileged_userns_clone=0`, so an unprivileged
+  `clone(CLONE_NEWUSER)` fails with `EPERM`. `cang-guest-init` raises it, and
+  `kernel.max_user_namespaces`, synchronously before it execs the task command:
+  the `rustc` and `rust-analyzer` compatibility wrappers run their tool under
+  `bwrap`, which needs a user namespace, and a `bwrap` started in the window
+  before the raise failed with "No permissions to create a new namespace". The
+  raise only ever moves the value up, so a task that sets it higher keeps its
+  value, and the rootless Podman prep worker's own call is a no-op.
 - The cang guest image includes `perf` and `strace` on `PATH`. Without `perf`,
   cang leaves the guest kernel's hardened `kernel.perf_event_paranoid=3`
   setting unchanged. `perf` sets `kernel.perf_event_paranoid=-1` and

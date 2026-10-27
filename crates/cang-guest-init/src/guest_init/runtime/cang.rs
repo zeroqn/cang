@@ -137,6 +137,21 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         }
         Ok(())
     })?;
+    profiler.measure_result("ensure-user-namespaces", || {
+        // Synchronously, before the command is exec'd: the compatibility
+        // wrappers around `rustc`/`rust-analyzer` run their tool under `bwrap`,
+        // which needs an unprivileged user namespace, and the guest kernel
+        // (`linux-hardened`) boots with `kernel.unprivileged_userns_clone=0`.
+        // Raising it only from the background Podman prep worker meant a task
+        // whose first `bwrap` ran before that worker reached its second
+        // operation failed with "No permissions to create a new namespace" -
+        // intermittently, once per launch at most. The worker's own raise stays
+        // for the paths that do not come through here, and is a no-op.
+        if process::is_root() {
+            crate::guest_init::components::rootless::kernel::enable_user_namespaces()?;
+        }
+        Ok(())
+    })?;
     profiler.measure_result("ensure-tun-device", || {
         crate::guest_init::components::rootless::kernel::prepare_tun_device()
     })?;

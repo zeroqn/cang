@@ -3,7 +3,9 @@ use std::os::unix::fs::PermissionsExt;
 
 use tempfile::tempdir;
 
-use super::{linux_major, linux_minor, prepare_kvm_device_at, prepare_tun_device_at};
+use super::{
+    linux_major, linux_minor, maybe_raise_sysctl, prepare_kvm_device_at, prepare_tun_device_at,
+};
 
 fn noop_tun_probe(path: &std::path::Path) -> anyhow::Result<()> {
     if path.exists() {
@@ -67,4 +69,27 @@ fn kvm_device_prep_makes_existing_device_world_accessible() {
 
     let mode = fs::metadata(&kvm).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o666);
+}
+
+#[test]
+fn sysctl_raise_writes_the_target_and_is_idempotent() {
+    // The value is raised, never lowered, and a second call is a no-op - which
+    // is what lets `enter()` and the background Podman prep worker both call
+    // `enable_user_namespaces` without one undoing the other.
+    let temp = tempdir().unwrap();
+    let knob = temp.path().join("knob");
+    fs::write(&knob, "1\n").unwrap();
+
+    maybe_raise_sysctl(&knob, 4).unwrap();
+    assert_eq!(fs::read_to_string(&knob).unwrap(), "4\n");
+
+    fs::write(&knob, "9\n").unwrap();
+    maybe_raise_sysctl(&knob, 4).unwrap();
+    assert_eq!(fs::read_to_string(&knob).unwrap(), "9\n");
+
+    // A missing knob is an error, not a silent skip: the callers depend on the
+    // kernel actually having the setting.
+    let missing = temp.path().join("absent");
+    let err = maybe_raise_sysctl(&missing, 4).expect_err("missing knob should fail");
+    assert!(format!("{err:#}").contains("does not expose"));
 }

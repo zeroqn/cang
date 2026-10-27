@@ -20,7 +20,17 @@ pub(in crate::guest_init) fn prepare() -> Result<()> {
     prepare_kvm_device()
 }
 
-fn enable_user_namespaces() -> Result<()> {
+/// Raise the kernel knobs rootless user namespaces need.
+///
+/// The linux-hardened guest kernel boots with
+/// `kernel.unprivileged_userns_clone=0`, so an unprivileged
+/// `clone(CLONE_NEWUSER)` fails with `EPERM` until this runs. Anything the task
+/// starts that creates its own user namespace - `bwrap`, which is what the
+/// guest's `rustc`/`rust-analyzer` compatibility wrappers exec, and rootless
+/// Podman - needs it raised *before* the task command runs, so `enter()` calls
+/// this synchronously; the rootless Podman prep worker calls it too, and
+/// [`maybe_raise_sysctl`] makes the second call a no-op.
+pub(in crate::guest_init) fn enable_user_namespaces() -> Result<()> {
     maybe_raise_sysctl(Path::new("/proc/sys/user/max_user_namespaces"), 28_633)?;
     if Path::new("/proc/sys/kernel/unprivileged_userns_clone").exists() {
         maybe_raise_sysctl(Path::new("/proc/sys/kernel/unprivileged_userns_clone"), 1)?;
