@@ -1,5 +1,8 @@
 {
   pkgs,
+  rustToolchain,
+  cargoDeny,
+  wild,
   piCodingAgent,
   herdrPrebuilt,
   montyPrebuilt,
@@ -23,6 +26,9 @@ let
   layers = import ./layers.nix {
     inherit
       pkgs
+      rustToolchain
+      cargoDeny
+      wild
       piCodingAgent
       herdrPrebuilt
       montyPrebuilt
@@ -544,6 +550,28 @@ let
           *":${waypipe}/bin:"*) ;;
           *) exit 1 ;;
         esac
+
+        # The guest's Rust is the pinned fenix toolchain, not nixpkgs' 1.95:
+        # the layer the image installs has to carry that toolchain's rustc and
+        # the compat wrapper the guest resolves `rustc` through has to exec it,
+        # so a `cargo build` inside a cang guest runs the compiler cang itself
+        # is built with.
+        test -x ${rustToolchain.toolchain}/bin/rustc
+        test -x ${layers.rustToolchainImageLayer}/bin/rustc
+        test -x ${layers.rustToolchainImageLayer}/bin/cargo
+        test -x ${layers.rustToolchainImageLayer}/bin/clippy-driver
+        grep -F '${rustToolchain.toolchain}/bin/rustc' ${layers.rustcCommandCompat}/bin/rustc
+        grep -F 'rustToolchain.toolchain' ${layersSourceFile}
+        # RUST_SRC_PATH points at /share/rust-src, which has to be the pinned
+        # toolchain's rust-src component (a `std` tree, not the rustc source).
+        test -f ${layers.rustSourceImage}/share/rust-src/std/src/lib.rs
+        # The lint gate and the guest use the same, newer cargo-deny and the
+        # same Rust linker (wild, through the shared clang wrapper).
+        test -x ${cargoDeny}/bin/cargo-deny
+        test -x ${wild}/bin/wild
+        test -x ${layers.clangWildWrapper}/bin/clang_wild_wrapper
+        grep -F 'clang_wild_wrapper' ${configSourceFile}
+        grep -F 'clang-wild-wrapper.nix' ${layersSourceFile}
 
         mkdir -p "$out"
         touch "$out/passed"

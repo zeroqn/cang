@@ -150,6 +150,14 @@ cargo build
 cargo test
 ```
 
+The dev shell's Rust is fenix's current stable (1.99.1 today), not the nixpkgs
+input's, and it is the same toolchain `nix build .#cang` and the cang guest use
+(`nix/lib/rust-toolchain.nix`). The shell puts it first on `PATH` and refuses to
+start when another `rustc`/`cargo`/`rustfmt`/`clippy-driver` still answers for it,
+so a `cargo build` or `cargo test` run in `nix develop` cannot silently use a
+different compiler. Rust links in the shell and in a guest go through the same
+`clang` + `wild` wrapper (`clang_wild_wrapper`) for the host target.
+
 `nix develop` opens `fish` + `starship` by default. Keep your current shell:
 
 ```bash
@@ -508,7 +516,9 @@ The container provides:
   sandboxed Python kernel
 - cargo-deny and Symposium (`cargo-agents`, invoked as `cargo agents`)
 - Python 3 (`PyYAML`, Tree-sitter, Tree-sitter Rust parser), Node.js
-- Rust toolchain (`cargo`, `rustc`, `clippy`, `rustfmt`, `rust-analyzer`, `sccache`, `mold`)
+- Rust toolchain (`cargo`, `rustc`, `clippy`, `rustfmt` from fenix's current
+  stable - the same one the repository's dev shell and `nix build` use -
+  plus `rust-analyzer`, `sccache` and `wild`)
 - `gcc`, `musl`, `clang`
 - `mimalloc` enabled by default for Nix-linked dynamic binaries through `/etc/ld-nix.so.preload`; cang selects the task allocator with `--alloc=mimalloc`, `--alloc=hardened`, or `--alloc=glibc`, and `hardening-run` remains the per-command foreign/FHS `LD_PRELOAD` opt-in
 - RTK (`rtk`)
@@ -533,7 +543,8 @@ The container provides:
   [ADR 0009](docs/adr/0009-pi-extension-cxx-runtime-delivery.md))
 - `ONNXRUNTIME_LIB_PATH`, pointing at the ONNX Runtime the shim above loads
 - `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` preset to the bundled
-  `clang_mold_wrapper` helper for the `x86_64-unknown-linux-gnu` target
+  `clang_wild_wrapper` helper, which drives the `wild` linker, for the
+  `x86_64-unknown-linux-gnu` target
 - `LIBCLANG_PATH` preset to the bundled Nix `libclang` library directory
 - `RUSTC_WRAPPER`, `CMAKE_C_COMPILER_LAUNCHER`, and `CMAKE_CXX_COMPILER_LAUNCHER` preset to the bundled `sccache`
 - `SCCACHE_DIR=/home/dev/.cache/sccache`, backed by the shared host cache under the cang state root
@@ -550,11 +561,12 @@ The container provides:
   keeps large history and one-based window/pane indexes, uses vi keys, and
   creates splits and new windows in the current pane directory.
 
-`clang_mold_wrapper` keeps the default linker policy in the image and avoids
+`clang_wild_wrapper` keeps the default linker policy in the image and avoids
 setting `RUSTFLAGS`, so existing Cargo config can still layer on top normally.
-If `clang -fuse-ld=mold` ever stops resolving correctly in-image, the fallback
-is to pin `mold` explicitly inside the wrapper and update this document to
-match.
+The linker is `wild` (nixpkgs-unstable) and is pinned by path inside the wrapper,
+so it does not depend on `ld.wild` resolving through `PATH`; the repository's dev
+shell presets the same wrapper through `CARGO_TARGET_<TRIPLE>_LINKER`, so a link
+in a guest and a link in `nix develop` are the same command.
 
 Container task launches use Podman `--userns=keep-id`; libkrun task launches
 use cang's keep-id helper namespace to provide the same `/workspace` ownership

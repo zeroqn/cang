@@ -4,6 +4,9 @@
   src,
   pkgs,
   pins,
+  # The pinned Rust toolchain (`nix/lib/rust-toolchain.nix`): the same rustc,
+  # cargo and rustfmt the dev shell and the guest image use.
+  rustToolchain,
   krunInitBinary,
   libkrunfw ? null,
   enableCiSccache ? false,
@@ -24,6 +27,11 @@ let
   # `fetchCargoVendor` running `cargo vendor` over this tree. A libkrun or
   # rutabaga bump refreshes this hash in the same commit as the submodule
   # pointers and the matching flake inputs.
+  #
+  # This deliberately stays on nixpkgs' `rustPlatform` and not the pinned
+  # toolchain's: the hash is a function of the lock file and the crate sources,
+  # not of the compiler, so vendoring with a fixed cargo keeps a toolchain bump
+  # (`nix flake update fenix`) from re-hashing it.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     inherit src;
     hash = "sha256-WxsAGPFoCMs8g7Rb46pNQT4HFLjqNx+fhjyGbe2grrs=";
@@ -36,7 +44,9 @@ let
   libkrunNativeBuildInputs = [
     pkgs.rustPlatform.bindgenHook
     pkgs.pkg-config
-    pkgs.rustfmt
+    # ffier's client generator shells out to `rustfmt`, which has to be the
+    # pinned toolchain's (formatting is version-dependent).
+    rustToolchain.toolchain
     pkgs.patchelf
   ];
   libkrunBuildInputs = [
@@ -52,7 +62,7 @@ let
   # the helper/library lookup below behind shell setup. Runtime tools resolve
   # from $out/libexec/cang-helpers, and the firmware (`libkrunfw.so.5`, opened by
   # libkrun itself) from $out/lib/cang.
-  rustPackage = pkgs.rustPlatform.buildRustPackage (
+  rustPackage = rustToolchain.rustPlatform.buildRustPackage (
     {
       pname = "cang";
       version = cangVersion;
@@ -63,6 +73,15 @@ let
       nativeBuildInputs = ciSccacheNativeBuildInputs ++ libkrunNativeBuildInputs;
       buildInputs = libkrunBuildInputs;
       env = libkrunEnv;
+
+      # `cargoCheckHook` runs the test binaries, and cang links libkrun and
+      # therefore `libvirglrenderer.so.1`, which a build shell does not put on
+      # the loader path. Scoped to the check phase on purpose: a global
+      # `LD_LIBRARY_PATH` changes what `patchelf --shrink-rpath` does in
+      # `fixupPhase` and strips the run paths the installed binary needs.
+      preCheck = ''
+        export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath libkrunBuildInputs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      '';
 
       postInstall = ''
         mkdir -p "$out/libexec/cang-helpers" "$out/lib/cang"
@@ -86,8 +105,17 @@ let
       # process itself. That used to resolve through the dlopen'd libkrun.so's
       # `$ORIGIN` runpath; now the binary carries a package-relative rpath for it,
       # which also keeps `$out/bin/cang` runnable without a wrapper.
+      #
+      # The second run path is for `libvirglrenderer.so.1`, which the binary
+      # needs because it links libkrun (whose GPU device links vrend). The
+      # pinned toolchain's link step does not leave the linker's search
+      # directories in the output, so the package states them: without them the
+      # loader cannot start `$out/bin/cang` outside a shell that already has the
+      # store on `LD_LIBRARY_PATH`. `libvirglrenderer.so.1` carries its own run
+      # path for everything below it.
       postFixup = ''
         patchelf --add-rpath '$ORIGIN/../lib/cang' "$out/bin/cang"
+        patchelf --add-rpath '${pkgs.lib.makeLibraryPath libkrunBuildInputs}' "$out/bin/cang"
       '';
     }
     // ciSccacheEnv
@@ -101,6 +129,10 @@ let
     else
       throw "cang-musl is only supported on Linux";
 
+  # The musl guest init stays on `pkgsStatic`'s rustPlatform rather than the
+  # pinned toolchain: it builds with `CARGO_BUILD_TARGET` on a musl target, and
+  # the static package set is what carries a rustc and std for it. Nothing it
+  # compiles is shared with the host crate graph beyond the protocol crates.
   cangMuslPackage = pkgs.pkgsStatic.rustPlatform.buildRustPackage (
     {
       pname = "cang";

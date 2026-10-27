@@ -1,5 +1,8 @@
 {
   pkgs,
+  rustToolchain,
+  cargoDeny,
+  wild,
   piCodingAgent,
   herdrPrebuilt,
   montyPrebuilt,
@@ -37,9 +40,9 @@ let
     builder:
     "${builder.name}:x:${toString builder.uid}:${toString nixBuilderGroupId}:Nix build user ${toString builder.builderNumber}:/var/empty:${pkgs.runtimeShell}"
   ) nixBuilderUsers;
-  clangMoldWrapper = pkgs.writeShellScriptBin "clang_mold_wrapper" ''
-    exec ${pkgs.clang}/bin/clang -fuse-ld=mold "$@"
-  '';
+  # The guest's Rust linker, shared with the dev shell so a link in a cang
+  # guest and a link in `nix develop` use the same driver and linker.
+  clangWildWrapper = import ../lib/clang-wild-wrapper.nix { inherit pkgs wild; };
   grapheneHardenedMalloc = pkgs.graphene-hardened-malloc.overrideAttrs (_old: {
     version = "14";
     src = pkgs.fetchFromGitHub {
@@ -96,7 +99,7 @@ let
       --unsetenv NSS_WRAPPER_PASSWD \
       --unsetenv NSS_WRAPPER_GROUP \
       -- \
-      ${pkgs.rustc}/bin/rustc "$@"
+      ${rustToolchain.toolchain}/bin/rustc "$@"
   '';
   rustAnalyzerCommandCompat = pkgs.writeShellScriptBin "rust-analyzer" ''
     unset LD_PRELOAD NSS_WRAPPER_PASSWD NSS_WRAPPER_GROUP
@@ -255,19 +258,26 @@ let
     exec tail -f /dev/null
   '';
 
+  # `RUST_SRC_PATH` for the guest's rust-analyzer: the pinned toolchain's own
+  # `rust-src` component, not nixpkgs' `rustPlatform.rustLibSrc`, which unpacks
+  # the source tarball of nixpkgs' 1.95 rustc and would disagree with the
+  # compiler the image ships.
   rustSourceImage = pkgs.runCommand "cang-rust-source-image" { } ''
     mkdir -p "$out/share"
-    ln -s ${pkgs.rustPlatform.rustLibSrc} "$out/share/rust-src"
+    ln -s ${rustToolchain.rustSrc}/lib/rustlib/src/rust/library "$out/share/rust-src"
   '';
 
+  # The guest's Rust: the pinned fenix stable toolchain
+  # (`nix/lib/rust-toolchain.nix`) - the same rustc/cargo/clippy/rustfmt a
+  # `cargo build` in `nix develop` and a `nix build .#cang` use, so a build
+  # inside a cang guest cannot fail on a compiler the project does not build
+  # with. `rust-analyzer`, `wild` and `sccache` are not part of the Rust release
+  # and stay on nixpkgs.
   stableRustToolchainPackages = [
-    pkgs.cargo
-    clangMoldWrapper
-    pkgs.clippy
-    pkgs.mold
+    rustToolchain.toolchain
+    clangWildWrapper
+    wild
     pkgs.rust-analyzer
-    pkgs.rustc
-    pkgs.rustfmt
     pkgs.sccache
   ];
 
@@ -317,7 +327,9 @@ let
 
   toolingImagePackages = [
     bun
-    pkgs.cargo-deny
+    # nixpkgs-unstable's cargo-deny, the same one the dev shell's lint gate
+    # runs and the same input the image's Rust zg comes from.
+    cargoDeny
     pkgs.fzf
     pkgs.neovim
     pkgs.nixfmt
@@ -677,6 +689,8 @@ in
 {
   inherit
     agentImageLayer
+    rustToolchain
+    rustToolchainImageLayer
     vaApiRuntime
     cangImageLayeringPipeline
     cangImageMaxLayers
@@ -685,7 +699,7 @@ in
     imagePath
     realPodmanBin
     rustSourceImage
-    clangMoldWrapper
+    clangWildWrapper
     nixCommandCompat
     nixStoreDbCheck
     podmanCommandCompat

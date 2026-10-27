@@ -1,4 +1,8 @@
-{ nixpkgs, pins }:
+{
+  nixpkgs,
+  fenix,
+  pins,
+}:
 let
   mesaCang = pkgs: import ./mesa-cang.nix { inherit pkgs pins; };
   virglrendererCang = pkgs: import ./virglrenderer-cang.nix { inherit pkgs pins; };
@@ -11,8 +15,7 @@ let
     f:
     nixpkgs.lib.genAttrs systems (
       system:
-      f {
-        inherit system;
+      let
         pkgs =
           (import nixpkgs {
             inherit system;
@@ -36,6 +39,15 @@ let
                 virglrenderer = virglrendererCang prev;
               }
             );
+      in
+      f {
+        inherit system pkgs;
+        # fenix's current stable Rust: the dev shell, `nix build` and the guest
+        # image's rust layer all take it from here, so they cannot drift apart.
+        rustToolchain = import ./rust-toolchain.nix {
+          inherit pkgs;
+          fenix = fenix.packages.${system};
+        };
       }
     );
 in

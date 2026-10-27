@@ -71,6 +71,14 @@ pub(super) const IMAGE_CANG_ENV_ALLOWLIST: &[&str] = &[
     "CANG_REAL_PODMAN",
     "MONTY_BIN",
     "ONNXRUNTIME_LIB_PATH",
+    // The image's Rust build environment: the linker its `cargo` links with
+    // (`clang_wild_wrapper`, which drives `wild`) and the `rust-src` tree the
+    // image's rust-analyzer reads. Both are set in the image's `Env`
+    // (`nix/image/config.nix`), and a `cargo build` in a guest has to link the
+    // way the image says it does rather than with the stdenv default.
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+    "RUST_SRC_PATH",
+    "LIBCLANG_PATH",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

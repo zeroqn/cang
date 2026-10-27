@@ -1489,6 +1489,10 @@ fn libkrun_envp_stays_tiny_while_guest_config_env_is_allowlisted() {
             "PATH=/nix/store/fish/bin".to_owned(),
             "OMX_API_BIN=/nix/store/host-only".to_owned(),
             "RUSTC_WRAPPER=/nix/store/sccache/bin/sccache".to_owned(),
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/nix/store/clang-wild-wrapper/bin/clang_wild_wrapper"
+                .to_owned(),
+            "RUST_SRC_PATH=/nix/store/rust-src-image/share/rust-src".to_owned(),
+            "LIBCLANG_PATH=/nix/store/libclang/lib".to_owned(),
             "CANG_HOST_UID=image".to_owned(),
             "CANG_FISH_CONFIG_SOURCE=/nix/store/fish-config".to_owned(),
             "CANG_STARSHIP_CONFIG_SOURCE=/nix/store/starship.toml".to_owned(),
@@ -1561,6 +1565,17 @@ fn libkrun_envp_stays_tiny_while_guest_config_env_is_allowlisted() {
     assert!(config.guest_config_env_contains("CANG_REAL_PODMAN", "/nix/store/podman/bin/podman"));
     assert!(config.guest_config_env_contains("MONTY_BIN", "/nix/store/monty/bin/monty"));
     assert!(config.guest_config_env_contains("ONNXRUNTIME_LIB_PATH", "/nix/store/onnxruntime/lib"));
+    // The guest links with the image's Rust linker and sees its `rust-src`.
+    assert!(config.guest_config_env_contains(
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+        "/nix/store/clang-wild-wrapper/bin/clang_wild_wrapper"
+    ));
+    assert!(
+        config
+            .guest_config_env_contains("RUST_SRC_PATH", "/nix/store/rust-src-image/share/rust-src")
+    );
+    // libclang is what cang's own bindgen build scripts need in the guest.
+    assert!(config.guest_config_env_contains("LIBCLANG_PATH", "/nix/store/libclang/lib"));
     assert!(
         config
             .guest_config_env_contains("NIX_CONFIG", "experimental-features = nix-command flakes")

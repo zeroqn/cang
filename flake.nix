@@ -1,10 +1,44 @@
 {
   description = "Rust CLI for launching direct-libkrun microVM task environments";
 
+  # The Rust toolchain cang builds with is fenix's stable release (see
+  # `nix/lib/rust-toolchain.nix`). fenix's cached toolchain outputs are served by
+  # `nix-community.cachix.org` (measured: a fenix revision's own toolchain path
+  # is there, the same revision's path built against this flake's nixpkgs is
+  # not); `fenix.cachix.org` is fenix's own cache and is listed too. Adding both
+  # as extra substituters is what makes the toolchain a download rather than a
+  # local build on a fresh machine; `extra-*` settings are only honoured for a
+  # user who trusts this flake.
+  nixConfig = {
+    extra-substituters = [
+      "https://fenix.cachix.org"
+      "https://nix-community.cachix.org"
+    ];
+    extra-trusted-public-keys = [
+      "fenix.cachix.org-1:ecJhr+RdYEdcVgUkjruiYhjbBloIEGov7bos90cZi0Q="
+      "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # The Rust toolchain: fenix's current stable (nixpkgs 26.05's rustc is
+    # 1.95). `nix/lib/rust-toolchain.nix` turns it into the `rustPlatform` the
+    # cang packages build with, the dev shell's `rustc`/`cargo` and the guest
+    # image's rust layer.
+    #
+    # The input deliberately does not follow this flake's `nixpkgs`: fenix's CI
+    # builds its toolchain derivations against fenix's own locked nixpkgs and
+    # publishes them to the `nix-community.cachix.org` substituter, so following
+    # this flake's nixpkgs changes those derivations and every one of them
+    # becomes a cache miss (measured: the followed build's toolchain paths 404 on
+    # the substituter while a fenix revision's own paths are served). The extra
+    # nixpkgs costs an evaluation, not a build; nothing cang compiles is built
+    # against it - the compiler is a tool that runs under this flake's stdenv.
+    fenix.url = "github:nix-community/fenix";
 
     # `cang-libkrun` depends on libkrun's source at `deps/libkrun` by path (cang
     # links libkrun's Rust API, so libkrun has to be compiled by cang's own
@@ -42,6 +76,7 @@
   outputs =
     {
       self,
+      fenix,
       nixpkgs,
       nixpkgs-unstable,
       libkrun-src,
@@ -52,7 +87,7 @@
     let
       pins = import ./nix/pins.nix;
       systems = import ./nix/lib/systems.nix {
-        inherit nixpkgs pins;
+        inherit fenix nixpkgs pins;
       };
       # cang's mesa (the VA-API encode fixes + the headless virtio-gpu modifier fix):
       # the prebuilt release asset when one is published for the system, otherwise
@@ -81,7 +116,12 @@
       };
 
       packages = systems.forAllSystems (
-        { pkgs, system, ... }:
+        {
+          pkgs,
+          rustToolchain,
+          system,
+          ...
+        }:
         let
           bun = (import nixpkgs-unstable { inherit system; }).bun;
           # The un-overridden nixpkgs. `nix/lib/systems.nix` replaces
@@ -204,6 +244,7 @@
             inherit
               pkgs
               pins
+              rustToolchain
               libkrunfw
               ;
             src = workspaceSrc;
@@ -213,6 +254,7 @@
             inherit
               pkgs
               pins
+              rustToolchain
               libkrunfw
               ;
             src = workspaceSrc;
@@ -227,6 +269,7 @@
             inherit
               pkgs
               pins
+              rustToolchain
               ;
             src = workspaceSrc;
             libkrunfw = libkrunfwLocal;
@@ -237,6 +280,9 @@
             import ./nix/image/container.nix {
               inherit
                 pkgs
+                rustToolchain
+                cargoDeny
+                wild
 
                 piCodingAgent
                 herdrPrebuilt
@@ -256,6 +302,13 @@
                 ;
               inherit cangMuslPackage;
             };
+          # The image ships the same `cargo deny` the dev shell's lint gate runs
+          # (nixpkgs-unstable's), next to the Rust zg and ONNX Runtime shim it
+          # already takes from that input.
+          cargoDeny = zgPkgs.cargo-deny;
+          # The guest's Rust linker (`clang_wild_wrapper`), from the same input
+          # as the Rust zg and the ONNX Runtime shim.
+          wild = zgPkgs.wild;
           cangImage = mkImage rustPackages.cangMuslPackage;
           cangImageCiSccache = mkImage rustPackagesCiSccache.cangMuslPackage;
         in
@@ -327,14 +380,25 @@
         {
           pkgs,
 
+          rustToolchain,
           system,
           ...
         }:
         let
-          bun = (import nixpkgs-unstable { inherit system; }).bun;
+          unstablePkgs = import nixpkgs-unstable { inherit system; };
+          bun = unstablePkgs.bun;
           packages = self.packages.${system};
+          # The image ships nixpkgs-unstable's cargo-deny and its wild linker,
+          # so these contracts resolve the same packages.
+          cargoDeny = unstablePkgs.cargo-deny;
+          wild = unstablePkgs.wild;
           cangImageChecks = import ./nix/image/checks.nix {
-            inherit pkgs;
+            inherit
+              pkgs
+              rustToolchain
+              cargoDeny
+              wild
+              ;
             bun = bun;
             piCodingAgent = packages.pi-coding-agent;
             herdrPrebuilt = packages.herdr-prebuilt or null;
@@ -422,20 +486,35 @@
       );
 
       devShells = systems.forAllSystems (
-        { pkgs, ... }:
         {
-          default = import ./nix/shell/devshell.nix {
-            inherit pkgs;
-            libkrunfw = pkgs.callPackage ./nix/pkgs/libkrunfw.nix {
-              inherit pins;
-              libkrunfwSrc = libkrunfw-src;
+          pkgs,
+          rustToolchain,
+          system,
+          ...
+        }:
+        {
+          default =
+            let
+              unstablePkgs = import nixpkgs-unstable { inherit system; };
+            in
+            import ./nix/shell/devshell.nix {
+              inherit pkgs rustToolchain;
+              # `cargo deny` follows the advisory database and its own lock-file
+              # parser, so the lint gate uses nixpkgs-unstable's cargo-deny
+              # instead of the 26.05 input's (0.19.6 -> 0.20.2). The Rust linker
+              # is the image's `wild`, from the same input.
+              cargoDeny = unstablePkgs.cargo-deny;
+              wild = unstablePkgs.wild;
+              libkrunfw = pkgs.callPackage ./nix/pkgs/libkrunfw.nix {
+                inherit pins;
+                libkrunfwSrc = libkrunfw-src;
+              };
+              krunInitBinary =
+                (import ./nix/pkgs/libkrun-source.nix {
+                  inherit pkgs;
+                  src = libkrun-src;
+                }).krunInitBinary;
             };
-            krunInitBinary =
-              (import ./nix/pkgs/libkrun-source.nix {
-                inherit pkgs;
-                src = libkrun-src;
-              }).krunInitBinary;
-          };
         }
       );
 

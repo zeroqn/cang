@@ -1,5 +1,59 @@
 # Build outputs and Nix DB diagnostics
 
+## Rust toolchain and linker
+
+One toolchain builds everything. `nix/lib/rust-toolchain.nix` derives it from the
+`fenix` flake input - fenix's current stable release (1.99.1 at the time of
+writing, against the `nixpkgs` input's 1.95) - and hands out three things:
+
+- `rustPlatform` (`pkgs.makeRustPlatform` over the toolchain), which
+  `nix/pkgs/cang-rust.nix` builds `.#cang`, `.#cang-ci-sccache` and `.#cang-dev`
+  with, libkrun's Rust API included;
+- `toolchain`, the rustc/cargo/rustfmt/clippy-driver set the dev shell puts on
+  `PATH` and the guest image's rust layer installs;
+- `rustSrc`, the guest image's `RUST_SRC_PATH`.
+
+`nix develop` exports the toolchain first on `PATH` and then refuses to start
+unless `rustc -vV`, `cargo -V`, `rustfmt -V` and `clippy-driver -V` all match it,
+so the `nix develop --command cargo ...` invocations the workflows run cannot
+compile with something else - a rustup shim, a `~/.cargo/bin`, another profile.
+It also exports `RUSTC`-consistency: an exported `RUSTC` pointing anywhere else
+fails the shell too.
+
+The `fenix` input deliberately does not follow this flake's `nixpkgs`
+(`inputs.nixpkgs.follows`). fenix's CI builds its toolchain derivations against
+its own locked nixpkgs and publishes them to the `nix-community.cachix.org`
+substituter the flake's `nixConfig` adds; following `nixpkgs` changes those
+derivations, so all of them become cache misses (measured: the followed build's
+toolchain paths 404 on the substituter while a fenix revision's own paths are
+served). The extra nixpkgs costs an evaluation, not a build - the compiler is a
+tool that runs under this flake's stdenv, and nothing cang compiles is built
+against fenix's nixpkgs. A very recent fenix revision may not be published to the
+cache yet; the fetch of the Rust release tarballs from `static.rust-lang.org`
+happens either way, and nothing is ever compiled from source.
+
+`cargoDeps` stays on nixpkgs' `rustPlatform.fetchCargoVendor` on purpose: the
+vendor hash is a function of the lock file and the crate sources, so vendoring
+with a fixed cargo means a toolchain bump (`nix flake update fenix`) does not
+re-hash it. `.#cang-musl` likewise keeps `pkgsStatic`'s rust platform, which is
+what carries a rustc and std for its musl target.
+
+The Rust linker is `clang_wild_wrapper` (`nix/lib/clang-wild-wrapper.nix`):
+`clang -fuse-ld=<wild>/bin/wild`, with `wild` from nixpkgs-unstable. The image
+presets it as `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` and the dev shell
+presets the same variable for its own host triple, so identical links happen in a
+guest and on the host. `cargo-deny` for the lint gate (and in the image) is also
+nixpkgs-unstable's, because the advisory database and lock-file parsing move with
+the ecosystem.
+
+The image sets that linker, `RUST_SRC_PATH` and `LIBCLANG_PATH` in its `Env`
+(`nix/image/config.nix`), and `IMAGE_CANG_ENV_ALLOWLIST` in
+`crates/cang/src/runtime/launch/config/model.rs` is what carries them into a
+guest - cang forwards only an allowlist of image environment, so a variable that
+is not on it exists for the image's own processes but not for a `cargo build`
+inside a task. A guest build therefore links with `wild` and sees the pinned
+toolchain's `rust-src`; `RUSTC_WRAPPER` (`sccache`) stays host-only on purpose.
+
 ## Build outputs
 
 Source builds of the host package compile libkrun's Rust API from the fork

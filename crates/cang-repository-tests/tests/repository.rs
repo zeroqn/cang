@@ -19,6 +19,10 @@ const CARGO_TOML: &str = include_str!("../../../Cargo.toml");
 const SECCOMP_JSON_NIX: &str =
     include_str!("../../../nix/pkgs/container-lib-policy-seccomp-json.nix");
 const CANG_RUST_NIX: &str = include_str!("../../../nix/pkgs/cang-rust.nix");
+const RUST_TOOLCHAIN_NIX: &str = include_str!("../../../nix/lib/rust-toolchain.nix");
+const SYSTEMS_NIX: &str = include_str!("../../../nix/lib/systems.nix");
+const CLANG_WILD_WRAPPER_NIX: &str = include_str!("../../../nix/lib/clang-wild-wrapper.nix");
+const FLAKE_LOCK: &str = include_str!("../../../flake.lock");
 const CANG_PREBUILT_NIX: &str = include_str!("../../../nix/pkgs/cang-prebuilt.nix");
 const TEST_YML: &str = include_str!("../../../.github/workflows/test.yml");
 const PUBLISH_RELEASE_YML: &str = include_str!("../../../.github/workflows/publish_release.yml");
@@ -518,10 +522,14 @@ fn cang_package_exposes_stable_raw_elf_payload_for_release_workflow() {
         // musl guest init blob.
         "pkgs.rustPlatform.bindgenHook",
         "pkgs.pkg-config",
-        "pkgs.rustfmt",
+        // rustfmt (ffier's client generator shells out to it) is the pinned
+        // toolchain's, not nixpkgs': formatting is version-dependent.
+        "rustToolchain.toolchain",
         "pkgs.virglrenderer",
         "pkgs.libgbm",
         "KRUN_INIT_BINARY_PATH",
+        // Vendoring stays on nixpkgs' rustPlatform so a toolchain bump does not
+        // re-hash the vendor set.
         "pkgs.rustPlatform.fetchCargoVendor",
     ] {
         assert!(CANG_RUST_NIX.contains(required), "missing {required}");
@@ -971,7 +979,7 @@ fn rust_tool_wrappers_mask_nix_loader_preload() {
         "--unsetenv LD_PRELOAD",
         "--unsetenv NSS_WRAPPER_PASSWD",
         "--unsetenv NSS_WRAPPER_GROUP",
-        r#"${pkgs.rustc}/bin/rustc "$@""#,
+        r#"${rustToolchain.toolchain}/bin/rustc "$@""#,
         "rustAnalyzerCommandCompat",
         r#"pkgs.writeShellScriptBin "rust-analyzer""#,
         "cang-empty-ld-nix-so-preload",
@@ -1160,8 +1168,12 @@ fn image_places_cargo_deny_in_tooling_layer_without_symposium() {
     let rust_toolchain = nix_list_body(LAYERS, "stableRustToolchainPackages");
     let tooling = nix_list_body(LAYERS, "toolingImagePackages");
 
+    // The lint gate and the image run the same cargo-deny, and it is
+    // nixpkgs-unstable's (an explicit package, not part of the Rust toolchain
+    // layer).
     assert!(!rust_toolchain.contains("pkgs.cargo-deny"));
-    assert!(tooling.contains("pkgs.cargo-deny"));
+    assert!(tooling.contains("cargoDeny"));
+    assert!(!LAYERS.contains("pkgs.cargo-deny"));
     assert!(!LAYERS.contains("symposium"));
 }
 
@@ -1706,4 +1718,142 @@ fn cang_release_driver_pins_the_sri_ci_published() {
             "docs/maintenance.md missing {required}"
         );
     }
+}
+
+/// One Rust toolchain for everything: fenix's stable release, wired into the
+/// packages (`rustPlatform`), the dev shell and the guest image, with the dev
+/// shell refusing to start when something else answers for `rustc`.
+#[test]
+fn one_pinned_fenix_rust_toolchain_serves_builds_the_devshell_and_the_image() {
+    // The input, and the substituter that makes it a download rather than a
+    // build. `follows nixpkgs` would change fenix's derivations and turn every
+    // one of them into a cache miss, so the input must stand on its own.
+    for required in [
+        r#"fenix.url = "github:nix-community/fenix";"#,
+        "https://nix-community.cachix.org",
+        "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=",
+        "extra-substituters",
+        "extra-trusted-public-keys",
+        "systems = import ./nix/lib/systems.nix {\n        inherit fenix nixpkgs pins;",
+    ] {
+        assert!(FLAKE_NIX.contains(required), "flake.nix missing {required}");
+    }
+    assert!(
+        !FLAKE_NIX.contains(".follows = \"nixpkgs\""),
+        "fenix must keep its own nixpkgs so its cached derivations match"
+    );
+    assert!(
+        FLAKE_LOCK.contains(r#""fenix": {"#)
+            && FLAKE_LOCK.contains(r#""repo": "fenix""#)
+            && FLAKE_LOCK.contains(r#""owner": "nix-community""#)
+            && FLAKE_LOCK.contains(r#""rev": ""#),
+        "flake.lock has to pin the fenix input by revision"
+    );
+    assert!(
+        FLAKE_LOCK.contains(r#""rust-analyzer-src""#),
+        "fenix's own inputs are locked with it"
+    );
+
+    // One module owns the toolchain, and it builds a `rustPlatform` out of it.
+    for required in [
+        "fenix.stable.withComponents",
+        r#""cargo""#,
+        r#""rustc""#,
+        r#""rustfmt""#,
+        r#""clippy""#,
+        "rustSrc = fenix.stable.rust-src;",
+        "pkgs.makeRustPlatform",
+        "rustc = toolchain;",
+        "cargo = toolchain;",
+    ] {
+        assert!(
+            RUST_TOOLCHAIN_NIX.contains(required),
+            "nix/lib/rust-toolchain.nix missing {required}"
+        );
+    }
+    assert!(
+        SYSTEMS_NIX.contains("fenix = fenix.packages.${system};")
+            && SYSTEMS_NIX.contains("rustToolchain = import ./rust-toolchain.nix"),
+        "nix/lib/systems.nix should hand every output the same toolchain"
+    );
+
+    // The host build compiles with it.
+    assert!(
+        CANG_RUST_NIX.contains("rustPackage = rustToolchain.rustPlatform.buildRustPackage"),
+        "the cang package has to build with the pinned toolchain"
+    );
+
+    // The dev shell puts it first and fails when anything else answers for it,
+    // which is what makes `nix develop --command cargo ...` in CI meaningful.
+    for required in [
+        "export PATH=${rustToolchain.toolchain}/bin:$PATH",
+        "cang_devshell_require_tool rustc -vV",
+        "cang_devshell_require_tool cargo -V",
+        "cang_devshell_require_tool rustfmt -V",
+        "cang_devshell_require_tool clippy-driver -V",
+        "refusing to start with a",
+        "exit 1",
+        "RUSTC points at",
+    ] {
+        assert!(
+            DEVSHELL_NIX.contains(required),
+            "the devshell toolchain check is missing {required}"
+        );
+    }
+
+    // The guest image installs the same toolchain and points RUST_SRC_PATH at
+    // its rust-src, rather than at nixpkgs' 1.95.
+    for required in [
+        "rustToolchain.toolchain",
+        "rustToolchain.rustSrc",
+        "rustToolchainImageLayer",
+        r#"CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=${layers.clangWildWrapper}/bin/clang_wild_wrapper"#,
+    ] {
+        assert!(
+            LAYERS.contains(required) || IMAGE_CONFIG_NIX.contains(required),
+            "the image's rust layer is missing {required}"
+        );
+    }
+    assert!(
+        !LAYERS.contains("pkgs.rustPlatform.rustLibSrc") && !LAYERS.contains("pkgs.rustc"),
+        "the image must take rustc and rust-src from the pinned toolchain"
+    );
+
+    // The image's Rust linker is wild (nixpkgs-unstable), not mold, and its
+    // cargo-deny is the same newer one the lint gate runs. The wrapper is shared
+    // with the dev shell, so both link the same way.
+    assert!(
+        CLANG_WILD_WRAPPER_NIX
+            .contains(r#"exec ${pkgs.clang}/bin/clang -fuse-ld=${wild}/bin/wild "$@""#),
+        "clang_wild_wrapper should drive the wild linker"
+    );
+    for source in [LAYERS, DEVSHELL_NIX] {
+        assert!(
+            source.contains("clang-wild-wrapper.nix"),
+            "the image and the dev shell have to share clang_wild_wrapper"
+        );
+    }
+    assert!(
+        DEVSHELL_NIX.contains("clang_wild_wrapper") && DEVSHELL_NIX.contains("_LINKER"),
+        "the dev shell has to preset CARGO_TARGET_<TRIPLE>_LINKER to wild"
+    );
+    assert!(
+        !LAYERS.contains("pkgs.mold")
+            && !LAYERS.contains("fuse-ld=mold")
+            && !DEVSHELL_NIX.contains("pkgs.mold"),
+        "mold must be gone from the image"
+    );
+    assert!(
+        LAYERS.contains("\n    cargoDeny\n") && LAYERS.contains("\n    wild\n"),
+        "the image should carry the unstable cargo-deny and wild"
+    );
+    assert!(
+        DEVSHELL_NIX.contains("    cargoDeny\n"),
+        "the dev shell's lint gate should use the unstable cargo-deny"
+    );
+    // bun already came from that input; it and the two new packages must keep
+    // coming from it rather than from the 26.05 set.
+    assert!(FLAKE_NIX.contains("bun = unstablePkgs.bun;"));
+    assert!(FLAKE_NIX.contains("cargoDeny = zgPkgs.cargo-deny;"));
+    assert!(FLAKE_NIX.contains("wild = zgPkgs.wild;"));
 }

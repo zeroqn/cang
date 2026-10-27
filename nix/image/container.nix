@@ -1,5 +1,8 @@
 {
   pkgs,
+  rustToolchain,
+  cargoDeny,
+  wild,
   piCodingAgent,
   herdrPrebuilt,
   montyPrebuilt,
@@ -23,6 +26,9 @@ let
   layers = import ./layers.nix {
     inherit
       pkgs
+      rustToolchain
+      cargoDeny
+      wild
       piCodingAgent
       herdrPrebuilt
       montyPrebuilt
@@ -54,6 +60,9 @@ let
   imageChecks = import ./checks.nix {
     inherit
       pkgs
+      rustToolchain
+      cargoDeny
+      wild
       piCodingAgent
       herdrPrebuilt
       montyPrebuilt

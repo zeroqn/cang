@@ -68,6 +68,34 @@ published asset:
 nix develop --command ./scripts/update-virglrenderer-prebuilt.sh
 ```
 
+### Updating the Rust toolchain
+
+The toolchain is the `fenix` flake input, not a nixpkgs pin, so it is bumped with
+a lock update rather than an edit:
+
+```bash
+nix flake update fenix
+nix develop --command rustc -V          # the dev shell's toolchain
+nix develop --command cargo fmt --check
+nix develop --command cargo clippy --all-targets --all-features -- -D warnings
+nix develop --command cargo test
+nix develop --command cargo deny check
+```
+
+A toolchain bump can surface new lints (`-D warnings` turns them into failures),
+new `rustfmt` formatting, and differing `cargo deny`/advisory findings - run all
+four gates above in the same commit as the lock change. Do not change
+`cargoDeps`: the vendor hash is a function of the lock file, and vendoring stays
+on nixpkgs' `rustPlatform` (`docs/build.md`, "Rust toolchain and linker"). A very
+recent fenix revision may not be pushed to the `nix-community.cachix.org`
+substituter yet, so the first build after a bump can build fenix's wrapper
+derivations locally; the Rust release tarballs are fetched either way.
+
+The guest image's rust layer takes the same toolchain from the same input, so a
+bump moves the dev shell, `nix build .#cang` and the guest together; nothing else
+needs editing. `wild`, `cargo-deny`, `rust-analyzer` and `sccache` are separate
+nixpkgs(-unstable) packages and do not move with it.
+
 ### The virglrenderer decode parameter buffers
 
 cang's `virglrenderer-decode-slice-params.patch` clears the decode's VA parameter
