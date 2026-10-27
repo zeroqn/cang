@@ -34,6 +34,7 @@ pkgs.mkShell {
     pkgs.fish
     pkgs.fuse-overlayfs
     pkgs.jq
+    pkgs.just
     pkgs.nixfmt
     pkgs.passt
     pkgs.podman

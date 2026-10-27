@@ -5,6 +5,9 @@ const ADR_0008_CANG_LINKS_LIBKRUN_RUST_API_MD: &str =
     include_str!("../../../docs/adr/0008-cang-links-libkrun-rust-api.md");
 const GLOSSARY_MD: &str = include_str!("../../../GLOSSARY.md");
 const MAINTENANCE_MD: &str = include_str!("../../../docs/maintenance.md");
+const JUSTFILE: &str = include_str!("../../../Justfile");
+const CANG_RELEASE_SH: &str = include_str!("../../../scripts/cang-release.sh");
+const DEVSHELL_NIX: &str = include_str!("../../../nix/shell/devshell.nix");
 const LAYERS: &str = include_str!("../../../nix/image/layers.nix");
 const CONTAINER_NIX: &str = include_str!("../../../nix/image/container.nix");
 const IMAGE_CONFIG_NIX: &str = include_str!("../../../nix/image/config.nix");
@@ -1646,5 +1649,61 @@ fn cang_va_driver_escape_hatch_is_named_forwarded_and_documented() {
                 "{label} should document the VA driver escape hatch: missing {required}"
             );
         }
+    }
+}
+
+#[test]
+fn cang_release_driver_pins_the_sri_ci_published() {
+    // The release driver exists so a release cannot re-introduce the v0.15.1
+    // miss: the asset SRI is taken from the CI run that built the same source,
+    // never from a locally normalized asset (which patchelf version decided).
+    // Mentioning patchelf in the header comment is the point; *running* it on
+    // the asset is what the driver must never do.
+    for line in CANG_RELEASE_SH.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        assert!(
+            !line.contains("patchelf") && !line.contains("--set-interpreter"),
+            "the release driver must not normalize the asset itself: {line}"
+        );
+    }
+    for required in [
+        "releases/download/alpha",
+        "--hash \"$sri\"",
+        "update-cang-prebuilt.sh",
+        "Publish release binaries",
+        "wait_run",
+        "git tag \"v$version\"",
+        "nix build .#cang-prebuilt",
+        "CANG_RELEASE_SMOKE_OK",
+        "libkrunfwRelease.tag",
+    ] {
+        assert!(
+            CANG_RELEASE_SH.contains(required),
+            "scripts/cang-release.sh missing {required}"
+        );
+    }
+    for required in [
+        "release version:",
+        "scripts/cang-release.sh all {{version}}",
+        "release-plan version:",
+        "release-verify version:",
+    ] {
+        assert!(JUSTFILE.contains(required), "Justfile missing {required}");
+    }
+    assert!(
+        DEVSHELL_NIX.contains("pkgs.just"),
+        "the devshell has to provide just"
+    );
+    for required in [
+        "`just release <version>`",
+        "just release-plan <version>",
+        "just release-verify <published-version>",
+    ] {
+        assert!(
+            MAINTENANCE_MD.contains(required),
+            "docs/maintenance.md missing {required}"
+        );
     }
 }

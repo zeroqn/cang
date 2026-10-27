@@ -385,6 +385,15 @@ push the tag. If the tag run does get cancelled, re-create the tag at the same
 commit (`git push --delete origin v<version>` and then `git push origin
 v<version>`) to trigger it again.
 
+`just release <version>` runs the phases below as one command - gates, version
+bump, the CI-checked pin, the tag, and the post-publish verification - and is the
+supported way to cut a release. It never computes the asset SRI locally: it pins
+the hash CI published for the same source, which is why the patchelf question in
+step 2 cannot go wrong with it. `just release-plan <version>` prints the phases
+without touching anything, and `just release-verify <published-version>`
+re-checks a released version against its pin. What follows is what each phase
+proves, and the manual fallback.
+
 Release a version in this order:
 
 1. Bump `workspace.package.version` in `Cargo.toml` and the workspace-member
@@ -395,7 +404,9 @@ Release a version in this order:
    the mismatch. Nothing else about the graph changes, so that is the only hash
    a version bump touches.
 2. Compute the asset SRI from a local build normalized exactly like the release
-   workflow. The asset is patched to a neutral interpreter and embeds no
+   workflow. `scripts/cang-release.sh` does not do this — it takes the hash from
+   the `main` push's own `Publish release binaries` run instead, whose alpha asset
+   is the same bytes — so this is the fallback for cutting a release by hand. The asset is patched to a neutral interpreter and embeds no
    `/nix/store` paths, so the result is byte-reproducible and is the hash CI
    publishes:
 

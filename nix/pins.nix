@@ -234,11 +234,12 @@ in
     systems = {
       x86_64-linux = {
         asset = "cang-v0.15.1-x86_64-unknown-linux-gnu";
-        # Computed from `nix build .#cang-ci-sccache` normalized exactly like the
-        # release workflow (`patchelf --set-interpreter
-        # /lib64/ld-linux-x86-64.so.2 --set-rpath ""`), so it is the byte-identical
-        # asset the tag push uploads. Recompute it the same way for the next
-        # release; see the cang release scheme in docs/maintenance.md.
+        # The bytes CI published for the source this pin sits on: `just release
+        # <version>` reads the hash from the main push's own release run, whose
+        # alpha asset is the same file the tag publishes. Never pin a locally
+        # normalized asset - which patchelf normalized it decides the byte
+        # stream, and v0.15.1 shipped a pin for the wrong one. See the cang
+        # release scheme in docs/maintenance.md.
         hash = "sha256-1HPfSRB9XX26l86iFF9ujNVuJGw93PjeG/YQNTDnX5M=";
       };
     };

@@ -7,14 +7,21 @@ owner="zeroqn"
 repo="cang"
 system="x86_64-linux"
 release_tag=""
+provided_hash=""
 
 usage() {
   cat <<'USAGE'
 Usage: update-cang-prebuilt.sh [--tag <release-tag>] [--system <system>]
+                                [--hash <sri>]
 
 Refresh the pinned cang prebuilt release metadata in nix/pins.nix by querying
 GitHub Releases, rejecting legacy/concrete-store-referencing payloads, and
 recomputing the binary SRI hash.
+
+  --hash    pin this SRI instead of downloading the asset. Only for the pre-tag
+            flow in scripts/cang-release.sh, which takes the hash from the cang
+            CI run that built the same source: the versioned asset does not
+            exist yet, so there is nothing to download and nothing to check.
 
 Defaults:
   --tag     newest rolling sha-<revision> prerelease containing the selected
@@ -32,6 +39,10 @@ while [ "$#" -gt 0 ]; do
       release_tag="${2:?missing value for --tag}"
       shift 2
       ;;
+    --hash)
+      provided_hash="${2:?missing value for --hash}"
+      shift 2
+      ;;
     --system)
       system="${2:?missing value for --system}"
       shift 2
@@ -47,6 +58,11 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ -n "$provided_hash" ] && [ -z "$release_tag" ]; then
+  echo "--hash also needs --tag: the asset name comes from the release tag" >&2
+  exit 1
+fi
 
 for cmd in curl jq python3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -119,7 +135,10 @@ if [ -z "$release_tag" ]; then
   exit 1
 fi
 
-download_url="https://github.com/$owner/$repo/releases/download/$release_tag/$asset_name"
+if [ -n "$provided_hash" ]; then
+  asset_hash="$provided_hash"
+else
+  download_url="https://github.com/$owner/$repo/releases/download/$release_tag/$asset_name"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -174,7 +193,8 @@ import sys
 digest = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).digest()
 print("sha256-" + base64.b64encode(digest).decode())
 PY
-)"
+  )"
+fi
 
 python3 - "$pins_file" "$release_tag" "$system" "$asset_name" "$asset_hash" <<'PY'
 import re
