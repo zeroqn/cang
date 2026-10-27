@@ -1,10 +1,16 @@
 # 35 - The two levers that shipped: no-flush and cacheable negative entries
 
-Campaign evidence (raw, on this host, not in the repo):
-`/home/dev/cang-bench/evidence/levers/` (switch A/B, 12 interleaved arms),
-`/home/dev/cang-bench/evidence/ladder/` (negative-lifetime ladder + staleness),
-`/home/dev/cang-bench/evidence/ship/` (end-to-end check of the shipped defaults).
-Fork build: `v2.0.0-cang.13`. Workload: the 2401-crate synthetic tree from
+Campaign evidence: the reports are notes
+[36](36-levers-campaign-record.md) (the switch A/B, 12 interleaved arms),
+[37](37-negative-lifetime-ladder-record.md) (the negative-lifetime ladder and its
+staleness probe) and [38](38-shipped-defaults-verification-cang-vfio.md) /
+[39](39-shipped-defaults-verification-main.md) (the end-to-end checks of the
+shipped defaults, first from the worktree's build and then from main's own).
+Their raw logs and per-arm guest evidence lived under
+`/home/dev/cang-bench/evidence/{levers,ladder,ship,main-ship}` on the development
+host and were deleted with the benchmark worktree once the numbers were recorded
+here; every figure below is quoted from those reports. Fork build:
+`v2.0.0-cang.13`. Workload: the 2401-crate synthetic tree from
 `tools/rust-compile-bench`, guest image `ghcr.io/zeroqn/cang:latest`.
 
 ## What was asked

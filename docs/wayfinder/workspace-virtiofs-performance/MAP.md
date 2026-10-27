@@ -25,16 +25,13 @@ green.
 
 ## Notes
 
-- **Where this effort lives.** The map, its tickets, its notes and
-  `tools/rust-compile-bench` are tracked on branch `wayfinder/workspace-virtiofs-perf`
-  in the worktree **`/home/dev/cang/cang-vfio`** (created 2026-10-25 off `main`
-  `e1d9b75`, submodules at the pinned commits: `deps/libkrun`
-  `79228a72` = `v2.0.0-cang.10`). Work here, not in the primary checkout: that one
-  is in use by the concurrent **THP** effort, which has `launcher.rs`,
-  `libkrun/tests.rs`, the `deps/libkrun` submodule pointer, `README.md` and
-  `nix/image/layers.nix` dirty - so a build or a benchmark run in it measures a
-  moving tree, and this map will eventually touch `launcher.rs` and the fork
-  itself (tickets 04/07/08).
+- **Where this effort lives.** In the repo, on `main`: the map, its tickets, its
+  notes and `tools/rust-compile-bench` all landed there on 2026-10-27, and the
+  worktree the effort used before that (`/home/dev/cang/cang-vfio`, branch
+  `wayfinder/workspace-virtiofs-perf`) was removed once the branch merged. That
+  worktree existed because the primary checkout was shared with the concurrent
+  **THP** effort; when a benchmark needs an isolated tree again, make a fresh
+  worktree, land through `main`, and delete the worktree with the run.
 
 - Domain: `deps/libkrun` (`zeroqn/libkrun`, branch `cang`) -
   `src/devices/src/virtio/fs/` (`device.rs`, `worker.rs`, `server.rs`,
