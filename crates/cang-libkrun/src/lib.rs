@@ -71,6 +71,55 @@ pub const CANG_FS_ZERO_MESSAGE_OPEN: bool = true;
 /// `1`/`true`; anything else is refused rather than guessed at).
 pub const CANG_FS_ZERO_MESSAGE_OPEN_ENV: &str = "CANG_FS_ZERO_MESSAGE_OPEN";
 
+/// Whether cang asks the share to answer `FUSE_FLUSH` with `-ENOSYS` by default.
+///
+/// `FUSE_FLUSH` is a close-time round trip, and it was 21% of the requests a cold
+/// 2401-crate `cargo build` issued inside a cang guest. The server's flush body is
+/// a `dup()`+`close()` of the passthrough descriptor and nothing else, so
+/// answering `-ENOSYS` - the protocol's "this server has no close-time work",
+/// which the client takes as success and remembers - costs only the ability of
+/// `close(2)` to report an error the host deferred. No lock state moves: this
+/// share negotiates neither `POSIX_LOCKS` nor `FLOCK_LOCKS`, so the client's
+/// locks live in its own kernel and `filp_flush` releases them whatever `->flush`
+/// does.
+///
+/// Measured with the switch as the only variable, interleaved, on that build:
+/// FLUSH 211,877 -> 2 at the 1 M-request mark (-21.2% of all requests) and
+/// 171.4 s -> 153.5 s (-10.5%), against a 112.9 -> 117.4 s host drift over the
+/// same campaign and a 16.1 s same-setting spread. See note 33 and note 35 of the
+/// workspace-virtiofs-performance map. `CANG_FS_NO_FLUSH=0` restores the round
+/// trip per launch.
+pub const CANG_FS_NO_FLUSH: bool = true;
+
+/// Env var that overrides [`CANG_FS_NO_FLUSH`] (`0`/`false` or `1`/`true`;
+/// anything else is refused rather than guessed at).
+pub const CANG_FS_NO_FLUSH_ENV: &str = "CANG_FS_NO_FLUSH";
+
+/// How long cang lets the guest cache the answer "this name does not exist".
+///
+/// A FUSE lookup that finds nothing was answered `-ENOENT`, which the kernel
+/// cannot cache at all: it drops the dentry and asks again next time. A cold
+/// 2401-crate `cargo build` issued 494 k such probes - 91.5% of all its lookups,
+/// 54% of all its requests - because a compiler asks for every candidate path
+/// it can imagine. Answering with the protocol's *negative entry* (`nodeid == 0`
+/// plus `entry_valid`) makes the answer cacheable, which removed 72% of the
+/// lookups, 48% of the requests and 20.8% of the wall time on that build.
+///
+/// The price is exactly this constant: a file the *host* creates stays invisible
+/// to the guest for up to this long, because "not there" is cached. 250 ms keeps
+/// 92.3% of the saving (a quarter second already catches the compiler re-probing
+/// the same name) and bounds the staleness to something a person cannot notice;
+/// the measured invisibility at this setting was 74 ms. Files the guest itself
+/// creates, and files the host rewrites by rename (`git checkout`, every editor,
+/// `sed -i`), are unaffected - a create or a rename in the guest invalidates the
+/// entry. `CANG_FS_NEGATIVE_ENTRY_TIMEOUT=0` disables it (error path only) and a
+/// larger value trades visibility for the last few percent.
+pub const CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS: u64 = 250;
+
+/// Env var that overrides [`CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS`], in
+/// milliseconds (`0` disables the negative entry).
+pub const CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV: &str = "CANG_FS_NEGATIVE_ENTRY_TIMEOUT";
+
 /// Env var that makes the fork log the opcode mix it served when the device
 /// stops (`1`/`true`).
 ///

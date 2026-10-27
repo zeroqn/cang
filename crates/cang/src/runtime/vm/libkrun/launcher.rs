@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::runtime::launch::config::{LaunchConfig, NetworkMode};
 use crate::runtime::publish::tsi_port_forwards;
@@ -14,8 +15,10 @@ use crate::runtime::session::supervisor::rlimits::host_nofile_hard_limit;
 use crate::runtime::vm::gpu::GpuMode;
 
 use cang_libkrun::{
-    CANG_FS_ROOT_TAG, CANG_FS_STATS_ENV, CANG_FS_WORKER_THREADS, CANG_FS_ZERO_MESSAGE_OPEN,
-    CANG_FS_ZERO_MESSAGE_OPEN_ENV, CANG_LIBKRUN_COMPAT_NET_FEATURES, Handle, LibkrunApi,
+    CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV, CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS, CANG_FS_NO_FLUSH,
+    CANG_FS_NO_FLUSH_ENV, CANG_FS_ROOT_TAG, CANG_FS_STATS_ENV, CANG_FS_WORKER_THREADS,
+    CANG_FS_ZERO_MESSAGE_OPEN, CANG_FS_ZERO_MESSAGE_OPEN_ENV, CANG_LIBKRUN_COMPAT_NET_FEATURES,
+    Handle, LibkrunApi,
 };
 
 pub(in crate::runtime::vm::libkrun) const PROFILE_KERNEL_CMDLINE_APPEND: &str =
@@ -87,6 +90,51 @@ fn zero_message_open_enabled() -> bool {
         },
         Err(_) => CANG_FS_ZERO_MESSAGE_OPEN,
     }
+}
+
+/// Whether this launch asks the share to answer `FUSE_FLUSH` with `-ENOSYS`.
+///
+/// cang's default is [`CANG_FS_NO_FLUSH`]; `CANG_FS_NO_FLUSH` in the environment
+/// overrides it. Same refusal rule as the zero-message-open switch: an
+/// unparseable value keeps the default and says so, rather than running an arm
+/// the caller did not ask for.
+fn no_flush_enabled() -> bool {
+    match std::env::var(CANG_FS_NO_FLUSH_ENV) {
+        Ok(value) => match parse_env_flag(&value) {
+            Some(enabled) => enabled,
+            None => {
+                tracing::warn!(
+                    value = %value,
+                    "{CANG_FS_NO_FLUSH_ENV} is not 0/1, ignoring it"
+                );
+                CANG_FS_NO_FLUSH
+            }
+        },
+        Err(_) => CANG_FS_NO_FLUSH,
+    }
+}
+
+/// How long a lookup of a *missing* name may be cached in the guest.
+///
+/// cang's default is [`CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS`]; the same env var
+/// overrides it in milliseconds, and `0` turns the negative entry off (every
+/// miss costs a round trip again, and a file the host adds is visible at the very
+/// next lookup).
+fn negative_entry_timeout() -> Option<Duration> {
+    let millis = match std::env::var(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV) {
+        Ok(value) => match value.trim().parse::<u64>() {
+            Ok(millis) => millis,
+            Err(_) => {
+                tracing::warn!(
+                    value = %value,
+                    "{CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV} is not milliseconds, ignoring it"
+                );
+                CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS
+            }
+        },
+        Err(_) => CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS,
+    };
+    (millis > 0).then(|| Duration::from_millis(millis))
 }
 
 /// Whether this launch asks the fork to log the fuse opcode histogram.
@@ -327,6 +375,25 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             "krun_fs_device_set_zero_message_open",
             self.api
                 .fs_device_set_zero_message_open(rootfs, zero_message_open),
+        )?;
+        let no_flush = no_flush_enabled();
+        tracing::debug!(enabled = no_flush, "krun_fs_device_set_no_flush: begin");
+        setup(
+            "krun_fs_device_set_no_flush",
+            self.api.fs_device_set_no_flush(rootfs, no_flush),
+        )?;
+        let negative_entry = negative_entry_timeout();
+        tracing::debug!(
+            timeout_ms = negative_entry.map(|t| t.as_millis()),
+            "krun_fs_device_set_negative_entry: begin"
+        );
+        setup(
+            "krun_fs_device_set_negative_entry",
+            self.api.fs_device_set_negative_entry(
+                rootfs,
+                negative_entry.is_some(),
+                negative_entry.map(|t| t.as_millis() as u64).unwrap_or(0),
+            ),
         )?;
         let opcode_stats = opcode_stats_enabled();
         tracing::debug!(

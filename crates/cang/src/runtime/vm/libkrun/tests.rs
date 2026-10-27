@@ -59,6 +59,8 @@ enum Call {
     FsDeviceSetOverlay(usize, usize),
     FsDeviceSetWorkerThreads(usize, usize),
     FsDeviceSetZeroMessageOpen(usize, bool),
+    FsDeviceSetNoFlush(usize, bool),
+    FsDeviceSetNegativeEntry(usize, bool, u64),
     FsDeviceSetOpcodeStats(usize, bool),
     BlockDeviceNew(usize, String, String, bool),
     NetDeviceNewUnixstreamFd(i32, u32, u32),
@@ -277,6 +279,25 @@ impl LibkrunApi for FakeLibkrunApi {
     fn fs_device_set_zero_message_open(&mut self, device: usize, enabled: bool) -> Result<()> {
         self.record(Call::FsDeviceSetZeroMessageOpen(device, enabled));
         self.checked("krun_fs_device_set_zero_message_open")
+    }
+
+    fn fs_device_set_no_flush(&mut self, device: usize, enabled: bool) -> Result<()> {
+        self.record(Call::FsDeviceSetNoFlush(device, enabled));
+        self.checked("krun_fs_device_set_no_flush")
+    }
+
+    fn fs_device_set_negative_entry(
+        &mut self,
+        device: usize,
+        enabled: bool,
+        timeout_millis: u64,
+    ) -> Result<()> {
+        self.record(Call::FsDeviceSetNegativeEntry(
+            device,
+            enabled,
+            timeout_millis,
+        ));
+        self.checked("krun_fs_device_set_negative_entry")
     }
 
     fn fs_device_set_opcode_stats(&mut self, device: usize, enabled: bool) -> Result<()> {
@@ -677,6 +698,12 @@ fn fake_api_records_direct_libkrun_v2_call_order() {
             Call::FsDeviceSetOverlay(ROOTFS, OVERLAY),
             Call::FsDeviceSetWorkerThreads(ROOTFS, cang_libkrun::CANG_FS_WORKER_THREADS),
             Call::FsDeviceSetZeroMessageOpen(ROOTFS, cang_libkrun::CANG_FS_ZERO_MESSAGE_OPEN),
+            Call::FsDeviceSetNoFlush(ROOTFS, cang_libkrun::CANG_FS_NO_FLUSH),
+            Call::FsDeviceSetNegativeEntry(
+                ROOTFS,
+                true,
+                cang_libkrun::CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS,
+            ),
             Call::FsDeviceSetOpcodeStats(ROOTFS, false),
             Call::MmioDeviceManagerAdd(DEVICES, ROOTFS),
             Call::BlockDeviceNew(
