@@ -289,11 +289,11 @@ in
   # The Rust workspace never bumps `[workspace.package] version`, so `version` is
   # the stamp the package applies; `zvecRustLib` below is pinned to the crate
   # version that workspace's `zvec-rust`/`zvec-rust-build` deps require.
-  # The stamp also moves when cang carries its own patches: 0.3.1 is the
+  # The stamp also moves when cang carries its own patches: 0.3.2 is the
   # pinned revision plus the ArkTS/GLSL format registration in
   # nix/pkgs/zvec-grep.nix.
   zvecGrep = {
-    version = "0.3.1";
+    version = "0.3.2";
     owner = "zvec-ai";
     repo = "zvec-grep";
     rev = "4def5663a8694584db9784c74e9ad2e0c171f9ac";

@@ -32,10 +32,13 @@ let
     pkgs.stdenv.cc.cc.lib
   ];
   # `build-zg.yml` publishes an asset and pins it in nix/pins.nix together, so a
-  # pinned asset is only the current binary while its revision is the pinned
-  # source revision. Between a source bump and that pin landing, the pinned asset
-  # is the previous zg and the source build is the one that matches.
-  prebuiltIsCurrent = (release.revision or null) == pins.zvecGrep.rev;
+  # pinned asset is only the current binary while both its revision and its stamp
+  # match the source pin - the asset name carries both. Between either bump and
+  # that pin landing, the pinned asset is the previous zg (or an asset name that
+  # does not exist yet) and the source build is the one that matches.
+  prebuiltIsCurrent =
+    (release.revision or null) == pins.zvecGrep.rev
+    && (release.version or null) == pins.zvecGrep.version;
 in
 if prebuiltIsCurrent && builtins.hasAttr system systems then
   let
