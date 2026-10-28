@@ -296,8 +296,8 @@ in
     version = "0.3.1";
     owner = "zvec-ai";
     repo = "zvec-grep";
-    rev = "88777bd1f722a77f96ebc378897fcc262470dac9";
-    srcHash = "sha256-7qSuEsfiiEGdieotYNLQ1JcWEIpPLaG0OyydzMrcPFI=";
+    rev = "4def5663a8694584db9784c74e9ad2e0c171f9ac";
+    srcHash = "sha256-Yvjff9Dkl4mqZxxv26BuDrIa8WIvonfFtZlrJnqvZis=";
   };
 
   # zvec's C API shared library (`libzvec_c_api.so` plus the jieba dictionary the
@@ -307,11 +307,11 @@ in
   # the C++ vector database, so pointing it here keeps the ABI matched and the Nix
   # build offline.
   zvecRustLib = {
-    version = "0.7.2";
+    version = "0.8.0";
     owner = "zvec-ai";
     repo = "zvec-rust";
     asset = "zvec-prebuilt-x86_64-unknown-linux-gnu.tar.gz";
-    hash = "sha256-EjveZO2LquXqgTkHr1qzV1ETKB64H8pTEPKKD+T/uSs=";
+    hash = "sha256-Vlj5xuhrWlEcKmEU8UoUdeWuVMakvx2OD72jRIzZYBM=";
   };
 
   # Prebuilt zg built from the zvecGrep revision above.

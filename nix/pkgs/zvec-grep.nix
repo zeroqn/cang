@@ -11,8 +11,9 @@
 # or npm.
 #
 # `pkgs` must be a nixpkgs whose rustc satisfies the workspace's
-# `rust-version = "1.98"` and whose ONNX Runtime is the 1.27 ABI `ort`'s `api-27`
-# feature wants; the flake passes nixpkgs-unstable for both.
+# `rust-version = "1.98"`, and whose ONNX Runtime is recent enough to serve the
+# API version the pinned `ort` binding asks for (21 at this revision, loaded at
+# run time through `load-dynamic`); the flake passes nixpkgs-unstable for both.
 { pkgs, pins }:
 
 let
@@ -23,6 +24,17 @@ let
     releaseAsset = zvecRustLib // {
       url = "https://github.com/${zvecRustLib.owner}/${zvecRustLib.repo}/releases/download/v${zvecRustLib.version}/${zvecRustLib.asset}";
     };
+  };
+
+  # `llama-cpp-sys-2` builds llama.cpp from the source revision named in its own
+  # `build_support/source-lock.json` and refuses any tree whose portable SHA-256
+  # differs from the pin there. The crate revision Nix vendors carries no
+  # `llama.cpp/` directory, so without this the build script would `curl` the
+  # archive mid-build; hand it the same archive instead, and let its own
+  # verification double-check what Nix already pinned.
+  llamaCppSource = pkgs.fetchurl {
+    url = "https://codeload.github.com/ggml-org/llama.cpp/tar.gz/5f55650a78f92aff4d48d671423e888fac0469ff";
+    hash = "sha256-++BXvv3UkEatu82fGa004EyYFVh0TVXbGHAvQdTQGwc=";
   };
 in
 pkgs.rustPlatform.buildRustPackage (finalAttrs: {
@@ -53,7 +65,16 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
   # `cargoRoot`, while `cargoBuildHook` builds in `buildAndTestSubdir`.
   cargoRoot = "rust";
   buildAndTestSubdir = "rust";
-  cargoLock.lockFile = "${finalAttrs.src}/rust/Cargo.lock";
+  # `llama-cpp-2`/`llama-cpp-sys-2` come from zvec's llama.cpp fork (a git
+  # dependency in the lock), which `importCargoLock` cannot vendor without a hash
+  # per locked package; both crates resolve to the same checkout of that revision.
+  cargoLock = {
+    lockFile = "${finalAttrs.src}/rust/Cargo.lock";
+    outputHashes = {
+      "llama-cpp-2-0.1.154" = "sha256-l7anKvQBgJVJ3jpn+83Ulp7ZxgbmQt2QH1ytfHx+E5o=";
+      "llama-cpp-sys-2-0.1.154" = "sha256-l7anKvQBgJVJ3jpn+83Ulp7ZxgbmQt2QH1ytfHx+E5o=";
+    };
+  };
 
   # The extension asks the binary for its version, so stamp the source rather
   # than the manifest: `cargoLock` vendors from the lock shipped in `src`, and
@@ -94,11 +115,23 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
 
   env = {
     ZVEC_LIB_DIR = "${zvecLib}/lib";
-    # `ort-sys` takes a system ONNX Runtime over its `download-binaries` path when
-    # ORT_LIB_LOCATION is set, and links it dynamically only when asked to.
-    ORT_LIB_LOCATION = "${pkgs.onnxruntime}/lib";
-    ORT_PREFER_DYNAMIC_LINK = "1";
+    # `ort` is built with its `load-dynamic` feature, so nothing is linked against
+    # ONNX Runtime and `ort-sys` never needs `ORT_LIB_LOCATION`. What the setting
+    # below does is keep `zg-engine`'s build script from staging (and
+    # network-downloading) an upstream 1.21 runtime: it takes any `ORT_DYLIB_PATH`
+    # as "an external runtime is configured" and returns early. The runtime the
+    # binary actually loads is the one this derivation installs under `$out/lib`.
+    ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime.so.1";
+    # The archive `llama-cpp-sys-2` verifies, extracts and compiles from.
+    LLAMA_CPP_SOURCE_ARCHIVE = "${llamaCppSource}";
   };
+
+  # ... and the extraction cache has to be writable: `llama-cpp-sys-2` unpacks the
+  # archive under `CARGO_HOME/llama-cpp-sources` unless `LLAMA_CPP_SOURCE_CACHE`
+  # says otherwise, and CARGO_HOME is the read-only vendor directory here.
+  preBuild = ''
+    export LLAMA_CPP_SOURCE_CACHE="$TMPDIR/llama-cpp-sources"
+  '';
 
   # The suite wants network and downloaded models; this package is the binary.
   doCheck = false;
@@ -106,9 +139,15 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
   # nixpkgs' cargoBuildHook always passes `--target <triple>`, so the artifact is
   # under the target subdirectory of `target/`, not `target/release/` — the same
   # subdirectory its own install hook copies from.
+  # zg loads ONNX Runtime at run time (`ort`'s `load-dynamic`): the engine looks
+  # for `libonnxruntime.so.1` under `../lib` relative to its own executable before
+  # anything on the loader path, which is where upstream's own packaging puts it.
+  # So the binary needs the runtime beside it, not linked into it.
   installPhase = ''
     runHook preInstall
     install -Dm755 "target/${pkgs.stdenv.targetPlatform.rust.cargoShortTarget}/$cargoBuildType/zg" $out/bin/zg
+    mkdir -p $out/lib
+    ln -s ${pkgs.onnxruntime}/lib/libonnxruntime.so.1 $out/lib/libonnxruntime.so.1
     runHook postInstall
   '';
 

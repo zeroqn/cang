@@ -240,6 +240,11 @@ let
       *":${layers.agentImageLayer}/bin:"*) ;;
       *) exit 1 ;;
     esac
+    # zg loads ONNX Runtime at run time (`ort`'s `load-dynamic`) and looks for
+    # `lib/libonnxruntime.so.1` beside its own binary first, so the link has to
+    # survive the layer merge: a missing one is a guest whose first embedding
+    # search fails, not a build failure.
+    test -e ${layers.agentImageLayer}/lib/libonnxruntime.so.1
   '';
 
   herdrContracts = ''

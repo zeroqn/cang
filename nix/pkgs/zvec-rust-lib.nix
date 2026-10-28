@@ -34,7 +34,13 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     mkdir -p "$out/lib"
-    cp -a libzvec_c_api.so data "$out/lib/"
+    cp -a libzvec_c_api.so "$out/lib/"
+    # The jieba dictionary ships beside the library while the release still
+    # carries it (v0.7.2 and earlier); v0.8.0 dropped the directory, so copy it
+    # only when the archive has one.
+    if [ -d data ]; then
+      cp -a data "$out/lib/"
+    fi
     runHook postInstall
   '';
 

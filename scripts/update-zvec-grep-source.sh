@@ -32,7 +32,7 @@ revision without `rust/Cargo.lock` or whose `zvec-rust` crate version does not
 match the pinned `zvecRustLib` release asset in nix/pins.nix.
 
 The Rust workspace never bumps `[workspace.package] version`, so `zvecGrep.version`
-stays the `zg` stamp (0.3.0); this updater does not change it.
+stays the `zg` stamp (0.3.1); this updater does not change it.
 
 Options:
   --rev <rev>  git revision or tag to pin (required; --tag is an alias)

@@ -5,9 +5,9 @@
 # without compiling llama.cpp, and the container build can too.
 #
 # `pkgs` must be a nixpkgs whose rustc satisfies the workspace's
-# `rust-version = "1.98"` and whose ONNX Runtime is the 1.27 ABI `ort` wants; the
-# flake passes nixpkgs-unstable (the 26.05 input has rustc 1.95 and ONNX Runtime
-# 1.24). See nix/pkgs/zvec-grep.nix.
+# `rust-version = "1.98"` and whose ONNX Runtime is recent enough for the API
+# version `ort` compiles against (21 as of the pinned revision); the flake passes
+# nixpkgs-unstable (the 26.05 input has rustc 1.95). See nix/pkgs/zvec-grep.nix.
 { pkgs, pins }:
 
 let
@@ -31,12 +31,18 @@ let
     pkgs.onnxruntime
     pkgs.stdenv.cc.cc.lib
   ];
+  # `build-zg.yml` publishes an asset and pins it in nix/pins.nix together, so a
+  # pinned asset is only the current binary while its revision is the pinned
+  # source revision. Between a source bump and that pin landing, the pinned asset
+  # is the previous zg and the source build is the one that matches.
+  prebuiltIsCurrent = (release.revision or null) == pins.zvecGrep.rev;
 in
-if builtins.hasAttr system systems then
+if prebuiltIsCurrent && builtins.hasAttr system systems then
   let
     asset = builtins.getAttr system systems;
     prebuilt = pkgs.callPackage ../pkgs/zvec-grep-prebuilt.nix {
       inherit runtimeDeps;
+      inherit (pkgs) onnxruntime;
       releaseAsset = asset // {
         inherit system;
         inherit (release)

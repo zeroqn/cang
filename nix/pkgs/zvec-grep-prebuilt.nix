@@ -11,6 +11,7 @@
   fetchurl,
   autoPatchelfHook,
   patchelf,
+  onnxruntime,
   releaseAsset,
   runtimeDeps,
 }:
@@ -48,6 +49,12 @@ stdenvNoCC.mkDerivation {
     mkdir -p "$out"
     cp -a . "$out"/
     chmod -R u+w "$out"
+    # The archive carries `lib/libonnxruntime.so.1` as a symlink into the store
+    # that built it, because zg loads ONNX Runtime at run time from `../lib`
+    # rather than linking it. Rebind it to this evaluation's ONNX Runtime.
+    rm -f "$out/lib/libonnxruntime.so.1"
+    mkdir -p "$out/lib"
+    ln -s ${onnxruntime}/lib/libonnxruntime.so.1 "$out/lib/libonnxruntime.so.1"
     runHook postInstall
   '';
 

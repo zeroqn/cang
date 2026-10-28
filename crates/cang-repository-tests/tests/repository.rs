@@ -1462,15 +1462,19 @@ fn zg_is_built_from_the_zvec_grep_rust_workspace_with_a_prebuilt_asset_path() {
     // The Rust workspace, not the published npm package: it lives under `rust/`
     // with its own lock, and the stamp has to be substituted into the source
     // because the workspace version never moves (which is also why `cargoLock`
-    // reads that lock rather than a vendor hash).
+    // reads that lock rather than a vendor hash). The two crates the lock takes
+    // from zvec's llama.cpp fork are git dependencies, which `importCargoLock`
+    // cannot vendor without a hash each, so `outputHashes` has to be there too.
     for required in [
         "rustPlatform.buildRustPackage",
         "cargoRoot = \"rust\";",
         "buildAndTestSubdir = \"rust\";",
-        "cargoLock.lockFile = \"${finalAttrs.src}/rust/Cargo.lock\";",
+        "lockFile = \"${finalAttrs.src}/rust/Cargo.lock\";",
+        "outputHashes",
+        "\"llama-cpp-2-0.1.154\"",
+        "\"llama-cpp-sys-2-0.1.154\"",
         "zvec-rust-lib.nix",
         "ZVEC_LIB_DIR",
-        "ORT_LIB_LOCATION",
         "env!(\"CARGO_PKG_VERSION\")",
     ] {
         assert!(
@@ -1487,6 +1491,24 @@ fn zg_is_built_from_the_zvec_grep_rust_workspace_with_a_prebuilt_asset_path() {
             && ZVEC_RUST_LIB_NIX.contains("autoPatchelfHook"),
         "nix/pkgs/zvec-rust-lib.nix should reconstruct the pinned zvec C API release asset"
     );
+
+    // ONNX Runtime is loaded at run time (`ort`'s `load-dynamic`), not linked:
+    // `zg-engine`'s build script staggers its own download behind
+    // `ORT_DYLIB_PATH`, and the engine resolves `<exe>/../lib/libonnxruntime.so.1`
+    // first, so both the source build and the prebuilt consumer have to put the
+    // runtime there.
+    for required in ["ORT_DYLIB_PATH", "$out/lib/libonnxruntime.so.1"] {
+        assert!(
+            ZVEC_GREP_NIX.contains(required),
+            "nix/pkgs/zvec-grep.nix should mention {required}"
+        );
+    }
+    for required in ["onnxruntime", "libonnxruntime.so.1"] {
+        assert!(
+            ZVEC_GREP_PREBUILT_NIX.contains(required),
+            "nix/pkgs/zvec-grep-prebuilt.nix should rebind {required}"
+        );
+    }
 
     // The selector prefers cang's prebuilt asset when one is pinned for the
     // system and otherwise builds the same source, exactly like mesa and

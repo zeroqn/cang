@@ -748,6 +748,25 @@ workflow; refresh it by hand to re-pin an already published asset:
 nix develop --command ./scripts/update-zg-prebuilt.sh
 ```
 
+The workspace pins dependencies exactly, and three of them reach into
+`nix/pkgs/zvec-grep.nix`, so a revision bump can move more than `rev`/`srcHash`:
+
+- `zvec-rust`/`zvec-rust-build` (`=0.8.0` at the current revision) have to match
+  `zvecRustLib` in `nix/pins.nix`; the updater refuses a mismatch rather than
+  writing a pin whose build cannot resolve the C API it links.
+- `llama-cpp-2`/`llama-cpp-sys-2` come from zvec's llama.cpp fork as a git
+  dependency, which `importCargoLock` can only vendor with a hash per locked
+  package (`cargoLock.outputHashes`), and the fork's build verifies its llama.cpp
+  source against the SHA-256 pins in its own `build_support/source-lock.json`.
+  That tree is not vendored in the crate, so the derivation fetches the matching
+  `ggml-org/llama.cpp` archive itself; when a bump moves the revision in that
+  lock file, the `llamaCppSource` URL and hash move with it.
+- `ort` is built with `load-dynamic`: nothing links against ONNX Runtime, and
+  `zg` resolves `lib/libonnxruntime.so.1` relative to its own executable (or
+  `ORT_DYLIB_PATH`) at run time. The derivation installs that link, the prebuilt
+  consumer rebinds it to its own `pkgs.onnxruntime`, and `ORT_DYLIB_PATH` is what
+  keeps `zg-engine`'s build script from downloading a runtime mid-build.
+
 ### wl-cross-domain-proxy subtree
 
 `deps/wl-cross-domain-proxy` is a git subtree of
