@@ -324,11 +324,11 @@ in
     repo = "cang";
     tag = "alpha";
     version = "0.3.1";
-    revision = "88777bd1f722a77f96ebc378897fcc262470dac9";
+    revision = "4def5663a8694584db9784c74e9ad2e0c171f9ac";
     systems = {
       x86_64-linux = {
-        asset = "zg-0.3.1-88777bd1-x86_64-linux.tar.gz";
-        hash = "sha256-Tbr5Ssf9auHkzgiYXR808Kke8UvZIf7uBhIAhPtsnFY=";
+        asset = "zg-0.3.1-4def5663-x86_64-linux.tar.gz";
+        hash = "sha256-Z/dE86J0GjbHVsqgoWO0cXah9Kr9KOUENYMKdifeDpw=";
       };
     };
   };
