@@ -63,7 +63,8 @@ isolates libkrun.
 | `make BLK=1 NET=1 GPU=1 INPUT=1 TIMESYNC=1 FFI=1` (libkrun) | green, no warnings |
 | `cargo fmt --all --check` | clean |
 | `nix build .#cang .#cang-musl .#container` (rebased input) | green; cang's own test/doc-test hooks pass |
-| virtio-fs perf, `tools/rust-compile-bench` synthetic (2401 crates), alternating pairs | pre `61.8/55.0/70.0/71.0/72.5 s`, new `55.4/56.6/70.4/66.1/72.9 s`; medians 70.0 s vs 66.1 s, mean paired delta -1.9 % - **no regression** |
+| virtio-fs perf, `tools/rust-compile-bench` synthetic (2401 crates), 5 alternating pairs | pre `61.769/55.037/69.991/70.966/72.461 s` (mean 66.04 s, median 69.99 s) vs new `55.405/56.636/70.370/66.089/72.944 s` (mean 64.29 s, median 66.09 s): mean paired delta **-2.6 %**, per-pair `-10.3 %, +2.9 %, +0.5 %, -6.9 %, +0.7 %`, `fs_worker` 22-28 % of a core in both - **no regression**, the spread is host noise (absolute level drifts 55-73 s between batches) |
+| two runs discarded | the `23:07` window (85.4 s rebased, 72.2 s control) ran under a 1 Hz log-copying watcher and is excluded, not averaged in |
 | fs opcode histogram at 300 001 requests (both arms) | `FLUSH 2`, `lookup ... 0 negative`, `LOOKUP 39.09 %` (vs `FLUSH 2`, `0 negative`, `39.22 %` on the control) - the no-flush and negative-entry levers survived |
 | `tools/chromium-cang-smoke --waypipe` | PASS - venus `ANGLE (AMD, Vulkan 1.4.343 (Virtio-GPU Venus (RADV NAVI33)), venus)`, host frame 100 928 pattern px, renderer overlay 4 613 px, control run 0 px |
 | `tools/chromium-cang-smoke --waypipe --software-renderer` | PASS - llvmpipe presented, frame 117 344 px, renderer overlay 3 995 px |
