@@ -22,11 +22,11 @@
     "libkrun-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1793080191,
-        "narHash": "sha256-YoqmEynLlCbBPVKaOlYmoDlyHacmb4e86D7qg7lckik=",
+        "lastModified": 1793636732,
+        "narHash": "sha256-LMpKhZXHyXGmKMgF2g6pVx0Rehj6EnBLU73rYx5m8so=",
         "owner": "zeroqn",
         "repo": "libkrun",
-        "rev": "e8a771592ec78e5041f8d3abe44a37572a73a977",
+        "rev": "b722d6910748e27359c82bcf6d127bd1ad5c7f05",
         "type": "github"
       },
       "original": {
@@ -131,11 +131,11 @@
     "rutabaga-gfx-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790825541,
-        "narHash": "sha256-5idyMkTma39FVJU1QGpMA4/IcqafNrukr0Spa2RLVko=",
+        "lastModified": 1793636630,
+        "narHash": "sha256-a2ZB1sI1yScH8FXnnRX5K5sbNLgRb7RuTcuTHOEPSfA=",
         "owner": "zeroqn",
         "repo": "rutabaga_gfx",
-        "rev": "d8479a1edb560228a55a4e6fd5817145c39e99d9",
+        "rev": "2fd63c700afb31de5c4374e385f7dff7549b0664",
         "type": "github"
       },
       "original": {
