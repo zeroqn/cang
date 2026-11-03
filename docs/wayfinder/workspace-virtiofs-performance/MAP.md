@@ -340,6 +340,24 @@ of every request to zero.
   stop the guest honouring file capabilities. Numbers, instrumentation and the open ladder:
   [note 40](notes/40-cache-symlinks-shipped.md).
 
+## Decided (2026-11-04): no `/nix` export, the host overlay already is the two layers
+
+The store's two-layer requirement - reuse the workspace's nix cache, still pick up the
+packages a *new* cang image brings - is met by the shipped host overlay: `lowerdir` is the
+new image's snapshot, the workspace upper is kept across image moves and cloned into the
+new generation (`seed_from_previous`), and the old store DB is parked for the guest to
+merge. Cost is a one-time reflink clone (0 bytes, ~10 s) when the image changes.
+
+Exporting the layers separately and merging them **in the guest** was implemented and
+measured, and it is blocked by the guest kernel, not by cang: overlayfs refuses a FUSE
+mount as upper (`overlayfs: upper fs does not support tmpfile`, `... does not support
+RENAME_WHITEOUT`, `failed to set xattr on upper`), while the same option string over a
+tmpfs upper mounts fine in the same guest. Reopening it means `O_TMPFILE` + whiteout
+support in the fork's passthrough, or the server-side union. See
+[note 43](notes/43-nix-export-guest-overlay-blocked.md); the two research notes
+([41](notes/41-nix-export-host-plan.md), [42](notes/42-nix-export-guest-and-fork-facts.md))
+hold the code-level plan if that work is ever scheduled.
+
 ## Withdrawn / superseded
 
 - **The worker pool** (ticket 04): readdirplus is the one class the
