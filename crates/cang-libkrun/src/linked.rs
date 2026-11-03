@@ -370,6 +370,17 @@ impl LibkrunApi for LinkedLibkrunApi {
         }
     }
 
+    fn fs_device_set_cache_symlinks(&mut self, handle: Handle, enabled: bool) -> Result<()> {
+        match self.slots.get_mut(handle) {
+            Some(Slot::FsDevice(device)) => {
+                device.set_cache_symlinks(enabled);
+                Ok(())
+            }
+            Some(_) => bail!("libkrun fs device handle {handle} holds a different object kind"),
+            None => bail!("libkrun fs device handle {handle} is not live"),
+        }
+    }
+
     fn fs_device_set_negative_entry(
         &mut self,
         handle: Handle,

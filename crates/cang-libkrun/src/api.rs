@@ -52,6 +52,7 @@ pub trait LibkrunApi {
     fn fs_device_set_worker_threads(&mut self, device: Handle, threads: usize) -> Result<()>;
     fn fs_device_set_zero_message_open(&mut self, device: Handle, enabled: bool) -> Result<()>;
     fn fs_device_set_no_flush(&mut self, device: Handle, enabled: bool) -> Result<()>;
+    fn fs_device_set_cache_symlinks(&mut self, device: Handle, enabled: bool) -> Result<()>;
     fn fs_device_set_negative_entry(
         &mut self,
         device: Handle,

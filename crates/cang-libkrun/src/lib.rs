@@ -95,6 +95,33 @@ pub const CANG_FS_NO_FLUSH: bool = true;
 /// anything else is refused rather than guessed at).
 pub const CANG_FS_NO_FLUSH_ENV: &str = "CANG_FS_NO_FLUSH";
 
+/// Whether cang asks the share to advertise `FUSE_CACHE_SYMLINKS` by default.
+///
+/// The flag lets the guest kernel keep a symlink's target in the inode and answer
+/// a repeated resolution of that path without a `READLINK`. `CACHE_SYMLINKS` is
+/// defined in libkrun's fuse bindings and was never advertised, so every
+/// resolution of the same symlink cost a FUSE round trip, and a FUSE round trip
+/// costs the same per request whatever opcode it carries.
+///
+/// Measured through cang on 2026-11-03, defaults otherwise unchanged, the same
+/// workload on both sides of each pair (READ/LOOKUP/GETXATTR identical): a
+/// 600-exec loop 11,522 -> 5,973 requests (READLINK 5,242 -> 95), 1500 `/nix`
+/// tool reads 29,350 -> 10,567 (18,941 -> 530), 2000 `/workspace` reads 38,230 ->
+/// 12,220 (24,442 -> 93), 200 compiler-cache write+rename+read rounds 22,854 ->
+/// 14,773 (7,666 -> 95), and 200 append+stat rounds 11,861 -> 7,005 (5,278 ->
+/// 96). READLINK was 35-57% of every one of those request streams.
+///
+/// The one semantic it gives up: a symlink target the *host* retargets stays
+/// stale in the guest for the share's `entry_timeout` (5 s), which is the same
+/// window [`CANG_FS_ZERO_MESSAGE_OPEN`] already exposes file contents to. A path
+/// whose target never changes - every `/nix/store` entry - pays nothing.
+/// `CANG_FS_CACHE_SYMLINKS=0|1` overrides the default per launch.
+pub const CANG_FS_CACHE_SYMLINKS: bool = true;
+
+/// Env var that overrides [`CANG_FS_CACHE_SYMLINKS`] (`0`/`false` or `1`/`true`;
+/// anything else is refused rather than guessed at).
+pub const CANG_FS_CACHE_SYMLINKS_ENV: &str = "CANG_FS_CACHE_SYMLINKS";
+
 /// How long cang lets the guest cache the answer "this name does not exist".
 ///
 /// A FUSE lookup that finds nothing was answered `-ENOENT`, which the kernel

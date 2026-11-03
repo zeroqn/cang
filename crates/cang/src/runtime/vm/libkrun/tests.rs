@@ -60,6 +60,7 @@ enum Call {
     FsDeviceSetWorkerThreads(usize, usize),
     FsDeviceSetZeroMessageOpen(usize, bool),
     FsDeviceSetNoFlush(usize, bool),
+    FsDeviceSetCacheSymlinks(usize, bool),
     FsDeviceSetNegativeEntry(usize, bool, u64),
     FsDeviceSetOpcodeStats(usize, bool),
     BlockDeviceNew(usize, String, String, bool),
@@ -286,6 +287,11 @@ impl LibkrunApi for FakeLibkrunApi {
         self.checked("krun_fs_device_set_no_flush")
     }
 
+    fn fs_device_set_cache_symlinks(&mut self, device: usize, enabled: bool) -> Result<()> {
+        self.record(Call::FsDeviceSetCacheSymlinks(device, enabled));
+        self.checked("krun_fs_device_set_cache_symlinks")
+    }
+
     fn fs_device_set_negative_entry(
         &mut self,
         device: usize,
@@ -502,6 +508,7 @@ fn config() -> LaunchConfig {
         zero_copy_shm: false,
         zero_message_open: None,
         no_flush: None,
+        cache_symlinks: None,
         negative_entry_millis: None,
         wayland: false,
         new_perms: crate::runtime::launch::config::GuestPermissions::default(),
@@ -702,6 +709,7 @@ fn fake_api_records_direct_libkrun_v2_call_order() {
             Call::FsDeviceSetWorkerThreads(ROOTFS, cang_libkrun::CANG_FS_WORKER_THREADS),
             Call::FsDeviceSetZeroMessageOpen(ROOTFS, cang_libkrun::CANG_FS_ZERO_MESSAGE_OPEN),
             Call::FsDeviceSetNoFlush(ROOTFS, cang_libkrun::CANG_FS_NO_FLUSH),
+            Call::FsDeviceSetCacheSymlinks(ROOTFS, cang_libkrun::CANG_FS_CACHE_SYMLINKS),
             Call::FsDeviceSetNegativeEntry(
                 ROOTFS,
                 true,
@@ -861,6 +869,7 @@ fn drm_gpu_mode_enables_venus_render_server_flags_before_start() {
         zero_copy_shm: false,
         zero_message_open: None,
         no_flush: None,
+        cache_symlinks: None,
         negative_entry_millis: None,
         ..config()
     };

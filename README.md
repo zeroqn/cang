@@ -432,6 +432,13 @@ millions of them:
   answered with the protocol's negative entry instead of `-ENOENT`, so the guest
   can cache the answer for 250 ms (91.5% of a build's lookups are such misses;
   caching them removes 72% of the lookups, and `-ENOENT` can never be cached).
+- **cached symlink targets** - the share advertises `FUSE_CACHE_SYMLINKS`, so the
+  guest keeps a symlink's target instead of issuing a `READLINK` on every
+  resolution; repeated resolutions were 35-57% of the requests of the spawn-heavy
+  workloads measured here (process starts, `/nix` tool reads, workspace reads,
+  compiler-cache writes, journal appends) and 98-99% of them go away, cutting
+  those request streams by roughly a third to two thirds
+  (`docs/wayfinder/workspace-virtiofs-performance/notes/40-cache-symlinks-shipped.md`).
 
 What that costs is bounded visibility, and the bounds are:
 
@@ -446,12 +453,16 @@ What that costs is bounded visibility, and the bounds are:
 - Only a **host-side in-place rewrite** of a file the guest has already read
   (e.g. `echo >> file` from the host) can lag by up to 5 s, the `attr_timeout`
   the guest uses to revalidate attributes.
+- A symlink the **host retargets** can stay stale in the guest for up to 5 s, the
+  same entry validity that governs attributes; a target that never changes - every
+  `/nix/store` entry - is unaffected.
 
 Measured together on a cold 2401-crate `cargo build`: 171.4 s before, 116.3 s
 with all three (the host itself builds the same tree in 115 s), i.e. the share
 costs ~1% where it used to cost 49%. Each lever can be turned off for a launch
 that needs the strict semantics - `--fs=zero-message-open:off`,
-`--fs=no-flush:off`, `--fs=negative-entry:off` (or a millisecond value) - and the
+`--fs=no-flush:off`, `--fs=negative-entry:off` (or a millisecond value),
+`--fs=cache-symlinks:off` - and the
 matching `CANG_FS_*` environment variables do the same thing, which is what makes
 a one-binary A/B possible. `CANG_FS_STATS=1` makes the share log the opcode mix
 it served when the VM stops, for measuring a workload without a guest-side tracer.

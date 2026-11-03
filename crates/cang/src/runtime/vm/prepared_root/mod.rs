@@ -535,6 +535,7 @@ mod tests {
             zero_copy_shm: false,
             zero_message_open: None,
             no_flush: None,
+            cache_symlinks: None,
             negative_entry_millis: None,
             wayland: false,
             new_perms: crate::runtime::launch::config::GuestPermissions::default(),

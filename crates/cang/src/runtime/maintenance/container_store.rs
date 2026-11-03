@@ -159,6 +159,7 @@ fn maintenance_launch_config(
         zero_copy_shm: false,
         zero_message_open: None,
         no_flush: None,
+        cache_symlinks: None,
         negative_entry_millis: None,
         new_perms: crate::runtime::launch::config::GuestPermissions::default(),
         publish: Vec::new(),

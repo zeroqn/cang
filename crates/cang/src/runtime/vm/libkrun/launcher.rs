@@ -15,10 +15,10 @@ use crate::runtime::session::supervisor::rlimits::host_nofile_hard_limit;
 use crate::runtime::vm::gpu::GpuMode;
 
 use cang_libkrun::{
-    CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV, CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS, CANG_FS_NO_FLUSH,
-    CANG_FS_NO_FLUSH_ENV, CANG_FS_ROOT_TAG, CANG_FS_STATS_ENV, CANG_FS_WORKER_THREADS,
-    CANG_FS_ZERO_MESSAGE_OPEN, CANG_FS_ZERO_MESSAGE_OPEN_ENV, CANG_LIBKRUN_COMPAT_NET_FEATURES,
-    Handle, LibkrunApi,
+    CANG_FS_CACHE_SYMLINKS, CANG_FS_CACHE_SYMLINKS_ENV, CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV,
+    CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS, CANG_FS_NO_FLUSH, CANG_FS_NO_FLUSH_ENV,
+    CANG_FS_ROOT_TAG, CANG_FS_STATS_ENV, CANG_FS_WORKER_THREADS, CANG_FS_ZERO_MESSAGE_OPEN,
+    CANG_FS_ZERO_MESSAGE_OPEN_ENV, CANG_LIBKRUN_COMPAT_NET_FEATURES, Handle, LibkrunApi,
 };
 
 pub(in crate::runtime::vm::libkrun) const PROFILE_KERNEL_CMDLINE_APPEND: &str =
@@ -134,6 +134,37 @@ fn resolve_no_flush(cli_choice: Option<bool>, env_value: Option<&str>) -> bool {
             }
         },
         None => CANG_FS_NO_FLUSH,
+    }
+}
+
+/// Whether this launch asks the share to advertise `FUSE_CACHE_SYMLINKS`.
+fn cache_symlinks_enabled(cli_choice: Option<bool>) -> bool {
+    resolve_cache_symlinks(
+        cli_choice,
+        std::env::var(CANG_FS_CACHE_SYMLINKS_ENV).ok().as_deref(),
+    )
+}
+
+/// Resolve the symlink-cache knob: `--fs=cache-symlinks:on|off` over the
+/// environment, which overrides cang's default. An unparseable environment value
+/// keeps the default and says so, rather than running an arm the caller did not
+/// ask for.
+fn resolve_cache_symlinks(cli_choice: Option<bool>, env_value: Option<&str>) -> bool {
+    if let Some(choice) = cli_choice {
+        return choice;
+    }
+    match env_value {
+        Some(value) => match parse_env_flag(value) {
+            Some(enabled) => enabled,
+            None => {
+                tracing::warn!(
+                    value = %value,
+                    "{CANG_FS_CACHE_SYMLINKS_ENV} is not 0/1, ignoring it"
+                );
+                CANG_FS_CACHE_SYMLINKS
+            }
+        },
+        None => CANG_FS_CACHE_SYMLINKS,
     }
 }
 
@@ -416,6 +447,16 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
         setup(
             "krun_fs_device_set_no_flush",
             self.api.fs_device_set_no_flush(rootfs, no_flush),
+        )?;
+        let cache_symlinks = cache_symlinks_enabled(config.cache_symlinks);
+        tracing::debug!(
+            enabled = cache_symlinks,
+            "krun_fs_device_set_cache_symlinks: begin"
+        );
+        setup(
+            "krun_fs_device_set_cache_symlinks",
+            self.api
+                .fs_device_set_cache_symlinks(rootfs, cache_symlinks),
         )?;
         let negative_entry = negative_entry_timeout(config.negative_entry_millis);
         tracing::debug!(
@@ -892,6 +933,21 @@ fn no_flush_precedence_is_flag_then_env_then_default() {
     // The flag wins over the environment in both directions.
     assert!(!resolve_no_flush(Some(false), Some("1")));
     assert!(resolve_no_flush(Some(true), Some("0")));
+}
+
+#[test]
+fn cache_symlinks_precedence_is_flag_then_env_then_default() {
+    assert_eq!(resolve_cache_symlinks(None, None), CANG_FS_CACHE_SYMLINKS);
+    assert!(!resolve_cache_symlinks(None, Some("0")));
+    assert!(resolve_cache_symlinks(None, Some("1")));
+    // An unparseable environment value keeps the default rather than guessing.
+    assert_eq!(
+        resolve_cache_symlinks(None, Some("yes-please")),
+        CANG_FS_CACHE_SYMLINKS
+    );
+    // The flag wins over the environment in both directions.
+    assert!(!resolve_cache_symlinks(Some(false), Some("1")));
+    assert!(resolve_cache_symlinks(Some(true), Some("0")));
 }
 
 #[test]

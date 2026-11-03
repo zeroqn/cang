@@ -313,6 +313,33 @@ of every request to zero.
   can stay invisible to the guest for up to 250 ms (measured 74 ms). Numbers,
   dead ends and the ladder behind the lifetime: [note 35](notes/35-no-flush-and-negative-entry-shipped.md).
 
+## Shipped (2026-11-03)
+
+- Fork **`v2.0.0-cang.15`** (commit `eff52c5d`) advertises **`FUSE_CACHE_SYMLINKS`** behind
+  `FsDevice::set_cache_symlinks` / `krun_fs_device_set_cache_symlinks` (off by default; bindings
+  and `include/libkrun.h` regenerated, `CANG.md` updated). cang turns it on by default with
+  per-launch overrides (`CANG_FS_CACHE_SYMLINKS`, `--fs=cache-symlinks:on|off`).
+  The bit had been defined in the fork's `fuse.rs` since the crosvm import and never advertised,
+  so every repeated symlink resolution cost a `READLINK` round trip.
+- **Result**: `READLINK` 98-99% gone and total requests down 28-65% on the five workloads profiled
+  (600 execs 11,522 -> 7,737; 1500 `/nix` reads 29,350 -> 12,798; 2000 `/workspace` reads 38,230 ->
+  13,362; cache write+rename+read 22,854 -> 15,768; journal appends 11,861 -> 8,565), with `READ`,
+  `LOOKUP` and `GETXATTR` identical on both sides of every pair. Cost: a host-retargeted symlink
+  stays stale for `entry_timeout` (5 s), the same window zero-message open already trades.
+- **`entry_timeout` was priced and does not pay**: with the new per-device setters, entry 5 s -> 60 s
+  -> 300 s cuts `LOOKUP` 20-25% on `/nix` but the same requests return as `GETATTR` (333 -> 1,810),
+  net 0-5%, and the arm that raises both timeouts is no better than raising one. The remaining
+  `LOOKUP`s name *distinct* paths (1500 different store binaries, 2000 different files, each by a
+  fresh process), so no timeout can cache them. The setters stay (a store that repeats names can use
+  them), but they are not a lever and do not justify the `/nix` export on their own.
+- **Two facts recorded with it**: the levers are **connection-wide, not per mount** - `/`,
+  `/workspace`, `/nix` and `/home/dev/.codex` are grafts inside one root export and reach the guest
+  as `FUSE_ATTR_SUBMOUNT` sub-volumes (`INIT` is 1 in every arm), so a per-path lever needs a second
+  export; and the remaining **`GETXATTR` is entirely `security.capability`**, one request per
+  process start (`distinct=1` in all five profiles), removable only by `xattr = false`, which would
+  stop the guest honouring file capabilities. Numbers, instrumentation and the open ladder:
+  [note 40](notes/40-cache-symlinks-shipped.md).
+
 ## Withdrawn / superseded
 
 - **The worker pool** (ticket 04): readdirplus is the one class the

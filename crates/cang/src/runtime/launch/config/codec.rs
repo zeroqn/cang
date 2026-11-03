@@ -166,6 +166,9 @@ impl LaunchConfig {
         if let Some(enabled) = self.no_flush {
             push_field(&mut out, "no_flush", if enabled { "1" } else { "0" });
         }
+        if let Some(enabled) = self.cache_symlinks {
+            push_field(&mut out, "cache_symlinks", if enabled { "1" } else { "0" });
+        }
         if let Some(millis) = self.negative_entry_millis {
             push_field(&mut out, "negative_entry_millis", &millis.to_string());
         }
@@ -404,6 +407,7 @@ impl LaunchConfig {
                     | "zero_copy_shm"
                     | "zero_message_open"
                     | "no_flush"
+                    | "cache_symlinks"
                     | "negative_entry_millis"
                     | "permissions"
                     | "workdir"
@@ -464,6 +468,7 @@ impl LaunchConfig {
         let zero_copy_shm = fields.get("zero_copy_shm").map(String::as_str) == Some("1");
         let zero_message_open = fields.get("zero_message_open").map(|value| value == "1");
         let no_flush = fields.get("no_flush").map(|value| value == "1");
+        let cache_symlinks = fields.get("cache_symlinks").map(|value| value == "1");
         let negative_entry_millis =
             match fields.get("negative_entry_millis") {
                 Some(value) => Some(value.parse::<u64>().map_err(|_| {
@@ -516,6 +521,7 @@ impl LaunchConfig {
             zero_copy_shm,
             zero_message_open,
             no_flush,
+            cache_symlinks,
             negative_entry_millis,
             new_perms,
             publish: publish.into_values().collect(),

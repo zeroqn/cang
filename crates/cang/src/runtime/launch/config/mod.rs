@@ -134,6 +134,7 @@ impl LaunchConfig {
             zero_copy_shm: spec.zero_copy_shm,
             zero_message_open: spec.zero_message_open,
             no_flush: spec.no_flush,
+            cache_symlinks: spec.cache_symlinks,
             negative_entry_millis: spec.negative_entry_millis,
             new_perms: spec.new_perms,
             publish: spec.publish.to_vec(),
