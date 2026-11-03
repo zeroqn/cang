@@ -113,7 +113,7 @@ in
     systems = {
       x86_64-linux = {
         asset = "waypipe-6cccb84b-x86_64-linux.tar.gz";
-        hash = "sha256-Kea6UcUGiVgFszJeHWMluECRHFeB/sqnXfuiDxvtomw=";
+        hash = "sha256-TF5ANVDctC/SMFRYzasqBBi26VSExVKA4UeCFaieMTA=";
       };
     };
   };
