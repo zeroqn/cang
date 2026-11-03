@@ -4,7 +4,8 @@
   # nixpkgs-unstable's cargo-deny: the advisory database and lock-file parsing
   # move with the Rust ecosystem, and 26.05's is behind.
   cargoDeny,
-  # nixpkgs-unstable's `wild`, the Rust linker the image also links with.
+  # nixpkgs-unstable's `wild-unwrapped`, the Rust linker the image also links
+  # with (the wrapped `wild` costs about a second per link).
   wild,
   krunInitBinary,
   libkrunfw,
@@ -13,6 +14,8 @@
 let
   # The same wrapper the image presets as the guest's Rust linker, so a `cargo
   # build` here and a `cargo build` in a cang guest link with wild identically.
+  # It appends `-fuse-ld=<wild>` after the caller's arguments, which is what
+  # beats the `-fuse-ld=lld` rustc adds on its own.
   clangWildWrapper = import ../lib/clang-wild-wrapper.nix { inherit pkgs wild; };
 in
 pkgs.mkShell {

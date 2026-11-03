@@ -326,8 +326,11 @@
           # already takes from that input.
           cargoDeny = zgPkgs.cargo-deny;
           # The guest's Rust linker (`clang_wild_wrapper`), from the same input
-          # as the Rust zg and the ONNX Runtime shim.
-          wild = zgPkgs.wild;
+          # as the Rust zg and the ONNX Runtime shim. `wild-unwrapped`, not
+          # `wild`: the latter is the same binary behind nixpkgs' bintools
+          # wrapper, which adds about a second to every link (see
+          # `nix/lib/clang-wild-wrapper.nix`).
+          wild = zgPkgs.wild-unwrapped;
           cangImage = mkImage rustPackages.cangMuslPackage;
           cangImageCiSccache = mkImage rustPackagesCiSccache.cangMuslPackage;
         in
@@ -419,9 +422,10 @@
           # step.
           bun = packages.bun;
           # The image ships nixpkgs-unstable's cargo-deny and its wild linker,
-          # so these contracts resolve the same packages.
+          # so these contracts resolve the same packages (`wild-unwrapped`: the
+          # bintools wrapper around `wild` costs a second per link).
           cargoDeny = unstablePkgs.cargo-deny;
-          wild = unstablePkgs.wild;
+          wild = unstablePkgs.wild-unwrapped;
           cangImageChecks = import ./nix/image/checks.nix {
             inherit
               pkgs
@@ -545,9 +549,9 @@
               # `cargo deny` follows the advisory database and its own lock-file
               # parser, so the lint gate uses nixpkgs-unstable's cargo-deny
               # instead of the 26.05 input's (0.19.6 -> 0.20.2). The Rust linker
-              # is the image's `wild`, from the same input.
+              # is the image's `wild-unwrapped`, from the same input.
               cargoDeny = unstablePkgs.cargo-deny;
-              wild = unstablePkgs.wild;
+              wild = unstablePkgs.wild-unwrapped;
               libkrunfw = pkgs.callPackage ./nix/pkgs/libkrunfw.nix {
                 inherit pins;
                 libkrunfwSrc = libkrunfw-src;
