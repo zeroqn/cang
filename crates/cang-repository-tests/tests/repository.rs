@@ -167,7 +167,7 @@ fn fork_sources_are_flake_inputs_grafted_into_the_workspace() {
         "rutabaga-gfx-src = {",
         "url = \"github:zeroqn/libkrun/cang\";",
         "url = \"github:zeroqn/libkrunfw/cang\";",
-        "url = \"github:zeroqn/rutabaga_gfx/v0.1.85-cang.1\";",
+        "url = \"github:zeroqn/rutabaga_gfx/cang\";",
         "rutabagaGfxSrc = rutabaga-gfx-src;",
         "flake = false;",
         "workspaceSrc = import ./nix/pkgs/workspace-src.nix {",

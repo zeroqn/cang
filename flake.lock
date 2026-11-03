@@ -140,7 +140,7 @@
       },
       "original": {
         "owner": "zeroqn",
-        "ref": "v0.1.85-cang.1",
+        "ref": "cang",
         "repo": "rutabaga_gfx",
         "type": "github"
       }

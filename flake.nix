@@ -68,13 +68,16 @@
     # `--override-input rutabaga-gfx-src "git+file://$PWD/deps/rutabaga_gfx"` for
     # a local patch.
     #
-    # The ref is a permanent tag (`v<upstream version>-cang.<n>`), not the `cang`
-    # branch: the branch is re-based onto each upstream main, so a
-    # `nix flake update` would move this pin to whatever the branch happens to
-    # be - and with it the revision every build compiles. Moving rutabaga means
-    # a new tag plus the matching submodule pointer, never a silent bump.
+    # The input follows the `cang` branch, like `libkrun-src` and `libkrunfw-src`,
+    # and `flake.lock` pins the revision. The fork also tags each shipped tip
+    # permanently (`v<upstream version>-cang.<n>`) because the branch is re-based
+    # onto each upstream main and cannot say which base a revision sits on: the
+    # lock's rev is the commit `v0.1.85-cang.1` names. A lock node cannot carry
+    # both a rev and a tag, so the tag is recorded here and in
+    # docs/maintenance.md rather than in `flake.lock`. Moving rutabaga means a
+    # new tag plus the matching submodule pointer, never a silent bump.
     rutabaga-gfx-src = {
-      url = "github:zeroqn/rutabaga_gfx/v0.1.85-cang.1";
+      url = "github:zeroqn/rutabaga_gfx/cang";
       flake = false;
     };
   };

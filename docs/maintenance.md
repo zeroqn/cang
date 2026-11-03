@@ -193,10 +193,13 @@ branch `cang`: upstream `main` plus `VIRGL_RENDERER_USE_VIDEO`,
 `VirglRendererFlags::use_video` and `RutabagaBuilder::set_use_video`.
 
 The fork tags each shipped tip permanently as `v<upstream version>-cang.<n>`
-(currently `v0.1.85-cang.1`). The branch itself is not the pin: it is re-based
-onto every upstream `main` move, so an input following `cang` would let a
-`nix flake update` move the revision every build compiles to whatever the branch
-happens to be.
+(currently `v0.1.85-cang.1`). The input follows the branch, so `flake.lock` pins
+a revision; the tag is what says which upstream base that revision sits on,
+because the branch is re-based onto every upstream `main` move. A lock node
+cannot carry a revision and a tag at once (`nix` rejects "contains both a commit
+hash and a branch/tag name", and a tag-only node is "unlocked ... checked by NAR
+hash"), so the tag is recorded here and in `flake.nix`'s comment: keep the
+lock's `locked.rev` equal to the commit the tag names.
 
 cang compiles it the way it compiles libkrun - from a checkout in `deps/`, not
 from the revision libkrun's own manifest names:
@@ -209,9 +212,9 @@ from the revision libkrun's own manifest names:
 - `rutabaga-gfx-src` is the **flake input** a Nix build compiles: the revision
   arrives in `flake.lock`, and `nix/pkgs/workspace-src.nix` grafts it into
   `deps/rutabaga_gfx` for the same reason libkrun is an input (a flake's own
-  source cannot carry submodule contents). Its `url` names the permanent tag
-  (`github:zeroqn/rutabaga_gfx/v0.1.85-cang.1`), so the lock's `original.ref` is
-  that tag and its `rev` the tag's commit.
+  source cannot carry submodule contents). Its `url` follows the `cang` branch,
+  like the other two fork inputs, and its `locked.rev` is the commit the
+  permanent tag names.
 
 Three references name a rutabaga revision and move together: the
 `deps/rutabaga_gfx` **submodule pointer**, the `rutabaga-gfx-src` **input**, and
@@ -219,18 +222,18 @@ the rev in `deps/libkrun/src/devices/Cargo.toml` (twice: `[dependencies]` and
 `[target.'cfg(target_os = "linux")'.dependencies]`). That last one is libkrun's
 own default, used by the fork's own builds and rolling releases, so it must stay
 at a commit that has the flag even though cang's build patches over it. A new
-upstream base adds a fourth: the permanent tag the input follows.
+upstream base adds a fourth: the permanent tag naming that tip.
 
 A rutabaga update is therefore: rebase the fork's `cang` branch onto the new
 upstream `main` and push it, cut and push the permanent tag for that tip
 (`git -C deps/rutabaga_gfx tag -a v<upstream version>-cang.<n> <sha>`, its
-message naming the upstream base and the fork patch), bump the tag in
-`flake.nix`'s `rutabaga-gfx-src` url, fetch the submodule and check out the same
-commit (`git -C deps/rutabaga_gfx fetch && git -C deps/rutabaga_gfx checkout
-<sha>`), `git add deps/rutabaga_gfx`, move libkrun's rev to that commit as a
-libkrun fork commit and follow "Updating the libkrun fork" above, then
-`nix flake update rutabaga-gfx-src`, refresh `Cargo.lock` and the `cargoDeps`
-vendor hash. `krunInitCargoDeps` does not move: the musl init blob's lock has no
+message naming the upstream base and the fork patch), fetch the submodule and
+check out the same commit (`git -C deps/rutabaga_gfx fetch && git -C
+deps/rutabaga_gfx checkout <sha>`), `git add deps/rutabaga_gfx`, move libkrun's
+rev to that commit as a libkrun fork commit and follow "Updating the libkrun
+fork" above, then `nix flake update rutabaga-gfx-src` (it re-pins the lock to
+the branch head - check that revision is the tag's commit), refresh `Cargo.lock`
+and the `cargoDeps` vendor hash. `krunInitCargoDeps` does not move: the musl init blob's lock has no
 rutabaga. A *local* rutabaga patch needs no fork commit, no tag and no hash
 refresh - the in-tree `cargo` build already reads the submodule, and
 `--override-input rutabaga-gfx-src "git+file://$PWD/deps/rutabaga_gfx"` covers a
