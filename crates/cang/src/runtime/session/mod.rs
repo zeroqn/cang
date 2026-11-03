@@ -187,6 +187,14 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                 nix_overlay::NixOverlayLease::acquire(plan.state_layout.root_dir(), lease.handle())
             })?;
             profiler.record_metadata(
+                "nix_overlay_seed",
+                match nix_overlay_lease.seed() {
+                    nix_overlay::UpperSeedOutcome::Reused => "reused",
+                    nix_overlay::UpperSeedOutcome::Fresh => "fresh",
+                    nix_overlay::UpperSeedOutcome::Seeded => "seeded",
+                },
+            );
+            profiler.record_metadata(
                 "nix_overlay_lowerdir",
                 nix_overlay_lease.intent().lowerdir.display().to_string(),
             );

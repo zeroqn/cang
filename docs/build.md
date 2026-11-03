@@ -39,12 +39,23 @@ re-hash it. `.#cang-musl` likewise keeps `pkgsStatic`'s rust platform, which is
 what carries a rustc and std for its musl target.
 
 The Rust linker is `clang_wild_wrapper` (`nix/lib/clang-wild-wrapper.nix`):
-`clang -fuse-ld=<wild>/bin/wild`, with `wild` from nixpkgs-unstable. The image
-presets it as `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` and the dev shell
-presets the same variable for its own host triple, so identical links happen in a
-guest and on the host. `cargo-deny` for the lint gate (and in the image) is also
-nixpkgs-unstable's, because the advisory database and lock-file parsing move with
-the ecosystem.
+`clang "$@" -fuse-ld=<wild>/bin/wild`, with `wild-unwrapped` from
+nixpkgs-unstable. The image presets it as
+`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` and the dev shell presets the same
+variable for its own host triple, so identical links happen in a guest and on the
+host. The flag follows the caller's arguments because it has to: rustc enables
+its `lld` linker feature by default and appends `-fuse-ld=lld` itself, and
+`clang` honours the last `-fuse-ld` it is given, so leading with `-fuse-ld` would
+leave every Rust link on the toolchain's `rust-lld` without saying so. Driving
+`wild` this way is also the faster choice: the `cang` debug binary links in
+0.38 s with `wild` against 0.65 s with `rust-lld` (binutils `ld` needs 5.7 s),
+and a cold `cargo build --workspace --all-targets` spends 20 s linking rather
+than 25 s. It is `wild-unwrapped`, not `pkgs.wild`: the latter is the same binary
+behind nixpkgs' bintools wrapper, whose flag expansion adds about a second to
+every link - 233 s of link time over that same cold build instead of 20 s - which
+is why the image and the dev shell both take the unwrapped package. `cargo-deny`
+for the lint gate (and in the image) is also nixpkgs-unstable's, because the
+advisory database and lock-file parsing move with the ecosystem.
 
 The image sets that linker, `RUST_SRC_PATH` and `LIBCLANG_PATH` in its `Env`
 (`nix/image/config.nix`), and `IMAGE_CANG_ENV_ALLOWLIST` in
@@ -282,3 +293,100 @@ object is present in the upperdir or not found there. This is store-layer
 evidence only, not root-cause proof: absence from the upperdir is not proof that
 lower image metadata is correct or that the lower image is at fault. It is
 diagnostic only and never repairs or mutates the Nix DB.
+
+## `/nix` store generations and reconciliation
+
+A workspace `/nix` is an overlay whose `upper` survives image generations while
+its `lowerdir` is one image. Two mechanisms keep that pair coherent; the first
+prevents the drift, the second heals it if something else creates it.
+
+### Seeding a new generation (host)
+
+When `cang` acquires the workspace overlay lease and the image digest or
+`lowerdir` differs from the recorded generation, it does not reuse the upper as
+is. It clones the previous upper — a `btrfs subvolume snapshot` when both are on
+btrfs (constant time, extents shared, so generations cost no extra data), and a
+hardlink clone otherwise (no data copied, one inode per entry) — so every
+substituted object stays available without being downloaded again. It then:
+
+- parks the previous generation's DB at `var/nix/.cang-previous-db` inside the
+  upper (the guest sees `/nix/var/nix/.cang-previous-db`),
+- installs the new image's own DB as `var/nix/db`, so the live DB matches the
+  `lowerdir` that is about to be mounted,
+- drops stale `var/nix/daemon-socket` and `var/nix/temproots`,
+- retires the previous upper and rebuilds an empty overlay workdir.
+
+The new generation is a **clone of the previous upper**, never a fresh start, so
+every store object the workspace already holds stays usable and nothing is
+re-downloaded. `--profile` reports which happened as
+`nix_overlay_seed: fresh | reused | seeded`.
+
+The upper is deliberately a plain directory, not a btrfs subvolume: overlayfs
+requires `upperdir` and `workdir` to be on the same filesystem, and a btrfs
+subvolume has its own `st_dev`, so a subvolume upper makes the guest's first
+write to a layered path fail with `EXDEV`. Extent sharing comes from the clone
+instead, which prefers the cheapest mechanism per file:
+
+- a **hardlink** where the kernel allows it (one inode, no data);
+- else a **reflink** (`ioctl(FICLONE)`, shared extents, no data) — this is what
+  carries the store, because `fs.protected_hardlinks` (the kernel default)
+  refuses to hardlink a file the caller does not own, and after a guest has run
+  every store object in the upper belongs to its uid;
+- else a plain copy.
+
+Retiring the previous generation is best effort for the same reason: its
+directories belong to the guest's uid, so when they cannot be deleted (or a VM
+is still using them) they are renamed aside as `upper.retired.<timestamp>` and
+reclaimed on a later run.
+
+The live DB is the new image's, and the previous generation's is parked at
+`/nix/var/nix/.cang-previous-db` inside the upper. Guest-init merges it before
+starting `nix-daemon`, so Nix references the cloned store objects again:
+`cang-nix-store-repair --import-db /nix/var/nix/.cang-previous-db/db.sqlite
+--purge-only` copies the parked rows into the live DB (a union, Nix's own
+schema, `Refs` included) and then deregisters rows whose object did not survive
+the image move — entirely offline, because re-fetching what went with the old
+image is the download the seed exists to avoid. The parked copy is removed after
+a successful merge.
+
+Guest-init then merges the parked DB into the live one (a union of Nix's own
+`ValidPaths`, `Refs` and `DerivationOutputs` rows) and deregisters the rows whose
+store object went with the old image — offline, before `nix-daemon` starts. This
+is why a merged generation costs no network: absence there means "the old image
+supplied it", not "it went missing".
+
+### Reconciling a drifting store
+
+If the merged DB still names a path the merged store lacks — a store emptied by
+something other than an image move — guest-init runs the reconciler before it
+starts the daemon, by calling:
+
+```bash
+cang-nix-store-repair
+```
+
+For every registered-but-absent path it first fetches the object into a scratch
+store and copies it into `/nix/store`, then verifies it with
+`nix-store --verify-path`. The DB row already carries the right `narHash`, so
+this restores consistency without disturbing the workspace upper cache, without
+refetching the image closure, and without losing `Refs` edges. Only a path no
+substituter can supply is deregistered (`Refs`, `DerivationOutputs` and
+`ValidPaths` rows in one transaction) so Nix substitutes or rebuilds it on next
+use instead of trusting a stale row. Present-but-unregistered paths are reported
+and left alone: they are inert, and Nix reclaims them when it substitutes over
+them.
+
+```bash
+cang-nix-store-repair --dry-run          # report drift, repair nothing
+cang-nix-store-repair --scratch /var/tmp/repair --keep-scratch
+cang-nix-store-repair --import-db /nix/var/nix/.cang-previous-db/db.sqlite --purge-only
+```
+
+The validity and presence sets are read from the Nix DB and a directory scan
+(11 ms and 18 ms on a 1.8k-path guest store), not from `nix path-info --all`,
+which costs seconds on the same store — so a healthy boot pays almost nothing
+for the check.
+
+Exit status is `0` when nothing is left to repair, `1` when paths remain absent,
+and `69` when the store or the tools are unavailable. The reconciler never
+deletes store objects and never runs a GC.

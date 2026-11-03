@@ -491,6 +491,17 @@ let
         grep -F 'cang-guest-init internal podman service-wait' ${layers.dockerComposeCommandCompat}/bin/docker-compose
         grep -F 'cang-nix-store-db-check' ${layers.nixStoreDbCheck}/bin/cang-nix-store-db-check
         grep -F '/run/cang/nix-disk/upper' ${layers.nixStoreDbCheck}/bin/cang-nix-store-db-check
+        # The store reconciler guest-init runs from nix prep: restores registered-but-absent
+        # objects from the substituters and only deregisters what no cache can satisfy.
+        test -x ${layers.nixStoreRepair}/bin/cang-nix-store-repair
+        grep -F 'registered-but-absent' ${layers.nixStoreRepair}/bin/cang-nix-store-repair
+        grep -F -- '--verify-path' ${layers.nixStoreRepair}/bin/cang-nix-store-repair
+        grep -F 'delete from ValidPaths' ${layers.nixStoreRepair}/bin/cang-nix-store-repair
+        grep -F 'delete from Refs' ${layers.nixStoreRepair}/bin/cang-nix-store-repair
+        if grep -F -- '--ignore-liveness' ${layers.nixStoreRepair}/bin/cang-nix-store-repair; then
+          echo "cang-nix-store-repair must deregister rows, not delete store objects" >&2
+          exit 1
+        fi
         test -x ${pkgs.perf}/bin/perf
         test -x ${pkgs.strace}/bin/strace
         test -f ${pkgs.mesa}/lib/dri/swrast_dri.so
@@ -583,10 +594,23 @@ let
         # toolchain's rust-src component (a `std` tree, not the rustc source).
         test -f ${layers.rustSourceImage}/share/rust-src/std/src/lib.rs
         # The lint gate and the guest use the same, newer cargo-deny and the
-        # same Rust linker (wild, through the shared clang wrapper).
+        # same Rust linker (wild, through the shared clang wrapper). Two things
+        # about that linker are load-bearing and are asserted here rather than
+        # trusted: the wrapper puts `-fuse-ld=<wild>` *after* the caller's
+        # arguments, which is the only reason a Rust link does not end up on the
+        # toolchain's `rust-lld` (rustc appends `-fuse-ld=lld` itself and clang
+        # honours the last one), and the package is `wild-unwrapped`, not the
+        # bintools-wrapped `wild` that costs about a second per link.
         test -x ${cargoDeny}/bin/cargo-deny
         test -x ${wild}/bin/wild
+        case ${wild} in
+          *wild-unwrapped-wrapper*)
+            echo "the Rust linker must be wild-unwrapped, not the wrapped wild" >&2
+            exit 1
+            ;;
+        esac
         test -x ${layers.clangWildWrapper}/bin/clang_wild_wrapper
+        grep -F 'clang "$@" -fuse-ld=${wild}/bin/wild' ${layers.clangWildWrapper}/bin/clang_wild_wrapper
         grep -F 'clang_wild_wrapper' ${configSourceFile}
         grep -F 'clang-wild-wrapper.nix' ${layersSourceFile}
 

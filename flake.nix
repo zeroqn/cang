@@ -348,6 +348,10 @@
           virglrenderer = pkgs.virglrenderer;
           wl-cross-domain-proxy = wl-cross-domain-proxy;
           podman = pkgs.podman;
+          # The /nix store reconciler the image ships, buildable on its own: it runs
+          # against any Nix store (a host store whose DB names paths that are gone,
+          # or a guest store), and `cang` seeds new overlay generations around it.
+          cang-nix-store-repair = import ./nix/image/nix-store-repair.nix { inherit pkgs; };
           container = cangImage;
           container-ci-sccache = cangImageCiSccache;
           container-lib-policy-seccomp-json = containerLibPolicySeccompJson;

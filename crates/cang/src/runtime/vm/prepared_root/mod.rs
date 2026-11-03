@@ -198,6 +198,25 @@ impl PreparedRootCommands for HostPreparedRootCommands {
     }
 
     fn create_file_target(&self, path: &Path) -> Result<()> {
+        // A graft target that already exists is a valid mount point as it
+        // stands, and it is the normal case for `--guest-init`: the override is
+        // grafted at the store path the image itself ships, which is present
+        // inside the prepared root and read-only (0555).
+        //
+        // It must not be opened for writing. The prepared root's `/nix` is a
+        // bind of the host overlay, so `O_CREAT|O_WRONLY` on a file that lives in
+        // the overlay's lower layer asks overlayfs to copy it up into an upper on
+        // another filesystem, which fails with `EXDEV` — cang never boots with a
+        // `--guest-init` override whose store path the image already carries.
+        if path.is_file() {
+            return Ok(());
+        }
+        if path.symlink_metadata().is_ok() {
+            bail!(
+                "prepared-root bind target '{}' exists and is not a regular file",
+                path.display()
+            );
+        }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!(
@@ -845,5 +864,53 @@ mod tests {
 
         mount.target = "/workspace/".to_owned();
         assert!(prepared_target(&root, &mount.target).is_err());
+    }
+    /// The override is grafted at a store path the image already carries, so the
+    /// mount point exists and is read-only. Creating it must not open it for
+    /// writing: through the prepared root's overlay that asks for a copy-up and
+    /// fails with `EXDEV`, which used to make every `--guest-init` launch fail.
+    #[test]
+    fn existing_file_target_is_left_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let target = temp.path().join("nix/store/abc-cang/bin/cang-guest-init");
+        fs::create_dir_all(target.parent().expect("parent")).expect("parent dir");
+        fs::write(&target, "image guest-init").expect("existing target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).expect("read-only target");
+
+        HostPreparedRootCommands
+            .create_file_target(&target)
+            .expect("an existing file target is a valid mount point");
+
+        assert_eq!(
+            fs::read_to_string(&target).expect("content"),
+            "image guest-init",
+            "the existing mount point must not be rewritten"
+        );
+        assert_eq!(
+            fs::metadata(&target).expect("mode").permissions().mode() & 0o777,
+            0o555
+        );
+    }
+
+    #[test]
+    fn missing_file_target_is_created_and_a_directory_is_refused() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let target = temp.path().join("nix/store/abc-cang/bin/cang-guest-init");
+        HostPreparedRootCommands
+            .create_file_target(&target)
+            .expect("create");
+        assert!(target.is_file());
+
+        let directory = temp.path().join("nix/store/abc-cang/lib/not-a-file");
+        fs::create_dir_all(&directory).expect("dir");
+        let err = HostPreparedRootCommands
+            .create_file_target(&directory)
+            .expect_err("a directory cannot be a file mount point");
+        assert!(
+            format!("{err:#}").contains("is not a regular file"),
+            "unexpected error: {err:#}"
+        );
     }
 }

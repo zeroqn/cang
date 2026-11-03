@@ -13,6 +13,7 @@ const CONTAINER_NIX: &str = include_str!("../../../nix/image/container.nix");
 const IMAGE_CONFIG_NIX: &str = include_str!("../../../nix/image/config.nix");
 const IMAGE_CHECKS_NIX: &str = include_str!("../../../nix/image/checks.nix");
 const NIX_STORE_DB_CHECK_NIX: &str = include_str!("../../../nix/image/nix-store-db-check.nix");
+const NIX_STORE_REPAIR_NIX: &str = include_str!("../../../nix/image/nix-store-repair.nix");
 const PINS_NIX: &str = include_str!("../../../nix/pins.nix");
 const WORKSPACE_SRC_NIX: &str = include_str!("../../../nix/pkgs/workspace-src.nix");
 const CARGO_TOML: &str = include_str!("../../../Cargo.toml");
@@ -1135,6 +1136,155 @@ fn image_includes_manual_nix_store_db_checker() {
     }
 }
 
+/// The reconciler exists because a cang workspace `/nix` overlays an upper that
+/// outlives image generations: after an image move the copied-up DB can name a
+/// path only the old image supplied, and Nix never re-substitutes a valid row.
+/// The shape that matters is the order — restore the object first (the row
+/// already carries the right narHash and every `Refs` edge survives), and touch
+/// the DB only for a path no substituter can supply.
+#[test]
+fn image_includes_nix_store_reconciler_that_restores_before_deregistering() {
+    const GUEST_INIT_NIX_ROOT_RS: &str =
+        include_str!("../../../crates/cang-guest-init/src/guest_init/components/nix/root.rs");
+    const README: &str = include_str!("../../../README.md");
+    const BUILD_MD: &str = include_str!("../../../docs/build.md");
+
+    for required in [
+        r#"pkgs.writeShellScriptBin "cang-nix-store-repair""#,
+        "path-info --store \"$store\" --all",
+        "--verify-path",
+        "--dry-run",
+        "delete from Refs",
+        "delete from DerivationOutputs",
+        "delete from ValidPaths",
+        "registered-but-absent",
+        "present-but-unregistered",
+        "ok - every path in the Nix DB has its store object",
+        // A seeded generation merges the previous DB (a union, Nix's own schema)
+        // and purges rows whose object went with the old image, without fetching.
+        "--import-db",
+        "--purge-only",
+        "insert into ValidPaths (path, hash, registrationTime, deriver, narSize, ultimate, sigs, ca)",
+        "insert into Refs (referrer, reference)",
+        "attach database",
+        "select path from ValidPaths",
+    ] {
+        assert!(
+            NIX_STORE_REPAIR_NIX.contains(required),
+            "nix-store-repair.nix missing {required}"
+        );
+    }
+
+    let restore = NIX_STORE_REPAIR_NIX
+        .find("&& restore_object \"$path\"; then")
+        .expect("the repair loop should try restoring the object first");
+    let deregister = NIX_STORE_REPAIR_NIX
+        .find("if deregister \"$path\"; then")
+        .expect("the repair loop should deregister only as a fallback");
+    assert!(
+        restore < deregister,
+        "restoring the store object must be attempted before any DB row is dropped"
+    );
+
+    for forbidden in [
+        "--ignore-liveness",
+        "nix-collect-garbage",
+        "rm -rf /nix/store",
+        "nix store gc",
+    ] {
+        assert!(
+            !NIX_STORE_REPAIR_NIX.contains(forbidden),
+            "the reconciler must not delete store objects or collect garbage: {forbidden}"
+        );
+    }
+
+    assert!(
+        LAYERS.contains("nixStoreRepair = import ./nix-store-repair.nix { inherit pkgs; };"),
+        "layers.nix should build the reconciler"
+    );
+    assert!(
+        IMAGE_CHECKS_NIX.contains("layers.nixStoreRepair"),
+        "the image wrapper contracts should exercise the reconciler"
+    );
+
+    for required in [
+        r#"const PROFILE_REPAIR_STORE: &str = "nix-prep:repair-store";"#,
+        r#"command::find_on_path("cang-nix-store-repair")"#,
+        r#"command::run("cang-nix-store-repair", &args)"#,
+        r#"const PARKED_PREVIOUS_DB: &str = "/nix/var/nix/.cang-previous-db/db.sqlite";"#,
+        r#"vec!["--import-db", PARKED_PREVIOUS_DB, "--purge-only"]"#,
+    ] {
+        assert!(
+            GUEST_INIT_NIX_ROOT_RS.contains(required),
+            "guest-init nix prep should run the reconciler and tolerate its absence: missing {required}"
+        );
+    }
+    assert!(
+        GUEST_INIT_NIX_ROOT_RS.contains("std::fs::remove_dir_all(Path::new(PARKED_DB_DIR))"),
+        "a merged generation must drop the parked DB so it never becomes a second source of truth"
+    );
+    let mount = GUEST_INIT_NIX_ROOT_RS
+        .find("profiler.measure_result(PROFILE_MOUNT_OVERLAY")
+        .expect("internal prep should mount the overlay");
+    let repair = GUEST_INIT_NIX_ROOT_RS
+        .find("    repair_store(profiler)?;")
+        .expect("prep should reconcile the store");
+    let daemon = GUEST_INIT_NIX_ROOT_RS
+        .find("command::spawn_background(\"nix-daemon\", &[\"--daemon\"])")
+        .expect("prep should start the daemon");
+    assert!(
+        mount < repair && repair < daemon,
+        "the store must be consistent before the daemon starts"
+    );
+
+    for (label, source) in [("README.md", README), ("docs/build.md", BUILD_MD)] {
+        for required in ["cang-nix-store-repair", "registered-but-absent"] {
+            assert!(
+                source.contains(required),
+                "{label} should document the /nix store reconciler: missing {required}"
+            );
+        }
+    }
+
+    // The host seeds a new /nix overlay generation instead of reusing a DB that
+    // describes an older image: clone the previous upper (cache kept), install
+    // the new image's DB, park the previous generation's for the guest to merge.
+    const NIX_OVERLAY_RS: &str =
+        include_str!("../../../crates/cang/src/runtime/session/nix_overlay.rs");
+    for required in [
+        "enum UpperSeedOutcome",
+        "Seeded",
+        "Reused",
+        "Fresh",
+        "fn prepare_upper_with(",
+        "fn seed_from_previous(",
+        "PARKED_DB_DIR",
+        r#"const GENERATION_KEY: &str = "generation";"#,
+        "fn generation_of(",
+        "fn clone_tree(",
+        "fn reflink(",
+        "FICLONE",
+        "fn install_image_db(",
+        "fn retired_sibling(",
+        "requires `upperdir` and `workdir` to be on the same filesystem",
+        r#"for stale_state in ["daemon-socket", "temproots"]"#,
+        "fn make_dirs_writable(",
+    ] {
+        assert!(
+            NIX_OVERLAY_RS.contains(required),
+            "the /nix overlay seed is missing {required}"
+        );
+    }
+    for (label, source) in [("README.md", README), ("docs/build.md", BUILD_MD)] {
+        for required in ["btrfs", "seed"] {
+            assert!(
+                source.contains(required),
+                "{label} should document how a new image generation seeds /nix: missing {required}"
+            );
+        }
+    }
+}
+
 #[test]
 fn podman_wrapper_unsets_compat_env_before_execing_real_podman() {
     for required in [
@@ -1843,11 +1993,14 @@ fn one_pinned_fenix_rust_toolchain_serves_builds_the_devshell_and_the_image() {
 
     // The image's Rust linker is wild (nixpkgs-unstable), not mold, and its
     // cargo-deny is the same newer one the lint gate runs. The wrapper is shared
-    // with the dev shell, so both link the same way.
+    // with the dev shell, so both link the same way. Its `-fuse-ld` has to
+    // follow the caller's arguments: rustc appends `-fuse-ld=lld` of its own and
+    // clang honours the last one, so a wrapper that led with `-fuse-ld` would
+    // silently leave every Rust link on the toolchain's `rust-lld`.
     assert!(
         CLANG_WILD_WRAPPER_NIX
-            .contains(r#"exec ${pkgs.clang}/bin/clang -fuse-ld=${wild}/bin/wild "$@""#),
-        "clang_wild_wrapper should drive the wild linker"
+            .contains(r#"exec ${pkgs.clang}/bin/clang "$@" -fuse-ld=${wild}/bin/wild"#),
+        "clang_wild_wrapper should drive the wild linker, after the caller's arguments"
     );
     for source in [LAYERS, DEVSHELL_NIX] {
         assert!(
@@ -1908,5 +2061,12 @@ fn one_pinned_fenix_rust_toolchain_serves_builds_the_devshell_and_the_image() {
         );
     }
     assert!(FLAKE_NIX.contains("cargoDeny = zgPkgs.cargo-deny;"));
-    assert!(FLAKE_NIX.contains("wild = zgPkgs.wild;"));
+    // `wild-unwrapped`, not `wild`: nixpkgs' `wild` is the same binary behind a
+    // bintools wrapper whose flag expansion costs about a second per link, and
+    // the image and the dev shell both have to link with the real one.
+    assert!(
+        FLAKE_NIX.contains("wild = zgPkgs.wild-unwrapped;")
+            && FLAKE_NIX.contains("wild = unstablePkgs.wild-unwrapped;"),
+        "the guest and the dev shell have to link with wild-unwrapped"
+    );
 }

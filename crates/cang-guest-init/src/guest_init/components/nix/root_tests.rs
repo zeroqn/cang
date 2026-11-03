@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::guest_init::components::nix::root::{
     NixOperation, PreseedState, attempt_marker, classify_preseed_state, completion_sentinel,
     ensure_host_overlay_nix_is_directory, overlay_options, planned_host_overlay_operations,
-    planned_operations, planned_profile_labels, preseed_upper_with,
+    planned_operations, planned_profile_labels, preseed_upper_with, store_reconcile_args,
 };
 
 #[test]
@@ -21,6 +21,7 @@ fn nix_prep_operation_order_marks_ready_without_socket_wait() {
             NixOperation::MountDisk,
             NixOperation::PreseedUpper,
             NixOperation::MountOverlay,
+            NixOperation::RepairStore,
             NixOperation::CreateSocketDir,
             NixOperation::StartDaemon,
             NixOperation::WriteReadyStatus,
@@ -28,7 +29,8 @@ fn nix_prep_operation_order_marks_ready_without_socket_wait() {
     );
     assert!(pos(NixOperation::MountDisk) < pos(NixOperation::PreseedUpper));
     assert!(pos(NixOperation::PreseedUpper) < pos(NixOperation::MountOverlay));
-    assert!(pos(NixOperation::MountOverlay) < pos(NixOperation::CreateSocketDir));
+    assert!(pos(NixOperation::MountOverlay) < pos(NixOperation::RepairStore));
+    assert!(pos(NixOperation::RepairStore) < pos(NixOperation::CreateSocketDir));
     assert!(pos(NixOperation::StartDaemon) < pos(NixOperation::WriteReadyStatus));
 }
 
@@ -40,6 +42,7 @@ fn host_overlay_nix_prep_skips_raw_disk_and_guest_overlay_operations() {
         ops,
         vec![
             NixOperation::WriteRunningStatus,
+            NixOperation::RepairStore,
             NixOperation::CreateSocketDir,
             NixOperation::StartDaemon,
             NixOperation::WriteReadyStatus,
@@ -49,6 +52,7 @@ fn host_overlay_nix_prep_skips_raw_disk_and_guest_overlay_operations() {
     assert!(!ops.contains(&NixOperation::MountDisk));
     assert!(!ops.contains(&NixOperation::PreseedUpper));
     assert!(!ops.contains(&NixOperation::MountOverlay));
+    assert!(ops.contains(&NixOperation::RepairStore));
 }
 
 #[test]
@@ -105,6 +109,7 @@ fn nix_prep_profile_labels_stop_after_daemon_spawn() {
             "nix-prep:mount-disk",
             "nix-prep:preseed-upper",
             "nix-prep:mount-overlay",
+            "nix-prep:repair-store",
             "nix-prep:create-socket-dir",
             "nix-prep:start-daemon",
         ]
@@ -112,6 +117,8 @@ fn nix_prep_profile_labels_stop_after_daemon_spawn() {
     assert_eq!(labels.first(), Some(&"nix-prep:require-tools"));
     assert!(pos("nix-prep:mount-disk") < pos("nix-prep:preseed-upper"));
     assert!(pos("nix-prep:preseed-upper") < pos("nix-prep:mount-overlay"));
+    assert!(pos("nix-prep:mount-overlay") < pos("nix-prep:repair-store"));
+    assert!(pos("nix-prep:repair-store") < pos("nix-prep:create-socket-dir"));
     assert_eq!(labels.last(), Some(&"nix-prep:start-daemon"));
     assert!(!labels.iter().any(|label| label.contains("wait-socket")));
 }
@@ -358,4 +365,17 @@ impl PreseedHarness {
             work,
         }
     }
+}
+
+#[test]
+fn seeded_generation_imports_the_parked_db_and_never_fetches() {
+    assert_eq!(
+        store_reconcile_args(true),
+        vec![
+            "--import-db",
+            "/nix/var/nix/.cang-previous-db/db.sqlite",
+            "--purge-only"
+        ]
+    );
+    assert_eq!(store_reconcile_args(false), Vec::<&str>::new());
 }

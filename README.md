@@ -534,6 +534,15 @@ The container provides:
 - `cang-nix-store-db-check` for non-mutating live `/nix/store` vs Nix DB
   validity diagnostics, including cautious libkrun upperdir store-layer
   evidence when `/run/cang/nix-disk/upper` is visible
+- `cang-nix-store-repair` for reconciling the merged `/nix/store` with its own
+  Nix DB: guest-init runs it during `/nix` prep, before `nix-daemon` starts, and
+  it restores every registered-but-absent store object from the substituters
+  (keeping the workspace `/nix` overlay cache intact) before it will deregister
+  a row no cache can satisfy. When the host seeds a new image generation it also
+  merges the previous generation's Nix DB into the live one and purges only the
+  rows whose object went with the old image, which keeps every cached object
+  valid and needs no network; on a btrfs state root a generation is seeded by a
+  `btrfs` subvolume snapshot, otherwise by a hardlink clone
 - `rustc` and `rust-analyzer` wrappers that mask `/etc/ld-nix.so.preload` so
   both tools keep the default allocator
 - a `pi` wrapper that prepends a cang-owned runtime directory holding
@@ -568,10 +577,19 @@ The container provides:
 
 `clang_wild_wrapper` keeps the default linker policy in the image and avoids
 setting `RUSTFLAGS`, so existing Cargo config can still layer on top normally.
-The linker is `wild` (nixpkgs-unstable) and is pinned by path inside the wrapper,
-so it does not depend on `ld.wild` resolving through `PATH`; the repository's dev
-shell presets the same wrapper through `CARGO_TARGET_<TRIPLE>_LINKER`, so a link
-in a guest and a link in `nix develop` are the same command.
+It ends every link with `-fuse-ld=<wild>`, after whatever the caller passed:
+rustc enables its `lld` linker feature by default and appends `-fuse-ld=lld`
+itself, `clang` honours the last `-fuse-ld` it sees, and that ordering is what
+puts `wild` in charge of a `cargo build` in a guest and in `nix develop`. The
+linker is `wild-unwrapped` from nixpkgs-unstable - the same 0.11.0 binary as
+`pkgs.wild` without nixpkgs' bintools wrapper, whose flag expansion costs about a
+second per link - pinned by path inside the wrapper rather than resolved as
+`ld.wild` through `PATH`. It is the faster of the two for Rust links: the `cang`
+debug binary links in 0.38 s with `wild` against 0.65 s with `rust-lld`, and a
+cold `cargo build --workspace --all-targets` spends 20 s linking rather than
+25 s. The repository's dev shell presets the same wrapper through
+`CARGO_TARGET_<TRIPLE>_LINKER`, so a link in a guest and a link in `nix develop`
+are the same command.
 
 Container task launches use Podman `--userns=keep-id`; libkrun task launches
 use cang's keep-id helper namespace to provide the same `/workspace` ownership

@@ -20,6 +20,11 @@ const PROFILE_PREPARE_RUN_DIRS: &str = "nix-prep:prepare-run-dirs";
 const PROFILE_MOUNT_DISK: &str = "nix-prep:mount-disk";
 const PROFILE_PRESEED_UPPER: &str = "nix-prep:preseed-upper";
 const PROFILE_MOUNT_OVERLAY: &str = "nix-prep:mount-overlay";
+const PROFILE_REPAIR_STORE: &str = "nix-prep:repair-store";
+/// The cang host parks the previous /nix overlay generation's Nix DB here when
+/// it seeds the upper for a new image generation (`PARKED_DB_DIR` on the host).
+const PARKED_DB_DIR: &str = "/nix/var/nix/.cang-previous-db";
+const PARKED_PREVIOUS_DB: &str = "/nix/var/nix/.cang-previous-db/db.sqlite";
 const PROFILE_CREATE_SOCKET_DIR: &str = "nix-prep:create-socket-dir";
 const PROFILE_START_DAEMON: &str = "nix-prep:start-daemon";
 
@@ -34,6 +39,7 @@ pub(in crate::guest_init) enum NixOperation {
     MountDisk,
     PreseedUpper,
     MountOverlay,
+    RepairStore,
     CreateSocketDir,
     StartDaemon,
     WriteReadyStatus,
@@ -47,6 +53,7 @@ pub(in crate::guest_init) fn planned_operations() -> Vec<NixOperation> {
         NixOperation::MountDisk,
         NixOperation::PreseedUpper,
         NixOperation::MountOverlay,
+        NixOperation::RepairStore,
         NixOperation::CreateSocketDir,
         NixOperation::StartDaemon,
         NixOperation::WriteReadyStatus,
@@ -57,6 +64,7 @@ pub(in crate::guest_init) fn planned_operations() -> Vec<NixOperation> {
 pub(in crate::guest_init) fn planned_host_overlay_operations() -> Vec<NixOperation> {
     vec![
         NixOperation::WriteRunningStatus,
+        NixOperation::RepairStore,
         NixOperation::CreateSocketDir,
         NixOperation::StartDaemon,
         NixOperation::WriteReadyStatus,
@@ -72,6 +80,7 @@ pub(in crate::guest_init) fn planned_profile_labels() -> Vec<&'static str> {
         PROFILE_MOUNT_DISK,
         PROFILE_PRESEED_UPPER,
         PROFILE_MOUNT_OVERLAY,
+        PROFILE_REPAIR_STORE,
         PROFILE_CREATE_SOCKET_DIR,
         PROFILE_START_DAEMON,
     ]
@@ -208,6 +217,7 @@ pub(in crate::guest_init) fn run_prep(
         .context("failed to mount internal overlay at /nix")
     })?;
 
+    repair_store(profiler)?;
     profiler.measure_result(PROFILE_CREATE_SOCKET_DIR, || {
         fs::create_dir_all(Path::new("/nix/var/nix/daemon-socket"))
     })?;
@@ -215,6 +225,64 @@ pub(in crate::guest_init) fn run_prep(
         command::spawn_background("nix-daemon", &["--daemon"]).context("failed to start nix-daemon")
     })?;
     Ok(())
+}
+
+// The merged /nix is an overlay whose upper outlives image generations while its
+// lowerdir is one image. The host closes that gap when it seeds a new
+// generation: it clones the previous upper (so every substituted object stays
+// cached), installs the new image's DB and parks the previous generation's DB
+// here. This step then merges those registrations into the live DB and
+// deregisters the rows whose objects went with the old image — offline, before
+// the daemon starts and before any nix wrapper is handed a ready marker.
+//
+// Without a parked DB this is the drift repair: restore a registered-but-absent
+// object from the substituters, and only deregister a row no cache can satisfy.
+//
+// Best effort by design: a guest image older than this binary does not ship the
+// tool, a broken store must not stop the VM from booting, and the reconcile
+// only ever touches paths the DB already claims.
+fn repair_store(profiler: &mut impl ProfileRecorder) -> Result<()> {
+    profiler.measure_result(PROFILE_REPAIR_STORE, || {
+        if command::find_on_path("cang-nix-store-repair").is_none() {
+            eprintln!(
+                "cang-guest-init: warning: cang-nix-store-repair is not on PATH; skipping /nix store reconciliation"
+            );
+            return Ok(());
+        }
+        let parked_db = Path::new(PARKED_PREVIOUS_DB).is_file();
+        let args = store_reconcile_args(parked_db);
+        match command::run("cang-nix-store-repair", &args) {
+            Ok(()) => {
+                if parked_db {
+                    // The merge is idempotent, but once it succeeded the parked
+                    // copy is dead weight inside every future generation.
+                    if let Err(err) = std::fs::remove_dir_all(Path::new(PARKED_DB_DIR)) {
+                        eprintln!(
+                            "cang-guest-init: warning: failed to remove '{}': {err}",
+                            PARKED_DB_DIR
+                        );
+                    }
+                }
+            }
+            Err(err) => eprintln!(
+                "cang-guest-init: warning: /nix store reconciliation failed: {err:#}"
+            ),
+        }
+        Ok(())
+    })
+}
+
+/// A seeded generation ships the previous generation's DB next to the live one.
+/// Merging it is a union, and every path it registers is already on disk, so the
+/// right policy is purge-only: absence now means "went with the old image", and
+/// fetching it would be a download the user did not ask for. The plain drift
+/// repair keeps the restore-first policy.
+fn store_reconcile_args(parked_db: bool) -> Vec<&'static str> {
+    if parked_db {
+        vec!["--import-db", PARKED_PREVIOUS_DB, "--purge-only"]
+    } else {
+        Vec::new()
+    }
 }
 
 fn overlay_options(lower_dir: &Path, upper_dir: &Path, work_dir: &Path) -> String {
@@ -232,10 +300,11 @@ fn run_host_overlay_prep(profiler: &mut impl ProfileRecorder) -> Result<()> {
         Ok(())
     })?;
     profiler.measure_result(PROFILE_PREPARE_RUN_DIRS, || {
-        fs::create_dir_all(Path::new(RUN_DIR))
+        fs::create_dir_all(Path::new(RUN_DIR))?;
+        ensure_host_overlay_nix_is_directory(Path::new("/nix"))
     })?;
+    repair_store(profiler)?;
     profiler.measure_result(PROFILE_CREATE_SOCKET_DIR, || {
-        ensure_host_overlay_nix_is_directory(Path::new("/nix"))?;
         fs::create_dir_all(Path::new("/nix/var/nix/daemon-socket"))
             .context("failed to create nix-daemon socket directory on host-overlay /nix")
     })?;

@@ -18,6 +18,14 @@ use crate::runtime::launch::config::HostNixOverlay;
 use crate::runtime::session::rootfs::task::TaskRootfsHandle;
 
 const OVERLAY_DIR: &str = "nix-overlay";
+const SEED_TMP_DIR: &str = "upper.new";
+const SEED_STALE_DIR: &str = "upper.previous";
+const SEED_RETIRED_PREFIX: &str = "upper.retired.";
+/// Where a seeded generation parks the previous one's Nix DB so the guest can
+/// merge it: `var/nix/.cang-previous-db` inside the overlay upper, which the
+/// guest sees as `/nix/var/nix/.cang-previous-db`.
+pub(crate) const PARKED_DB_DIR: &str = ".cang-previous-db";
+const GENERATION_KEY: &str = "generation";
 const UPPER_DIR: &str = "upper";
 const WORK_DIR: &str = "work";
 const MERGED_DIR: &str = "merged";
@@ -52,6 +60,7 @@ impl NixOverlayPaths {
 
 pub(crate) struct NixOverlayLease {
     intent: HostNixOverlay,
+    seed: UpperSeedOutcome,
     _lock_file: File,
 }
 
@@ -84,15 +93,21 @@ impl NixOverlayLease {
         })?;
 
         let intent = intent_from_task_rootfs(&paths, handle)?;
+        let seed = prepare_upper_with(&paths, &intent, &HostUpperSeedCommands)?;
         record_state(&paths.lease_state, &intent)?;
         Ok(Self {
             intent,
+            seed,
             _lock_file: lock_file,
         })
     }
 
     pub(crate) fn intent(&self) -> &HostNixOverlay {
         &self.intent
+    }
+
+    pub(crate) fn seed(&self) -> UpperSeedOutcome {
+        self.seed
     }
 }
 
@@ -252,6 +267,447 @@ fn intent_from_task_rootfs(
     })
 }
 
+/// What `prepare_upper` did to the workspace overlay upper for this launch.
+///
+/// A workspace `/nix` overlays one image generation's `lowerdir` with an upper
+/// that outlives it. Reusing the upper across generations is what keeps every
+/// substituted object cached, but it also leaves the DB describing a store that
+/// no longer exists: the copied-up DB still claims paths only the previous
+/// image supplied, and Nix never re-substitutes a path it calls valid. The seed
+/// keeps the cache and removes the contradiction — the new generation is a
+/// clone of the previous upper (hardlinks, or a btrfs snapshot), and its DB is
+/// the new image's, with the previous generation's registrations parked for the
+/// guest to merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpperSeedOutcome {
+    /// Same image generation as the recorded one; the upper is used as is.
+    Reused,
+    /// No upper existed yet; an empty one was created.
+    Fresh,
+    /// A new image generation: the previous upper was cloned, its DB parked and
+    /// the new image's DB installed.
+    Seeded,
+}
+
+fn prepare_upper_with(
+    paths: &NixOverlayPaths,
+    intent: &HostNixOverlay,
+    commands: &impl UpperSeedCommands,
+) -> Result<UpperSeedOutcome> {
+    if !paths.upperdir.is_dir() {
+        commands.create_empty_upper(&paths.upperdir)?;
+        return Ok(UpperSeedOutcome::Fresh);
+    }
+    let prior = fs::read_to_string(&paths.lease_state)
+        .ok()
+        .map(|text| parse_state(&text));
+    let prior_generation = prior
+        .as_ref()
+        .and_then(|state| state.get(GENERATION_KEY))
+        .map(String::as_str);
+    if prior_generation == Some(generation_of(intent).as_str()) {
+        return Ok(UpperSeedOutcome::Reused);
+    }
+    seed_from_previous(paths, intent, commands)?;
+    Ok(UpperSeedOutcome::Seeded)
+}
+
+fn generation_of(intent: &HostNixOverlay) -> String {
+    format!("{}|{}", intent.image_digest, intent.lowerdir.display())
+}
+
+fn seed_from_previous(
+    paths: &NixOverlayPaths,
+    intent: &HostNixOverlay,
+    commands: &impl UpperSeedCommands,
+) -> Result<()> {
+    let tmp = paths.root.join(SEED_TMP_DIR);
+    let stale = paths.root.join(SEED_STALE_DIR);
+    // A previous seed that died mid-swap leaves these behind; they are only
+    // ever copies, so dropping them loses nothing. Reclaiming a *used*
+    // generation is best effort: after a guest ran nix-daemon it holds
+    // directories owned by the guest's uid, which an unprivileged host process
+    // cannot delete (a btrfs subvolume delete is the exception, and the
+    // hardlink fallback renames them aside instead).
+    commands.remove_tree(&tmp)?;
+    reclaim_stale_generations(paths, &stale, commands);
+
+    commands.clone_upper(&paths.upperdir, &tmp)?;
+
+    let var_nix = tmp.join("var/nix");
+    let db = var_nix.join("db");
+    // Park the previous generation's DB for the guest to merge: its rows are what
+    // keep the cloned store objects addressable by Nix. The clone does not copy
+    // `var/nix/db` (that is live daemon state), so park it from the live upper.
+    let previous_db = paths.upperdir.join("var/nix/db");
+    if previous_db.is_dir() {
+        let parked = var_nix.join(PARKED_DB_DIR);
+        commands.remove_tree(&parked)?;
+        fs::create_dir_all(&parked).with_context(|| {
+            format!(
+                "failed to create the parked /nix DB directory '{}'",
+                parked.display()
+            )
+        })?;
+        for name in ["db.sqlite", "db.sqlite-wal", "schema"] {
+            let from = previous_db.join(name);
+            if from.is_file() {
+                fs::copy(&from, parked.join(name)).with_context(|| {
+                    format!(
+                        "failed to park the previous /nix DB '{}' as '{}'",
+                        from.display(),
+                        parked.display()
+                    )
+                })?;
+            }
+        }
+    }
+    commands.install_image_db(&intent.lowerdir, &db)?;
+    // Stale daemon state must not be inherited: the socket belongs to a dead
+    // daemon and the temproots point at dead pids.
+    for stale_state in ["daemon-socket", "temproots"] {
+        commands.remove_tree(&var_nix.join(stale_state))?;
+    }
+
+    fs::rename(&paths.upperdir, &stale).with_context(|| {
+        format!(
+            "failed to retire the previous /nix overlay upper '{}'",
+            paths.upperdir.display()
+        )
+    })?;
+    fs::rename(&tmp, &paths.upperdir).with_context(|| {
+        format!(
+            "failed to install the seeded /nix overlay upper '{}'",
+            paths.upperdir.display()
+        )
+    })?;
+    reclaim_stale_generations(paths, &stale, commands);
+    commands.reset_work(&paths.workdir)?;
+    tracing::info!(
+        prior_generation_upper = %paths.upperdir.display(),
+        image_digest = %intent.image_digest,
+        lowerdir = %intent.lowerdir.display(),
+        "cang seeded a new /nix overlay generation from the previous upper"
+    );
+    Ok(())
+}
+
+/// Drop the retired generations under `stale`, or move them out of the way when
+/// their contents cannot be deleted (a generation a guest already used holds at
+/// least one guest-owned directory, which is normal, not an error).
+fn reclaim_stale_generations(
+    paths: &NixOverlayPaths,
+    stale: &Path,
+    commands: &impl UpperSeedCommands,
+) {
+    let mut candidates = vec![stale.to_path_buf()];
+    if let Ok(entries) = fs::read_dir(&paths.root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(SEED_RETIRED_PREFIX) {
+                candidates.push(entry.path());
+            }
+        }
+    }
+    for candidate in candidates {
+        if candidate.symlink_metadata().is_err() {
+            continue;
+        }
+        if commands.remove_tree(&candidate).is_ok() {
+            continue;
+        }
+        if candidate == stale {
+            let retired = retired_sibling(&candidate);
+            match fs::rename(&candidate, &retired) {
+                Ok(()) => tracing::warn!(
+                    retired = %retired.display(),
+                    "cang could not delete the previous /nix overlay generation; moved it aside                      (its store objects are hardlinked into the live generation, so it costs                      inodes rather than data)"
+                ),
+                Err(err) => tracing::warn!(
+                    path = %candidate.display(),
+                    error = %err,
+                    "cang could not reclaim the previous /nix overlay generation"
+                ),
+            }
+        }
+    }
+}
+
+trait UpperSeedCommands {
+    fn create_empty_upper(&self, path: &Path) -> Result<()>;
+    fn clone_upper(&self, source: &Path, target: &Path) -> Result<()>;
+    fn install_image_db(&self, lowerdir: &Path, dest_db: &Path) -> Result<()>;
+    fn reset_work(&self, workdir: &Path) -> Result<()>;
+    fn remove_tree(&self, path: &Path) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HostUpperSeedCommands;
+
+impl UpperSeedCommands for HostUpperSeedCommands {
+    fn create_empty_upper(&self, path: &Path) -> Result<()> {
+        // Deliberately a plain directory, never a btrfs subvolume: overlayfs
+        // requires `upperdir` and `workdir` to be on the same filesystem, and a
+        // btrfs subvolume is a different `st_dev` from its parent, so a
+        // subvolume upper makes every copy-up (the guest's first write to a
+        // layered path) fail with `EXDEV`. Cache reuse comes from the clone
+        // strategy instead, which shares extents without changing the layout.
+        fs::create_dir_all(path).with_context(|| {
+            format!(
+                "failed to create cang /nix overlay upper '{}'",
+                path.display()
+            )
+        })
+    }
+
+    /// Clone the parts of `source` that carry the workspace cache into `target`.
+    ///
+    /// Deliberately not a btrfs snapshot: a snapshot is a subvolume on its own
+    /// `st_dev`, which the overlay cannot use as an upper. Instead each file is
+    /// hardlinked where the kernel allows it and reflinked where the filesystem
+    /// supports it, so a new generation normally costs inodes and shared
+    /// extents rather than bytes.
+    ///
+    /// Only the store and the daemon's profile/gcroot state are carried over.
+    /// The rest of `var/nix` is live daemon state — locks, sockets, temproots
+    /// owned by the guest's uid and not even readable here — and the DB is
+    /// handled separately (the image's is installed, the previous one parked).
+    fn clone_upper(&self, source: &Path, target: &Path) -> Result<()> {
+        fs::create_dir_all(target).with_context(|| {
+            format!(
+                "failed to create the seeded /nix overlay upper '{}'",
+                target.display()
+            )
+        })?;
+        let store = source.join("store");
+        if store.is_dir() {
+            clone_tree(&store, &target.join("store")).with_context(|| {
+                format!(
+                    "failed to clone the /nix overlay store '{}' into '{}'",
+                    store.display(),
+                    target.display()
+                )
+            })?;
+        }
+        for relative in ["var/nix/profiles", "var/nix/gcroots"] {
+            let from = source.join(relative);
+            if from.is_dir()
+                && let Err(err) = clone_tree(&from, &target.join(relative))
+            {
+                tracing::warn!(
+                    path = %from.display(),
+                    error = %err,
+                    "cang could not carry /nix daemon state into the seeded generation"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Install the image generation's own DB as the live one. The previous
+    /// generation's DB is parked by the caller and merged in the guest, so Nix
+    /// keeps referencing everything the upper's store still holds.
+    fn install_image_db(&self, lowerdir: &Path, dest_db: &Path) -> Result<()> {
+        let source_db = lowerdir.join("var/nix/db");
+        if !source_db.is_dir() {
+            return Ok(());
+        }
+        fs::create_dir_all(dest_db).with_context(|| {
+            format!(
+                "failed to create '/nix/var/nix/db' in the seeded upper '{}'",
+                dest_db.display()
+            )
+        })?;
+        for name in ["db.sqlite", "schema"] {
+            let from = source_db.join(name);
+            if from.is_file() {
+                let to = dest_db.join(name);
+                fs::copy(&from, &to).with_context(|| {
+                    format!(
+                        "failed to install the image /nix DB '{}' as '{}'",
+                        from.display(),
+                        to.display()
+                    )
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn reset_work(&self, workdir: &Path) -> Result<()> {
+        self.remove_tree(workdir)?;
+        fs::create_dir_all(workdir).with_context(|| {
+            format!(
+                "failed to recreate cang /nix overlay workdir '{}'",
+                workdir.display()
+            )
+        })
+    }
+
+    fn remove_tree(&self, path: &Path) -> Result<()> {
+        if path.symlink_metadata().is_err() {
+            return Ok(());
+        }
+        if btrfs_ok(&["subvolume", "delete"], path) {
+            return Ok(());
+        }
+        make_dirs_writable(path);
+        match fs::remove_dir_all(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            // A generation a guest has used holds directories owned by the
+            // guest's uid, which an unprivileged host process cannot delete.
+            // Renaming needs write access to the *parent* only, so move it out
+            // of the way rather than failing the launch; the seeder reclaims
+            // retired generations on a later run.
+            Err(err) => {
+                let retired = retired_sibling(path);
+                match fs::rename(path, &retired) {
+                    Ok(()) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            retired = %retired.display(),
+                            error = %err,
+                            "cang could not delete a /nix overlay generation and moved it aside"
+                        );
+                        Ok(())
+                    }
+                    Err(rename_err) => Err(rename_err).with_context(|| {
+                        format!(
+                            "failed to remove the retired /nix overlay upper '{}'",
+                            path.display()
+                        )
+                    }),
+                }
+            }
+        }
+    }
+}
+
+/// `btrfs <args> <path>` succeeding means the capability is there (btrfs-progs
+/// on PATH and the path on btrfs); every caller falls back when it does not.
+fn btrfs_ok(args: &[&str], path: &Path) -> bool {
+    Command::new("btrfs")
+        .args(args)
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// Clone a tree so every entry is usable in the new generation, preferring the
+/// cheapest mechanism per file: a hardlink (one inode, no data), then a reflink
+/// (shared extents, works for files owned by another uid — `fs.protected_hardlinks`
+/// forbids linking those, and after a guest has run every store object in the
+/// upper is one), then a plain copy.
+fn clone_tree(source: &Path, target: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(source)
+        .with_context(|| format!("failed to stat '{}'", source.display()))?;
+    let file_type = metadata.file_type();
+    if file_type.is_dir() {
+        fs::create_dir_all(target)
+            .with_context(|| format!("failed to create '{}' while cloning", target.display()))?;
+        for entry in fs::read_dir(source)
+            .with_context(|| format!("failed to read '{}'", source.display()))?
+        {
+            let entry = entry?;
+            clone_tree(&entry.path(), &target.join(entry.file_name()))?;
+        }
+        // Store objects are 0555; restore the source mode only after the
+        // directory is populated, and keep it exact so `nix-store --verify-path`
+        // still matches the recorded narHash.
+        fs::set_permissions(target, metadata.permissions())?;
+        return Ok(());
+    }
+    if file_type.is_symlink() {
+        let link = fs::read_link(source)?;
+        std::os::unix::fs::symlink(link, target)
+            .with_context(|| format!("failed to recreate symlink '{}'", target.display()))?;
+        return Ok(());
+    }
+    if file_type.is_file() {
+        let cloned = fs::hard_link(source, target).is_ok() || reflink(source, target).is_ok();
+        if !cloned {
+            fs::copy(source, target).with_context(|| {
+                format!(
+                    "failed to copy '{}' to '{}' while cloning the /nix overlay upper",
+                    source.display(),
+                    target.display()
+                )
+            })?;
+        }
+        fs::set_permissions(target, metadata.permissions())?;
+    }
+    // Sockets and fifos are never store content; a stale daemon socket is
+    // dropped with the rest of `var/nix` state by the seed.
+    Ok(())
+}
+
+/// `ioctl(dst, FICLONE, src)`: a copy-on-write clone sharing the source's
+/// extents (btrfs, xfs, zfs, and ext4 with reflink). Costs metadata only, and
+/// unlike a hardlink it is allowed for a file owned by another uid.
+fn reflink(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    // FICLONE from <linux/fs.h>; libc does not name it.
+    const FICLONE: libc::c_ulong = 0x4004_9409;
+
+    let source_file = fs::File::open(source)?;
+    let target_file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(target)?;
+    // SAFETY: both descriptors are open for the duration of the call, and
+    // FICLONE takes the source fd as its argument.
+    let rc = unsafe { libc::ioctl(target_file.as_raw_fd(), FICLONE, source_file.as_raw_fd()) };
+    if rc == 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    let _ = fs::remove_file(target);
+    Err(err)
+}
+
+/// A sibling name that reclaims a generation by moving it aside.
+fn retired_sibling(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("generation"));
+    name.push(format!(
+        ".retired.{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default()
+    ));
+    path.with_file_name(name)
+}
+
+fn make_dirs_writable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if !metadata.is_dir() {
+        return;
+    }
+    let mode = metadata.permissions().mode();
+    if mode & 0o700 != 0o700 {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700));
+    }
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            make_dirs_writable(&entry.path());
+        }
+    }
+}
+
 fn record_state(path: &Path, intent: &HostNixOverlay) -> Result<()> {
     if let Ok(text) = fs::read_to_string(path) {
         let state = parse_state(&text);
@@ -265,7 +721,7 @@ fn record_state(path: &Path, intent: &HostNixOverlay) -> Result<()> {
                 prior_lowerdir = ?prior_lowerdir,
                 image_digest = %intent.image_digest,
                 lowerdir = %intent.lowerdir.display(),
-                "cang host /nix overlay lowerdir changed; preserving workspace overlay upper/work/merged state"
+                "cang host /nix overlay lowerdir changed; the upper is seeded from that generation"
             );
         }
     }
@@ -274,14 +730,16 @@ fn record_state(path: &Path, intent: &HostNixOverlay) -> Result<()> {
 
 fn write_state(path: &Path, intent: &HostNixOverlay) -> Result<()> {
     let state = format!(
-        "selected_reference={}\nimage_digest={}\ndigest_key={}\nlowerdir={}\nupperdir={}\nworkdir={}\nmergeddir={}\n",
+        "selected_reference={}\nimage_digest={}\ndigest_key={}\nlowerdir={}\nupperdir={}\nworkdir={}\nmergeddir={}\n{}={}\n",
         intent.selected_reference,
         intent.image_digest,
         intent.digest_key,
         intent.lowerdir.display(),
         intent.upperdir.display(),
         intent.workdir.display(),
-        intent.mergeddir.display()
+        intent.mergeddir.display(),
+        GENERATION_KEY,
+        generation_of(intent)
     );
     fs::write(path, state).with_context(|| {
         format!(
@@ -435,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_state_for_different_digest_rewrites_lowerdir_without_rescoping_overlay() {
+    fn existing_state_for_different_digest_seeds_a_new_generation() {
         let temp = tempfile::tempdir().expect("tempdir");
         let workspace_state = temp.path().join("state/workspace");
         let paths = NixOverlayPaths::new(&workspace_state);
@@ -561,5 +1019,312 @@ mod tests {
                 .push(format!("umount:{}", intent.mergeddir.display()));
             Ok(())
         }
+    }
+    fn write_upper_with_store_object(paths: &NixOverlayPaths, name: &str) -> PathBuf {
+        let store_path = paths.upperdir.join("store").join(name);
+        fs::create_dir_all(&store_path).expect("store path");
+        fs::write(store_path.join("payload"), name).expect("payload");
+        let var_nix = paths.upperdir.join("var/nix");
+        fs::create_dir_all(var_nix.join("db")).expect("db dir");
+        fs::create_dir_all(var_nix.join("profiles")).expect("profiles dir");
+        fs::create_dir_all(var_nix.join("daemon-socket")).expect("socket dir");
+        fs::create_dir_all(var_nix.join("temproots")).expect("temproots dir");
+        fs::write(var_nix.join("db/db.sqlite"), "previous generation").expect("previous db");
+        // Store objects are read-only; the clone has to keep that, because
+        // `nix-store --verify-path` compares the recorded narHash.
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&store_path, fs::Permissions::from_mode(0o555))
+            .expect("read-only store path");
+        store_path
+    }
+
+    fn lease_state_text(image_digest: &str, lowerdir: &Path, paths: &NixOverlayPaths) -> String {
+        format!(
+            "selected_reference=localhost/cang:latest\nimage_digest={image_digest}\ndigest_key=k\nlowerdir={}\nupperdir={}\nworkdir={}\nmergeddir={}\n",
+            lowerdir.display(),
+            paths.upperdir.display(),
+            paths.workdir.display(),
+            paths.mergeddir.display()
+        )
+    }
+
+    #[test]
+    fn first_use_creates_an_empty_upper_and_work_dir() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace_state = temp.path().join("state/workspace");
+        let paths = NixOverlayPaths::new(&workspace_state);
+        let cache_entry = temp.path().join("image-cache/sha256-new");
+        fs::create_dir_all(cache_entry.join("rootfs/nix/var/nix/db")).expect("cache");
+        let handle = task_handle(cache_entry.clone(), Some("sha256:new"), Some("sha256-new"));
+
+        let lease = NixOverlayLease::acquire(&workspace_state, &handle).expect("lease");
+
+        assert_eq!(lease.seed(), UpperSeedOutcome::Fresh);
+        assert!(paths.upperdir.is_dir());
+        assert!(
+            fs::read_to_string(&paths.lease_state)
+                .expect("state")
+                .contains("generation=")
+        );
+    }
+
+    #[test]
+    fn same_generation_reuses_the_upper_without_touching_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace_state = temp.path().join("state/workspace");
+        let paths = NixOverlayPaths::new(&workspace_state);
+        let cache_entry = temp.path().join("image-cache/sha256-new");
+        fs::create_dir_all(cache_entry.join("rootfs/nix/var/nix/db")).expect("cache");
+        let handle = task_handle(cache_entry.clone(), Some("sha256:new"), Some("sha256-new"));
+        NixOverlayLease::acquire(&workspace_state, &handle).expect("first lease");
+        let store_path =
+            write_upper_with_store_object(&paths, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-kept");
+
+        let lease = NixOverlayLease::acquire(&workspace_state, &handle).expect("second lease");
+
+        assert_eq!(lease.seed(), UpperSeedOutcome::Reused);
+        assert!(store_path.is_dir());
+        assert_eq!(
+            fs::read_to_string(paths.upperdir.join("var/nix/db/db.sqlite")).expect("db"),
+            "previous generation"
+        );
+        assert!(!paths.root.join(SEED_TMP_DIR).exists());
+        assert!(!paths.root.join(SEED_STALE_DIR).exists());
+    }
+
+    #[test]
+    fn new_generation_clones_the_previous_upper_and_swaps_in_the_image_db() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace_state = temp.path().join("state/workspace");
+        let paths = NixOverlayPaths::new(&workspace_state);
+        fs::create_dir_all(&paths.root).expect("overlay root");
+        let old_lowerdir = temp.path().join("image-cache/sha256-old/rootfs/nix");
+        fs::create_dir_all(old_lowerdir.join("var/nix/db")).expect("old cache");
+        fs::write(
+            &paths.lease_state,
+            lease_state_text("sha256:old", &old_lowerdir, &paths),
+        )
+        .expect("old state");
+        let store_path =
+            write_upper_with_store_object(&paths, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-kept");
+        let store_mode = fs::metadata(&store_path).expect("metadata").permissions();
+        fs::create_dir_all(&paths.workdir).expect("workdir");
+        fs::write(paths.workdir.join("leftover"), "overlayfs state").expect("stale work");
+
+        let cache_entry = temp.path().join("image-cache/sha256-new");
+        fs::create_dir_all(cache_entry.join("rootfs/nix/var/nix/db")).expect("cache");
+        fs::write(
+            cache_entry.join("rootfs/nix/var/nix/db/db.sqlite"),
+            "image generation",
+        )
+        .expect("image db");
+        let handle = task_handle(cache_entry, Some("sha256:new"), Some("sha256-new"));
+
+        let lease = NixOverlayLease::acquire(&workspace_state, &handle).expect("lease");
+
+        assert_eq!(lease.seed(), UpperSeedOutcome::Seeded);
+        // The cache survives: the store object is still there, bit for bit.
+        let cloned = paths
+            .upperdir
+            .join("store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-kept/payload");
+        assert_eq!(
+            fs::read_to_string(&cloned).expect("cloned payload"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-kept"
+        );
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(
+                paths
+                    .upperdir
+                    .join("store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-kept")
+            )
+            .expect("cloned metadata")
+            .permissions()
+            .mode()
+                & 0o777,
+            store_mode.mode() & 0o777,
+            "the clone must keep store-object modes so narHash verification still matches"
+        );
+        // The live DB is the new image's; the previous one is parked for the guest.
+        assert_eq!(
+            fs::read_to_string(paths.upperdir.join("var/nix/db/db.sqlite")).expect("live db"),
+            "image generation"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                paths
+                    .upperdir
+                    .join("var/nix")
+                    .join(PARKED_DB_DIR)
+                    .join("db.sqlite")
+            )
+            .expect("parked db"),
+            "previous generation"
+        );
+        assert!(paths.upperdir.join("var/nix/profiles").is_dir());
+        assert!(!paths.upperdir.join("var/nix/daemon-socket").exists());
+        assert!(!paths.upperdir.join("var/nix/temproots").exists());
+        assert!(!paths.root.join(SEED_TMP_DIR).exists());
+        assert!(!paths.root.join(SEED_STALE_DIR).exists());
+        assert!(paths.workdir.is_dir());
+        assert!(!paths.workdir.join("leftover").exists());
+        assert!(
+            fs::read_to_string(&paths.lease_state)
+                .expect("state")
+                .contains("image_digest=sha256:new")
+        );
+    }
+
+    #[test]
+    fn interrupted_seed_leftovers_are_dropped_on_the_next_attempt() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace_state = temp.path().join("state/workspace");
+        let paths = NixOverlayPaths::new(&workspace_state);
+        fs::create_dir_all(&paths.root).expect("overlay root");
+        let old_lowerdir = temp.path().join("image-cache/sha256-old/rootfs/nix");
+        fs::create_dir_all(old_lowerdir.join("var/nix/db")).expect("old cache");
+        fs::write(
+            &paths.lease_state,
+            lease_state_text("sha256:old", &old_lowerdir, &paths),
+        )
+        .expect("old state");
+        write_upper_with_store_object(&paths, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-kept");
+        fs::create_dir_all(paths.root.join(SEED_TMP_DIR).join("store")).expect("stale tmp");
+        fs::create_dir_all(paths.root.join(SEED_STALE_DIR)).expect("stale retired upper");
+
+        let cache_entry = temp.path().join("image-cache/sha256-new");
+        fs::create_dir_all(cache_entry.join("rootfs/nix/var/nix/db")).expect("cache");
+        fs::write(
+            cache_entry.join("rootfs/nix/var/nix/db/db.sqlite"),
+            "image generation",
+        )
+        .expect("image db");
+        let handle = task_handle(cache_entry, Some("sha256:new"), Some("sha256-new"));
+
+        let lease = NixOverlayLease::acquire(&workspace_state, &handle).expect("lease");
+
+        assert_eq!(lease.seed(), UpperSeedOutcome::Seeded);
+        assert!(!paths.root.join(SEED_TMP_DIR).exists());
+        assert!(!paths.root.join(SEED_STALE_DIR).exists());
+        assert!(paths.upperdir.join("store").is_dir());
+    }
+    /// Opt-in: needs a btrfs directory, which a plain `cargo test` tempdir is
+    /// not. Run with
+    /// `CANG_BTRFS_TEST_ROOT=/path/on/btrfs cargo test -p cang reflinks_a_seeded_generation`.
+    ///
+    /// The seeded generation must share the previous generation's extents rather
+    /// than copy its bytes, and it must stay a plain directory: overlayfs needs
+    /// `upperdir` and `workdir` on the same filesystem, so a subvolume upper
+    /// breaks every copy-up with `EXDEV`.
+    #[test]
+    fn reflinks_a_seeded_generation_on_btrfs() {
+        use std::os::unix::fs::MetadataExt;
+
+        let Ok(root) = std::env::var("CANG_BTRFS_TEST_ROOT") else {
+            return;
+        };
+        let temp = tempfile::Builder::new()
+            .prefix("cang-reflink-")
+            .tempdir_in(&root)
+            .expect("tempdir on the btrfs root");
+        let old_cache = temp.path().join("cache/sha256-old");
+        fs::create_dir_all(old_cache.join("rootfs/nix/var/nix/db")).expect("cache");
+        let workspace_state = temp.path().join("state/workspace");
+        let paths = NixOverlayPaths::new(&workspace_state);
+        let old_handle = task_handle(old_cache, Some("sha256:old"), Some("sha256-old"));
+        {
+            let lease = NixOverlayLease::acquire(&workspace_state, &old_handle).expect("first");
+            assert_eq!(lease.seed(), UpperSeedOutcome::Fresh);
+        }
+        // A generation's worth of store object, big enough that a copy is visible.
+        let payload = paths
+            .upperdir
+            .join("store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-kept/payload");
+        fs::create_dir_all(payload.parent().expect("object dir")).expect("object dir");
+        fs::write(&payload, vec![7_u8; 4 * 1024 * 1024]).expect("payload");
+        let blocks_before = fs::metadata(&payload).expect("metadata").blocks();
+
+        let new_cache = temp.path().join("cache/sha256-new");
+        fs::create_dir_all(new_cache.join("rootfs/nix/var/nix/db")).expect("cache");
+        fs::write(
+            new_cache.join("rootfs/nix/var/nix/db/db.sqlite"),
+            "image generation",
+        )
+        .expect("image db");
+        let new_handle = task_handle(new_cache, Some("sha256:new"), Some("sha256-new"));
+        let lease = NixOverlayLease::acquire(&workspace_state, &new_handle).expect("second");
+
+        assert_eq!(lease.seed(), UpperSeedOutcome::Seeded);
+        assert_eq!(
+            fs::metadata(&paths.upperdir).expect("upper").dev(),
+            fs::metadata(&paths.workdir).expect("work").dev(),
+            "overlayfs needs upperdir and workdir on the same filesystem"
+        );
+        let seeded = paths
+            .upperdir
+            .join("store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-kept/payload");
+        assert_eq!(
+            fs::read(&seeded).expect("seeded payload").len(),
+            4 * 1024 * 1024
+        );
+        assert_eq!(
+            fs::metadata(&seeded).expect("seeded").blocks(),
+            blocks_before,
+            "the clone must not duplicate the payload's data"
+        );
+        assert_eq!(
+            fs::read_to_string(paths.upperdir.join("var/nix/db/db.sqlite")).expect("live db"),
+            "image generation"
+        );
+    }
+    /// The clone strategy relies on `FICLONE` for files it may not hardlink
+    /// (`fs.protected_hardlinks` refuses a file owned by another uid, and after a
+    /// guest has run every store object in the upper is one). Opt-in on btrfs:
+    /// `CANG_BTRFS_TEST_ROOT=/path/on/btrfs cargo test -p cang reflink_shares`.
+    #[test]
+    fn reflink_shares_extents_on_btrfs() {
+        use std::os::unix::fs::MetadataExt;
+
+        let Ok(root) = std::env::var("CANG_BTRFS_TEST_ROOT") else {
+            return;
+        };
+        let temp = tempfile::Builder::new()
+            .prefix("cang-ficlone-")
+            .tempdir_in(&root)
+            .expect("tempdir on the btrfs root");
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        fs::write(&source, vec![3_u8; 4 * 1024 * 1024]).expect("source");
+
+        reflink(&source, &target).expect("FICLONE on btrfs");
+
+        assert_eq!(
+            fs::read(&target).expect("target").len(),
+            4 * 1024 * 1024,
+            "the reflinked file must carry the source's data"
+        );
+        assert_ne!(
+            fs::metadata(&source).expect("source").ino(),
+            fs::metadata(&target).expect("target").ino(),
+            "a reflink is a new inode, unlike a hardlink"
+        );
+        let shared = Command::new("btrfs")
+            .args(["filesystem", "du", "-s"])
+            .arg(temp.path())
+            .output()
+            .expect("btrfs filesystem du");
+        let report = String::from_utf8_lossy(&shared.stdout).to_string();
+        // "Exclusive 0.00B" is the proof: the clone owns no extent of its own,
+        // so the payload's 4 MiB were never written a second time.
+        let exclusive = report
+            .lines()
+            .filter(|line| !line.contains("Filename"))
+            .filter_map(|line| line.split_whitespace().nth(1))
+            .next()
+            .unwrap_or_default();
+        assert_eq!(
+            exclusive, "0.00B",
+            "the clone should share extents instead of allocating: {report}"
+        );
     }
 }

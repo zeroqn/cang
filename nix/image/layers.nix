@@ -167,6 +167,7 @@ let
   dockerComposeCommandCompat = cangDockerComposeCommandCompat;
   cangOnlyCommandCompat = [ cangAsDevCommandCompat ];
   nixStoreDbCheck = import ./nix-store-db-check.nix { inherit pkgs; };
+  nixStoreRepair = import ./nix-store-repair.nix { inherit pkgs; };
 
   sidecarProxyWrapper = pkgs.writeShellScriptBin "cang-sidecar-proxy" ''
     LISTEN_PORT="$1"
@@ -272,7 +273,8 @@ let
   # `cargo build` in `nix develop` and a `nix build .#cang` use, so a build
   # inside a cang guest cannot fail on a compiler the project does not build
   # with. `rust-analyzer`, `wild` and `sccache` are not part of the Rust release
-  # and stay on nixpkgs.
+  # and stay on nixpkgs; `wild` is its unwrapped build, because the bintools
+  # wrapper nixpkgs puts around it costs about a second on every link.
   stableRustToolchainPackages = [
     rustToolchain.toolchain
     clangWildWrapper
@@ -456,6 +458,7 @@ let
     pkgs.lsof
     pkgs.nix
     nixStoreDbCheck
+    nixStoreRepair
     pkgs.diffutils
     pkgs.nss_wrapper
     pkgs.tmux
@@ -703,6 +706,7 @@ in
     clangWildWrapper
     nixCommandCompat
     nixStoreDbCheck
+    nixStoreRepair
     podmanCommandCompat
     dockerCommandCompat
     dockerComposeCommandCompat
