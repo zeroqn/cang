@@ -5,13 +5,18 @@ in
   cangVersion = cargoToml.workspace.package.version;
 
   piCodingAgent = {
-    version = "1.4.0";
+    version = "1.5.0";
     owner = "earendil-works";
     repo = "pi";
-    rev = "v1.4.0";
-    srcHash = "sha256-N9NOpiiZTbOMDMV+CxvJAgtLjJJ1/8NJBGS0cFHkhsc=";
-    npmDepsHash = "sha256-ojYDNOjSPQrJQIpSVSviayCRjpcoFIFc9FZH7wWZwhU=";
-    aiNpmTarballHash = "sha256-tA4rqLtvwzKQj4uW6DfcLR/ftF65zTgvWu0RFGKYHjw=";
+    rev = "v1.5.0";
+    srcHash = "sha256-eH3RuypmXeayuZ9lEag6KW3m2LSM4bDc4ogyHxjZMNI=";
+    # `nix/pkgs/pi-coding-agent.nix` builds with bun, not nixpkgs' node:
+    # `bunDepsHash` is the recursive hash of the `node_modules` tree
+    # `bun install --frozen-lockfile` produces from the generated
+    # `nix/pkgs/pi-coding-agent-bun.lock`, and `scripts/update-pi-coding-agent.sh`
+    # recomputes it with the pinned bun (the flake's `.#bun`).
+    bunDepsHash = "sha256-Trci9lNDu0QyZ+vo2VwVfwL/VlEnjtVq5PMZ5qiLGNQ=";
+    aiNpmTarballHash = "sha256-4yD+e9K5J3grqaN9NW/lg38aqWpGQyYQ4bO5zLdI6lw=";
   };
 
   # Neither nixpkgs input carries a fixed bun yet - both pin 1.4.2, whose
@@ -286,18 +291,21 @@ in
   # consumers get as `zg`; upstream publishes no Rust binary (its release assets
   # and platform npm packages are the TypeScript build), so
   # nix/pkgs/zvec-grep.nix compiles it.
-  # The Rust workspace never bumps `[workspace.package] version`, so `version` is
-  # the stamp the package applies; `zvecRustLib` below is pinned to the crate
-  # version that workspace's `zvec-rust`/`zvec-rust-build` deps require.
-  # The stamp also moves when cang carries its own patches: 0.3.2 is the
-  # pinned revision plus the ArkTS/GLSL format registration in
-  # nix/pkgs/zvec-grep.nix.
+  # The revision is the commit upstream's v0.3.0 tag names - the first release
+  # whose workspace version is the port itself (`[workspace.package] version`),
+  # so `version` normally matches it. The package still stamps `version` into
+  # every `env!("CARGO_PKG_VERSION")` site, because that workspace version sat at
+  # 0.0.1 through the whole rewrite and may drift again.
+  # The stamp also moves when cang carries its own patches: 0.3.0 is that tag plus
+  # the ArkTS/GLSL format registration in nix/pkgs/zvec-grep.nix. `zvecRustLib`
+  # below is pinned to the crate version the workspace's
+  # `zvec-rust`/`zvec-rust-build` deps require.
   zvecGrep = {
-    version = "0.3.2";
+    version = "0.3.0";
     owner = "zvec-ai";
     repo = "zvec-grep";
-    rev = "4def5663a8694584db9784c74e9ad2e0c171f9ac";
-    srcHash = "sha256-Yvjff9Dkl4mqZxxv26BuDrIa8WIvonfFtZlrJnqvZis=";
+    rev = "e7ab89394e917ae5746ccdda813f882cd53c9797";
+    srcHash = "sha256-m+EshRJznj27l4wFh8CxKJVH5eaIJKUEZylDEKd0BuU=";
   };
 
   # zvec's C API shared library (`libzvec_c_api.so` plus the jieba dictionary the
@@ -323,13 +331,8 @@ in
     owner = "zeroqn";
     repo = "cang";
     tag = "alpha";
-    version = "0.3.2";
-    revision = "4def5663a8694584db9784c74e9ad2e0c171f9ac";
-    systems = {
-      x86_64-linux = {
-        asset = "zg-0.3.2-4def5663-x86_64-linux.tar.gz";
-        hash = "sha256-iIgQNF6upWnLAJOecI5K9Y+9QDtUJpRcgjjjDRYsEMs=";
-      };
-    };
+    version = "0.3.0";
+    revision = "e7ab89394e917ae5746ccdda813f882cd53c9797";
+    systems = { };
   };
 }

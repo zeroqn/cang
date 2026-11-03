@@ -707,11 +707,18 @@ its pin went in), so a freshly published `.sha256` that disagrees with this list
 the build inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache`
 attribute first.
 
-Refresh pinned Pi coding agent source/npm metadata in `nix/pins.nix` from `earendil-works/pi`:
+Refresh pinned Pi coding agent source and dependency metadata in `nix/pins.nix`
+from `earendil-works/pi`:
 
 ```bash
-nix develop --command ./scripts/update-pi-coding-agent.sh
+nix develop --command ./scripts/update-pi-coding-agent.sh --tag v1.5.0
 ```
+
+The package builds with bun alone (`nix/pkgs/pi-coding-agent.nix`): the updater
+resolves the narrowed workspace closure with npm's lockfile, installs it with the
+pinned bun (it builds `.#bun` itself) and records both the resulting `bun.lock`'s
+dependency tree (`bunDepsHash`) and the `@earendil-works/pi-ai` tarball. `npm`
+has to be on `PATH` for the resolution step; nothing in the build uses node.
 
 Refresh pinned `herdrdev/herdr` prebuilt release metadata (tag and per-system
 asset hashes) in `nix/pins.nix`:

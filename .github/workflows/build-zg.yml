@@ -88,10 +88,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The pinned upstream revision is the rebuild key: the Rust workspace's
-          # own `[workspace.package] version` is a never-bumped 0.0.1, so the
-          # version nix/pkgs/zvec-grep.nix stamps does not move when the revision
-          # does. The asset name carries both.
+          # The pinned upstream revision is the rebuild key, and the version is
+          # the stamp nix/pkgs/zvec-grep.nix applies - the workspace's own
+          # `[workspace.package] version`, which upstream started bumping with its
+          # v0.3.0 release, so the two normally move together. The asset name
+          # carries both.
           revision="$(nix eval --raw --impure \
             --expr '(import ./nix/pins.nix).zvecGrep.rev')"
           version="$(nix eval --raw .#zvec-grep-release-build.version)"

@@ -39,11 +39,15 @@ let
 in
 pkgs.rustPlatform.buildRustPackage (finalAttrs: {
   pname = "zvec-grep";
-  # The Rust workspace still says 0.0.1 (`[workspace.package]` in rust/Cargo.toml,
-  # never bumped since the rewrite landed), so the release is stamped here. The
-  # extension's argv generation is keyed on `>= 0.2.1` (`styleForVersion` in
+  # The version is the pin's (`pins.zvecGrep.version`), which
+  # scripts/update-zvec-grep-source.sh reads out of the pinned revision's
+  # `[workspace.package] version` - the release stamp upstream started bumping
+  # with v0.3.0, after the rewrite spent its first tags at 0.0.1. It is still
+  # substituted into the source below rather than trusted: the extension's argv
+  # generation is keyed on `>= 0.2.1` (`styleForVersion` in
   # extensions/packages/zvec-grep/src/cli.ts), and a workspace manifest the node
-  # CLI seeded is refused outright, so the stamp says what the binary actually is.
+  # CLI seeded is refused outright, so what the binary reports has to be exactly
+  # what the pin says.
   version = zvecGrep.version;
 
   src = pkgs.fetchFromGitHub {

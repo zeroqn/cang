@@ -1716,6 +1716,52 @@ fn zg_is_built_from_the_zvec_grep_rust_workspace_with_a_prebuilt_asset_path() {
     );
 }
 
+/// The image's `pi` is built with bun, not with nixpkgs' node: the dependency
+/// tree is installed by `bun install` against a bun lockfile and the build runs
+/// pi's own `build:binary` (which compiles the standalone with
+/// `bun build --compile`) under bun, with no node or npm in the derivation.
+#[test]
+fn pi_coding_agent_builds_with_bun_not_nixpkgs_node() {
+    const PI_NIX: &str = include_str!("../../../nix/pkgs/pi-coding-agent.nix");
+    const UPDATE_PI_SCRIPT: &str = include_str!("../../../scripts/update-pi-coding-agent.sh");
+
+    for required in [
+        "bun install --frozen-lockfile --ignore-scripts",
+        "bunDepsHash",
+        "pi-coding-agent-bun.lock",
+        "bun run --cwd packages/coding-agent build:binary",
+        "writeShellScriptBin \"node\"",
+        "writeShellScriptBin \"npm\"",
+    ] {
+        assert!(
+            PI_NIX.contains(required),
+            "nix/pkgs/pi-coding-agent.nix should mention {required}"
+        );
+    }
+    for absent in ["buildNpmPackage", "npmDepsHash", "nodejs"] {
+        assert!(
+            !PI_NIX.contains(absent),
+            "nix/pkgs/pi-coding-agent.nix should not use {absent}: the build is bun's"
+        );
+    }
+    // The pin names the bun dependency tree, and the updater is what recomputes
+    // it - with the pinned bun, from the lockfile it commits.
+    assert!(
+        PINS_NIX.contains("bunDepsHash") && !PINS_NIX.contains("npmDepsHash"),
+        "nix/pins.nix should pin the bun dependency tree"
+    );
+    for required in [
+        "nix build --no-link --print-out-paths .#bun",
+        "bun.lock",
+        "bunDepsHash",
+    ] {
+        assert!(
+            UPDATE_PI_SCRIPT.contains(required),
+            "scripts/update-pi-coding-agent.sh should mention {required}"
+        );
+    }
+}
+
 /// The guest image's `waypipe` is zeroqn/headless's prebuilt release asset - the
 /// same artifact that repository's flake names `waypipe-bin` - and the flake
 /// re-exports that package so a host can install the matching client. The image

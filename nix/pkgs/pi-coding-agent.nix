@@ -1,7 +1,9 @@
 {
   pkgs,
   pins,
-  # The toolchain `bun build --compile` runs under. The flake passes
+  # The toolchain the whole build runs under: `bun install` resolves the
+  # dependency tree and `bun run` executes pi's build scripts, with bun's own
+  # `bun build --compile` producing the standalone binary. The flake passes
   # nixpkgs-unstable's bun rather than `pkgs.bun`: Magic Context's own build
   # scripts refuse to run below bun 1.4 (`scripts/check-bun.mjs`), and the
   # standalone binary keeps the compiler's dynamic linkage - so this is also
@@ -15,10 +17,123 @@
 }:
 
 let
+  version = pins.piCodingAgent.version;
+
   piAiNpmTarball = pkgs.fetchurl {
-    url = "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-${pins.piCodingAgent.version}.tgz";
+    url = "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-${version}.tgz";
     hash = pins.piCodingAgent.aiNpmTarballHash;
   };
+
+  src = pkgs.fetchFromGitHub {
+    owner = pins.piCodingAgent.owner;
+    repo = pins.piCodingAgent.repo;
+    rev = pins.piCodingAgent.rev;
+    hash = pins.piCodingAgent.srcHash;
+  };
+
+  # What the build sees of the checkout, applied identically to the dependency
+  # derivation below and to the build itself:
+  #
+  # - the generated root manifest narrows the monorepo's `packages/*` workspace
+  #   glob to the closure `build:binary` builds (plus `schema`, which `ai`
+  #   type-imports), so the install does not drag in the examples, evals and
+  #   apps the glob would otherwise collect;
+  # - `packages/ai`'s `build` script regenerates its model catalog from the
+  #   network, while `build:offline` consumes `src/providers/data`: the
+  #   published `pi-ai` tarball's data is unpacked there, which is the same
+  #   bytes its own release shipped;
+  # - `bun.lock` is the lock `bun install` resolves from (see `bunDeps`).
+  postPatch = ''
+    cp ${./pi-coding-agent-package.json} package.json
+    cp ${./pi-coding-agent-bun.lock} bun.lock
+    substituteInPlace packages/coding-agent/package.json \
+      --replace-fail 'npm --prefix ../ai run build' \
+                     'npm --prefix ../ai run build:offline'
+
+    mkdir -p packages/ai/src/providers/data
+    tar -xzf ${piAiNpmTarball} --strip-components=4 \
+      -C packages/ai/src/providers/data \
+      package/dist/providers/data
+  '';
+
+  # The dependency tree, as a fixed-output derivation: `bun install` is the only
+  # step that needs the registry, and its result is what `bunDepsHash` in
+  # nix/pins.nix pins. The frozen lock makes the resolution strict - a
+  # `package.json` that no longer matches `bun.lock` fails here rather than
+  # silently resolving something else - and the tree is copied into the build
+  # so the workspace symlinks inside it (`node_modules/@earendil-works/pi-ai` ->
+  # `../../packages/ai`) resolve against the checkout being built.
+  bunDeps = pkgs.stdenvNoCC.mkDerivation {
+    pname = "pi-coding-agent-bun-deps";
+    inherit version src postPatch;
+
+    nativeBuildInputs = [ bun ];
+
+    dontConfigure = true;
+    # Nothing in a dependency tree should be stripped or patched: the JS is
+    # copied verbatim and the prebuilt native pieces are not ours to rewrite.
+    dontFixup = true;
+
+    outputHashMode = "recursive";
+    outputHashAlgo = "sha256";
+    outputHash = pins.piCodingAgent.bunDepsHash;
+
+    buildPhase = ''
+      runHook preBuild
+      export HOME=$TMPDIR
+      export BUN_INSTALL_CACHE_DIR=$TMPDIR/bun-cache
+      bun install --frozen-lockfile --ignore-scripts
+      runHook postBuild
+    '';
+
+    installPhase = ''
+      runHook preInstall
+      mkdir -p $out
+      cp -a node_modules/. $out/
+      runHook postInstall
+    '';
+  };
+
+  # pi's build scripts are npm scripts (`npm run build`, `npm --prefix ../tui run
+  # build`) whose helpers are invoked as `node ../../scripts/*.mjs`, and this
+  # package deliberately has no node in its build inputs. bun runs all three
+  # forms: a script with bun's own runner, the npm `run` subset these scripts
+  # use with `--cwd` standing in for `--prefix`, and the `.mjs`/`.ts` helpers
+  # directly. The failure mode is loud - anything outside that subset exits
+  # non-zero with the line it did not implement.
+  nodeAsBun = pkgs.writeShellScriptBin "node" ''
+    exec ${bun}/bin/bun "$@"
+  '';
+  npmAsBun = pkgs.writeShellScriptBin "npm" ''
+    set -eu
+    prefix=""
+    script=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --prefix)
+          prefix="$2"
+          shift 2
+          ;;
+        run)
+          script="$2"
+          shift 2
+          break
+          ;;
+        *)
+          echo "pi-coding-agent: this npm shim only implements 'npm [--prefix <dir>] run <script>', not '$1'" >&2
+          exit 1
+          ;;
+      esac
+    done
+    if [ -z "$script" ]; then
+      echo "pi-coding-agent: this npm shim needs a script to run" >&2
+      exit 1
+    fi
+    if [ -n "$prefix" ]; then
+      exec ${bun}/bin/bun run --cwd "$prefix" "$script" "$@"
+    fi
+    exec ${bun}/bin/bun run "$script" "$@"
+  '';
 
   # The native addon runtime directory: prebuilt addons that pi extensions
   # install at runtime (magic-context's `sharp` and `onnxruntime-node`, for
@@ -55,40 +170,36 @@ let
     ln -s ${onnxruntimeShim}/lib/libonnxrtabi24.so.1 "$out/lib/libonnxrtabi24.so.1"
   '';
 in
-pkgs.buildNpmPackage {
+pkgs.stdenv.mkDerivation {
   pname = "pi-coding-agent";
-  version = pins.piCodingAgent.version;
-
-  src = pkgs.fetchFromGitHub {
-    owner = pins.piCodingAgent.owner;
-    repo = pins.piCodingAgent.repo;
-    rev = pins.piCodingAgent.rev;
-    hash = pins.piCodingAgent.srcHash;
-  };
-
-  npmDepsHash = pins.piCodingAgent.npmDepsHash;
-  npmDepsFetcherVersion = 2;
-  npmWorkspace = "packages/coding-agent";
-  npmRebuildFlags = [ "--ignore-scripts" ];
-
-  postPatch = ''
-    cp ${./pi-coding-agent-package.json} package.json
-    cp ${./pi-coding-agent-package-lock.json} package-lock.json
-    substituteInPlace packages/coding-agent/package.json \
-      --replace-fail 'npm --prefix ../ai run build' \
-                     'npm --prefix ../ai run build:offline'
-
-    mkdir -p packages/ai/src/providers/data
-    tar -xzf ${piAiNpmTarball} --strip-components=4 \
-      -C packages/ai/src/providers/data \
-      package/dist/providers/data
-  '';
+  inherit version src postPatch;
 
   nativeBuildInputs = [
     bun
+    nodeAsBun
+    npmAsBun
     pkgs.makeWrapper
   ];
-  npmBuildScript = "build:binary";
+
+  buildPhase = ''
+    runHook preBuild
+
+    cp -a ${bunDeps} ./node_modules
+    # npm-installed entry points carry `#!/usr/bin/env node`, which a Nix build
+    # has no `/usr/bin/env` for: point them at the `node` on PATH, which is bun.
+    patchShebangs --build node_modules
+    export HOME=$TMPDIR
+    export BUN_INSTALL_CACHE_DIR=$TMPDIR/bun-cache
+
+    # `packages/ai` imports `@earendil-works/pi-schema` (a workspace member
+    # since v1.5.0) and `build:binary` does not build it, while upstream's own
+    # build list runs `schema` before `ai`; without this `tsc` cannot resolve
+    # the module's declarations.
+    bun run --cwd packages/schema build
+    bun run --cwd packages/coding-agent build:binary
+
+    runHook postBuild
+  '';
 
   installPhase = ''
     runHook preInstall
@@ -112,6 +223,9 @@ pkgs.buildNpmPackage {
 
     runHook postInstall
   '';
+
+  # The bun standalone is already stripped and is not ours to rewrite.
+  dontStrip = true;
 
   nativeInstallCheckInputs = [ pkgs.versionCheckHook ];
   doInstallCheck = true;

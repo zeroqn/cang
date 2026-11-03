@@ -27,12 +27,11 @@ downstream consumers get `zg` from the `rust/` workspace of this repository (see
 nix/pkgs/zvec-grep.nix); upstream's release tags still name the TypeScript build,
 so the revision to pin has to be given explicitly.
 
-The updater prefetches the GitHub archive, records its SRI hash, and refuses a
-revision without `rust/Cargo.lock` or whose `zvec-rust` crate version does not
-match the pinned `zvecRustLib` release asset in nix/pins.nix.
-
-The Rust workspace never bumps `[workspace.package] version`, so `zvecGrep.version`
-is cang's own `zg` stamp; this updater does not change it.
+The updater prefetches the GitHub archive, records its SRI hash and the
+`[workspace.package] version` the workspace declares (what `zg --version` reports,
+and what the release is stamped with), and refuses a revision without
+`rust/Cargo.lock` or whose `zvec-rust` crate version does not match the pinned
+`zvecRustLib` release asset in nix/pins.nix.
 
 Options:
   --rev <rev>  git revision or tag to pin (required; --tag is an alias)
@@ -102,7 +101,16 @@ if [ "$workspace_zvec_version" != "$pinned_zvec_version" ]; then
   exit 1
 fi
 
-python3 - "$pins_file" "$rev" "$src_hash_sri" <<'PY'
+# The workspace version is the released `zg` stamp. Upstream's first release of
+# the Rust port is the first tag whose manifest carries it, so take it from the
+# tree being pinned rather than from the previous pin.
+workspace_version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' "$workspace_manifest" | head -1)"
+if [ -z "$workspace_version" ]; then
+  echo "failed to read the [workspace.package] version from $workspace_manifest" >&2
+  exit 1
+fi
+
+python3 - "$pins_file" "$rev" "$src_hash_sri" "$workspace_version" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -110,6 +118,7 @@ from pathlib import Path
 pins_path = Path(sys.argv[1])
 rev = sys.argv[2]
 src_hash = sys.argv[3]
+version = sys.argv[4]
 
 text = pins_path.read_text()
 block_match = re.search(r'(  zvecGrep = \{\n)(?P<body>.*?)(\n  \};)', text, re.S)
@@ -123,6 +132,9 @@ if rev_count != 1:
 body, hash_count = re.subn(r'srcHash = "[^"]*";', f'srcHash = "{src_hash}";', body, count=1)
 if hash_count != 1:
     raise SystemExit("failed to update zvecGrep.srcHash in nix/pins.nix")
+body, version_count = re.subn(r'version = "[^"]*";', f'version = "{version}";', body, count=1)
+if version_count != 1:
+    raise SystemExit("failed to update zvecGrep.version in nix/pins.nix")
 
 pins_path.write_text(text[: block_match.start()] + block_match.group(1) + body + block_match.group(3) + text[block_match.end() :])
 PY
@@ -132,5 +144,5 @@ cat <<EOF_SUMMARY
 updated nix/pins.nix:
   zvecGrep.rev = "$rev";
   zvecGrep.srcHash = "$src_hash_sri";
-  zvecGrep.version = "$(cd "$repo_root" && nix eval --raw --impure --expr '(import ./nix/pins.nix).zvecGrep.version')" (unchanged)
+  zvecGrep.version = "$workspace_version";
 EOF_SUMMARY
