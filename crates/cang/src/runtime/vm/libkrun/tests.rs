@@ -10,8 +10,8 @@ use crate::runtime::seccomp::{AuditMode, SeccompMode};
 use crate::runtime::vm::gpu::GpuMode;
 use crate::runtime::vm::libkrun::DirectLibkrunLauncher;
 use crate::runtime::vm::libkrun::launcher::{
-    GUEST_KERNEL_CMDLINE_APPEND, PROFILE_KERNEL_CMDLINE_APPEND, guest_nofile_rlimit_entry,
-    with_audit_start_marker_hook_for_test,
+    GPU_SHM_SIZE_BYTES, GUEST_KERNEL_CMDLINE_APPEND, PROFILE_KERNEL_CMDLINE_APPEND,
+    guest_nofile_rlimit_entry, with_audit_start_marker_hook_for_test,
 };
 use anyhow::{Result, anyhow, bail};
 use cang_libkrun::{CANG_LIBKRUN_COMPAT_NET_FEATURES, LibkrunApi};
@@ -855,7 +855,6 @@ fn drm_gpu_mode_enables_venus_render_server_flags_before_start() {
     const VIRGLRENDERER_RENDER_SERVER: u32 = 1 << 9;
     const VIRGLRENDERER_DRM: u32 = 1 << 10;
     const VIRGLRENDERER_USE_VIDEO: u32 = 1 << 11;
-    const GPU_SHM_SIZE_BYTES: u64 = 256 * 1024 * 1024;
 
     // configure_gpu reads the render-server fd number from the env var the
     // supervisor sets on the VM worker.

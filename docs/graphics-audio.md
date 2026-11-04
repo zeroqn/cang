@@ -149,6 +149,36 @@ disk, so every process recompiles its SPIR-V shaders). Short single-query
 searches are therefore at parity — the GPU wins on bulk indexing, which is what a
 first `zg --index` over a workspace is.
 
+### The venus memory window
+
+A venus device owns no memory to hand out: the renderer serves every
+`vkMapMemory` of host-visible device memory by mapping the host driver's exported
+dma-buf over a slice of one guest shared-memory window
+(`virtio_gpu::resource_map_blob`), so that window — not the 8 GiB device-local
+heap the ICD advertises — bounds the **cumulative** size of live mappings. cang
+sizes it at 4 GiB (`GPU_SHM_SIZE_BYTES` in
+`crates/cang/src/runtime/vm/libkrun/launcher.rs`).
+
+| window | `qwen3-embedding-0.6b`, 15 files / 8.8 k lines |
+|---|---|
+| 256 MiB (before) | mapping the model's 633 MiB of weight buffers fails with `VK_ERROR_OUT_OF_DEVICE_MEMORY` (live mappings cap out at ~192 MiB) → CPU fallback |
+| 4 GiB (now) | model stays on venus, 1 m 30 s |
+
+The same corpus on the CPU, same model, took 44 m 28 s — the window is worth ~30×.
+The failure is not loud: `zg` logs `ggml_vulkan: Device memory allocation of size
+… failed` and `falling back to CPU`, then indexes with the GGUF model on the CPU
+(~30 t/s instead of ~800 t/s), so the symptom is a workspace that indexes in
+minutes instead of the tens of seconds the table above promises. The window costs guest *address space*, not guest
+RAM — `MemTotal` and what the balloon can reclaim are unchanged, and a blob
+mapping replaces the window's pages with the dma-buf's.
+
+There is no way around the window from the guest side: a venus device reports no
+exportable buffer handle types at all (`compatibleHandleTypes = 0` for
+`OPAQUE_FD`, `DMA_BUF` and `HOST_ALLOC`, measured in a `--gpu=drm` guest), so a
+client cannot ask for memory the renderer would map back into it. Growing the
+window is the lever; `VK_EXT_external_memory_host` would need the renderer to
+import guest pointers, which is a renderer-side project of its own.
+
 Which model and device a guest uses is decided at boot by `cang-guest-init`
 (`crates/cang-guest-init/src/guest_init/components/zg.rs`):
 

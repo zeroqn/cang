@@ -64,7 +64,28 @@ const VIRGLRENDERER_VENUS_FLAGS: u32 = VIRGLRENDERER_USE_EGL
     | VIRGLRENDERER_RENDER_SERVER
     | VIRGLRENDERER_DRM
     | VIRGLRENDERER_USE_VIDEO;
-const GPU_SHM_SIZE_BYTES: u64 = 256 * 1024 * 1024;
+/// The virtio-gpu shared-memory window the guest maps venus blob resources
+/// through.
+///
+/// Every `vkMapMemory` of host-visible device memory in a venus guest is served
+/// by mapping the exported dma-buf over a slice of this region
+/// (`virtio_gpu::resource_map_blob`), so its size is the *cumulative* budget for
+/// simultaneously mapped GPU memory, not a per-allocation cap. 256 MiB was enough
+/// for the GL and video paths that predate venus; a llama.cpp-class Vulkan
+/// backend maps hundreds of MiB of weight buffers and falls back to the CPU once
+/// the budget is gone (measured, below).
+pub(in crate::runtime::vm::libkrun) const GPU_SHM_SIZE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// Floor, not an exact value, so the window can grow without a second edit here.
+///
+/// At 256 MiB a llama.cpp-class Vulkan backend capped out at ~192 MiB of live
+/// mappings, failed to map its 633 MiB of `qwen3-embedding-0.6b` weight buffers
+/// with `VK_ERROR_OUT_OF_DEVICE_MEMORY`, and silently fell back to the CPU
+/// (that 15-file / 8.8 k-line corpus: 1 m 30 s on venus at 4 GiB, 44 m 28 s on
+/// the CPU).
+const _: () = assert!(
+    GPU_SHM_SIZE_BYTES >= 1 << 30,
+    "the virtio-gpu shm window must hold a Vulkan backend's live mapped buffers (>= 1 GiB)"
+);
 /// Env var the supervisor sets on the VM worker carrying the parent end of the
 /// SOCK_SEQPACKET socketpair connected to the render-server runner.
 pub(crate) const RENDER_SERVER_FD_ENV: &str = "CANG_RENDER_SERVER_FD";
