@@ -133,15 +133,26 @@ pub const CANG_FS_CACHE_SYMLINKS_ENV: &str = "CANG_FS_CACHE_SYMLINKS";
 /// lookups, 48% of the requests and 20.8% of the wall time on that build.
 ///
 /// The price is exactly this constant: a file the *host* creates stays invisible
-/// to the guest for up to this long, because "not there" is cached. 250 ms keeps
-/// 92.3% of the saving (a quarter second already catches the compiler re-probing
-/// the same name) and bounds the staleness to something a person cannot notice;
-/// the measured invisibility at this setting was 74 ms. Files the guest itself
-/// creates, and files the host rewrites by rename (`git checkout`, every editor,
-/// `sed -i`), are unaffected - a create or a rename in the guest invalidates the
-/// entry. `CANG_FS_NEGATIVE_ENTRY_TIMEOUT=0` disables it (error path only) and a
-/// larger value trades visibility for the last few percent.
-pub const CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS: u64 = 250;
+/// to the guest for up to this long, because "not there" is cached. Files the
+/// guest itself creates, and files the host rewrites by rename (`git checkout`,
+/// every editor, `sed -i`), are unaffected - a create or a rename in the guest
+/// invalidates the entry.
+///
+/// **30 s since 2026-11-04** (was 250 ms). The 250 ms figure was priced on a
+/// *cold* build, where the compiler re-probes the same name within a quarter
+/// second; a compile-test *iteration* is a different shape and pays ~9.6 k
+/// missing-candidate probes per run (cargo checks `src/lib.rs`, `src/main.rs`,
+/// `src/bin/`, `examples/`, `benches/`, `tests/`, `build.rs` and `README*` for
+/// every crate). At 250 ms every iteration re-issues all of them - one cargo
+/// iteration lasts 11-15 s, far longer than any sub-second lifetime - and
+/// measured on the 2401-crate tree a 30 s lifetime took a no-op iteration from
+/// 11.8 s to 7.9 s (-33%, four interleaved arms; 300 s is no better than 30 s,
+/// note 45 of the workspace-virtiofs-performance map). Metadata that a host
+/// process created *outside* the guest stays unseen for that window; a host
+/// `git checkout` of an existing path is a rename and still shows immediately.
+/// `CANG_FS_NEGATIVE_ENTRY_TIMEOUT=0` disables it (error path only) and a bare
+/// millisecond value overrides this default for one launch.
+pub const CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS: u64 = 30_000;
 
 /// Env var that overrides [`CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS`], in
 /// milliseconds (`0` disables the negative entry).

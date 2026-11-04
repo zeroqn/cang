@@ -430,8 +430,10 @@ millions of them:
   has nothing to report through it);
 - **cacheable negative lookups** - a lookup of a name that does not exist is
   answered with the protocol's negative entry instead of `-ENOENT`, so the guest
-  can cache the answer for 250 ms (91.5% of a build's lookups are such misses;
-  caching them removes 72% of the lookups, and `-ENOENT` can never be cached).
+  can cache the answer for **30 s** (91.5% of a build's lookups are such misses;
+  caching them removes 72% of the lookups, and `-ENOENT` can never be cached;
+  at 30 s, a compile-test iteration on a 2401-crate tree drops from 11.8 s to
+  7.9 s, `docs/wayfinder/workspace-virtiofs-performance/notes/45-compile-iteration-lookup-diagnosis.md`).
 - **cached symlink targets** - the share advertises `FUSE_CACHE_SYMLINKS`, so the
   guest keeps a symlink's target instead of issuing a `READLINK` on every
   resolution; repeated resolutions were 35-57% of the requests of the spawn-heavy
@@ -448,8 +450,10 @@ What that costs is bounded visibility, and the bounds are:
 - **Files the guest itself creates** are visible at once, and the host sees them
   as soon as the guest's writes land.
 - A file the **host adds** to a directory can stay invisible to the guest for up
-  to 250 ms - the negative-entry lifetime, measured at 74 ms in practice - because
-  "this name is not there" is cached for that long.
+  to 30 s - the negative-entry lifetime, because "this name is not there" is
+  cached for that long. This is the widest window cang ships; lower it for a
+  workspace a host process populates while the guest reads it
+  (`--fs=negative-entry:250`, or `0` to disable).
 - Only a **host-side in-place rewrite** of a file the guest has already read
   (e.g. `echo >> file` from the host) can lag by up to 5 s, the `attr_timeout`
   the guest uses to revalidate attributes.
@@ -522,6 +526,10 @@ The container provides:
 
 - interactive `fish` + `starship`
 - bubblewrap (`bwrap`) and Pi (`pi`)
+- `zg` (zvec-grep's Rust build) with llama.cpp's Vulkan backend and the two
+  embedding models it needs already installed, so a first `zg --index` works
+  offline: `local/potion-code-16m-v2` on a CPU guest, `local/qwen3-embedding-0.6b`
+  on the GPU (`--gpu=drm`) — see [docs/graphics-audio.md](docs/graphics-audio.md)
 - the `sqlite3` CLI in the agent layer, so agent tooling can repair a corrupted
   local database (for example Magic Context's)
 - the pinned monty worker (`monty`, `MONTY_BIN`) that backs the RLM extension's
@@ -712,11 +720,16 @@ cang.packages.${pkgs.system}.container-lib-policy-seccomp-json
 ```
 
 The `zg` workspace search CLI the image ships is a package output too, for hosts
-that want the same Rust build the agent layer gets:
+that want the same Rust build the agent layer gets. That build carries llama.cpp's
+Vulkan backend, so its GGUF embedding models can index on a GPU (`--device
+vulkan`/`auto`; the CPU stays the default device):
 
 ```nix
 cang.packages.${pkgs.system}.zvec-grep
 ```
+
+The embedding models the guest pre-installs for `zg` — a CPU Model2Vec default and
+the GGUF model a `--gpu=drm` guest uses — are `cang.packages.${pkgs.system}.zg-models`.
 
 The guest image's `waypipe` is the same way: the output is the build the image
 ships, so a host can install it as the matching client for `cang --waypipe`:
