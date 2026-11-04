@@ -128,3 +128,58 @@ no venus ICD, no VA driver — so the launcher explains that and exits instead o
 starting a software-rendered browser. `tools/cang-chromium/README.md` has the
 environment table and the per-flag rationale (`--disable-vulkan-surface`, why
 `gui` must not pass `--enable-features=Vulkan`, and so on).
+
+## Embedding models on the guest GPU (`zg`)
+
+The image's `zg` (zvec-grep's Rust build) carries llama.cpp's **Vulkan** backend,
+so its GGUF embedding models can run on the guest's GPU instead of the CPU. This
+is not a marginal optimisation: measured on the pinned revision with the image's
+own binary, indexing 24 k tokens of Rust source
+
+| model | device | 6 k tokens | 24 k tokens | marginal |
+|---|---|---|---|---|
+| `local/embeddinggemma-300m` | CPU (28-core Zen4) | 92 s (66 t/s) | 345 s (70 t/s) | 72 t/s |
+| `local/embeddinggemma-300m` | Vulkan (RDNA3, RADV) | 18 s (334 t/s) | 26 s (949 t/s) | 2 454 t/s |
+| `local/qwen3-embedding-0.6b` | CPU | 200 s (30 t/s) | — | ~30 t/s |
+| `local/qwen3-embedding-0.6b` | Vulkan | 15 s (393 t/s) | 30 s (821 t/s) | 1 288 t/s |
+
+Per indexed token that is ~34× the CPU; whole-run wall clock is 5–13× because a
+fresh process pays ~10–15 s of Vulkan startup (ggml keeps no pipeline cache on
+disk, so every process recompiles its SPIR-V shaders). Short single-query
+searches are therefore at parity — the GPU wins on bulk indexing, which is what a
+first `zg --index` over a workspace is.
+
+Which model and device a guest uses is decided at boot by `cang-guest-init`
+(`crates/cang-guest-init/src/guest_init/components/zg.rs`):
+
+| guest | `ZVEC_GREP_EMBEDDING` | `ZVEC_GREP_DEVICE` |
+|---|---|---|
+| `cang --gpu=drm` and `vulkaninfo --summary` reports a hardware device | `local/qwen3-embedding-0.6b` | `auto` |
+| anything else | `local/potion-code-16m-v2` | `cpu` |
+
+The `vulkaninfo` probe is what keeps the GPU default honest. A `--gpu=drm` guest is
+not proof of a usable Vulkan device — a venus device can be present in `/dev/dri`
+and still enumerate zero physical devices — and the GGUF model on the CPU is far
+slower than the Model2Vec model it would replace, so a guest whose probe fails
+(including one that only sees llvmpipe/lavapipe) keeps the CPU model. The probe is
+bounded (10 s) and its failure is silent: `--gpu=drm` alone does not change what
+`zg` uses.
+
+An explicit `--embedding`/`--device` still wins, and `auto` falls back to the CPU
+when no GPU device is usable, so the GPU default cannot lose the device entirely.
+One consequence worth knowing: an index stores the model it was built with, so a
+workspace first indexed in a GPU guest and then opened in a CPU guest (or the
+reverse) reports `model references differ` and wants `zg --index --rebuild`.
+
+The models themselves are pre-installed, not downloaded at first use: the image
+ships `local/potion-code-16m-v2` (32 MB Model2Vec) and
+`local/qwen3-embedding-0.6b` (610 MiB GGUF, `nix/pkgs/zg-models.nix`), pinned by
+the digests from zg's own catalog. guest-init links them into
+`~/.zvec-grep/models`, which stays a writable directory — anything else the user
+indexes with still downloads there.
+
+Inside a `--gpu=drm` guest the ICD is mesa's **venus**, not a host driver: the
+device appears through virtio-gpu, and it reports `KHR_coopmat` without
+`coopmat2`, so the GPU path is the portable one. Changing the model also means
+changing the index (see above) — pick a model per workspace, or a model per
+guest shape, but not both.

@@ -508,6 +508,12 @@ let
     ++ [
       browserImageLayer
       pkgs.mesa
+      # `vulkaninfo`, the guest's own answer to "is there a Vulkan device?".
+      # guest-init runs it once when the guest was started with `--gpu=drm` and
+      # only then defaults `zg` to the GGUF model on `auto` - a DRM guest whose
+      # venus device is not usable keeps the CPU model instead of paying
+      # qwen3-on-CPU for every index.
+      pkgs.vulkan-tools
       # glvnd's dispatcher (`libEGL.so.1`). The image exposes it at
       # `/usr/lib/cang-gpu-runtime` for the guest's DRM clients, and a client
       # that links the dispatcher directly (rather than dlopening it) also gets
@@ -532,6 +538,7 @@ let
     ]
     ++ [
       browserImageLayer
+      pkgs.vulkan-tools
       pkgs.perf
       pkgs.strace
       waypipe

@@ -529,7 +529,8 @@ The container provides:
 - `zg` (zvec-grep's Rust build) with llama.cpp's Vulkan backend and the two
   embedding models it needs already installed, so a first `zg --index` works
   offline: `local/potion-code-16m-v2` on a CPU guest, `local/qwen3-embedding-0.6b`
-  on the GPU (`--gpu=drm`) — see [docs/graphics-audio.md](docs/graphics-audio.md)
+  on a `--gpu=drm` guest whose `vulkaninfo` probe finds a hardware Vulkan device —
+  see [docs/graphics-audio.md](docs/graphics-audio.md)
 - the `sqlite3` CLI in the agent layer, so agent tooling can repair a corrupted
   local database (for example Magic Context's)
 - the pinned monty worker (`monty`, `MONTY_BIN`) that backs the RLM extension's

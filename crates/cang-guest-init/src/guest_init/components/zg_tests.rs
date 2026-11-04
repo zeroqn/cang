@@ -169,3 +169,33 @@ fn seeded_cache_is_owned_like_the_home() {
     assert_eq!(owner.uid(), metadata.uid());
     assert_eq!(owner.gid(), metadata.gid());
 }
+
+#[test]
+fn gpu_default_needs_a_real_vulkan_device() {
+    let _guard = ENV_LOCK.lock().expect("env test lock");
+
+    // `--gpu=drm` without a usable device (venus unavailable, or a software
+    // implementation): the CPU model, not the GGUF one on the CPU.
+    export_selection_with(true, || false);
+    assert_eq!(std::env::var(EMBEDDING_ENV).as_deref(), Ok(CPU_MODEL));
+    assert_eq!(std::env::var(DEVICE_ENV).as_deref(), Ok(CPU_DEVICE));
+
+    export_selection_with(true, || true);
+    assert_eq!(std::env::var(EMBEDDING_ENV).as_deref(), Ok(GPU_MODEL));
+    assert_eq!(std::env::var(DEVICE_ENV).as_deref(), Ok(GPU_DEVICE));
+}
+
+#[test]
+fn probe_accepts_a_hardware_device() {
+    let summary = "==========\nVulkan Instance Version: 1.4.363\n\nDevices:\n==========\ndeviceName         = AMD Radeon RX 7600M XT (RADV NAVI33)\ndeviceType         = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n";
+    assert!(probe_vulkan_device_with(|| Some(summary.to_owned())));
+}
+
+#[test]
+fn probe_rejects_a_software_device_and_a_failed_probe() {
+    let llvmpipe = "Devices:\ndeviceName = llvmpipe (LLVM 19.1.7, 256 bits)\n";
+    assert!(!probe_vulkan_device_with(|| Some(llvmpipe.to_owned())));
+    let empty = "Vulkan Instance Version: 1.4.363\n";
+    assert!(!probe_vulkan_device_with(|| Some(empty.to_owned())));
+    assert!(!probe_vulkan_device_with(|| None));
+}

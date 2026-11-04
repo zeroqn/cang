@@ -1793,6 +1793,11 @@ fn zg_ships_the_vulkan_backend_and_the_image_models() {
 
     // The guest and the image have to agree on where the models are and which one
     // a given guest uses.
+    const IMAGE_LAYERS_NIX: &str = include_str!("../../../nix/image/layers.nix");
+    assert!(
+        IMAGE_LAYERS_NIX.contains("pkgs.vulkan-tools"),
+        "the image should ship vulkaninfo for guest-init's device probe"
+    );
     assert!(
         IMAGE_CONFIG_NIX.contains("CANG_ZG_MODELS_DIR=${layers.zgModels}/models"),
         "the image should expose the models directory to the guest"
@@ -1803,6 +1808,9 @@ fn zg_ships_the_vulkan_backend_and_the_image_models() {
         "ZVEC_GREP_DEVICE",
         "local/potion-code-16m-v2",
         "local/qwen3-embedding-0.6b",
+        // The GPU default is taken only when the guest really has a device, so
+        // the image has to ship the probe.
+        "vulkaninfo",
     ] {
         assert!(
             GUEST_ZG_RS.contains(required),
