@@ -62,6 +62,11 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
   # already take.
   patches = [
     ./patches/zvec-grep-arkts-glsl-formats.patch
+    # Turn the engine's `vulkan` feature on by default and split the ONNX WebGPU
+    # execution provider off it, so `zg` can drive the GGUF models on a GPU
+    # without dragging wgpu in. Runtime CPU fallback is untouched: an index still
+    # runs on the CPU unless a GPU device is requested (`--device auto|vulkan`).
+    ./patches/zvec-grep-vulkan-backend.patch
   ];
 
   # The Cargo workspace lives in `rust/`, not at the repository root, and
@@ -103,6 +108,14 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
     pkgs.cmake
     pkgs.autoPatchelfHook
     pkgs.rustPlatform.bindgenHook
+    # llama.cpp's Vulkan backend compiles its 155 shaders to SPIR-V at build time
+    # and vendors no copies, so the glslc compiler and the SPIR-V headers have to
+    # be here. `Vulkan` and `SPIRV-Headers` are CMake config packages, which is
+    # why they are also on `CMAKE_PREFIX_PATH` below rather than only in the
+    # environment.
+    pkgs.shaderc
+    pkgs.vulkan-headers
+    pkgs.spirv-headers
   ];
 
   # In `buildInputs`, not only in `env`, so `autoPatchelfHook` writes the rpath the
@@ -115,6 +128,10 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
     zvecLib
     pkgs.onnxruntime
     pkgs.stdenv.cc.cc.lib
+    # `libvulkan.so.1`: the Vulkan build dlopens ICDs through the loader, so the
+    # binary has a `NEEDED` entry for it that autoPatchelfHook resolves here.
+    # The ICD itself is the machine's (mesa/venus in a cang guest), never ours.
+    pkgs.vulkan-loader
   ];
 
   env = {
@@ -128,6 +145,21 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
     ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime.so.1";
     # The archive `llama-cpp-sys-2` verifies, extracts and compiles from.
     LLAMA_CPP_SOURCE_ARCHIVE = "${llamaCppSource}";
+    # `ggml-vulkan`'s CMakeLists does `find_package(Vulkan COMPONENTS glslc
+    # REQUIRED)` and `find_package(SPIRV-Headers CONFIG REQUIRED)`; both are found
+    # through CMAKE_PREFIX_PATH (VULKAN_SDK is what upstream appends on Windows) and
+    # the headers are included by path, not by target.
+    VULKAN_SDK = "${pkgs.vulkan-loader}";
+    CMAKE_PREFIX_PATH = pkgs.lib.makeSearchPath ":" [
+      pkgs.vulkan-loader
+      pkgs.vulkan-headers
+      pkgs.shaderc
+      pkgs.spirv-headers
+    ];
+    CPATH = pkgs.lib.concatStringsSep ":" [
+      "${pkgs.vulkan-headers}/include"
+      "${pkgs.spirv-headers}/include"
+    ];
   };
 
   # ... and the extraction cache has to be writable: `llama-cpp-sys-2` unpacks the

@@ -200,6 +200,9 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     profiler.measure("export-gpu-env", || {
         crate::guest_init::components::wayland::export_mesa_if_enabled(env_contract.cang.gpu_drm)
     });
+    profiler.measure("export-zg-env", || {
+        crate::guest_init::components::zg::export_selection(env_contract.cang.gpu_drm)
+    });
     profiler.measure_result("build-opengl-driver-farm", || {
         // The NixOS-conventional `/run/opengl-driver` farm is a boot-time root
         // operation; the explicit MESA_ENV above stays the authoritative
@@ -214,6 +217,9 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     })?;
     profiler.measure_result("materialize-home", || {
         crate::guest_init::components::home::root::materialize(&identity)
+    })?;
+    profiler.measure_result("seed-zg-models", || {
+        crate::guest_init::components::zg::seed_models(process::is_root(), &identity)
     })?;
     profiler.measure_result("materialize-allocator-preload", || {
         crate::guest_init::components::hardening::allocator::ensure_from_env_if_root(

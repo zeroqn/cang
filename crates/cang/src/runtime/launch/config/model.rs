@@ -69,6 +69,10 @@ pub(super) const IMAGE_CANG_ENV_ALLOWLIST: &[&str] = &[
     "CANG_MIMALLOC_LIB",
     "CANG_GRAPHENE_HARDENED_MALLOC_LIB",
     "CANG_REAL_PODMAN",
+    // Where the image keeps the `zg` embedding models it pre-installed; guest-init
+    // links them into the task user's model cache so a first `zg --index` works
+    // offline. See `nix/pkgs/zg-models.nix`.
+    "CANG_ZG_MODELS_DIR",
     "MONTY_BIN",
     "ONNXRUNTIME_LIB_PATH",
     // The image's Rust build environment: the linker its `cargo` links with

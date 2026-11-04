@@ -30,6 +30,11 @@ let
     zvecLib
     pkgs.onnxruntime
     pkgs.stdenv.cc.cc.lib
+    # `zg` is built with llama.cpp's Vulkan backend, so the binary has a
+    # `NEEDED libvulkan.so.1` entry even in a guest that never asks for a GPU.
+    # The loader is data-free: the ICD it selects stays the machine's (mesa/venus
+    # in a cang guest), which is why this is the only Vulkan piece in the closure.
+    pkgs.vulkan-loader
   ];
   # `build-zg.yml` publishes an asset and pins it in nix/pins.nix together, so a
   # pinned asset is only the current binary while both its revision and its stamp

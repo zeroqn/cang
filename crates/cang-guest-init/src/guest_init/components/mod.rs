@@ -13,6 +13,7 @@ pub(in crate::guest_init) mod shell;
 pub(in crate::guest_init) mod swap;
 pub(in crate::guest_init) mod wayland;
 pub(in crate::guest_init) mod waypipe;
+pub(in crate::guest_init) mod zg;
 
 /// Helpers shared by component tests that write a script and then `exec` it.
 #[cfg(test)]

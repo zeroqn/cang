@@ -9,6 +9,7 @@
   rmuxPrebuilt,
   rtkPrebuilt,
   zvecGrep,
+  zgModels,
   waypipe,
   doltPrebuilt,
   beadsPrebuilt,
@@ -385,6 +386,10 @@ let
     pkgs.sqlite
     piCodingAgent
     zvecGrep
+    # The embedding models `zg` resolves from here instead of downloading in the
+    # guest (guest-init links them into the task user's cache; the path is in the
+    # image's `CANG_ZG_MODELS_DIR`).
+    zgModels
     doltPrebuilt
     beadsPrebuilt
     freshPrebuilt
@@ -717,6 +722,7 @@ in
     hardeningRun
     mimallocLib
     hardenedMallocLib
+    zgModels
     nixBuilderGroupId
     nixBuilderGroupMembers
     nixBuilderPasswdEntries

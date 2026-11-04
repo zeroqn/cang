@@ -55,6 +55,11 @@ let
     "CANG_MIMALLOC_LIB=${layers.mimallocLib}"
     "CANG_GRAPHENE_HARDENED_MALLOC_LIB=${layers.hardenedMallocLib}"
     "CANG_REAL_PODMAN=${layers.realPodmanBin}"
+    # Where the image's pre-installed `zg` embedding models live. guest-init links
+    # them into the task user's model cache, so a first `zg --index` in a fresh
+    # guest works offline; the task user's own downloads still go to its writable
+    # cache, because only the pre-installed files are linked in.
+    "CANG_ZG_MODELS_DIR=${layers.zgModels}/models"
   ];
 in
 {

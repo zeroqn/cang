@@ -1,0 +1,50 @@
+cang enable zg's llama.cpp Vulkan backend without the ONNX WebGPU path
+
+--- a/rust/crates/zg-engine/Cargo.toml	2026-11-04 13:45:05.385124495 +0800
++++ b/rust/crates/zg-engine/Cargo.toml	2026-11-04 13:45:09.114499757 +0800
+@@ -8,7 +8,11 @@
+ publish.workspace = true
+ 
+ [features]
+-default = []
++# cang ships the Vulkan GPU path: it is what makes the GGUF embedding models
++# usable outside a warm server (a 300M encoder runs ~34x faster per indexed token
++# on an RDNA3 GPU than on 28 Zen4 cores, measured on this revision), and the
++# backend costs build time only - the CPU path stays the default device.
++default = ["vulkan"]
+ # Matching CUDA builds reuse the pinned native SDK; custom CUDA/Vulkan
+ # configurations require source toolchains. Runtime CPU fallback is unchanged.
+ cuda = [
+@@ -17,7 +21,11 @@
+     "llama-cpp-2/dynamic-backends",
+     "ort/cuda",
+ ]
+-vulkan = ["llama-cpp-2/vulkan", "ort/webgpu"]
++# Split out of `vulkan` on purpose: the ONNX WebGPU execution provider needs
++# `ort/webgpu` (and with it wgpu), and cang's GPU stack is the guest's venus
++# Vulkan reached through llama.cpp, so the ONNX models stay on the CPU there.
++vulkan = ["llama-cpp-2/vulkan"]
++webgpu = ["ort/webgpu"]
+ 
+ [dependencies]
+ async-trait.workspace = true
+--- a/rust/crates/zg-engine/src/models/backends/transformers/model.rs	2026-11-04 13:45:05.395575075 +0800
++++ b/rust/crates/zg-engine/src/models/backends/transformers/model.rs	2026-11-04 13:45:09.116053581 +0800
+@@ -725,7 +725,7 @@
+     ))
+ }
+ 
+-#[cfg(feature = "vulkan")]
++#[cfg(feature = "webgpu")]
+ fn configure_webgpu(
+     builder: ort::session::builder::SessionBuilder,
+ ) -> Result<ort::session::builder::SessionBuilder, ModelError> {
+@@ -737,7 +737,7 @@
+         })
+ }
+ 
+-#[cfg(not(feature = "vulkan"))]
++#[cfg(not(feature = "webgpu"))]
+ fn configure_webgpu(
+     _builder: ort::session::builder::SessionBuilder,
+ ) -> Result<ort::session::builder::SessionBuilder, ModelError> {

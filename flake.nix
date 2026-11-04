@@ -202,6 +202,9 @@
             pkgs = zgPkgs;
             inherit pins;
           };
+          # The two embedding models the image pre-installs for `zg` (a CPU
+          # Model2Vec default and the GGUF model the GPU path uses).
+          zgModels = import ./nix/pkgs/zg-models.nix { inherit pkgs; };
           # The guest's waypipe and the matching host client: zeroqn/headless's
           # prebuilt release asset where one is pinned for the system, otherwise
           # nixpkgs' own waypipe. See nix/lib/waypipe-cang.nix.
@@ -309,6 +312,7 @@
                 rmuxPrebuilt
                 rtkPrebuilt
                 zvecGrep
+                zgModels
                 waypipe
                 doltPrebuilt
                 beadsPrebuilt
@@ -359,6 +363,7 @@
           container-ci-sccache = cangImageCiSccache;
           container-lib-policy-seccomp-json = containerLibPolicySeccompJson;
           zvec-grep = zvecGrep;
+          zg-models = zgModels;
           waypipe-bin = waypipe;
           dolt-prebuilt = doltPrebuilt;
           beads-prebuilt = beadsPrebuilt;
