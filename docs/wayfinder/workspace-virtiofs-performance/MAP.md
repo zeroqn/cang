@@ -96,7 +96,12 @@ green.
     `VIRTIO_F_MULTIQUEUE` feature bit at all** - the queue count is purely the
     device's config word (kernel `virtio_fs.c:963-971`), so there is nothing to
     negotiate; the limit is a hard-coded constant inherited from crosvm's 2019
-    device, not a withheld feature.
+    device, not a withheld feature. **Addition (2026-11-04, note 44):** the guest
+    does honour a larger number - `virtio_fs.c` takes `num_request_queues` from
+    the config word and treats `0` as `min(ncpus, 64)`, one `fuse_iqueue` per
+    queue - so raising the constant is a host-side-only change, now
+    [ticket 21](tickets/21-multiqueue-request-queues.md). The fork's request
+    threads are not a lever: 4 -> 16 workers measured flat (note 44, section 4).
   - One `FsWorker` thread serves that queue serially (`worker.rs::process_queue`
     -> `server.handle_message` inline), so rustc's stat/open/read/write stream
     is a single-threaded request loop.
@@ -212,6 +217,43 @@ of every request to zero.
   smaller numerator still: the remaining gap is 45 s, spread over
   LOOKUP/FLUSH/WRITE/GETXATTR, none of which is a data-path design.
 
+- **Queue-depth decision (bob, 2026-11-04): chart the multi-queue work; the pool
+  is settled shut.** After the shipped-defaults verification, bob asked what was
+  left and approved two checks rather than a redesign: *who burns host CPU during
+  a 26-process create storm*, and *does the pool size move the ceiling*. Both are
+  in [note 44](notes/44-queue-depth-not-thread-count.md):
+  - the dispatcher used **40.4 %** of one core and each of the four pool threads
+    **17.4-17.6 %** during a 7 819 creates/s storm (4.03 cores host-wide, nothing
+    saturated), so the wall time is latency and queueing;
+  - **4 -> 16 workers changed nothing** (mean 6.3 k vs 5.8 k creates/s @26 across
+    two interleaved rounds per side; the edit was reverted and the tree left
+    clean), so `CANG_FS_WORKER_THREADS` is not a lever and 4 stays;
+  - completion signalling is already batched (651 host->guest interrupts/s against
+    ~28 k requests/s, ~43 replies per notification), and the connection's
+    background-request credit is unreachable from the guest (no
+    `/sys/fs/fuse/connections` entry for a virtiofs mount), so neither is a knob;
+  - what *is* reachable is the **queue count**: the guest kernel reads
+    `num_request_queues` from the device config word and gives each request queue
+    its own `fuse_iqueue` (`0` = `min(ncpus, 64)`), while the fork hard-codes `1`.
+  **Reading:** this does not reopen ticket 01's finding (there is still no
+  multiqueue feature bit) - it corrects the *inference* drawn from it. The pool
+  was the right first move and is finished; the next fork change is
+  [ticket 21](tickets/21-multiqueue-request-queues.md), and the payoff is scoped to
+  metadata-heavy workloads because a cold 2401-crate build already sits at ~1 % of
+  the host.
+
+- [Advertise N virtio-fs request queues](tickets/21-multiqueue-request-queues.md):
+  **the next fork change, and the only queue-side lever left open.** Parallel
+  metadata churn tops out at 7-8 k creates/s against a 25-29 k tmpfs control, with
+  no host thread saturated (dispatcher 40 %, pool 17 % each), the pool size flat at
+  4 vs 16 workers, completion notifications already batched (~43 replies each), and
+  the connection's background-request credit unreachable from the guest. What is
+  left is one serialized kick -> dispatch path per request, so the ticket
+  advertises N request queues (the guest kernel already supports them from the
+  config word) behind a per-launch knob, A/B'd 1 vs 4 on the storm, the scaling
+  ladder and a rust-build regression arm. Numbers and dead ends:
+  [note 44](notes/44-queue-depth-not-thread-count.md).
+
 ## Decisions so far
 
 - [Issue #939 / the cache policy / metadata timeouts / what the remaining 45 s
@@ -268,6 +310,12 @@ of every request to zero.
   a **worker pool over the existing single request queue** (no multiqueue, no
   inode-map refactor needed); passthrough/io_uring are unreachable from a VMM
   server. Detail: [note](notes/01-fuse-negotiation-and-queue-facts.md).
+  *Correction (2026-11-04, note 44):* "no multiqueue" was about the missing
+  feature bit and stays true, but the **queue count is a host-side config word the
+  guest honours**, so it is a lever after all
+  ([ticket 21](tickets/21-multiqueue-request-queues.md)); and the pool, once
+  shipped, measured flat from 4 to 16 threads - it was the right first move, not a
+  scaling knob.
 
 ## Awaiting bob (answered 2026-10-26, except where noted)
 
@@ -371,13 +419,20 @@ hold the code-level plan if that work is ever scheduled.
 
 ## Not yet specified
 
-- **What the remaining ~30% would take.** With the pool dead and caching ruled
-  out, the only untried lever that is not caching *data* is `NO_OPEN_SUPPORT`
-  (handle reuse for a `LOOKUP+OPEN` pair) - and the quarter-busy worker says there is
-  little to win. If bob wants the penalty gone rather than explained, the
-  candidates are all outside this map's scope: `/workspace` on a block device, a
-  share split so `target/` can be cached and sources cannot, or accepting the VM
-  penalty instead (2.2x the host dwarfs the 1.3x share).
+- **Whether more than four request queues is worth having.** Ticket 21 measures
+  1 vs 4 (and 8 if 4 pays) on the storm, the scaling ladder and a rust-build
+  regression arm; only that answer says whether the metadata ceiling moves at all,
+  and only then is it askable whether the extra dispatchers and event fds are
+  worth carrying in every share. Per-request cost inside the fork (30 us pool +
+  11 us dispatcher, note 44) is the fallback explanation if the queue count does
+  not move it, and is not charted until then.
+- **Whether the remaining gap should be attacked at all.** The share now costs
+  ~1 % of a cold 2401-crate build (116.3 s vs 115 s host) while the VM as a whole
+  costs 1.35x the host - so anything left here serves metadata-heavy workloads
+  (`git checkout`/`status`, package installs, target-dir churn), not compiles. If
+  bob wants *those* fixed rather than explained, the candidates are outside this
+  map's scope: `/workspace` on a block device, a share split so `target/` can be
+  cached and sources cannot.
 - **Whether the VM penalty itself is worth attacking** (2.2x the host, i.e. the
   larger half): CPU model, `vdso`/`virtio` interrupt affinity, vCPU count vs
   `JOBS`, transparent hugepages (the concurrent THP effort), sccache inside the

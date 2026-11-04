@@ -26,6 +26,16 @@ That leaves ticket 01's ordering, minus everything that caches:
    pool); 5. attr/entry timeouts and passthrough/io_uring (measured later /
    dead).
 
+> **Correction (2026-11-04, note 44).** Two of those orderings did not survive the
+> shipped pool. Item 4's "nothing left to buy after the pool" was an inference
+> from the pool *lifting* the request classes; measured, the pool at 4 vs 16
+> threads is flat (6.3 k vs 5.8 k creates/s @26) and no worker is saturated, so
+> the ceiling is the single serialized request queue and the **queue count** is
+> the lever that is actually open - [ticket 21](21-multiqueue-request-queues.md).
+> NO_OPEN_SUPPORT (item 2) did ship, and the two request-removing switches
+> (FLUSH, negative entry) and `FUSE_CACHE_SYMLINKS` came after it. What stays true
+> here: the pool was the right first change, and it is finished.
+
 Decide:
 
 - **Ship order and grouping, against the numbers.** Ticket 02 measures how much
