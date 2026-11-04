@@ -258,17 +258,17 @@ in
     # Pinned by scripts/update-cang-prebuilt.sh, which rejects wrapper-script,
     # legacy flake-locked, and concrete /nix/store/<hash>-referencing cang
     # release payloads.
-    tag = "v0.17.0";
+    tag = "v0.17.1";
     systems = {
       x86_64-linux = {
-        asset = "cang-v0.17.0-x86_64-unknown-linux-gnu";
+        asset = "cang-v0.17.1-x86_64-unknown-linux-gnu";
         # The bytes CI published for the source this pin sits on: `just release
         # <version>` reads the hash from the main push's own release run, whose
         # alpha asset is the same file the tag publishes. Never pin a locally
         # normalized asset - which patchelf normalized it decides the byte
         # stream, and v0.15.1 shipped a pin for the wrong one. See the cang
         # release scheme in docs/maintenance.md.
-        hash = "sha256-fUWMuJZAbekeJ8Ms5zq/j7aK1eXU4Atw536okR73tWw=";
+        hash = "sha256-qwuw50cRCojZE67TQnI/p1uZmmxhum4p6Kjw7oKG9es=";
       };
     };
   };
