@@ -1,9 +1,9 @@
 ---
 label: wayfinder:task
 title: Advertise N virtio-fs request queues - parallelise the queue handoff, not the pool
-status: open
+status: closed
 blocked_by: []
-claimed_by:
+claimed_by: pi (2026-11-04)
 ---
 
 ## Question
@@ -88,3 +88,36 @@ See [note 44](../notes/44-queue-depth-not-thread-count.md): storm 7 002-8 392
 creates/s; scaling ladder 1 075 / 4 686 / 7 359 for `/workspace` at 1 / 8 / 26
 processes; tmpfs control 2 113 / 19 378 / 29 008; single-stream classes 1.9 k
 create/s, 1.26 k 4 KiB write+close/s, 0.95 k write+rename/s.
+
+## Outcome (2026-11-04): measured flat, reverted
+
+Implemented in the fork (reverted afterwards, so the shipped tree is unchanged):
+`defs::queue_config(request_queues)` building `1 + n` queues,
+`virtio_fs`'s `num_request_queues` config word set from
+`Fs::set_request_queues` (plus the `FsDevice`/header surface), `work()`'s epoll
+over every queue event fd with one dispatcher, and a per-queue request counter
+for the teardown log. The guest took them: with `CANG_FS_REQUEST_QUEUES=4` the
+device activated 5 queues and requests landed as
+`#0=11 #1=276 #2=1065 #3=306 #4=112`, so the client does drive several request
+queues and the config word is the whole negotiation, exactly as the ticket said.
+
+**It does not help.** Two shapes, alternating arms, one boot each:
+
+| shape | 1 queue | 4 queues |
+|---|---|---|
+| 26-process create storm (creates/s) | 5 174 / 9 322 | 4 615 / 8 201 |
+| compile-test iteration, no-op rebuild | 11.3 / 11.4 / 11.3 s | 11.8 / 11.5 / 11.8 s |
+
+The reason is in [note 44](../notes/44-queue-depth-not-thread-count.md) and
+[note 45](../notes/45-compile-iteration-lookup-diagnosis.md) §6: with one
+dispatcher thread serving all four queues the handoff is still serialised by
+design (which was the ticket's open design question, answered here as "one
+dispatcher is not enough"), *and* the dispatcher was only ~40 % of a core to
+begin with, so the serial resource is not the queue at all. The real ceiling is
+one round trip per path component at ~7k requests/s, whose cost sits in the guest
+FUSE path — three VM exits per round trip.
+
+What did pay on the same shape was a different lever entirely: the **negative
+entry lifetime** (250 ms → 30 s) removes ~9.6k missing-name probes per iteration
+and 33 % of the iteration wall time, shipping today as
+`--fs=negative-entry:30000` (note 45 §5).

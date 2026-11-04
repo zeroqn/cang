@@ -254,6 +254,17 @@ of every request to zero.
   ladder and a rust-build regression arm. Numbers and dead ends:
   [note 44](notes/44-queue-depth-not-thread-count.md).
 
+- [Advertise N virtio-fs request queues](tickets/21-multiqueue-request-queues.md):
+  **implemented, measured flat, reverted.** The guest does drive several request
+  queues when the device advertises them (five queues activated, requests landing
+  `#1=276 #2=1065 #3=306 #4=112`), and it changes nothing: a 26-process create
+  storm runs 4.6-8.2k/s with 4 queues against 5.2-9.3k/s with 1, and a compile
+  iteration 11.8 s against 11.3 s. One dispatcher thread over N queues serialises
+  the handoff by construction, and the dispatcher was only ~40 % of a core
+  either way, so the queue is not the serial resource. The limit is one round trip
+  per path component at ~7k requests/s, spent in the guest FUSE path.
+  [note 45](notes/45-compile-iteration-lookup-diagnosis.md) §6.
+
 ## Decisions so far
 
 - [Issue #939 / the cache policy / metadata timeouts / what the remaining 45 s
@@ -419,13 +430,20 @@ hold the code-level plan if that work is ever scheduled.
 
 ## Not yet specified
 
-- **Whether more than four request queues is worth having.** Ticket 21 measures
-  1 vs 4 (and 8 if 4 pays) on the storm, the scaling ladder and a rust-build
-  regression arm; only that answer says whether the metadata ceiling moves at all,
-  and only then is it askable whether the extra dispatchers and event fds are
-  worth carrying in every share. Per-request cost inside the fork (30 us pool +
-  11 us dispatcher, note 44) is the fallback explanation if the queue count does
-  not move it, and is not charted until then.
+- **Whether the ~7k requests/s ceiling can be raised at all.** Every host-side
+  explanation has now been measured out of it - pool size, request-queue count,
+  notification batching, the connection's background credit (note 44 §4-6,
+  [ticket 21](tickets/21-multiqueue-request-queues.md)). What remains is the guest
+  FUSE path (~55 us of vCPU time per request, three VM exits per round trip), so
+  this graduates only if someone takes on a *kernel-side* change in libkrunfw, or
+  finds a way to issue one round trip for several path components.
+- **Whether `--fs=negative-entry:30000` should be the documented setting for
+  compile-test loops, or the default.** It buys 33 % of an iteration on the
+  2401-crate tree (11.8 s -> 7.9 s, [note 45](notes/45-compile-iteration-lookup-diagnosis.md) §5)
+  at the cost of a name the *host* creates staying invisible for 30 s instead of
+  250 ms. Shipping it as the default would weaken ticket 03's coherence contract;
+  shipping it as documentation needs one line in `docs/usage.md` and a decision
+  from bob.
 - **Whether the remaining gap should be attacked at all.** The share now costs
   ~1 % of a cold 2401-crate build (116.3 s vs 115 s host) while the VM as a whole
   costs 1.35x the host - so anything left here serves metadata-heavy workloads
