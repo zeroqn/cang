@@ -22,7 +22,9 @@ fn identity_under(home: &Path) -> DevIdentity {
 #[test]
 fn gpu_guest_selects_the_gguf_model_and_auto_device() {
     let _guard = ENV_LOCK.lock().expect("env test lock");
-    export_selection(true);
+    // Injected, not probed: the test host has no `vulkaninfo`, and this test is
+    // about the selection a detected device produces.
+    export_selection_with(true, || true);
 
     assert_eq!(std::env::var(EMBEDDING_ENV).as_deref(), Ok(GPU_MODEL));
     assert_eq!(std::env::var(DEVICE_ENV).as_deref(), Ok(GPU_DEVICE));
