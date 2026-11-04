@@ -275,6 +275,17 @@ of every request to zero.
   virtio-pci/MSI-X or inline-completion patch is worth at most ~1.5-2x and only if
   a fork cycle is explicitly wanted.
 
+- [Candidate 3 closed - three research passes, one verdict](notes/50-candidate-3-closed.md):
+  **no fork or kernel change on this axis is worth building.** MSI-X would remove
+  the two completion ISR exits but is 0.3-0.75 % of an iteration for ~900 lines,
+  and the fork has no MSI-X and no PCI notify ioeventfd; the completion workqueue
+  is already per batch with non-blocking replies completed inline (the functions
+  note 46 named do not exist in v7.2.10); `max_background` is already `u16::MAX`
+  and gates only async requests (correcting notes 44/45/46). The exit budget is
+  ~1 % of the iteration - the floor with every exit free is ~7.6-7.9 s against
+  8.2 s. Only `CONFIG_FTRACE` in the `-kvm` config is worth adding, to make the
+  guest half measurable next time.
+
 ## Decisions so far
 
 - [Issue #939 / the cache policy / metadata timeouts / what the remaining 45 s
@@ -440,15 +451,14 @@ hold the code-level plan if that work is ever scheduled.
 
 ## Not yet specified
 
-- **Whether the ~7k requests/s ceiling can be raised at all.** Every host-side
-  explanation has been measured out of it - pool size, request-queue count,
-  notification batching, the connection's background credit (note 44 §4-6,
-  [ticket 21](tickets/21-multiqueue-request-queues.md)) - and the cost split says
-  the guest owns 48 % and the FUSE server only 27 % of it
-  ([note 46](notes/46-request-cost-split-and-recommendation.md)). So nothing on
-  this axis crosses 2x, and it graduates only if a fork cycle is explicitly
-  wanted (virtio-pci/MSI-X, inline completions) or a way is found to issue one
-  round trip for several path components.
+- **Whether several path components can share one round trip.** Every
+  *efficiency* lever on this axis is now measured or source-closed: pool size,
+  request-queue count, notification batching, background credit, the exit budget
+  (~1 %), MSI-X, and hoisting kernel completion work
+  ([note 50](notes/50-candidate-3-closed.md)). FUSE has no compound-lookup
+  primitive, so this graduates only from a protocol-level idea (batching a
+  directory's worth of lookups into one reply, or a prefetch hint the server can
+  answer in bulk), which nobody has proposed yet.
 - **Whether 8.2 s is the accepted cost of a compile-test iteration on a live host
   tree** (against 1.45 s on the host and 1.3-2.1 s on guest tmpfs). If yes, this
   effort's metadata thread is done; if no, the next artifact is a decision on

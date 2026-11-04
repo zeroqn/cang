@@ -109,8 +109,10 @@ tested and failed:
   count, and the dispatcher stays at ~40 % of a core, so the handoff is not the
   serial resource. Code reverted (ticket 21);
 - **notifications**: already batched (~43 replies per host→guest interrupt);
-- **connection credit**: unreachable from the guest (no `/sys/fs/fuse/connections`
-  entry for virtiofs; kernel default 12, `virtio_fs.c` never overrides it);
+- **connection credit**: already maxed (libkrun's INIT reply sets
+  `max_background = u16::MAX`, note 48 §2) *and* structurally irrelevant - it gates
+  async allocations only, while every request in this workload is a synchronous
+  `fuse_simple_request`;
 - **longer metadata lifetimes**: exchange, or worse (section 4).
 
 That leaves the guest-side FUSE path itself (~55 µs of vCPU time per request,

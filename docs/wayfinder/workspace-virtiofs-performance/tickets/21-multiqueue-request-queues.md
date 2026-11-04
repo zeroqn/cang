@@ -80,7 +80,9 @@ the metadata ceiling, leaving only per-request cost inside the fork (30 us pool 
   `min(num_online_cpus(), VIRTIO_FS_DEFAULT_QUEUE_SIZE)`; no module param, no
   feature bit (ticket 15's correction stands, this ticket does not contradict it).
 - `/sys/fs/fuse/connections` is empty in the cang guest, so `max_background` /
-  `congestion_threshold` cannot be part of the experiment.
+  `congestion_threshold` cannot be adjusted at runtime - and it would not matter:
+  libkrun already replies `u16::MAX` for both (note 48 §2), and the knob gates
+  only async allocations.
 
 ## Numbers to beat
 

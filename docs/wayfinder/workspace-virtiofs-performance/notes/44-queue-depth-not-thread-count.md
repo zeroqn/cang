@@ -114,13 +114,14 @@ vCPUs (~55 us of guest CPU per request).
   num_online_cpus(), VIRTIO_FS_DEFAULT_QUEUE_SIZE)`; each request queue gets its
   own `fuse_iqueue` via `fuse_conn_init` -> `virtio_fs_fiq_ops`. So N-queue
   virtio-fs is a **host-side-only** change, exactly upstream virtiofsd's shape.
-- **The connection's background-request credit cannot be raised from the guest.**
-  `fuse_conn_init` sets `max_background = FUSE_DEFAULT_MAX_BACKGROUND` (12,
-  congestion 9); `virtio_fs.c` never overrides it; and unlike `/dev/fuse` there is
-  **no `/sys/fs/fuse/connections/<id>/` entry for a virtiofs mount** (measured: the
-  directory is empty/absent in the cang guest), so the sysfs knobs that exist for
-  a FUSE daemon do not exist here. Raising it needs a libkrunfw kernel patch (and
-  it only governs *async* requests - a `create` is not one).
+- **The connection's background-request credit is already maxed, and it never
+  gated this workload anyway.** *Corrected 2026-11-04 (note 48 §2): this note
+  first claimed the connection ran on the kernel default of 12. It does not -
+  libkrun's FUSE INIT reply sets `max_background = u16::MAX` (congestion 49151,
+  `fs/server.rs:1110-1111`) and the kernel adopts it on a privileged init mount.
+  Either way the knob is irrelevant here: `fuse_block_alloc` gates only
+  *background* (async) allocations, and a `create`/`stat`/`read` from cargo is a
+  synchronous `fuse_simple_request` that never enters that queue.**
 - **The pool plumbing is already queue-aware.** `worker.rs`'s `FsJob` and
   `FsCompletion` both carry `queue_index`, and replies are published into
   `queues[queue_index]`, so the server side does not assume one queue. What is

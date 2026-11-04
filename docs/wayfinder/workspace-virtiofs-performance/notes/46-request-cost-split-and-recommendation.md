@@ -56,14 +56,17 @@ Ranked by expected value per unit of effort, given the split above:
    [ticket 18](tickets/18-workspace-target-on-block.md) (a block device carrying
    `target/`): removing the round trips is the only route to tmpfs numbers, and it
    is a design decision to grill, not a tweak to implement.
-3. **Only if a fork/kernel cycle is explicitly wanted**, in this order: (a)
-   virtio-pci + MSI-X for the share, which removes the completion-side
-   `INTERRUPT_STATUS` read and `INTERRUPT_ACK` write (note 22) and is A/B-able
-   with today's harness in a day; (b) a libkrunfw patch to run
-   `virtio_fs_requests_done` inline instead of via the workqueue; (c) raising
-   `max_background`, which gates only asynchronous requests and so is unlikely to
-   show anything on cargo's synchronous stats. Expected ceiling for all three
-   together: ~1.5-2x on metadata throughput, i.e. ~8.2 s -> ~5 s.
+3. **A fork/kernel cycle is not worth it** - this note originally listed three
+   candidates with a ~1.5-2x ceiling. All three were then researched from source
+   and are closed: MSI-X removes two exits but is worth 0.3-0.75 % of the
+   iteration for ~700-900 lines ([note 47](47-virtio-pci-msix-feasibility.md));
+   the completion workqueue is already *per batch* with non-blocking replies
+   completed inline, so there is nothing to hoist
+   ([note 48](48-guest-kernel-completion-and-concurrency.md)); `max_background` is
+   already `u16::MAX` and gates only async requests. The exit budget itself is
+   ~1 % of the iteration ([note 49](49-exit-budget-per-round-trip.md)). The one
+   cheap thing worth doing in the kernel is enabling `CONFIG_FTRACE`, so a future
+   measurement can measure the guest half instead of bounding it (note 48 §5).
 
 ## 4. A measurement that failed, recorded so it is not repeated
 
