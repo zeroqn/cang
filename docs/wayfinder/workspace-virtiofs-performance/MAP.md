@@ -265,6 +265,16 @@ of every request to zero.
   per path component at ~7k requests/s, spent in the guest FUSE path.
   [note 45](notes/45-compile-iteration-lookup-diagnosis.md) §6.
 
+- [Where the per-request cost sits, and what to do next](notes/46-request-cost-split-and-recommendation.md):
+  **no single component owns it.** Of the ~516 us of host CPU per create, 48 % is
+  the guest (vCPUs), 27 % is the FUSE server (dispatcher 10 %, pool 17 %) and 24 %
+  is VMM plumbing; parallelism is 4.0x. Halving either side buys ~1.3-1.5x, both
+  ~2x - so there is no 4x in per-request work, and the completion-exit count is
+  already amortised (~11-43 replies per interrupt). Recommendation: accept 8.2 s
+  or grill [ticket 18](tickets/18-workspace-target-on-block.md); a
+  virtio-pci/MSI-X or inline-completion patch is worth at most ~1.5-2x and only if
+  a fork cycle is explicitly wanted.
+
 ## Decisions so far
 
 - [Issue #939 / the cache policy / metadata timeouts / what the remaining 45 s
@@ -431,12 +441,18 @@ hold the code-level plan if that work is ever scheduled.
 ## Not yet specified
 
 - **Whether the ~7k requests/s ceiling can be raised at all.** Every host-side
-  explanation has now been measured out of it - pool size, request-queue count,
+  explanation has been measured out of it - pool size, request-queue count,
   notification batching, the connection's background credit (note 44 §4-6,
-  [ticket 21](tickets/21-multiqueue-request-queues.md)). What remains is the guest
-  FUSE path (~55 us of vCPU time per request, three VM exits per round trip), so
-  this graduates only if someone takes on a *kernel-side* change in libkrunfw, or
-  finds a way to issue one round trip for several path components.
+  [ticket 21](tickets/21-multiqueue-request-queues.md)) - and the cost split says
+  the guest owns 48 % and the FUSE server only 27 % of it
+  ([note 46](notes/46-request-cost-split-and-recommendation.md)). So nothing on
+  this axis crosses 2x, and it graduates only if a fork cycle is explicitly
+  wanted (virtio-pci/MSI-X, inline completions) or a way is found to issue one
+  round trip for several path components.
+- **Whether 8.2 s is the accepted cost of a compile-test iteration on a live host
+  tree** (against 1.45 s on the host and 1.3-2.1 s on guest tmpfs). If yes, this
+  effort's metadata thread is done; if no, the next artifact is a decision on
+  [ticket 18](tickets/18-workspace-target-on-block.md), not a FUSE change.
 - **Whether `--fs=negative-entry:30000` should be the documented setting for
   compile-test loops, or the default.** It buys 33 % of an iteration on the
   2401-crate tree (11.8 s -> 7.9 s, [note 45](notes/45-compile-iteration-lookup-diagnosis.md) §5)
