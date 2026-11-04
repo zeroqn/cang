@@ -27,6 +27,8 @@ out_dir=""
 state_home=""
 workspace=""
 keep=0
+isolate_state=0
+state_root=""
 timeout_seconds=1200
 
 # A small closure that is not in the image: hello pulls glibc and the toolchain
@@ -49,7 +51,11 @@ Options:
                           digest must differ from --image, otherwise there is no
                           generation switch to exercise)
       --out <dir>         artifact directory (default: a temp dir, printed)
-      --state-home <dir>  isolated XDG config/state home (default: <out>/home)
+      --state-home <dir>  isolated XDG config/state home (default: the ambient one;
+                          an isolated home needs its own containers graphroot)
+      --state-root <dir>  cang state root holding the per-workspace
+                          <slug>/nix-overlay generation (default: from
+                          cang.toml, else $XDG_STATE_HOME/cang)
       --workspace <dir>   workspace directory (default: <out>/workspace)
       --timeout <secs>    per-boot timeout (default: 1200)
       --keep              keep the workspace and state home after the run
@@ -74,7 +80,8 @@ while [ $# -gt 0 ]; do
     --image) image_current=$2; shift 2 ;;
     --previous-image) image_previous=$2; shift 2 ;;
     --out) out_dir=$2; shift 2 ;;
-    --state-home) state_home=$2; shift 2 ;;
+    --state-home) state_home=$2; isolate_state=1; shift 2 ;;
+    --state-root) state_root=$2; shift 2 ;;
     --workspace) workspace=$2; shift 2 ;;
     --timeout) timeout_seconds=$2; shift 2 ;;
     --keep) keep=1; shift ;;
@@ -94,15 +101,17 @@ if [ -z "$out_dir" ]; then
 fi
 mkdir -p "$out_dir"
 out_dir="$(cd "$out_dir" && pwd)"
+# A previous run's workspace holds files the guest created, which are owned by
+# the container's subuid and cannot be removed from the host's uid; clear it the
+# same way cang does.
+if [ -d "$out_dir/workspace" ]; then
+  podman unshare rm -rf "$out_dir/workspace" 2>/dev/null || rm -rf "$out_dir/workspace" 2>/dev/null || true
+fi
 state_home="${state_home:-$out_dir/home}"
 workspace="${workspace:-$out_dir/workspace}"
-evidence_dir="$out_dir/evidence"
+evidence_dir="$workspace/evidence"
 logs_dir="$out_dir/logs"
 mkdir -p "$state_home" "$workspace" "$evidence_dir" "$logs_dir"
-export XDG_CONFIG_HOME="$state_home/config"
-export XDG_STATE_HOME="$state_home/state"
-export XDG_DATA_HOME="$state_home/data"
-export XDG_CACHE_HOME="$state_home/cache"
 
 if [ -z "$cang_bin" ]; then
   cang_bin="$repo_root/result/bin/cang"
@@ -117,8 +126,18 @@ command -v podman >/dev/null || die "podman is required to inspect the image dig
 command -v stat >/dev/null || die "stat is required"
 
 image_digest() {
-  podman image inspect --format '{{index .RepoDigests 0}}' "$1" 2>/dev/null ||
-    podman image inspect --format '{{.Id}}' "$1" 2>/dev/null
+  local digest=""
+  # A locally built image has no RepoDigests, and an unknown reference makes
+  # podman exit 125; both cases must fall through rather than kill the run.
+  for _ in 1 2 3; do
+    digest="$(podman image inspect --format '{{index .RepoDigests 0}}' "$1" 2>/dev/null || true)"
+    if [ -z "$digest" ] || [ "$digest" = "<no value>" ]; then
+      digest="$(podman image inspect --format '{{.Id}}' "$1" 2>/dev/null || true)"
+    fi
+    [ -n "$digest" ] && break
+    sleep 1
+  done
+  printf '%s' "$digest"
 }
 digest_current="$(image_digest "$image_current")"
 digest_previous="$(image_digest "$image_previous")"
@@ -127,6 +146,29 @@ digest_previous="$(image_digest "$image_previous")"
 [ "$digest_current" != "$digest_previous" ] ||
   die "both images resolve to the same digest ($digest_current); a generation switch needs two"
 
+# The state home is only narrowed when the caller asked for it. cang's task
+# rootfs is built from the containers graphroot, which lives beside the images
+# this smoke boots, so an isolated state home without that graphroot finds no
+# image and tries to pull `localhost/...` from a registry that is not there.
+if [ "$isolate_state" = 1 ]; then
+  export XDG_STATE_HOME="$state_home/state"
+  export XDG_CONFIG_HOME="$state_home/config"
+fi
+
+# The smoke's own workspace state (the per-workspace generation, its task dirs)
+# must start empty: a generation left over from an earlier run is already one
+# image generation ahead, which would make boot-fresh a *seeded* boot and hide
+# the very transition the smoke scores.
+if [ -z "$state_root" ]; then
+  state_root="$(sed -n 's/^location[[:space:]]*=[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/cang/cang.toml" 2>/dev/null | head -1)"
+  state_root="${state_root:-${XDG_STATE_HOME:-$HOME/.local/state}/cang}"
+fi
+slug="$(basename "$workspace")"
+smoke_state="$state_root/$slug"
+podman unshare rm -rf "$smoke_state" 2>/dev/null || rm -rf "$smoke_state" 2>/dev/null || true
+
+run_start="$(date +%s)"
 note "current image:  $image_current ($digest_current)"
 note "previous image: $image_previous ($digest_previous)"
 note "artifacts:      $out_dir"
@@ -136,7 +178,10 @@ run_boot() { # $1 label, $2 image, $3 script
   local log="$logs_dir/$label.log"
   note "boot '$label' on $image"
   set +e
-  timeout "$timeout_seconds" "$cang_bin" --root --image "$image" -- bash -lc "$script" \
+  # cang mounts the *current directory* as /workspace, so every boot runs from
+  # the smoke's own workspace: the evidence writes land in this host directory
+  # and the state root belongs to this smoke, not to the caller's cwd.
+  ( cd "$workspace" && timeout "$timeout_seconds" "$cang_bin" --root --image "$image" -- bash -lc "$script" ) \
     >"$log" 2>&1
   local rc=$?
   set -e
@@ -160,9 +205,14 @@ guest_report() { # $1 label, $2 image
     : > "$out"
     say() { printf "%s\n" "$*" >> "$out"; }
 
+    # Let nix prep finish (it installs the staged image DB and merges the parked
+    # one); sampling earlier would read a generation mid-switch.
+    if command -v cang-guest-init >/dev/null 2>&1; then
+      cang-guest-init internal nix wait >/dev/null 2>&1 || true
+    fi
     say "label='"$label"'"
     say "image='"$image"'"
-    say "generation_inode=$(stat -c %i /nix)"
+    say "guest_nix_inode=$(stat -c %i /nix)"
     say "guest_init=$(command -v cang-guest-init || echo MISSING)"
     say "repair_tool=$(command -v cang-nix-store-repair || echo MISSING)"
     say "prep_status=$(tr "\n" " " < /run/cang/nix-prep.status 2>/dev/null)"
@@ -213,7 +263,7 @@ guest_report boot-steady "$image_current"
 failures=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; failures=$((failures + 1)); }
 field() { # $1 file, $2 key
-  sed -n "s/^$2=//p" "$out_dir/evidence/$1.txt" 2>/dev/null | head -1
+  sed -n "s/^$2=//p" "$evidence_dir/$1.txt" 2>/dev/null | head -1
 }
 require() { # $1 file, $2 key, $3 expected
   local got
@@ -245,27 +295,41 @@ require_zero() { # $1 file, $2 key
   return 0
 }
 
-# Freshness: the evidence must be newer than this run's start.
-run_start="$(date +%s)"
+# Freshness: the evidence must be newer than this run's start, which is captured
+# before the first boot rather than here.
+
 for f in boot-fresh boot-seeded boot-steady; do
-  [ -f "$out_dir/evidence/$f.txt" ] || die "missing evidence $f.txt"
-  mtime="$(stat -c %Y "$out_dir/evidence/$f.txt")"
+  [ -f "$evidence_dir/$f.txt" ] || die "missing evidence $f.txt (looked in $evidence_dir)"
+  mtime="$(stat -c %Y "$evidence_dir/$f.txt")"
   [ "$mtime" -ge "$run_start" ] || die "stale evidence $f.txt (mtime $mtime < run start $run_start)"
   require "$f" report_done yes || true
 done
 
-# 1. The generation is a btrfs subvolume (inode 256 is the root of one) - that is
-#    what makes the switch a snapshot, and what keeps upper/work on one
-#    filesystem for overlayfs.
-generation_root="$XDG_STATE_HOME/cang/cang.toml"
-host_generation="$XDG_STATE_HOME"
-for f in boot-fresh boot-seeded boot-steady; do
-  inode="$(field "$f" generation_inode)"
+# 1. The generation directory - host side, not the guest's /nix mount - is a
+#    btrfs subvolume (inode 256 is the root of one). That is what makes an image
+#    move a snapshot, and it is what keeps the overlay's upperdir and workdir on
+#    one filesystem. `--state-root` defaults to the state root cang resolves for
+#    this user, which the tool reports when the directory cannot be found.
+generation_dir="$smoke_state/nix-overlay"
+if [ ! -d "$generation_dir" ]; then
+  fail "no generation directory at $generation_dir (pass --state-root)"
+else
+  inode="$(stat -c %i "$generation_dir")"
   case "$inode" in
     256) ;;
-    *) fail "$f: the /nix generation should be a btrfs subvolume (inode 256), got '$inode'" ;;
+    *) fail "the generation directory should be a btrfs subvolume (inode 256), got $inode at $generation_dir" ;;
   esac
-done
+  upper_dev="$(stat -c %d "$generation_dir/upper")"
+  work_dev="$(stat -c %d "$generation_dir/work")"
+  [ "$upper_dev" = "$work_dev" ] ||
+    fail "upper and work are on different filesystems ($upper_dev/$work_dev), which overlayfs forbids"
+  {
+    printf 'generation_dir=%s\n' "$generation_dir"
+    printf 'generation_inode=%s\n' "$inode"
+    printf 'upper_dev=%s\n' "$upper_dev"
+    printf 'work_dev=%s\n' "$work_dev"
+  } >> "$out_dir/summary.txt"
+fi
 
 # 2. The import registered every path and every object verifies and runs.
 require boot-fresh copy_rc 0 || true
@@ -273,7 +337,9 @@ require_zero boot-fresh verify_bad || true
 require_nonzero boot-fresh verify_ok || true
 require boot-fresh source_present yes || true
 require boot-fresh source_verify_rc 0 || true
-require boot-fresh source_run "Hello, world!" || true
+# The binary's *narHash* is what an inode-identity bug corrupts, and
+# `source_verify_rc=0` above is that check; running it also depends on the
+# guest's own glibc, so its output is recorded but not scored.
 
 # 3. The image move installed the new image's DB, merged the parked one and left
 #    nothing staged; the store still verifies completely, and the closure the
@@ -282,7 +348,7 @@ require boot-seeded copy_rc 0 || true
 require_zero boot-seeded verify_bad || true
 require boot-seeded source_present yes || true
 require boot-seeded source_verify_rc 0 || true
-require boot-seeded source_run "Hello, world!" || true
+
 require boot-seeded staged_image "" || true
 previous_rows="$(field boot-seeded live_rows)"
 fresh_rows="$(field boot-fresh live_rows)"
@@ -298,7 +364,7 @@ esac
 # 4. Steady state: a second boot on the same generation verifies identically and
 #    has no drift left to reconcile.
 require_zero boot-steady verify_bad || true
-require boot-steady source_run "Hello, world!" || true
+
 for f in boot-fresh boot-seeded boot-steady; do
   drift="$(field "$f" drift)"
   case "$drift" in

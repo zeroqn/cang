@@ -516,17 +516,27 @@ impl UpperSeedCommands for HostUpperSeedCommands {
             return Ok(());
         }
         self.create_generation_root(target)?;
-        for dir in [UPPER_DIR, WORK_DIR, MERGED_DIR] {
-            let from = source.join(dir);
-            if from.is_dir() {
-                clone_tree(&from, &target.join(dir)).with_context(|| {
-                    format!(
-                        "failed to clone the /nix overlay generation '{}' into '{}'",
-                        source.display(),
-                        target.display()
-                    )
-                })?;
-            }
+        // Only the upper carries anything worth keeping. `work` and `merged` are
+        // overlayfs scratch: they hold the previous mount's state, and after a
+        // guest has run they belong to its uid, so copying them is both useless
+        // and impossible for an unprivileged host process.
+        let from = source.join(UPPER_DIR);
+        if from.is_dir() {
+            clone_tree(&from, &target.join(UPPER_DIR)).with_context(|| {
+                format!(
+                    "failed to clone the /nix overlay upper '{}' into '{}'",
+                    from.display(),
+                    target.display()
+                )
+            })?;
+        }
+        for dir in [WORK_DIR, MERGED_DIR] {
+            fs::create_dir_all(target.join(dir)).with_context(|| {
+                format!(
+                    "failed to create '{}' in the seeded /nix overlay generation",
+                    dir
+                )
+            })?;
         }
         Ok(())
     }

@@ -287,13 +287,13 @@ fn install_staged_image_db() -> Result<()> {
     }
     for stale in ["daemon-socket", "temproots"] {
         let path = Path::new("/nix/var/nix").join(stale);
-        if let Err(err) = std::fs::remove_dir_all(&path) {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "cang-guest-init: warning: failed to remove '{}': {err}",
-                    path.display()
-                );
-            }
+        if let Err(err) = std::fs::remove_dir_all(&path)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "cang-guest-init: warning: failed to remove '{}': {err}",
+                path.display()
+            );
         }
     }
     if let Err(err) = std::fs::remove_dir_all(Path::new(STAGED_IMAGE_DB_DIR)) {
