@@ -445,6 +445,7 @@
             rmuxPrebuilt = packages.rmux-prebuilt;
             rtkPrebuilt = packages.rtk-prebuilt or null;
             zvecGrep = packages.zvec-grep;
+            zgModels = packages.zg-models;
             onnxruntimeShim = packages.onnxruntime-shim;
             waypipe = packages.waypipe-bin;
             doltPrebuilt = packages.dolt-prebuilt;

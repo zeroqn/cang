@@ -9,6 +9,7 @@
   rmuxPrebuilt,
   rtkPrebuilt,
   zvecGrep,
+  zgModels,
   waypipe,
   doltPrebuilt,
   beadsPrebuilt,
@@ -35,6 +36,7 @@ let
       rmuxPrebuilt
       rtkPrebuilt
       zvecGrep
+      zgModels
       waypipe
       doltPrebuilt
       beadsPrebuilt

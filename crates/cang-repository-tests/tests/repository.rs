@@ -1730,6 +1730,94 @@ fn zg_is_built_from_the_zvec_grep_rust_workspace_with_a_prebuilt_asset_path() {
     );
 }
 
+/// `zg` ships llama.cpp's Vulkan backend, and the image pre-installs the embedding
+/// models its guest picks between, so a first `zg --index` needs neither a GPU
+/// driver install nor the network.
+#[test]
+fn zg_ships_the_vulkan_backend_and_the_image_models() {
+    const VULKAN_PATCH: &str =
+        include_str!("../../../nix/pkgs/patches/zvec-grep-vulkan-backend.patch");
+    const ZVEC_GREP_NIX: &str = include_str!("../../../nix/pkgs/zvec-grep.nix");
+    const ZG_MODELS_NIX: &str = include_str!("../../../nix/pkgs/zg-models.nix");
+    const GUEST_ZG_RS: &str =
+        include_str!("../../../crates/cang-guest-init/src/guest_init/components/zg.rs");
+    const IMAGE_CONFIG_NIX: &str = include_str!("../../../nix/image/config.nix");
+
+    // The backend is on by default, and the ONNX WebGPU execution provider is not
+    // part of it: that one is wgpu, and cang's guest GPU stack is venus Vulkan
+    // through llama.cpp. Upstream wires both to the same feature, so the split is
+    // what keeps `ort/webgpu` out of the build.
+    assert!(
+        VULKAN_PATCH.contains("default = [\"vulkan\"]"),
+        "the patch should enable the Vulkan backend by default"
+    );
+    assert!(
+        VULKAN_PATCH.contains("vulkan = [\"llama-cpp-2/vulkan\"]"),
+        "the vulkan feature should be llama.cpp's alone"
+    );
+    // ... which means removing upstream's line that had both.
+    assert!(
+        VULKAN_PATCH.contains("-vulkan = [\"llama-cpp-2/vulkan\", \"ort/webgpu\"]"),
+        "the patch should drop upstream's vulkan feature that includes ort/webgpu"
+    );
+    assert!(
+        VULKAN_PATCH.contains("+webgpu = [\"ort/webgpu\"]"),
+        "the ONNX WebGPU provider should move to its own feature"
+    );
+
+    for required in [
+        "pkgs.shaderc",
+        "pkgs.vulkan-headers",
+        "pkgs.spirv-headers",
+        "pkgs.vulkan-loader",
+        "zvec-grep-vulkan-backend.patch",
+    ] {
+        assert!(
+            ZVEC_GREP_NIX.contains(required),
+            "nix/pkgs/zvec-grep.nix should mention {required}"
+        );
+    }
+
+    // The install layout is `zg`'s own: Model2Vec models under
+    // `model2vec/<repo with / -> -->/<revision>/`, llama.cpp models by their
+    // `cache_file` name at the cache root (`hf_`-prefixed).
+    for required in [
+        "minishlab--potion-code-16M-v2",
+        "hf_Qwen_Qwen3-Embedding-0.6B-Q8_0.gguf",
+    ] {
+        assert!(
+            ZG_MODELS_NIX.contains(required),
+            "nix/pkgs/zg-models.nix should install {required}"
+        );
+    }
+
+    // The guest and the image have to agree on where the models are and which one
+    // a given guest uses.
+    assert!(
+        IMAGE_CONFIG_NIX.contains("CANG_ZG_MODELS_DIR=${layers.zgModels}/models"),
+        "the image should expose the models directory to the guest"
+    );
+    for required in [
+        "CANG_ZG_MODELS_DIR",
+        "ZVEC_GREP_EMBEDDING",
+        "ZVEC_GREP_DEVICE",
+        "local/potion-code-16m-v2",
+        "local/qwen3-embedding-0.6b",
+    ] {
+        assert!(
+            GUEST_ZG_RS.contains(required),
+            "guest-init's zg component should mention {required}"
+        );
+    }
+    // The allowlist is what makes the image variable reachable in the guest at all.
+    const ALLOWLIST_RS: &str =
+        include_str!("../../../crates/cang/src/runtime/launch/config/model.rs");
+    assert!(
+        ALLOWLIST_RS.contains("\"CANG_ZG_MODELS_DIR\""),
+        "cang must pass CANG_ZG_MODELS_DIR through to the guest"
+    );
+}
+
 /// The image's `pi` is built with bun, not with nixpkgs' node: the dependency
 /// tree is installed by `bun install` against a bun lockfile and the build runs
 /// pi's own `build:binary` (which compiles the standalone with
