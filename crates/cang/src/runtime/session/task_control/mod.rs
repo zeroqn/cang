@@ -17,7 +17,7 @@ const TERM_GRACE: Duration = Duration::from_millis(500);
 pub(crate) enum TaskControlCommand {
     Ps,
     Kill { task_id: String },
-    Attach { task_id: String },
+    Attach { task_id: String, force: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,8 +236,13 @@ pub(crate) fn run_task_control_command(
             &mut HostTaskSignaler,
             thread::sleep,
         ),
-        TaskControlCommand::Attach { task_id } => {
-            crate::runtime::session::attach::attach_to_task(app_dir, &task_id, &ProcfsInspector)
+        TaskControlCommand::Attach { task_id, force } => {
+            crate::runtime::session::attach::attach_to_task(
+                app_dir,
+                &task_id,
+                &ProcfsInspector,
+                force,
+            )
         }
     }
 }

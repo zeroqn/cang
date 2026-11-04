@@ -99,6 +99,35 @@ pub(in crate::guest_init) fn run(
     )
 }
 
+/// How long a busy-rejected client has to answer with a forced-takeover request
+/// before the session drops its connection.
+const FORCE_ATTACH_WAIT_MS: i32 = 500;
+
+/// Read the answer a busy-rejected client sends back, if it sends one at all.
+///
+/// The rejection frame goes out first, so an ordinary client still fails fast;
+/// only a client that was just told the session is busy has anything to say, and
+/// `cang attach --force` says it immediately.
+fn forced_takeover_requested(client: &mut File) -> Result<bool> {
+    let mut pollfd = libc::pollfd {
+        fd: client.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let rc = unsafe { libc::poll(&mut pollfd, 1, FORCE_ATTACH_WAIT_MS) };
+    if rc < 0 {
+        let err = std::io::Error::last_os_error();
+        if err.kind() == std::io::ErrorKind::Interrupted {
+            return Ok(false);
+        }
+        return Err(err).context("managed session force-attach poll failed");
+    }
+    if rc == 0 {
+        return Ok(false);
+    }
+    Ok(matches!(read_frame(client)?, Some(Frame::ForceAttach)))
+}
+
 /// The two guest-side presentation modes a managed session runs under: how PTY
 /// output is normalized, and whether the PTY carries a terminal session or a
 /// launcher command's data.
@@ -194,7 +223,7 @@ fn run_pre_start_event_loop(
                         }
                     };
                 let mut terminal_state = TerminalState::new(effective_size);
-                match serve_attached_client(
+                let first = serve_attached_client(
                     &pty.master,
                     child,
                     client,
@@ -202,7 +231,20 @@ fn run_pre_start_event_loop(
                     &mut terminal_state,
                     attach_profile,
                     pty_forwarding_mode,
-                )? {
+                )?;
+                let result = match first {
+                    ClientResult::Takeover(client) => serve_session_clients(
+                        &pty.master,
+                        child,
+                        client,
+                        &listener,
+                        &mut terminal_state,
+                        attach_profile,
+                        pty_forwarding_mode,
+                    )?,
+                    result => result,
+                };
+                match result {
                     ClientResult::Detached => {
                         return run_event_loop(
                             pty.master,
@@ -214,6 +256,9 @@ fn run_pre_start_event_loop(
                         );
                     }
                     ClientResult::ChildExited(code) => exit_status::report_and_exit(code),
+                    ClientResult::Takeover(_) => {
+                        unreachable!("a forced takeover is served, not returned")
+                    }
                 }
             }
         }
@@ -655,7 +700,7 @@ fn run_event_loop(
         }
         if fds[0].revents & libc::POLLIN != 0 {
             let client = listener.accept()?;
-            match serve_client(
+            match serve_session_clients(
                 &master,
                 child,
                 client,
@@ -666,15 +711,49 @@ fn run_event_loop(
             )? {
                 ClientResult::Detached => continue,
                 ClientResult::ChildExited(code) => exit_status::report_and_exit(code),
+                ClientResult::Takeover(_) => {
+                    unreachable!("a forced takeover is served, not returned")
+                }
             }
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum ClientResult {
     Detached,
     ChildExited(i32),
+    /// `cang attach --force` took the session over from the client that held it.
+    /// The new client has only been told the session was busy, so it still needs
+    /// the post-start handshake before it can be served.
+    Takeover(File),
+}
+
+/// Serve a client through its post-start handshake and attached session, and
+/// keep serving whatever client takes the session over from it.
+fn serve_session_clients(
+    master: &File,
+    child: libc::pid_t,
+    mut client: File,
+    listener: &VsockListener,
+    terminal_state: &mut TerminalState,
+    attach_profile: bool,
+    pty_forwarding_mode: PtyForwardingMode,
+) -> Result<ClientResult> {
+    loop {
+        match serve_client(
+            master,
+            child,
+            client,
+            listener,
+            terminal_state,
+            attach_profile,
+            pty_forwarding_mode,
+        )? {
+            ClientResult::Takeover(next_client) => client = next_client,
+            result => return Ok(result),
+        }
+    }
 }
 
 fn serve_client(
@@ -851,6 +930,14 @@ fn serve_attached_client(
             && let Ok(mut extra_client) = listener.accept()
         {
             let _ = write_frame(&mut extra_client, &Frame::Busy);
+            if forced_takeover_requested(&mut extra_client)? {
+                trace_event_from_env("guest", "force-attach", "direction=host-to-guest-takeover");
+                let _ = write_frame(&mut client, &Frame::Detach);
+                apply_pending_resizes(&resize_rx, terminal_state);
+                let _ = profiler.report_to(&mut std::io::stderr().lock());
+                stop_client_input(&active, client.as_raw_fd(), input_thread);
+                return Ok(ClientResult::Takeover(extra_client));
+            }
         }
         if fds[0].revents & libc::POLLIN == 0 {
             continue;
@@ -1766,7 +1853,10 @@ mod tests {
             .unwrap();
         assert_data_frames_eq(&mut client, b"primary-da-visible\r\n");
         write_frame(&mut client, &Frame::Detach).unwrap();
-        assert_eq!(server.join().unwrap().unwrap(), ClientResult::Detached);
+        assert!(matches!(
+            server.join().unwrap().unwrap(),
+            ClientResult::Detached
+        ));
         // The child waits for this signal, so the detach above always landed on
         // a live session; end it the way `run_sigwinch_redraw_pty_child` is ended.
         assert_eq!(unsafe { libc::kill(child, libc::SIGTERM) }, 0);
@@ -1844,7 +1934,7 @@ mod tests {
         let (forwarded, exit_code, result) = collect_final_session_frames(child, pty);
         assert_eq!(forwarded, b"final-visible\r\n");
         assert_eq!(exit_code, 0);
-        assert_eq!(result, ClientResult::ChildExited(0));
+        assert!(matches!(result, ClientResult::ChildExited(0)));
     }
 
     /// A writer that closes *after* the session reaped the child must still have
@@ -1877,7 +1967,7 @@ mod tests {
         let (forwarded, exit_code, result) = collect_final_session_frames(child, pty);
         assert_eq!(forwarded, b"final-visible\r\n");
         assert_eq!(exit_code, 0);
-        assert_eq!(result, ClientResult::ChildExited(0));
+        assert!(matches!(result, ClientResult::ChildExited(0)));
     }
 
     #[test]
@@ -2403,8 +2493,119 @@ mod tests {
         );
 
         write_frame(&mut client, &Frame::Detach).unwrap();
-        assert_eq!(server.join().unwrap().unwrap(), ClientResult::Detached);
+        assert!(matches!(
+            server.join().unwrap().unwrap(),
+            ClientResult::Detached
+        ));
         assert_eq!(unsafe { libc::kill(child, libc::SIGTERM) }, 0);
+        assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+    }
+
+    #[test]
+    fn forced_takeover_request_reads_only_a_force_attach_frame() {
+        let (mut peer, server) = UnixStream::pair().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut server = unsafe { File::from_raw_fd(server.into_raw_fd()) };
+
+        write_frame(&mut peer, &Frame::ForceAttach).unwrap();
+        assert!(forced_takeover_requested(&mut server).unwrap());
+
+        let (mut peer, silent) = UnixStream::pair().unwrap();
+        let mut silent = unsafe { File::from_raw_fd(silent.into_raw_fd()) };
+        write_frame(&mut peer, &Frame::Detach).unwrap();
+        assert!(!forced_takeover_requested(&mut silent).unwrap());
+
+        // A client that was only told the session is busy never answers, so the
+        // wait has to end on its own rather than hold the session's loop.
+        let (_peer, quiet) = UnixStream::pair().unwrap();
+        let mut quiet = unsafe { File::from_raw_fd(quiet.into_raw_fd()) };
+        let started = Instant::now();
+        assert!(!forced_takeover_requested(&mut quiet).unwrap());
+        assert!(started.elapsed() >= Duration::from_millis(FORCE_ATTACH_WAIT_MS as u64 / 2));
+    }
+
+    #[test]
+    fn forced_takeover_moves_the_session_to_the_new_client() {
+        let pty = Pty::open().unwrap();
+        let slave = pty_slave_cstring(&pty);
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            close_inherited_fds();
+            let code = write_then_wait_on_pty_slave(&slave, b"takeover-visible\n");
+            // SAFETY: see `attached_client_receives_initial_pty_output`.
+            unsafe { libc::_exit(code) }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("listener.sock");
+        let unix_listener = UnixListener::bind(&socket_path).unwrap();
+        let listener = VsockListener {
+            fd: unix_listener.into_raw_fd(),
+        };
+        let (mut first_client, first_server) = UnixStream::pair().unwrap();
+        let first_server_file = unsafe { File::from_raw_fd(first_server.into_raw_fd()) };
+
+        let server = thread::spawn(move || {
+            let mut terminal_state = TerminalState::new(PtySize::default());
+            serve_session_clients(
+                &pty.master,
+                child,
+                first_server_file,
+                &listener,
+                &mut terminal_state,
+                false,
+                PtyForwardingMode::Normalized,
+            )
+        });
+
+        first_client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(
+            read_frame(&mut first_client).unwrap(),
+            Some(Frame::Hello {
+                version: PROTOCOL_VERSION
+            })
+        );
+        write_frame(&mut first_client, &Frame::Attach).unwrap();
+
+        let mut forced = UnixStream::connect(&socket_path).unwrap();
+        forced
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(read_frame(&mut forced).unwrap(), Some(Frame::Busy));
+        write_frame(&mut forced, &Frame::ForceAttach).unwrap();
+
+        // The forced client is served through the post-start handshake it never
+        // got as a busy-rejected one.
+        assert_eq!(
+            read_frame(&mut forced).unwrap(),
+            Some(Frame::Hello {
+                version: PROTOCOL_VERSION
+            })
+        );
+        write_frame(&mut forced, &Frame::Attach).unwrap();
+        // The evicted client is told the session moved on instead of being left
+        // waiting on a PTY it no longer owns. Restore frames may still be queued
+        // ahead of the detach, so skip whatever the session had already sent.
+        loop {
+            match read_frame(&mut first_client).unwrap() {
+                Some(Frame::Detach) => break,
+                Some(Frame::Data(_)) => continue,
+                frame => panic!("expected the evicted client to be detached, got {frame:?}"),
+            }
+        }
+
+        write_frame(&mut forced, &Frame::Detach).unwrap();
+        assert!(matches!(
+            server.join().unwrap().unwrap(),
+            ClientResult::Detached
+        ));
+        assert_eq!(unsafe { libc::kill(child, libc::SIGTERM) }, 0);
+        let mut status = 0;
         assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
     }
 

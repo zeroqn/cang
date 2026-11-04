@@ -131,6 +131,7 @@ pub fn entrypoint() -> ExitCode {
         }
         CliAction::Attach {
             task_id,
+            force,
             log_settings,
         } => {
             if let Err(err) = logging::init_tracing(&log_settings) {
@@ -138,7 +139,7 @@ pub fn entrypoint() -> ExitCode {
                 return ExitCode::from(1);
             }
             match runtime::run_task_control_command(
-                runtime::session::task_control::TaskControlCommand::Attach { task_id },
+                runtime::session::task_control::TaskControlCommand::Attach { task_id, force },
             ) {
                 Ok(output) => {
                     print!("{output}");

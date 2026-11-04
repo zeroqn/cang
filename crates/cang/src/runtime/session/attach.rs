@@ -218,6 +218,7 @@ pub(crate) fn attach_to_task(
     app_dir: &Path,
     task_selector: &str,
     inspector: &impl ProcessInspector,
+    force: bool,
 ) -> Result<String> {
     let records = list_records(app_dir)?;
     let record = resolve_task_selector(&records, task_selector)?;
@@ -235,13 +236,13 @@ pub(crate) fn attach_to_task(
             record.task_id
         )
     })?;
-    let outcome = attach_to_socket(&managed.attach_socket)?;
+    let outcome = attach_to_socket(&managed.attach_socket, force)?;
     Ok(outcome.message())
 }
 
-pub(crate) fn attach_to_socket(socket_path: &Path) -> Result<AttachOutcome> {
+pub(crate) fn attach_to_socket(socket_path: &Path, force: bool) -> Result<AttachOutcome> {
     let stream = connect_with_retry(socket_path, ConnectPolicy::reconnect())?;
-    attach_stream(stream)
+    attach_stream(stream, force)
 }
 
 #[cfg(test)]
@@ -355,13 +356,25 @@ fn attach_to_ready_socket_with_policy(
     })
 }
 
-fn attach_stream(mut stream: UnixStream) -> Result<AttachOutcome> {
+fn attach_stream(mut stream: UnixStream, force: bool) -> Result<AttachOutcome> {
     match read_initial_hello(&mut stream)? {
         InitialHello::Ready => {
             attach_stream_after_hello(stream, AttachInputPolicy::default(), None)
         }
         InitialHello::ClosedBeforeHandshake => bail!("cang attach socket closed before handshake"),
-        InitialHello::Busy => bail!("cang task already has an attached client"),
+        InitialHello::Busy if !force => bail!("cang task already has an attached client"),
+        InitialHello::Busy => {
+            trace_event_from_env("host", "force-attach", "direction=host-to-guest");
+            write_frame(&mut stream, &Frame::ForceAttach)?;
+            match read_initial_hello(&mut stream)? {
+                InitialHello::Ready => {
+                    attach_stream_after_hello(stream, AttachInputPolicy::default(), None)
+                }
+                _ => bail!(
+                    "cang task did not release its attached client for a forced takeover; the guest init in this image may predate cang attach --force"
+                ),
+            }
+        }
     }
 }
 
@@ -1724,6 +1737,71 @@ mod tests {
                 .unwrap();
 
         assert_eq!(outcome, AttachOutcome::Exited(0));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn forced_attach_takes_the_session_over_from_a_busy_guest() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("attach.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (mut client, _) = listener.accept().unwrap();
+            write_frame(&mut client, &Frame::Busy).unwrap();
+            assert_eq!(read_frame(&mut client).unwrap(), Some(Frame::ForceAttach));
+            write_frame(
+                &mut client,
+                &Frame::Hello {
+                    version: PROTOCOL_VERSION,
+                },
+            )
+            .unwrap();
+            assert_eq!(read_frame(&mut client).unwrap(), Some(Frame::Attach));
+            write_frame(&mut client, &Frame::Exit { code: 0 }).unwrap();
+        });
+
+        let outcome = attach_to_socket(&socket, true).unwrap();
+
+        assert_eq!(outcome, AttachOutcome::Exited(0));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn busy_guest_refuses_attach_without_force() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("attach.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (mut client, _) = listener.accept().unwrap();
+            write_frame(&mut client, &Frame::Busy).unwrap();
+        });
+
+        let err = attach_to_socket(&socket, false).expect_err("busy session must refuse attach");
+
+        assert!(
+            format!("{err:#}").contains("already has an attached client"),
+            "unexpected error: {err:#}"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn forced_attach_reports_a_refused_takeover() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("attach.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (mut client, _) = listener.accept().unwrap();
+            write_frame(&mut client, &Frame::Busy).unwrap();
+            assert_eq!(read_frame(&mut client).unwrap(), Some(Frame::ForceAttach));
+        });
+
+        let err = attach_to_socket(&socket, true).expect_err("refused takeover must fail");
+
+        assert!(
+            format!("{err:#}").contains("did not release its attached client"),
+            "unexpected error: {err:#}"
+        );
         server.join().unwrap();
     }
 

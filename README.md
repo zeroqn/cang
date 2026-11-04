@@ -365,6 +365,7 @@ Run/help:
 ./result/bin/cang --waypipe exec <task-id-or-handle-selector> -- gui-application
 ./result/bin/cang --waypipe=/tmp/other-waypipe.sock exec <task-id-or-handle-selector> -- gui-application
 ./result/bin/cang attach <task-id-or-handle-selector>
+./result/bin/cang attach --force <task-id-or-handle-selector>
 ./result/bin/cang a <task-id-or-handle-selector>
 ./result/bin/cang kill <task-id-or-handle-selector>
 ./result/bin/cang container-store resize --size 128G

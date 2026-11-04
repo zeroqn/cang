@@ -57,7 +57,12 @@ relaunch them with the current version before using `cang exec`.
   usable without pressing `Enter` just to
   redraw. This restore state is not persisted across helper or VM restart.
 - Only one attach client is supported at a time. A second attach attempt receives
-  a busy error instead of sharing the PTY.
+  a busy error instead of sharing the PTY. `cang attach --force
+  <task-id-or-handle-selector>` takes the session over instead: the guest hands
+  the PTY to the new client and the evicted client detaches (`cang: detached`),
+  as `Ctrl-\` would have. Use it when the client holding the session is gone but
+  the guest never saw it leave, for example after a dropped SSH connection or a
+  terminal closed under a still-running attach process.
 - `cang -- <command>` behaves like a process launcher: the command's output is
   streamed to cang's stdout while it runs, and cang exits with the command's
   status. A command killed by a signal reports `128 + signal` (a SIGTERM-killed

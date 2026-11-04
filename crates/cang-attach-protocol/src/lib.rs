@@ -21,6 +21,7 @@ const TAG_DETACH: u8 = 5;
 const TAG_EXIT: u8 = 6;
 const TAG_ERROR: u8 = 7;
 const TAG_BUSY: u8 = 8;
+const TAG_FORCE_ATTACH: u8 = 9;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
@@ -32,6 +33,9 @@ pub enum Frame {
     Exit { code: i32 },
     Error(String),
     Busy,
+    // A busy-rejected client asks the guest to take the PTY over from the
+    // client that currently holds it.
+    ForceAttach,
 }
 
 impl Frame {
@@ -45,13 +49,14 @@ impl Frame {
             Self::Exit { .. } => TAG_EXIT,
             Self::Error(_) => TAG_ERROR,
             Self::Busy => TAG_BUSY,
+            Self::ForceAttach => TAG_FORCE_ATTACH,
         }
     }
 
     fn payload(&self) -> Vec<u8> {
         match self {
             Self::Hello { version } => version.to_be_bytes().to_vec(),
-            Self::Attach | Self::Detach | Self::Busy => Vec::new(),
+            Self::Attach | Self::Detach | Self::Busy | Self::ForceAttach => Vec::new(),
             Self::Data(data) => data.clone(),
             Self::Resize { rows, cols } => [rows.to_be_bytes(), cols.to_be_bytes()].concat(),
             Self::Exit { code } => code.to_be_bytes().to_vec(),
@@ -144,6 +149,7 @@ fn decode_frame(tag: u8, payload: Vec<u8>) -> Result<Frame> {
             String::from_utf8(payload).map_err(|_| anyhow!("error payload is not utf-8"))?,
         )),
         TAG_BUSY => empty_payload(payload, Frame::Busy),
+        TAG_FORCE_ATTACH => empty_payload(payload, Frame::ForceAttach),
         _ => bail!("unknown cang attach protocol frame tag {tag}"),
     }
 }
@@ -328,6 +334,7 @@ mod tests {
             Frame::Exit { code: 42 },
             Frame::Error("nope".to_owned()),
             Frame::Busy,
+            Frame::ForceAttach,
         ];
         let mut bytes = Vec::new();
         for frame in &frames {

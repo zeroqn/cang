@@ -106,6 +106,7 @@ impl PtyOptions {
   cang container-store reset --force
   cang ps
   cang attach <task-id-or-handle-selector>
+  cang attach --force <task-id-or-handle-selector>
   cang a <task-id-or-handle-selector>
   cang kill <task-id-or-handle-selector>
   cang seccomp synthesize --input trace.jsonl --output policy.json"
@@ -409,6 +410,13 @@ pub(crate) enum CliCommand {
     Attach {
         #[arg(value_name = "TASK_ID_OR_HANDLE_SELECTOR")]
         task_id: String,
+
+        #[arg(
+            long = "force",
+            action = ArgAction::SetTrue,
+            help = "Take the session over from the client that currently holds it"
+        )]
+        force: bool,
     },
 
     #[command(name = "kill", about = "Terminate an active cang task VM")]
@@ -518,6 +526,7 @@ pub(crate) enum CliAction {
     },
     Attach {
         task_id: String,
+        force: bool,
         log_settings: LogSettings,
     },
     Seccomp {
@@ -558,8 +567,9 @@ impl Cli {
                     task_id,
                     log_settings: LogSettings::from_process_env(self.log_level, self.debug),
                 },
-                CliCommand::Attach { task_id } => CliAction::Attach {
+                CliCommand::Attach { task_id, force } => CliAction::Attach {
                     task_id,
+                    force,
                     log_settings: LogSettings::from_process_env(self.log_level, self.debug),
                 },
                 CliCommand::Seccomp { command } => CliAction::Seccomp {
@@ -1046,6 +1056,31 @@ mod tests {
         assert!(matches!(
             alias.into_action(),
             crate::cli::CliAction::Attach { task_id, .. } if task_id == "workspace-123"
+        ));
+    }
+
+    #[test]
+    fn parses_attach_force_flag() {
+        let cli = Cli::try_parse_from(["cang", "attach", "--force", "workspace-123"])
+            .expect("attach --force should parse");
+        let alias = Cli::try_parse_from(["cang", "a", "--force", "workspace-123"])
+            .expect("a --force should parse");
+
+        assert!(matches!(
+            cli.into_action(),
+            crate::cli::CliAction::Attach {
+                task_id,
+                force: true,
+                ..
+            } if task_id == "workspace-123"
+        ));
+        assert!(matches!(
+            alias.into_action(),
+            crate::cli::CliAction::Attach {
+                task_id,
+                force: true,
+                ..
+            } if task_id == "workspace-123"
         ));
     }
 
