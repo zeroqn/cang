@@ -15,6 +15,7 @@ mod attach_profile;
 pub(crate) mod exec;
 mod launcher_command;
 mod managed_attach_socket;
+mod memory_reclaim;
 pub(crate) mod nix_overlay;
 mod profile;
 mod pty_raw_passthrough;

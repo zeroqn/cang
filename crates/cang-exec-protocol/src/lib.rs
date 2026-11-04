@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const DEFAULT_EXEC_PORT: u32 = 50_428;
 
 const MAX_PAYLOAD_LEN: usize = 1024 * 1024;
@@ -18,6 +18,8 @@ const TAG_STDOUT: u8 = 7;
 const TAG_STDERR: u8 = 8;
 const TAG_EXIT: u8 = 9;
 const TAG_ERROR: u8 = 10;
+const TAG_RECLAIM_MEMORY: u8 = 11;
+const TAG_RECLAIMED_MEMORY: u8 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaypipeAction {
@@ -47,6 +49,15 @@ pub enum Frame {
         code: i32,
     },
     Error(String),
+    /// Ask the guest to release its reclaimable caches to the host kernel.
+    ///
+    /// The guest answers with [`Frame::ReclaimedMemory`], or with
+    /// [`Frame::Error`] when it could not free anything.
+    ReclaimMemory,
+    ReclaimedMemory {
+        /// Guest `MemFree` growth, in KiB, that the release produced.
+        freed_kib: u64,
+    },
 }
 
 impl Frame {
@@ -62,6 +73,8 @@ impl Frame {
             Self::Stderr(_) => TAG_STDERR,
             Self::Exit { .. } => TAG_EXIT,
             Self::Error(_) => TAG_ERROR,
+            Self::ReclaimMemory => TAG_RECLAIM_MEMORY,
+            Self::ReclaimedMemory { .. } => TAG_RECLAIMED_MEMORY,
         }
     }
 
@@ -75,6 +88,8 @@ impl Frame {
                 Ok(signal.to_be_bytes().to_vec())
             }
             Self::Error(message) => Ok(message.as_bytes().to_vec()),
+            Self::ReclaimMemory => Ok(Vec::new()),
+            Self::ReclaimedMemory { freed_kib } => Ok(freed_kib.to_be_bytes().to_vec()),
         }
     }
 }
@@ -146,6 +161,13 @@ fn decode_frame(tag: u8, payload: Vec<u8>) -> Result<Frame> {
         TAG_ERROR => Ok(Frame::Error(
             String::from_utf8(payload).map_err(|_| anyhow!("error payload is not utf-8"))?,
         )),
+        TAG_RECLAIM_MEMORY => {
+            require_empty(&payload, "reclaim memory")?;
+            Ok(Frame::ReclaimMemory)
+        }
+        TAG_RECLAIMED_MEMORY => Ok(Frame::ReclaimedMemory {
+            freed_kib: decode_u64(&payload, "reclaimed memory")?,
+        }),
         _ => bail!("unknown cang exec protocol frame tag {tag}"),
     }
 }
@@ -240,6 +262,13 @@ fn decode_u16(payload: &[u8], frame: &str) -> Result<u16> {
     Ok(u16::from_be_bytes(bytes))
 }
 
+fn decode_u64(payload: &[u8], frame: &str) -> Result<u64> {
+    let bytes: [u8; 8] = payload
+        .try_into()
+        .map_err(|_| anyhow!("cang exec {frame} payload must contain a u64"))?;
+    Ok(u64::from_be_bytes(bytes))
+}
+
 fn decode_i32(payload: &[u8], frame: &str) -> Result<i32> {
     let bytes: [u8; 4] = payload
         .try_into()
@@ -306,6 +335,11 @@ mod tests {
             Frame::Stderr(b"err".to_vec()),
             Frame::Exit { code: 23 },
             Frame::Error("failed".into()),
+            Frame::ReclaimMemory,
+            Frame::ReclaimedMemory { freed_kib: 0 },
+            Frame::ReclaimedMemory {
+                freed_kib: u64::MAX - 7,
+            },
         ] {
             round_trip(frame);
         }
@@ -338,6 +372,20 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("must not be empty"));
+    }
+
+    #[test]
+    fn reclaimed_memory_payload_must_be_a_u64() {
+        let bytes = vec![TAG_RECLAIMED_MEMORY, 0, 0, 0, 4, 0, 0, 0, 1];
+        let err = read_frame(&mut Cursor::new(bytes)).unwrap_err();
+        assert!(format!("{err:#}").contains("u64"));
+    }
+
+    #[test]
+    fn reclaim_memory_payload_must_be_empty() {
+        let bytes = vec![TAG_RECLAIM_MEMORY, 0, 0, 0, 1, 0];
+        let err = read_frame(&mut Cursor::new(bytes)).unwrap_err();
+        assert!(format!("{err:#}").contains("must be empty"));
     }
 
     #[test]

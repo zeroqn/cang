@@ -135,6 +135,33 @@ while the guest runs on, and in the guest as a bound driver under
 `/sys/bus/virtio/drivers/virtio_balloon/` (the pinned kernel builds the driver
 in).
 
+Because the balloon can only return what the guest has already freed, an idle
+guest that still holds a few hundred megabytes of page cache - the image's
+`/nix` store, files read over virtiofs - keeps that memory away from the host at
+exactly the moment the host starts swapping. The helper therefore watches the
+host's own pressure and asks the guest to release the cache. Two samples run at
+1 Hz: `full avg10` from `/proc/pressure/memory`, whose `full` line counts only
+time that every runnable task was stalled, and the swap-out rate from
+`/proc/vmstat`. Either crossing its threshold sends a `ReclaimMemory` frame over
+the exec control channel; the guest writes `1` to `/proc/sys/vm/drop_caches` and
+answers with the growth in `MemFree` that the release produced, so the helper's
+log line reports what it bought:
+
+```text
+host memory pressure: guest released its clean page cache trigger=swap-out freed_kib=412320
+```
+
+The guest kernel's free-page reporting then hands those pages back, which is the
+same `madvise(MADV_DONTNEED)` path as above, so the VM worker's RSS drops while
+the guest keeps running. The guest pays for it by re-reading whatever it had
+cached: `drop_caches` never discards dirty pages, so a guest in the middle of a
+write keeps its data, and only the page cache goes, not the dentry and inode
+slabs. A release is rate-limited to one per 30 seconds, and the whole watcher is
+off with `CANG_MEMORY_RECLAIM=0`. `CANG_MEMORY_RECLAIM_PSI_FULL` (percent,
+default 1) and `CANG_MEMORY_RECLAIM_SWAP_OUT` (4 KiB pages per second, default
+64) move the thresholds - a threshold of `0` fires on the first sample, which is
+how the release path is verified on a host under no pressure.
+
 Guest RAM is fixed for the life of the microVM, so the guest also gets zram
 swap: during `enter`, before the shell or any background preparation starts,
 `cang-guest-init` sets the device capacity in `/sys/block/zram0/disksize`,

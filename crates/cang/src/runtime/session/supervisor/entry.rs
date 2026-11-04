@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::logging::{self, LogSettings};
 use crate::runtime::launch::config::{LaunchConfig, NetworkMode};
 use crate::runtime::seccomp::{self, SeccompMode};
+use crate::runtime::session::memory_reclaim::MemoryReclaimGuard;
 use crate::runtime::session::profile::CangHostProfiler;
 use crate::runtime::session::pulse_bridge::PulseBridge;
 use crate::runtime::session::rootfs::task::{UnsharedBtrfsRootfsCommands, cleanup_task_rootfs_dir};
@@ -151,6 +152,17 @@ fn run_helper_profiled_inner(
             }
         }
     }
+    // Guest RAM is fixed for the life of the VM, so the only way the host gets
+    // memory back from an idle guest is the guest freeing it. Watch the host's
+    // own pressure and ask over the exec channel; the freed pages return through
+    // the balloon's free-page reporting. This lives in the helper, which outlives
+    // the launcher for a detached task, so a task left for `cang attach` keeps
+    // releasing memory too.
+    let _memory_reclaim = profiler.measure_result("helper_memory_reclaim_start", || {
+        Ok::<_, anyhow::Error>(MemoryReclaimGuard::start(
+            config.exec.as_ref().map(|exec| exec.socket.as_path()),
+        ))
+    })?;
     let (status, wait_duration) =
         profiler.measure_result_with_duration("helper_wait_vm_worker", || worker.wait())?;
     profiler.record_vm_worker_wait_details(task_state_dir, wait_duration);

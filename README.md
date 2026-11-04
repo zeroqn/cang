@@ -96,6 +96,15 @@ rootless Podman tooling for development.
   path is active, guest RAM is file-backed and shared with the host, so the
   virtio-balloon has nothing to reclaim; a plain `--gpu=drm` run keeps
   anonymous guest RAM and the balloon's host memory reclaim.
+- The libkrun helper watches the host's own memory pressure (`full avg10` from
+  `/proc/pressure/memory` and the swap-out rate from `/proc/vmstat`) and, when
+  either crosses its threshold, asks the guest over the exec control channel to
+  release its clean page cache. The guest frees the pages and the balloon hands
+  them back to the host kernel, so an idle task in a VM no longer holds hundreds
+  of megabytes hostage while the host swaps. `CANG_MEMORY_RECLAIM=0` disables
+  the watcher; `CANG_MEMORY_RECLAIM_PSI_FULL` and
+  `CANG_MEMORY_RECLAIM_SWAP_OUT` move the thresholds. Details in
+  [Images and storage](docs/images-and-storage.md).
 - `cang --wayland` enables guest Wayland passthrough through
   `wl-cross-domain-proxy` and libkrun virtio-gpu DRM. The cang image includes
   the guest proxy binary and guest-init exports `XDG_RUNTIME_DIR=/run/user/<uid>`

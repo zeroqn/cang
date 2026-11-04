@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::guest_init::components::env::GuestPermissions;
 use crate::guest_init::components::home::identity::DevIdentity;
+use crate::guest_init::components::memory;
 use crate::guest_init::components::waypipe::WaypipeService;
 use crate::guest_init::process;
 use crate::guest_init::runtime::vsock::VsockListener;
@@ -62,6 +63,31 @@ pub(in crate::guest_init) fn start(
     }))
 }
 
+/// Reads the request that follows the hello frame.
+///
+/// Returns `None` when the client asked for something this listener answers
+/// itself - a memory reclaim, whose reply has already gone out - or hung up.
+fn read_request(client: &mut std::fs::File) -> Result<Option<(Vec<String>, WaypipeAction)>> {
+    match read_frame(client)? {
+        Some(Frame::Start { argv, waypipe }) => Ok(Some((argv, waypipe))),
+        Some(Frame::ReclaimMemory) => {
+            // The listener thread runs as the guest's root identity: the
+            // command children drop credentials in `pre_exec`, this thread never
+            // does, and releasing page cache needs root.
+            let reply = match memory::reclaim_clean_page_cache() {
+                Ok(report) => Frame::ReclaimedMemory {
+                    freed_kib: report.freed_kib,
+                },
+                Err(err) => Frame::Error(format!("guest memory reclaim failed: {err:#}")),
+            };
+            write_frame(client, &reply)?;
+            Ok(None)
+        }
+        Some(frame) => bail!("expected exec start, got {frame:?}"),
+        None => Ok(None),
+    }
+}
+
 fn handle_client(
     mut client: std::fs::File,
     identity: &DevIdentity,
@@ -85,10 +111,8 @@ fn handle_client(
         Some(frame) => bail!("expected exec hello, got {frame:?}"),
         None => return Ok(()),
     }
-    let (argv, waypipe_action) = match read_frame(&mut client)? {
-        Some(Frame::Start { argv, waypipe }) => (argv, waypipe),
-        Some(frame) => bail!("expected exec start, got {frame:?}"),
-        None => return Ok(()),
+    let Some((argv, waypipe_action)) = read_request(&mut client)? else {
+        return Ok(());
     };
     let waypipe_result = match (waypipe_action, waypipe) {
         (WaypipeAction::Disabled, _) => Ok(()),
