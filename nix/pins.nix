@@ -333,11 +333,15 @@ in
     tag = "alpha";
     version = "0.3.0";
     revision = "e7ab89394e917ae5746ccdda813f882cd53c9797";
-    # Empty on purpose: the pinned asset for this revision predates the image's
-    # Vulkan backend (`nix/pkgs/zvec-grep.nix`), so it is no longer the binary the
-    # source builds. `build-zg.yml` publishes the Vulkan build under the same asset
-    # name on the next push, and `scripts/update-zg-prebuilt.sh --hash <sri>` pins
-    # those bytes again; until then the source build is what ships.
-    systems = { };
+    # The Vulkan build (`nix/pkgs/patches/zvec-grep-vulkan-backend.patch`), whose
+    # asset is ~2x the non-Vulkan one: llama.cpp's 155 shaders are compiled to
+    # SPIR-V at build time and embedded. `build-zg.yml` rebuilt and uploaded it
+    # under the same name; these are its bytes.
+    systems = {
+      x86_64-linux = {
+        asset = "zg-0.3.0-e7ab8939-x86_64-linux.tar.gz";
+        hash = "sha256-dJ46sCHAYJ38KiHHnm7QF6CvTMgCKKecoLVmu15l0J0=";
+      };
+    };
   };
 }
