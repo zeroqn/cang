@@ -14,6 +14,9 @@ const IMAGE_CONFIG_NIX: &str = include_str!("../../../nix/image/config.nix");
 const IMAGE_CHECKS_NIX: &str = include_str!("../../../nix/image/checks.nix");
 const NIX_STORE_DB_CHECK_NIX: &str = include_str!("../../../nix/image/nix-store-db-check.nix");
 const NIX_STORE_REPAIR_NIX: &str = include_str!("../../../nix/image/nix-store-repair.nix");
+const BUILD_MD: &str = include_str!("../../../docs/build.md");
+const NIX_GENERATION_SMOKE: &str =
+    include_str!("../../../tools/nix-generation-smoke/nix-generation-smoke.sh");
 const PINS_NIX: &str = include_str!("../../../nix/pins.nix");
 const WORKSPACE_SRC_NIX: &str = include_str!("../../../nix/pkgs/workspace-src.nix");
 const CARGO_TOML: &str = include_str!("../../../Cargo.toml");
@@ -1211,7 +1214,10 @@ fn image_includes_nix_store_reconciler_that_restores_before_deregistering() {
         r#"const PROFILE_REPAIR_STORE: &str = "nix-prep:repair-store";"#,
         r#"command::find_on_path("cang-nix-store-repair")"#,
         r#"command::run("cang-nix-store-repair", &args)"#,
-        r#"const PARKED_PREVIOUS_DB: &str = "/nix/var/nix/.cang-previous-db/db.sqlite";"#,
+        r#"const PARKED_PREVIOUS_DB: &str = "/nix/.cang-previous-db/db.sqlite";"#,
+        r#"const STAGED_IMAGE_DB_DIR: &str = "/nix/.cang-image-db";"#,
+        "fn install_staged_image_db()",
+        r#"for stale in ["daemon-socket", "temproots"]"#,
         r#"vec!["--import-db", PARKED_PREVIOUS_DB, "--purge-only"]"#,
     ] {
         assert!(
@@ -1266,8 +1272,16 @@ fn image_includes_nix_store_reconciler_that_restores_before_deregistering() {
         "FICLONE",
         "fn install_image_db(",
         "fn retired_sibling(",
-        "requires `upperdir` and `workdir` to be on the same filesystem",
-        r#"for stale_state in ["daemon-socket", "temproots"]"#,
+        // A generation is one directory holding upper/work/merged, created as a
+        // btrfs subvolume so a new image generation is a constant-time snapshot.
+        "fn create_generation_root(",
+        "fn clone_generation(",
+        r#"btrfs subvolume"#,
+        "fn is_subvolume(",
+        "that upperdir and workdir share a filesystem",
+        // The guest installs the staged image DB and wipes the dead daemon's
+        // state; the host only stages files at the upper's root, which it owns.
+        "IMAGE_DB_DIR",
         "fn make_dirs_writable(",
     ] {
         assert!(
@@ -2114,5 +2128,47 @@ fn one_pinned_fenix_rust_toolchain_serves_builds_the_devshell_and_the_image() {
         FLAKE_NIX.contains("wild = zgPkgs.wild-unwrapped;")
             && FLAKE_NIX.contains("wild = unstablePkgs.wild-unwrapped;"),
         "the guest and the dev shell have to link with wild-unwrapped"
+    );
+}
+
+/// The `/nix` generation-switch live smoke is the only thing that proves a
+/// workspace survives an image move, so it must keep scoring the three
+/// properties that make the switch safe: the generation is a btrfs subvolume
+/// (hence snapshot-able, and `upper`/`work` on one filesystem), the store
+/// verifies on both sides of the move, and the guest's merge leaves no drift.
+#[test]
+fn nix_generation_smoke_scores_the_snapshot_switch() {
+    for required in [
+        "--previous-image",
+        "--image",
+        "generation_inode",
+        "verify_bad",
+        "staged_image",
+        "live_rows",
+        "registered-but-absent=0 present-but-unregistered=0",
+        "same digest",
+        "Hello, world!",
+        "boot-fresh",
+        "boot-seeded",
+        "boot-steady",
+    ] {
+        assert!(
+            NIX_GENERATION_SMOKE.contains(required),
+            "nix-generation-smoke.sh does not score {required}"
+        );
+    }
+    for forbidden in ["nix store gc", "rm -rf /nix/store", "--ignore-liveness"] {
+        assert!(
+            !NIX_GENERATION_SMOKE.contains(forbidden),
+            "the generation smoke must not mutate stores destructively: {forbidden}"
+        );
+    }
+    assert!(
+        MAINTENANCE_MD.contains("tools/nix-generation-smoke"),
+        "docs/maintenance.md should list the generation smoke among the re-pin smokes"
+    );
+    assert!(
+        BUILD_MD.contains("A layer-spanning share needs verified inode identity"),
+        "docs/build.md should explain why the share's inode identity is verified"
     );
 }

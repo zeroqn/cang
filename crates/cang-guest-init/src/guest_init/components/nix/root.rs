@@ -23,8 +23,14 @@ const PROFILE_MOUNT_OVERLAY: &str = "nix-prep:mount-overlay";
 const PROFILE_REPAIR_STORE: &str = "nix-prep:repair-store";
 /// The cang host parks the previous /nix overlay generation's Nix DB here when
 /// it seeds the upper for a new image generation (`PARKED_DB_DIR` on the host).
-const PARKED_DB_DIR: &str = "/nix/var/nix/.cang-previous-db";
-const PARKED_PREVIOUS_DB: &str = "/nix/var/nix/.cang-previous-db/db.sqlite";
+const PARKED_DB_DIR: &str = "/nix/.cang-previous-db";
+const PARKED_PREVIOUS_DB: &str = "/nix/.cang-previous-db/db.sqlite";
+/// The cang host stages the new image generation's Nix DB here when it seeds the
+/// upper (a snapshot preserves the previous generation's ownership, so the host
+/// cannot write inside `/nix/var/nix`; this guest, running as root, installs it).
+const STAGED_IMAGE_DB_DIR: &str = "/nix/.cang-image-db";
+const STAGED_IMAGE_DB: &str = "/nix/.cang-image-db/db.sqlite";
+const LIVE_DB_DIR: &str = "/nix/var/nix/db";
 const PROFILE_CREATE_SOCKET_DIR: &str = "nix-prep:create-socket-dir";
 const PROFILE_START_DAEMON: &str = "nix-prep:start-daemon";
 
@@ -241,8 +247,64 @@ pub(in crate::guest_init) fn run_prep(
 // Best effort by design: a guest image older than this binary does not ship the
 // tool, a broken store must not stop the VM from booting, and the reconcile
 // only ever touches paths the DB already claims.
+/// Install the image generation's DB that the host staged for this generation.
+///
+/// A seeded generation is a snapshot of the previous one, so `/nix/var/nix`
+/// still belongs to the guest's uid and the *previous* image's DB. The host
+/// therefore leaves two directories at the upper's root - `.cang-image-db` (the
+/// new image's) and `.cang-previous-db` (the previous generation's, merged
+/// below) - and this function does the swap as root, dropping the dead daemon's
+/// socket and temproots with it.
+fn install_staged_image_db() -> Result<()> {
+    if !Path::new(STAGED_IMAGE_DB).is_file() {
+        return Ok(());
+    }
+    let live = Path::new(LIVE_DB_DIR);
+    std::fs::create_dir_all(live).with_context(|| format!("failed to create '{LIVE_DB_DIR}'"))?;
+    for name in [
+        "db.sqlite",
+        "db.sqlite-wal",
+        "db.sqlite-shm",
+        "schema",
+        "big-lock",
+    ] {
+        match std::fs::remove_file(live.join(name)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to replace '{LIVE_DB_DIR}/{name}'"));
+            }
+        }
+    }
+    for staged in ["db.sqlite", "schema"] {
+        let from = Path::new(STAGED_IMAGE_DB_DIR).join(staged);
+        if from.is_file() {
+            std::fs::copy(&from, live.join(staged)).with_context(|| {
+                format!("failed to install the image Nix DB '{}'", from.display())
+            })?;
+        }
+    }
+    for stale in ["daemon-socket", "temproots"] {
+        let path = Path::new("/nix/var/nix").join(stale);
+        if let Err(err) = std::fs::remove_dir_all(&path) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "cang-guest-init: warning: failed to remove '{}': {err}",
+                    path.display()
+                );
+            }
+        }
+    }
+    if let Err(err) = std::fs::remove_dir_all(Path::new(STAGED_IMAGE_DB_DIR)) {
+        eprintln!("cang-guest-init: warning: failed to remove '{STAGED_IMAGE_DB_DIR}': {err}");
+    }
+    Ok(())
+}
+
 fn repair_store(profiler: &mut impl ProfileRecorder) -> Result<()> {
     profiler.measure_result(PROFILE_REPAIR_STORE, || {
+        install_staged_image_db()?;
         if command::find_on_path("cang-nix-store-repair").is_none() {
             eprintln!(
                 "cang-guest-init: warning: cang-nix-store-repair is not on PATH; skipping /nix store reconciliation"

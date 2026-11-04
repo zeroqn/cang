@@ -175,13 +175,18 @@ A libkrun update is therefore:
    blob, which is not a workspace member and vendors from its own
    `init/init-binary/Cargo.lock`). `nix build .#cang` reports whichever
    mismatches first.
-5. Re-verify with a live boot and **both** smokes, not just a green build:
-   `tools/chromium-cang-smoke` (GPU and `--waypipe` modes) and
+5. Re-verify with a live boot and **all three** smokes, not just a green build:
+   `tools/chromium-cang-smoke` (GPU and `--waypipe` modes),
    `tools/virglrenderer-cang-smoke` (the Chromium smoke plus its VA-API
-   encode/decode arms and host-side attribution). Chromium/venus being green does
-   not cover the vrend VA-API path: the first re-base release after PR 889 shipped
-   with Chromium passing and the guest's hardware decode blank - see
+   encode/decode arms and host-side attribution) and
+   `tools/nix-generation-smoke` (a workspace `/nix` moving between two images:
+   the generation is a btrfs subvolume, the move seeds it by snapshot, and the
+   guest's DB merge keeps every store path valid). Chromium/venus being green
+   does not cover the vrend VA-API path: the first re-base release after PR 889
+   shipped with Chromium passing and the guest's hardware decode blank - see
    `wayfinder/libkrun-main-rebase/tickets/15-pr-889-breaks-vaapi-decode.md`.
+   A virtio-fs change must ship with the generation smoke green: the fork's
+   inode cache is what a layer-spanning `/nix` share exercises.
 
 ### Updating the rutabaga_gfx fork
 

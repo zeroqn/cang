@@ -61,7 +61,7 @@ pkgs.writeShellScriptBin "cang-nix-store-repair" ''
     --scratch DIR      scratch store root (default /var/tmp/cang-nix-store-repair)
     --store URI        Nix store to repair (default: local, else auto)
     --import-db PATH   merge another generation's Nix DB (a path the cang host
-                       parked at /nix/var/nix/.cang-previous-db/db.sqlite when it
+                       parked at /nix/.cang-previous-db/db.sqlite when it
                        seeded this overlay) into the live DB before reconciling
     --purge-only       never fetch: only deregister rows whose store object is
                        absent in the merged view (the right policy right after a

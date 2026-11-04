@@ -373,7 +373,7 @@ fn seeded_generation_imports_the_parked_db_and_never_fetches() {
         store_reconcile_args(true),
         vec![
             "--import-db",
-            "/nix/var/nix/.cang-previous-db/db.sqlite",
+            "/nix/.cang-previous-db/db.sqlite",
             "--purge-only"
         ]
     );

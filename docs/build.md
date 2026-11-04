@@ -303,57 +303,72 @@ prevents the drift, the second heals it if something else creates it.
 ### Seeding a new generation (host)
 
 When `cang` acquires the workspace overlay lease and the image digest or
-`lowerdir` differs from the recorded generation, it does not reuse the upper as
-is. It clones the previous upper — a `btrfs subvolume snapshot` when both are on
-btrfs (constant time, extents shared, so generations cost no extra data), and a
-hardlink clone otherwise (no data copied, one inode per entry) — so every
-substituted object stays available without being downloaded again. It then:
+`lowerdir` differs from the recorded generation, it replaces the generation
+directory wholesale:
 
-- parks the previous generation's DB at `var/nix/.cang-previous-db` inside the
-  upper (the guest sees `/nix/var/nix/.cang-previous-db`),
-- installs the new image's own DB as `var/nix/db`, so the live DB matches the
-  `lowerdir` that is about to be mounted,
-- drops stale `var/nix/daemon-socket` and `var/nix/temproots`,
-- retires the previous upper and rebuilds an empty overlay workdir.
+1. **`btrfs subvolume snapshot <generation> <generation>.new`** — constant time,
+   extents shared, ownership preserved by the filesystem. Measured on a
+   devshell-scale workspace upper (2501 store paths, 150 688 inodes, 3.0 GB):
+   **~25 ms and 0 bytes** per image move, against 10 s for the per-file clone it
+   replaced and 23 s for a byte copy. A plain-directory generation (an older
+   workspace, or a state root that is not btrfs) is cloned once with the
+   per-file strategy below and becomes a subvolume afterwards.
+2. **Both DBs are staged at the generation's root**, the one directory the host
+   owns: the previous generation's at `upper/.cang-previous-db` for the guest to
+   merge, and the new image's at `upper/.cang-image-db` for the guest to install.
+   The host cannot write inside `upper/var/nix` — after a guest has run nix those
+   directories belong to the guest's uid, and a snapshot preserves that.
+3. The previous generation is retired (`btrfs subvolume delete`, ~20 ms) and the
+   overlay `work`/`merged` directories are recreated empty.
 
-The new generation is a **clone of the previous upper**, never a fresh start, so
-every store object the workspace already holds stays usable and nothing is
-re-downloaded. `--profile` reports which happened as
-`nix_overlay_seed: fresh | reused | seeded`.
+Each generation is therefore **one directory holding `upper`, `work` and
+`merged`** (and, on btrfs, one subvolume). That layout is what makes the
+snapshot possible: overlayfs requires `upperdir` and `workdir` on the same
+filesystem, so keeping them inside one subvolume satisfies it by construction —
+a subvolume *at the upper itself* does not, and made every copy-up fail with
+`EXDEV`. The lease and its state live beside the directory
+(`nix-overlay.lease.{lock,state}`), never inside it, because the directory is
+replaced on every image move.
 
-The upper is deliberately a plain directory, not a btrfs subvolume: overlayfs
-requires `upperdir` and `workdir` to be on the same filesystem, and a btrfs
-subvolume has its own `st_dev`, so a subvolume upper makes the guest's first
-write to a layered path fail with `EXDEV`. Extent sharing comes from the clone
-instead, which prefers the cheapest mechanism per file:
+The clone fallback, used when the state root is not btrfs, prefers the cheapest
+mechanism per file: a hardlink where the kernel allows it, else a reflink
+(`ioctl(FICLONE)` for an anonymous file, shared extents), else a copy. The
+reflink tier is what carries a store: `fs.protected_hardlinks` (the kernel
+default) refuses to hardlink a file the caller does not own, and after a guest
+has run every store object belongs to its uid.
 
-- a **hardlink** where the kernel allows it (one inode, no data);
-- else a **reflink** (`ioctl(FICLONE)`, shared extents, no data) — this is what
-  carries the store, because `fs.protected_hardlinks` (the kernel default)
-  refuses to hardlink a file the caller does not own, and after a guest has run
-  every store object in the upper belongs to its uid;
-- else a plain copy.
+`--profile` reports which happened as `nix_overlay_seed: fresh | reused | seeded`.
 
-Retiring the previous generation is best effort for the same reason: its
-directories belong to the guest's uid, so when they cannot be deleted (or a VM
-is still using them) they are renamed aside as `upper.retired.<timestamp>` and
-reclaimed on a later run.
+### A layer-spanning share needs verified inode identity
 
-The live DB is the new image's, and the previous generation's is parked at
-`/nix/var/nix/.cang-previous-db` inside the upper. Guest-init merges it before
-starting `nix-daemon`, so Nix references the cloned store objects again:
-`cang-nix-store-repair --import-db /nix/var/nix/.cang-previous-db/db.sqlite
---purge-only` copies the parked rows into the live DB (a union, Nix's own
-schema, `Refs` included) and then deregisters rows whose object did not survive
-the image move — entirely offline, because re-fetching what went with the old
-image is the download the seed exists to avoid. The parked copy is removed after
-a successful merge.
+The overlay's two layers can have independent inode spaces — the image's `nix`
+tree and the workspace upper are both btrfs subvolumes, and both number their
+inodes from 257 — while the overlay reports one synthesized `st_dev`. The
+virtio-fs server keys its inode cache on `(st_ino, st_dev, mnt_id)`, so it
+verifies a hit against the object the caller is looking at (kind, size,
+timestamps, link count) and, when two objects share a key, registers the
+colliding one by nodeid only instead of evicting the incumbent. Without that,
+a guest's write to a freshly created file lands on an unrelated directory
+(`EISDIR`) or a store path keeps another object's bytes. Covered live by
+`tools/nix-generation-smoke`.
 
-Guest-init then merges the parked DB into the live one (a union of Nix's own
-`ValidPaths`, `Refs` and `DerivationOutputs` rows) and deregisters the rows whose
-store object went with the old image — offline, before `nix-daemon` starts. This
-is why a merged generation costs no network: absence there means "the old image
-supplied it", not "it went missing".
+### The guest finishes the generation switch
+
+The two staged DBs are the guest's half of the job, done in `nix prep` before
+`nix-daemon` starts:
+
+1. `install_staged_image_db()` — the image's DB becomes the live one (it is what
+   matches the `lowerdir` just mounted), and the dead daemon's
+   `var/nix/daemon-socket` and `var/nix/temproots` are dropped with it.
+2. `cang-nix-store-repair --import-db /nix/.cang-previous-db/db.sqlite
+   --purge-only` — the previous generation's rows are merged in as a union (so
+   every store object the snapshot carried stays addressable by Nix) and rows
+   whose object went with the old image are deregistered, entirely offline
+   because fetching what the old image supplied is the download the snapshot
+   exists to avoid. The parked copy is removed once the merge succeeds.
+
+Both steps are idempotent and best effort: a store problem never keeps the VM
+from booting.
 
 ### Reconciling a drifting store
 
@@ -379,7 +394,7 @@ them.
 ```bash
 cang-nix-store-repair --dry-run          # report drift, repair nothing
 cang-nix-store-repair --scratch /var/tmp/repair --keep-scratch
-cang-nix-store-repair --import-db /nix/var/nix/.cang-previous-db/db.sqlite --purge-only
+cang-nix-store-repair --import-db /nix/.cang-previous-db/db.sqlite --purge-only
 ```
 
 The validity and presence sets are read from the Nix DB and a directory scan
