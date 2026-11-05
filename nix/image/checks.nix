@@ -19,6 +19,7 @@
   wl-cross-domain-proxy,
   onnxruntimeShim,
   bun,
+  mimalloc,
   cangMuslPackage,
 }:
 
@@ -45,6 +46,7 @@ let
       libkrunfw
       wl-cross-domain-proxy
       bun
+      mimalloc
       cangMuslPackage
       ;
     fishConfig = configPayloads.fishConfig;
@@ -138,6 +140,11 @@ let
   );
   configSourceFile = pkgs.writeText "cang-config-nix-source.txt" (builtins.readFile ./config.nix);
   layersSourceFile = pkgs.writeText "cang-layers-nix-source.txt" (builtins.readFile ./layers.nix);
+  # The allocator recipe both the image and the launcher's render-server preload
+  # evaluate (nix/lib/mimalloc-cang.nix).
+  mimallocSourceFile = pkgs.writeText "cang-mimalloc-nix-source.txt" (
+    builtins.readFile ../lib/mimalloc-cang.nix
+  );
   openglSourceFile = pkgs.writeText "cang-guest-init-opengl-source.txt" (
     builtins.readFile ../../crates/cang-guest-init/src/guest_init/components/opengl.rs
   );
@@ -156,7 +163,10 @@ let
   nativeAddonRuntimeDir = piCodingAgent.passthru.nativeAddonRuntimeDir;
   allocatorContracts = ''
     grep -F 'mimallocLib = ' ${layersSourceFile}
-    grep -F 'pkgs.mimalloc' ${layersSourceFile}
+    # One recipe for both consumers: the image's preload and the launcher's
+    # render-server preload take the same package.
+    grep -F 'pkgs.mimalloc' ${mimallocSourceFile}
+    grep -F 'mimallocPrebuiltRelease' ${mimallocSourceFile}
     grep -F './etc/ld-nix.so.preload' ${containerSourceFile}
     grep -F 'cat > ./etc/nix-allocator-libs <<EOF_NIX_ALLOCATOR_LIBS' ${containerSourceFile}
     grep -F 'mimalloc=' ${containerSourceFile}

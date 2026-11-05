@@ -194,6 +194,23 @@ cang --alloc=glibc
 glibc's standard allocator without requiring a per-command `bwrap` wrapper. The
 image records the mimalloc and hardened_malloc paths in
 `/etc/nix-allocator-libs`; the host passes only the allocator mode selector.
+
+cang's own binaries do not go through that preload: `cang` and
+`cang-guest-init`/`cang-granted` link mimalloc (`rustfs-mimalloc`, mimalloc 3.6)
+as their Rust global allocator, so the launcher and the in-guest bootstrap use
+the same allocator family as the tasks they start, and their allocations do not
+depend on a host or image `LD_PRELOAD`. `--alloc` still selects only the preload
+for the task's own processes.
+
+The image's preload and the launcher's own allocations come from the same
+source: `nix/lib/mimalloc-cang.nix` prefers the pinned `zeroqn/headless`
+prebuilt asset (mimalloc 3.6.1) and falls back to a source build of at least
+3.5.3, because mimalloc 3.3.2 faults when a preload is called before its own
+initialisation. The venus render server - a C program whose allocation hot path
+is in `libvirglrenderer.so`, which `--gpu=drm` loads - cannot link a Rust
+allocator, so the launcher `LD_PRELOAD`s that same shared object into it at
+`execv`. Both sides of the VM boundary thus run one mimalloc version.
+
 `rustc` and `rust-analyzer` are started through wrappers that mask
 `/etc/ld-nix.so.preload` for those processes, which remains useful in mimalloc
 and hardened modes and is redundant in glibc mode.
@@ -555,7 +572,7 @@ The container provides:
   stable - the same one the repository's dev shell and `nix build` use -
   plus `rust-analyzer`, `sccache` and `wild`)
 - `gcc`, `musl`, `clang`
-- `mimalloc` enabled by default for Nix-linked dynamic binaries through `/etc/ld-nix.so.preload`; cang selects the task allocator with `--alloc=mimalloc`, `--alloc=hardened`, or `--alloc=glibc`, and `hardening-run` remains the per-command foreign/FHS `LD_PRELOAD` opt-in
+- `mimalloc` enabled by default for Nix-linked dynamic binaries through `/etc/ld-nix.so.preload`; cang selects the task allocator with `--alloc=mimalloc`, `--alloc=hardened`, or `--alloc=glibc`, and `hardening-run` remains the per-command foreign/FHS `LD_PRELOAD` opt-in. `cang` and `cang-guest-init` link mimalloc themselves (`rustfs-mimalloc`) rather than relying on that preload
 - RTK (`rtk`)
 - the pinned `fresh` terminal text editor (`fresh`), a static-musl prebuilt
 - libkrun 2.0.0 (`libkrun.so.2`) plus pinned `libkrunfw.so` for nested KVM support inside the container

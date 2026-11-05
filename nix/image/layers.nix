@@ -19,6 +19,7 @@
   wl-cross-domain-proxy,
   bun,
   cangMuslPackage,
+  mimalloc,
   fishConfig,
   starshipConfig,
 }:
@@ -54,26 +55,10 @@ let
     };
   });
   emptyLdNixSoPreload = pkgs.writeText "cang-empty-ld-nix-so-preload" "";
-  # The default allocator cang preloads into every nix-linked guest process, so it
-  # has to survive being called before its own initialisation: ld.so runs a
-  # preload's constructor after the binary's dependency initialisers, so what
-  # those do first - libstdc++'s static initialiser building the C++ locale -
-  # reaches an allocator that has not been initialised yet. mimalloc 3.3.2 faults
-  # there under the glibc the unstable input brings (2.44, newer than the 2.42 the
-  # preload was built against) and killed `zg` in the guest with a SIGSEGV before
-  # `main`; the same nixpkgs' 3.5.3 does not, with nothing else changed
-  # (docs/wayfinder/pi-native-addons/notes/10-raw-preload-early-call.md). Built
-  # from the same nixpkgs as the rest of the image (`overrideAttrs`, not the
-  # unstable input's package) so the preloaded object carries this image's glibc.
-  mimalloc = pkgs.mimalloc.overrideAttrs (_old: {
-    version = "3.5.3";
-    src = pkgs.fetchFromGitHub {
-      owner = "microsoft";
-      repo = "mimalloc";
-      tag = "v3.5.3";
-      hash = "sha256-GmLMWdUR2/VXJY7A8dZtwoV9FJIx0sxj8KWI4kG8IrU=";
-    };
-  });
+  # The default allocator cang preloads into every nix-linked guest process
+  # (`nix/lib/mimalloc-cang.nix`: zeroqn/headless's prebuilt asset). It is also
+  # the file the launcher preloads into its venus render server, so both sides of
+  # the VM boundary run the same allocator.
   mimallocLib = "${mimalloc}/lib/libmimalloc.so";
   hardenedMallocLib = "${grapheneHardenedMalloc}/lib/libhardened_malloc.so";
   hardeningRun = pkgs.writeShellScriptBin "hardening-run" ''

@@ -136,6 +136,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn guest_binaries_build_mimalloc_without_allocation_profiling() {
+        // The bootstrap and `cang-granted` are the musl-static binaries the
+        // image runs; they share the workspace allocator features (`no_profile`,
+        // `secure`), so a guest never pays sampling on the allocation fast path.
+        assert!(
+            !rustfs_mimalloc::MiMalloc::profiling_enabled(),
+            "cang-guest-init builds mimalloc with no_profile"
+        );
+    }
+
+    #[test]
     fn allowlist_accepts_supported_capabilities() {
         assert!(reject_unexpected_capabilities(capability_mask(&ALLOWED_CAPABILITIES)).is_ok());
     }

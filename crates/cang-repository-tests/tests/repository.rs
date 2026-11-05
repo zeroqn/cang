@@ -876,16 +876,46 @@ fn image_preloads_a_mimalloc_that_survives_early_initialisation() {
     // a preload's constructor after the binary's dependency initialisers) and
     // mimalloc 3.3.2 does not survive that under the glibc the unstable input
     // brings: while the image carried 3.3.2 the image's `zg` died with a SIGSEGV
-    // before `main`, where the same nixpkgs' 3.5.3 does not. The image therefore
-    // builds its own mimalloc from the same nixpkgs, so the preloaded object still
-    // carries this image's glibc; see docs/diagnostics.md.
+    // before `main`, where 3.5.3 and later do not. The recipe lives in
+    // nix/lib/mimalloc-cang.nix - one file, because the launcher preloads the same
+    // object into its venus render server - and prefers zeroqn/headless's pinned
+    // prebuilt asset, falling back to a source build under the same version guard
+    // once the inputs catch up. See docs/diagnostics.md.
+    const MIMALLOC_CANG_NIX: &str = include_str!("../../../nix/lib/mimalloc-cang.nix");
+    const RENDER_SERVER_ENV_NIX: &str = include_str!("../../../nix/lib/render-server-env.nix");
     for required in [
-        "mimalloc = pkgs.mimalloc.overrideAttrs",
+        "mimallocLib = \"${mimalloc}/lib/libmimalloc.so\";",
+        // The image takes the resolved package as an argument, so both
+        // consumers read the one recipe.
+        "  mimalloc,\n",
+    ] {
+        assert!(LAYERS.contains(required), "missing {required}");
+    }
+    assert!(
+        FLAKE_NIX.contains("import ./nix/lib/mimalloc-cang.nix"),
+        "the flake must resolve the allocator package through nix/lib/mimalloc-cang.nix"
+    );
+    assert!(
+        RENDER_SERVER_ENV_NIX.contains("CANG_MIMALLOC_LIB = \"${mimalloc}/lib/libmimalloc.so\";"),
+        "the render-server preload must be the same mimalloc package as the image's"
+    );
+    for required in [
+        "pins.mimallocPrebuiltRelease",
+        "versionAtLeast base.version \"3.5.3\"",
         r#"repo = "mimalloc";"#,
         r#"tag = "v3.5.3";"#,
         r#"hash = "sha256-GmLMWdUR2/VXJY7A8dZtwoV9FJIx0sxj8KWI4kG8IrU=";"#,
     ] {
-        assert!(LAYERS.contains(required), "missing {required}");
+        assert!(MIMALLOC_CANG_NIX.contains(required), "missing {required}");
+    }
+    // The pin itself: the headless asset the image and the render-server preload
+    // both take.
+    for required in [
+        "mimallocPrebuiltRelease",
+        r#"repo = "headless";"#,
+        r#"asset = "mimalloc-3.6.1-x86_64-linux.tar.gz";"#,
+    ] {
+        assert!(PINS_NIX.contains(required), "missing {required}");
     }
 }
 
@@ -2377,5 +2407,44 @@ fn nix_generation_smoke_scores_the_snapshot_switch() {
     assert!(
         BUILD_MD.contains("A layer-spanning share needs verified inode identity"),
         "docs/build.md should explain why the share's inode identity is verified"
+    );
+}
+
+#[test]
+fn cang_binaries_link_the_rustfs_mimalloc_global_allocator() {
+    // The launcher and the in-guest bootstrap allocate through mimalloc
+    // themselves (README "Task allocator") instead of relying on a host or
+    // image `LD_PRELOAD`. Dropping the dependency or the attribute would still
+    // build, so it is pinned here.
+    const CANG_MANIFEST: &str = include_str!("../../../crates/cang/Cargo.toml");
+    const CANG_LIB: &str = include_str!("../../../crates/cang/src/lib.rs");
+    const GUEST_MANIFEST: &str = include_str!("../../../crates/cang-guest-init/Cargo.toml");
+    const GUEST_LIB: &str = include_str!("../../../crates/cang-guest-init/src/lib.rs");
+    const README: &str = include_str!("../../../README.md");
+
+    assert!(
+        CARGO_TOML.contains("rustfs-mimalloc = "),
+        "the workspace must declare the rustfs-mimalloc dependency"
+    );
+    for (label, manifest, source) in [
+        ("crates/cang", CANG_MANIFEST, CANG_LIB),
+        ("crates/cang-guest-init", GUEST_MANIFEST, GUEST_LIB),
+    ] {
+        assert!(
+            manifest.contains("rustfs-mimalloc.workspace = true"),
+            "{label} must depend on the workspace rustfs-mimalloc"
+        );
+        assert!(
+            source.contains("#[global_allocator]"),
+            "{label} must declare the global allocator"
+        );
+        assert!(
+            source.contains("rustfs_mimalloc::MiMalloc"),
+            "{label} must install the rustfs mimalloc allocator"
+        );
+    }
+    assert!(
+        README.contains("`rustfs-mimalloc`"),
+        "README.md should record that cang's own binaries link mimalloc"
     );
 }

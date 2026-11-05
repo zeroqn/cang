@@ -19,6 +19,7 @@
   wl-cross-domain-proxy,
   onnxruntimeShim,
   bun,
+  mimalloc,
   cangMuslPackage,
 }:
 let
@@ -45,6 +46,7 @@ let
       libkrunfw
       wl-cross-domain-proxy
       bun
+      mimalloc
       cangMuslPackage
       ;
     fishConfig = configPayloads.fishConfig;
@@ -81,6 +83,7 @@ let
       wl-cross-domain-proxy
       onnxruntimeShim
       bun
+      mimalloc
       cangMuslPackage
       ;
   };

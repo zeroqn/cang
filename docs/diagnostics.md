@@ -417,7 +417,31 @@ the launch path still consumes the encoded private handoff format.
   version) or by booting `--alloc=glibc`; leaving the allocator out of the
   picture entirely is what `--alloc=glibc` does. Images whose
   `/nix/store/*-mimalloc-3.3.2` is the preload predate the fix; current ones
-  preload mimalloc 3.5.x.
+  preload mimalloc 3.5.x or later.
+
+- A guest Vulkan device stops initialising under `--gpu=drm` while GL still
+  works, and the host render server is gone a moment after it starts:
+
+  ```text
+  ERROR:ui/gl/egl_util.cc:92] EGL Driver message (Critical) eglInitialize:
+  Internal Vulkan error (-3) … eglInitialize Vulkan failed with error
+  EGL_NOT_INITIALIZED
+  ```
+
+  The venus render server runs the same mimalloc the launcher and the image
+  preload (`nix/lib/mimalloc-cang.nix`), applied as `LD_PRELOAD` at its `execv`
+  by `runtime/session/supervisor/render_server.rs` - its allocation hot path is
+  inside `libvirglrenderer.so`, which a link of the executable could not reach.
+  Unlike the VM worker, that process has the seccomp allowlist
+  (`assets/seccomp/render-server.json`) applied *before* `exec`, so every
+  syscall the preload makes - including the ones ld.so makes while mapping it,
+  and mimalloc's `sysinfo` memory probe - has to be on the allowlist or the
+  process is SIGSYS-killed and every guest Vulkan device fails to initialise.
+  Confirm the pairing by exporting `MIMALLOC_VERBOSE=1` (the log then carries one
+  `mimalloc: process init` line per process: launcher, render server, VM worker)
+  and by running with `CANG_MIMALLOC_LIB` unset, which boots venus on the libc
+  allocator. `runtime::seccomp` has a regression test for each entry the preload
+  needs.
 
 ## Host GPU runtime (`cang doctor`)
 

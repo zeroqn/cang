@@ -1,6 +1,12 @@
 use anyhow::Result;
 use std::process::ExitCode;
 
+// The guest bootstrap and `cang-granted` allocate through mimalloc, matching the
+// allocator the image preloads for its Nix-linked binaries. Declared in the
+// library so both binaries of the crate get it.
+#[global_allocator]
+static GLOBAL_ALLOCATOR: rustfs_mimalloc::MiMalloc = rustfs_mimalloc::MiMalloc;
+
 pub mod granted;
 mod guest_init;
 

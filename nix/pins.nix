@@ -131,6 +131,26 @@ in
     };
   };
 
+  # The prebuilt mimalloc the image preloads for its Nix-linked binaries and the
+  # launcher preloads into the venus render server. It is zeroqn/headless's
+  # published `mimalloc-bin` release asset - that repository's
+  # `mimalloc/prebuilt-package.nix` recipe - taken from its rolling `main-build`
+  # prerelease, so the asset name carries the version. Newer than nixpkgs'
+  # (3.3.2, which faults when a preload is called before its own initialisation;
+  # see nix/lib/mimalloc-cang.nix), and the same object the headless desktop uses.
+  mimallocPrebuiltRelease = {
+    owner = "zeroqn";
+    repo = "headless";
+    tag = "main-build";
+    version = "3.6.1";
+    systems = {
+      x86_64-linux = {
+        asset = "mimalloc-3.6.1-x86_64-linux.tar.gz";
+        hash = "sha256-tm2yM6Jul1lexSP5jnRkKsSYErwN76YqLnr41Qdaw0s=";
+      };
+    };
+  };
+
   herdrPrebuiltRelease = {
     owner = "herdrdev";
     repo = "herdr";

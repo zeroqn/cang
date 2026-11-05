@@ -25,6 +25,9 @@
         "syscall": "clock_gettime"
       },
       {
+        "syscall": "clock_nanosleep"
+      },
+      {
         "syscall": "clone3"
       },
       {

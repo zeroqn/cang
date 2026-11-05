@@ -7,7 +7,7 @@
 # here once: .#cang-prebuilt's released wrapper bakes them in, and
 # ./render-server-env.sh is the sourceable form the chromium GPU smoke uses so a
 # no-argument run can launch a raw-ELF cang.
-{ pkgs }:
+{ pkgs, mimalloc }:
 let
   # cang's mesa, not nixpkgs' plain drop: this is the library the external
   # `virgl_render_server` loads for GL and Vulkan, and on a virtio-gpu host the
@@ -20,6 +20,11 @@ let
     CANG_MESA_LIBDIR = "${mesa}/lib";
     CANG_MESA_ICD = "${mesa}/share/vulkan/icd.d/radeon_icd.${pkgs.stdenv.hostPlatform.parsed.cpu.name}.json";
     CANG_VULKAN_LOADER_LIBDIR = "${pkgs.vulkan-loader}/lib";
+    # Preloaded into the render server by the launcher (see
+    # runtime/session/supervisor/render_server.rs): the venus/vrend allocation
+    # hot path lives in libvirglrenderer.so, so it has to be interposed
+    # process-wide rather than linked into the executable.
+    CANG_MIMALLOC_LIB = "${mimalloc}/lib/libmimalloc.so";
   };
 in
 {

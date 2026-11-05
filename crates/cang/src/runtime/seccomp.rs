@@ -1242,6 +1242,40 @@ mod tests {
     }
 
     #[test]
+    fn packaged_render_server_policy_allows_sysinfo() {
+        // The render server runs a mimalloc preload (see
+        // runtime/session/supervisor/render_server.rs), and mimalloc asks
+        // sysinfo for the machine's physical memory while initialising. Without
+        // it the enforced policy kills the render server with SIGSYS before it
+        // accepts a connection, and every guest Vulkan device fails to
+        // initialise.
+        let policy: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../../assets/seccomp/render-server.json"))
+                .expect("render server seccomp policy should parse");
+        let syscalls = allowed_syscalls_from_policy_value(&policy)
+            .expect("render server policy should inspect");
+
+        assert!(
+            syscalls.contains("sysinfo"),
+            "the render server's mimalloc preload needs sysinfo"
+        );
+    }
+
+    #[test]
+    fn packaged_default_seccomp_policy_allows_clock_nanosleep() {
+        let policy: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../../assets/seccomp/default.json"))
+                .expect("default seccomp policy should parse");
+        let syscalls =
+            allowed_syscalls_from_policy_value(&policy).expect("default policy should inspect");
+
+        assert!(
+            syscalls.contains("clock_nanosleep"),
+            "mimalloc backs off with clock_nanosleep when a thread contends for an arena; without it the enforced default policy kills the VM worker with SIGSYS"
+        );
+    }
+
+    #[test]
     fn compile_enforce_policy_reads_policy_before_apply() {
         let dir = tempfile::tempdir().expect("tempdir");
         let policy_path = dir.path().join("default.json");

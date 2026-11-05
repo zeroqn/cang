@@ -251,8 +251,15 @@
             rutabagaGfxSrc = rutabaga-gfx-src;
           };
           wl-cross-domain-proxy = pkgs.callPackage ./nix/wl-cross-domain-proxy.nix { };
+          # The image's allocator and the launcher's render-server preload are
+          # the same object: zeroqn/headless's prebuilt mimalloc
+          # (nix/lib/mimalloc-cang.nix).
+          mimallocCang = import ./nix/lib/mimalloc-cang.nix {
+            inherit pkgs pins;
+          };
           renderServerEnv = import ./nix/lib/render-server-env.nix {
             inherit pkgs;
+            mimalloc = mimallocCang;
           };
           prebuiltCang = import ./nix/pkgs/cang-prebuilt.nix {
             inherit
@@ -324,6 +331,7 @@
                 bun
                 ;
               inherit cangMuslPackage;
+              mimalloc = mimallocCang;
             };
           # The image ships the same `cargo deny` the dev shell's lint gate runs
           # (nixpkgs-unstable's), next to the Rust zg and ONNX Runtime shim it
@@ -364,6 +372,9 @@
           container-lib-policy-seccomp-json = containerLibPolicySeccompJson;
           zvec-grep = zvecGrep;
           zg-models = zgModels;
+          # The image's default allocator and the launcher's render-server
+          # preload (nix/lib/mimalloc-cang.nix).
+          mimalloc = mimallocCang;
           waypipe-bin = waypipe;
           dolt-prebuilt = doltPrebuilt;
           beads-prebuilt = beadsPrebuilt;
@@ -447,6 +458,7 @@
             zvecGrep = packages.zvec-grep;
             zgModels = packages.zg-models;
             onnxruntimeShim = packages.onnxruntime-shim;
+            mimalloc = packages.mimalloc;
             waypipe = packages.waypipe-bin;
             doltPrebuilt = packages.dolt-prebuilt;
             beadsPrebuilt = packages.beads-prebuilt;

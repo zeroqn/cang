@@ -16,6 +16,7 @@ path = "src/bin/cang-granted.rs"
 anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true
+rustfs-mimalloc.workspace = true
 cang-attach-protocol.workspace = true
 cang-exec-protocol.workspace = true
 vt100.workspace = true

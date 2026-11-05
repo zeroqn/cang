@@ -32,6 +32,7 @@ anyhow = "1.0"
 clap = { version = "4.6", features = ["derive", "env"] }
 libc = "0.2"
 landlock = "0.4"
+rustfs-mimalloc = { version = "0.7", features = [ "no_profile", "secure" ] }
 cang-attach-protocol = { path = "crates/cang-attach-protocol" }
 cang-libkrun = { path = "crates/cang-libkrun" }
 cang-exec-protocol = { path = "crates/cang-exec-protocol" }

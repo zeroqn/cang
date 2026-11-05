@@ -13,6 +13,7 @@ anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true
 landlock.workspace = true
+rustfs-mimalloc.workspace = true
 cang-attach-protocol.workspace = true
 cang-libkrun.workspace = true
 cang-exec-protocol.workspace = true

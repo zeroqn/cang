@@ -476,6 +476,7 @@ mod tests {
                 "/nix/store/mesa-mesa-26.1.8/share/vulkan/icd.d/radeon_icd.x86_64.json",
             ),
             vulkan_loader_lib_dir: PathBuf::from("/nix/store/vk-vulkan-loader-1.4.341.0/lib"),
+            mimalloc_lib: None,
         }
     }
 

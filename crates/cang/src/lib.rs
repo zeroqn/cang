@@ -4,6 +4,18 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 use std::time::Instant;
 
+// cang's own binaries allocate through mimalloc: the same allocator the guest
+// image preloads for its Nix-linked binaries (README "Task allocator"), so a
+// cang run pays one allocator's behaviour on both sides of the VM boundary
+// instead of glibc's on the host. Declared in the library rather than in
+// `main.rs` so every binary of the crate gets it.
+//
+// Features chosen in the workspace dependency: `secure` (metadata guard pages,
+// checked frees, encoded free lists) and `no_profile` (no sampled heap-profile
+// sampling on the allocation fast path, which cang never reads).
+#[global_allocator]
+static GLOBAL_ALLOCATOR: rustfs_mimalloc::MiMalloc = rustfs_mimalloc::MiMalloc;
+
 mod cli;
 mod config;
 mod doctor;
@@ -244,6 +256,20 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use crate::cli::Cli;
+
+    #[test]
+    fn global_allocator_is_mimalloc_without_allocation_profiling() {
+        // The guest image preloads mimalloc for its Nix-linked binaries; cang's
+        // own binaries link it so a run does not mix allocators across the VM
+        // boundary. `no_profile` and `secure` are selected in the workspace
+        // dependency, and feature unification means a dependency cannot quietly
+        // turn allocation profiling back on.
+        assert_eq!(rustfs_mimalloc::MiMalloc::version() / 10000, 3);
+        assert!(
+            !rustfs_mimalloc::MiMalloc::profiling_enabled(),
+            "cang builds mimalloc with no_profile: the allocation fast path must not sample"
+        );
+    }
 
     #[test]
     fn command_help_renders() {

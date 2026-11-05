@@ -15,10 +15,10 @@
 //! `CANG_RENDER_SERVER_FD` environment variable (the fd survives the helper
 //! exec and the VM-worker fork because the socketpair fds are not CLOEXEC).
 
-use std::ffi::{CString, OsString};
+use std::ffi::{CString, OsStr, OsString};
 use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -48,6 +48,12 @@ const MESA_LIBDIR_ENV: &str = "CANG_MESA_LIBDIR";
 const MESA_ICD_ENV: &str = "CANG_MESA_ICD";
 const VULKAN_LOADER_LIBDIR_ENV: &str = "CANG_VULKAN_LOADER_LIBDIR";
 const RENDER_SERVER_POLICY_OVERRIDE_ENV: &str = "CANG_RENDER_SERVER_POLICY";
+/// The host mimalloc shared object the launcher preloads into the render
+/// server, so its allocations - most of them inside `libvirglrenderer.so`,
+/// which a link of the executable could not reach - go to the same allocator as
+/// cang's own binaries.
+const RENDER_SERVER_MIMALLOC_LIB_ENV: &str = "CANG_MIMALLOC_LIB";
+const LD_PRELOAD_ENV: &str = "LD_PRELOAD";
 
 /// Host store paths the venus render server loads, resolved from the cang
 /// package closure by the launcher wrapper.
@@ -57,6 +63,9 @@ pub(crate) struct RenderServerEnv {
     pub(crate) mesa_lib_dir: PathBuf,
     pub(crate) mesa_icd: PathBuf,
     pub(crate) vulkan_loader_lib_dir: PathBuf,
+    /// `None` when the package does not configure a preload (a cang built
+    /// without one still runs the render server on the libc allocator).
+    pub(crate) mimalloc_lib: Option<PathBuf>,
 }
 
 impl RenderServerEnv {
@@ -76,6 +85,7 @@ impl RenderServerEnv {
                 VULKAN_LOADER_LIBDIR_ENV,
                 "vulkan-loader library directory",
             )?,
+            mimalloc_lib: optional_preload_path(RENDER_SERVER_MIMALLOC_LIB_ENV)?,
         })
     }
 
@@ -108,7 +118,31 @@ impl RenderServerEnv {
                 OsString::from(RENDER_SERVER_MESA_SHADER_CACHE_DIR_VALUE),
             ),
         ]
+        .into_iter()
+        .chain(self.mimalloc_lib.iter().map(|lib| {
+            (
+                OsString::from(RENDER_SERVER_MIMALLOC_LIB_ENV),
+                lib.clone().into_os_string(),
+            )
+        }))
+        .collect()
     }
+}
+
+/// An optional preload: unset means the process keeps the libc allocator, but a
+/// value naming a missing file is a broken package and fails loudly.
+fn optional_preload_path(name: &str) -> Result<Option<PathBuf>> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    if !path.is_file() {
+        bail!(
+            "{name} names '{}', which is not a file; the launcher preloads it into the render server",
+            path.display()
+        );
+    }
+    Ok(Some(path))
 }
 
 fn required_env_path(name: &str, description: &str) -> Result<PathBuf> {
@@ -258,11 +292,12 @@ pub(crate) fn run_render_server_bootstrap(args: Vec<OsString>) -> Result<()> {
     let policy_path = render_server_policy_path()?;
     let seccomp = compile_enforce_policy(&policy_path)?;
     apply_compiled_enforce_policy(&seccomp)?;
-    exec_render_server(child_fd)?;
+    let mimalloc_lib = optional_preload_path(RENDER_SERVER_MIMALLOC_LIB_ENV)?;
+    exec_render_server(child_fd, mimalloc_lib.as_deref())?;
     Ok(())
 }
 
-fn exec_render_server(child_fd: RawFd) -> Result<()> {
+fn exec_render_server(child_fd: RawFd, mimalloc_lib: Option<&Path>) -> Result<()> {
     let exec_path = std::env::var_os(RENDER_SERVER_EXEC_PATH_ENV).ok_or_else(|| {
         anyhow!("{RENDER_SERVER_EXEC_PATH_ENV} is not set in render server bootstrap")
     })?;
@@ -271,6 +306,14 @@ fn exec_render_server(child_fd: RawFd) -> Result<()> {
     let arg0 = CString::new("virgl_render_server").expect("static argv string has no NUL byte");
     let socket_option = CString::new(format!("--socket-fd={child_fd}"))
         .expect("socket-fd option contains no NUL byte");
+    // The exec is what loads the preload, so setting it here - rather than in
+    // the environment the bootstrap was spawned with - keeps this cang process
+    // (which carries mimalloc statically) from mapping a second copy. The
+    // bootstrap is single-threaded by this point, so set_var is sound.
+    if let Some(lib) = mimalloc_lib {
+        let value = preload_value(lib, std::env::var_os(LD_PRELOAD_ENV).as_deref());
+        unsafe { std::env::set_var(LD_PRELOAD_ENV, value) };
+    }
     let argv = [arg0.as_ptr(), socket_option.as_ptr(), std::ptr::null()];
     // SAFETY: execv with a NUL-terminated path and argv array; only returns on
     // failure.
@@ -293,6 +336,17 @@ fn close_render_server_inherited_fds(parent_fd: Option<RawFd>, ready_fd: Option<
             libc::close(fd);
         }
     }
+}
+
+/// `LD_PRELOAD` with `lib` first: the render server gets mimalloc, and any
+/// preload the launcher was itself started with still applies behind it.
+fn preload_value(lib: &Path, existing: Option<&OsStr>) -> OsString {
+    let mut value = lib.as_os_str().to_os_string();
+    if let Some(existing) = existing.filter(|value| !value.is_empty()) {
+        value.push(":");
+        value.push(existing);
+    }
+    value
 }
 
 fn parse_required_fd_env(name: &str) -> Result<RawFd> {
@@ -331,6 +385,7 @@ mod tests {
                 "/nix/store/mesa-mesa-26.1.8/share/vulkan/icd.d/radeon_icd.x86_64.json",
             ),
             vulkan_loader_lib_dir: PathBuf::from("/nix/store/vk-vulkan-loader-1.4.341.0/lib"),
+            mimalloc_lib: None,
         }
     }
 
@@ -355,6 +410,44 @@ mod tests {
             OsString::from(RENDER_SERVER_MESA_SHADER_CACHE_DIR_ENV),
             OsString::from(RENDER_SERVER_MESA_SHADER_CACHE_DIR_VALUE)
         )));
+    }
+
+    #[test]
+    fn render_server_env_vars_export_the_configured_mimalloc_preload() {
+        let mut configured = env();
+        configured.mimalloc_lib = Some(PathBuf::from(
+            "/nix/store/mim-mimalloc-3.6.1/lib/libmimalloc.so",
+        ));
+        assert!(configured.env_vars().contains(&(
+            OsString::from(RENDER_SERVER_MIMALLOC_LIB_ENV),
+            OsString::from("/nix/store/mim-mimalloc-3.6.1/lib/libmimalloc.so")
+        )));
+        // Unconfigured stays out of the child environment entirely.
+        assert!(
+            !env()
+                .env_vars()
+                .iter()
+                .any(|(name, _)| name == RENDER_SERVER_MIMALLOC_LIB_ENV)
+        );
+    }
+
+    #[test]
+    fn preload_value_puts_mimalloc_first_and_keeps_an_existing_preload() {
+        let lib = Path::new("/nix/store/mim-mimalloc-3.6.1/lib/libmimalloc.so");
+        assert_eq!(
+            preload_value(lib, None),
+            OsString::from("/nix/store/mim-mimalloc-3.6.1/lib/libmimalloc.so")
+        );
+        assert_eq!(
+            preload_value(lib, Some(OsStr::new("/nix/store/x/libother.so"))),
+            OsString::from(
+                "/nix/store/mim-mimalloc-3.6.1/lib/libmimalloc.so:/nix/store/x/libother.so"
+            )
+        );
+        assert_eq!(
+            preload_value(lib, Some(OsStr::new(""))),
+            OsString::from("/nix/store/mim-mimalloc-3.6.1/lib/libmimalloc.so")
+        );
     }
 
     #[test]
