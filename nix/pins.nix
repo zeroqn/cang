@@ -101,7 +101,12 @@ in
     # Until then `nix/lib/virglrenderer-cang.nix` falls back to the source build -
     # and its `prebuiltIsCurrent` guard refuses a stale asset even if one is
     # listed.
-    systems = { };
+    systems = {
+      x86_64-linux = {
+        asset = "virglrenderer-1.3.0-50282235-pde664d85-x86_64-linux.tar.gz";
+        hash = "sha256-CPzNozp9ObYI2X/NYaExNCHL4XuFy844wwF1Bu/fIbo=";
+      };
+    };
   };
 
   # The prebuilt waypipe the guest image ships. It is zeroqn/headless's published
