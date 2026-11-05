@@ -505,6 +505,7 @@ fn config() -> LaunchConfig {
         network_mode: NetworkMode::Tsi,
         pulse: None,
         gpu_mode: GpuMode::Off,
+        gpu_shm_bytes: None,
         zero_copy_shm: false,
         zero_message_open: None,
         no_flush: None,
@@ -865,6 +866,7 @@ fn drm_gpu_mode_enables_venus_render_server_flags_before_start() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let gpu_config = LaunchConfig {
         gpu_mode: GpuMode::Drm,
+        gpu_shm_bytes: None,
         zero_copy_shm: false,
         zero_message_open: None,
         no_flush: None,

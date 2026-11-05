@@ -913,6 +913,7 @@ mod tests {
             log_level: LogLevel::Off,
             network_mode: NetworkMode::Tsi,
             gpu_mode: GpuMode::Off,
+            gpu_shm_bytes: None,
             zero_copy_shm: false,
             zero_message_open: None,
             no_flush: None,

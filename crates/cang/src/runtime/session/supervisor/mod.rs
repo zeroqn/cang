@@ -206,6 +206,7 @@ mod tests {
             log_level: crate::logging::LogLevel::Info,
             network_mode: NetworkMode::Tsi,
             gpu_mode: crate::runtime::vm::gpu::GpuMode::Off,
+            gpu_shm_bytes: None,
             zero_copy_shm: false,
             zero_message_open: None,
             no_flush: None,

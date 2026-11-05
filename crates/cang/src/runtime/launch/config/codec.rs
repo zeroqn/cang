@@ -153,6 +153,9 @@ impl LaunchConfig {
             self.network_mode.as_config_value(),
         );
         push_field(&mut out, "gpu_mode", self.gpu_mode.as_config_value());
+        if let Some(bytes) = self.gpu_shm_bytes {
+            push_field(&mut out, "gpu_shm_bytes", &bytes.to_string());
+        }
         if self.zero_copy_shm {
             push_field(&mut out, "zero_copy_shm", "1");
         }
@@ -404,6 +407,7 @@ impl LaunchConfig {
                     | "log_level"
                     | "network_mode"
                     | "gpu_mode"
+                    | "gpu_shm_bytes"
                     | "zero_copy_shm"
                     | "zero_message_open"
                     | "no_flush"
@@ -465,6 +469,14 @@ impl LaunchConfig {
                 .map(String::as_str)
                 .unwrap_or(GpuMode::Off.as_config_value()),
         )?;
+        let gpu_shm_bytes = match fields.get("gpu_shm_bytes") {
+            Some(value) => Some(
+                value
+                    .parse::<u64>()
+                    .map_err(|_| anyhow::anyhow!("gpu_shm_bytes is not a number: {value}"))?,
+            ),
+            None => None,
+        };
         let zero_copy_shm = fields.get("zero_copy_shm").map(String::as_str) == Some("1");
         let zero_message_open = fields.get("zero_message_open").map(|value| value == "1");
         let no_flush = fields.get("no_flush").map(|value| value == "1");
@@ -518,6 +530,7 @@ impl LaunchConfig {
             log_level,
             network_mode,
             gpu_mode,
+            gpu_shm_bytes,
             zero_copy_shm,
             zero_message_open,
             no_flush,

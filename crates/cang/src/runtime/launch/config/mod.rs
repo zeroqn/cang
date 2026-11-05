@@ -131,6 +131,7 @@ impl LaunchConfig {
             log_level: spec.log_level,
             network_mode: spec.network_mode,
             gpu_mode: spec.gpu_mode,
+            gpu_shm_bytes: spec.gpu_shm_bytes,
             zero_copy_shm: spec.zero_copy_shm,
             zero_message_open: spec.zero_message_open,
             no_flush: spec.no_flush,

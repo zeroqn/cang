@@ -272,6 +272,15 @@ pub(crate) struct Cli {
     gpu: CliGpuMode,
 
     #[arg(
+        long = "gpu-shm",
+        value_name = "SIZE",
+        value_parser = parse_gpu_shm_arg,
+        help = "Override the virtio-gpu shared-memory window size",
+        long_help = "Override the virtio-gpu shared-memory window the guest maps venus blob resources through (default 4 GiB). A suffix scales: 512M, 4G, 65536K; a bare number is MiB. Requires --gpu=drm. Below 1 GiB a Vulkan backend may run out of live mappings and silently fall back to the CPU."
+    )]
+    gpu_shm: Option<u64>,
+
+    #[arg(
         long = "zero-copy-shm",
         help = "Ask the guest for the udmabuf zero-copy shared-memory fast path",
         long_help = "Ask the virtio-gpu device for the udmabuf zero-copy shared-memory fast path (wl_shm pools imported as guest blobs with host handles). Requires --gpu=drm. When the host cannot serve it (no /dev/udmabuf) cang logs why and the guest runs the copy path; guest RAM stays anonymous, so the virtio-balloon keeps reclaiming host memory. On fast-path runs the balloon has nothing to reclaim: guest RAM is file-backed and shared."
@@ -623,6 +632,7 @@ impl Cli {
             } else {
                 self.gpu.into()
             },
+            gpu_shm_bytes: self.gpu_shm,
             zero_copy_shm: self.zero_copy_shm,
             zero_message_open: fs_zero_message_open(&self.fs),
             no_flush: fs_no_flush(&self.fs),
@@ -669,6 +679,7 @@ pub(crate) struct RuntimeOptions {
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
     pub(crate) gpu_mode: GpuMode,
+    pub(crate) gpu_shm_bytes: Option<u64>,
     pub(crate) zero_copy_shm: bool,
     pub(crate) zero_message_open: Option<bool>,
     pub(crate) no_flush: Option<bool>,
@@ -782,6 +793,39 @@ fn fs_zero_message_open(options: &[FsOption]) -> Option<bool> {
 
 fn parse_permissions_arg(value: &str) -> Result<GuestPermissions, String> {
     value.parse()
+}
+
+pub(crate) fn parse_gpu_shm_arg(value: &str) -> Result<u64, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("gpu shm size must be a positive integer with an optional K/M/G unit suffix (e.g. 512M, 4G, 65536K); a bare number is MiB".to_owned());
+    }
+    let (digits, unit) = trimmed
+        .find(|c: char| !c.is_ascii_digit())
+        .map_or((trimmed, ""), |idx| (&trimmed[..idx], &trimmed[idx..]));
+    if digits.is_empty() {
+        return Err(format!("gpu shm size '{trimmed}' has no numeric part"));
+    }
+    let number: u64 = digits
+        .parse()
+        .map_err(|_| format!("gpu shm size '{trimmed}' is not a valid number"))?;
+    let factor: u64 = match unit.to_ascii_uppercase().as_str() {
+        "" | "M" | "MB" | "MIB" => 1024 * 1024,
+        "K" | "KB" | "KIB" => 1024,
+        "G" | "GB" | "GIB" => 1024 * 1024 * 1024,
+        other => {
+            return Err(format!(
+                "gpu shm size unit '{other}' is invalid; use K, M, or G (bare numbers are MiB)"
+            ));
+        }
+    };
+    let bytes = number
+        .checked_mul(factor)
+        .ok_or_else(|| format!("gpu shm size '{trimmed}' overflows"))?;
+    if bytes == 0 {
+        return Err("gpu shm size must be greater than 0".to_owned());
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn parse_mem_gib_arg(value: &str) -> Result<u32, String> {
@@ -998,6 +1042,19 @@ mod tests {
     use crate::runtime::launch::config::NetworkMode;
     use crate::runtime::seccomp::{AuditMode, SeccompCommand, SeccompMode};
     use crate::task_rootfs::TaskRootfsBackend;
+
+    #[test]
+    fn parses_gpu_shm_size_with_unit_suffixes() {
+        use crate::cli::parse_gpu_shm_arg;
+        assert_eq!(parse_gpu_shm_arg("512M").unwrap(), 512 * 1024 * 1024);
+        assert_eq!(parse_gpu_shm_arg("4G").unwrap(), 4 * 1024 * 1024 * 1024);
+        assert_eq!(parse_gpu_shm_arg("65536K").unwrap(), 64 * 1024 * 1024);
+        assert_eq!(parse_gpu_shm_arg("1024").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_gpu_shm_arg("2GiB").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert!(parse_gpu_shm_arg("0M").is_err());
+        assert!(parse_gpu_shm_arg("4X").is_err());
+        assert!(parse_gpu_shm_arg("").is_err());
+    }
 
     #[test]
     fn parses_single_runtime_options_without_subcommand() {

@@ -408,7 +408,12 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             self.api.mmio_device_manager_new(),
         )?;
 
-        self.configure_gpu(devices, config.gpu_mode, config.zero_copy_shm)?;
+        self.configure_gpu(
+            devices,
+            config.gpu_mode,
+            config.gpu_shm_bytes,
+            config.zero_copy_shm,
+        )?;
         self.configure_nested_virt(builder)?;
         let console_log = self.configure_console(devices, config)?;
 
@@ -554,6 +559,7 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
         &mut self,
         devices: Handle,
         gpu_mode: GpuMode,
+        gpu_shm_bytes: Option<u64>,
         zero_copy_shm: bool,
     ) -> Result<()> {
         match gpu_mode {
@@ -563,9 +569,16 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
                     .context("gpu mode drm requires a sandboxed render server runner")?
                     .parse::<i32>()
                     .context("render server fd env value is not a valid fd number")?;
+                let shm_size = gpu_shm_bytes.unwrap_or(GPU_SHM_SIZE_BYTES);
+                if shm_size < 1 << 30 {
+                    tracing::warn!(
+                        shm_size,
+                        "gpu shm window is below 1 GiB: a Vulkan backend mapping hundreds of MiB may run out of live mappings and silently fall back to the CPU"
+                    );
+                }
                 tracing::debug!(
                     virgl_flags = VIRGLRENDERER_VENUS_FLAGS,
-                    shm_size = GPU_SHM_SIZE_BYTES,
+                    shm_size,
                     render_server_fd,
                     "krun_gpu_device_new: begin"
                 );
@@ -573,7 +586,7 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
                     "krun_gpu_device_new",
                     self.api.gpu_device_new(
                         VIRGLRENDERER_VENUS_FLAGS,
-                        GPU_SHM_SIZE_BYTES,
+                        shm_size,
                         render_server_fd,
                         zero_copy_shm,
                     ),

@@ -42,6 +42,7 @@ pub(crate) struct LaunchPlan {
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
     pub(crate) gpu_mode: GpuMode,
+    pub(crate) gpu_shm_bytes: Option<u64>,
     pub(crate) zero_copy_shm: bool,
     pub(crate) zero_message_open: Option<bool>,
     pub(crate) no_flush: Option<bool>,
@@ -124,6 +125,11 @@ impl LaunchPlan {
                 "--zero-copy-shm requires --gpu=drm: the udmabuf fast path is a virtio-gpu property"
             );
         }
+        if options.gpu_shm_bytes.is_some()
+            && options.gpu_mode != crate::runtime::vm::gpu::GpuMode::Drm
+        {
+            anyhow::bail!("--gpu-shm requires --gpu=drm: the window is a virtio-gpu property");
+        }
 
         Ok(Self {
             workspace_dir,
@@ -144,6 +150,7 @@ impl LaunchPlan {
             network_mode: options.network_mode,
             pulse: options.pulse,
             gpu_mode: options.gpu_mode,
+            gpu_shm_bytes: options.gpu_shm_bytes,
             zero_copy_shm: options.zero_copy_shm,
             zero_message_open: options.zero_message_open,
             no_flush: options.no_flush,
@@ -371,6 +378,7 @@ mod tests {
             network_mode: NetworkMode::Tsi,
             pulse: None,
             gpu_mode: crate::runtime::vm::gpu::GpuMode::Off,
+            gpu_shm_bytes: None,
             zero_copy_shm: false,
             zero_message_open: None,
             no_flush: None,

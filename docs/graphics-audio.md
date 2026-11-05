@@ -157,7 +157,11 @@ dma-buf over a slice of one guest shared-memory window
 (`virtio_gpu::resource_map_blob`), so that window — not the 8 GiB device-local
 heap the ICD advertises — bounds the **cumulative** size of live mappings. cang
 sizes it at 4 GiB (`GPU_SHM_SIZE_BYTES` in
-`crates/cang/src/runtime/vm/libkrun/launcher.rs`).
+`crates/cang/src/runtime/vm/libkrun/launcher.rs`), and `--gpu-shm SIZE` (MiB
+bare, or `K`/`M`/`G` suffixes; requires `--gpu=drm`) overrides it per run — for
+A/B measurement, or to raise the ceiling for a workload with more weight buffers.
+Sizes below 1 GiB are allowed but logged: they are the regime where a Vulkan
+backend falls back to the CPU.
 
 | window | `qwen3-embedding-0.6b`, 15 files / 8.8 k lines |
 |---|---|
