@@ -48,19 +48,10 @@ impl From<CliAllocatorMode> for AllocatorMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum CliGpuMode {
-    Off,
-    Drm,
-}
-
-impl From<CliGpuMode> for GpuMode {
-    fn from(value: CliGpuMode) -> Self {
-        match value {
-            CliGpuMode::Off => Self::Off,
-            CliGpuMode::Drm => Self::Drm,
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CliGpu {
+    pub(crate) mode: GpuMode,
+    pub(crate) shm_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,22 +254,13 @@ pub(crate) struct Cli {
 
     #[arg(
         long = "gpu",
-        value_enum,
-        value_name = "MODE",
+        value_name = "MODE[:shm=SIZE]",
+        value_parser = parse_gpu_arg,
         default_value = "off",
         help = "Configure libkrun virtio-gpu mode",
-        long_help = "Configure libkrun virtio-gpu mode. Allowed values are off and drm. Wayland passthrough requires drm and enables it automatically."
+        long_help = "Configure libkrun virtio-gpu mode. Allowed modes are off and drm; drm may take shm=SIZE to override the virtio-gpu shared-memory window the guest maps venus blob resources through (default 4 GiB; a bare number is MiB, or 512M/4G/65536K suffixes). Wayland passthrough requires drm and enables it automatically. A window below 1 GiB is allowed but logged: a Vulkan backend mapping hundreds of MiB may run out of live mappings and silently fall back to the CPU."
     )]
-    gpu: CliGpuMode,
-
-    #[arg(
-        long = "gpu-shm",
-        value_name = "SIZE",
-        value_parser = parse_gpu_shm_arg,
-        help = "Override the virtio-gpu shared-memory window size",
-        long_help = "Override the virtio-gpu shared-memory window the guest maps venus blob resources through (default 4 GiB). A suffix scales: 512M, 4G, 65536K; a bare number is MiB. Requires --gpu=drm. Below 1 GiB a Vulkan backend may run out of live mappings and silently fall back to the CPU."
-    )]
-    gpu_shm: Option<u64>,
+    gpu: CliGpu,
 
     #[arg(
         long = "zero-copy-shm",
@@ -630,9 +612,9 @@ impl Cli {
             gpu_mode: if self.wayland {
                 GpuMode::Drm
             } else {
-                self.gpu.into()
+                self.gpu.mode
             },
-            gpu_shm_bytes: self.gpu_shm,
+            gpu_shm_bytes: self.gpu.shm_bytes,
             zero_copy_shm: self.zero_copy_shm,
             zero_message_open: fs_zero_message_open(&self.fs),
             no_flush: fs_no_flush(&self.fs),
@@ -793,6 +775,41 @@ fn fs_zero_message_open(options: &[FsOption]) -> Option<bool> {
 
 fn parse_permissions_arg(value: &str) -> Result<GuestPermissions, String> {
     value.parse()
+}
+
+pub(crate) fn parse_gpu_arg(value: &str) -> Result<CliGpu, String> {
+    let mut parts = value.split(':');
+    let mode = match parts.next() {
+        Some("off") => GpuMode::Off,
+        Some("drm") => GpuMode::Drm,
+        Some(other) => {
+            return Err(format!("gpu mode '{other}' is invalid; use off or drm"));
+        }
+        None => return Err("gpu mode is empty; use off or drm".to_owned()),
+    };
+    let mut shm_bytes = None;
+    for option in parts {
+        let (key, val) = option
+            .split_once('=')
+            .ok_or_else(|| format!("gpu option '{option}' is missing '='; expected shm=SIZE"))?;
+        match key {
+            "shm" => {
+                if shm_bytes.is_some() {
+                    return Err("gpu option shm=SIZE is given more than once".to_owned());
+                }
+                if mode == GpuMode::Off {
+                    return Err("gpu option shm=SIZE requires mode drm".to_owned());
+                }
+                shm_bytes = Some(parse_gpu_shm_arg(val)?);
+            }
+            other => {
+                return Err(format!(
+                    "gpu option '{other}' is unknown; only shm=SIZE is supported"
+                ));
+            }
+        }
+    }
+    Ok(CliGpu { mode, shm_bytes })
 }
 
 pub(crate) fn parse_gpu_shm_arg(value: &str) -> Result<u64, String> {
@@ -1054,6 +1071,40 @@ mod tests {
         assert!(parse_gpu_shm_arg("0M").is_err());
         assert!(parse_gpu_shm_arg("4X").is_err());
         assert!(parse_gpu_shm_arg("").is_err());
+    }
+
+    #[test]
+    fn parses_gpu_arg_modes_and_shm_option() {
+        use crate::cli::parse_gpu_arg;
+        use crate::runtime::vm::gpu::GpuMode;
+
+        let drm = parse_gpu_arg("drm").unwrap();
+        assert_eq!(drm.mode, GpuMode::Drm);
+        assert_eq!(drm.shm_bytes, None);
+
+        let off = parse_gpu_arg("off").unwrap();
+        assert_eq!(off.mode, GpuMode::Off);
+        assert_eq!(off.shm_bytes, None);
+
+        let sized = parse_gpu_arg("drm:shm=512M").unwrap();
+        assert_eq!(sized.mode, GpuMode::Drm);
+        assert_eq!(sized.shm_bytes, Some(512 * 1024 * 1024));
+
+        assert!(parse_gpu_arg("off:shm=512M").is_err());
+        assert!(parse_gpu_arg("drm:shm=4X").is_err());
+        assert!(parse_gpu_arg("drm:shm=512M:shm=1G").is_err());
+        assert!(parse_gpu_arg("drm:foo=1").is_err());
+        assert!(parse_gpu_arg("").is_err());
+        assert!(parse_gpu_arg("other").is_err());
+    }
+
+    #[test]
+    fn gpu_arg_parses_through_cli_and_reaches_runtime_options() {
+        let cli =
+            Cli::try_parse_from(["cang", "--gpu=drm:shm=1G"]).expect("drm with shm should parse");
+        let options = cli.into_runtime_options();
+        assert_eq!(options.gpu_mode, crate::runtime::vm::gpu::GpuMode::Drm);
+        assert_eq!(options.gpu_shm_bytes, Some(1024 * 1024 * 1024));
     }
 
     #[test]

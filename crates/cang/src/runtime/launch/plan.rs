@@ -125,11 +125,6 @@ impl LaunchPlan {
                 "--zero-copy-shm requires --gpu=drm: the udmabuf fast path is a virtio-gpu property"
             );
         }
-        if options.gpu_shm_bytes.is_some()
-            && options.gpu_mode != crate::runtime::vm::gpu::GpuMode::Drm
-        {
-            anyhow::bail!("--gpu-shm requires --gpu=drm: the window is a virtio-gpu property");
-        }
 
         Ok(Self {
             workspace_dir,
