@@ -177,6 +177,40 @@ control:
   co-tenant inflates the worker's share), but the absolute seconds are ±;
   [ticket 12](tickets/12-clean-window-re-record.md) re-records them cleanly.
 
+- **Cold-build mix, and the job count is not the lever (2026-11-05,
+  [note 51](notes/51-cold-build-request-mix-and-job-count.md)).** Interleaved
+  arms on the synthetic tree, one boot each: the share costs **32.171 s at
+  `JOBS=6`** (58.061 vs 25.890 s guest-local) and **31.903 s at `JOBS=26`**
+  (49.187 vs 17.284 s) - additive, job-independent, and 2.24-2.85x the
+  guest-local floor rather than the ~1 % [note 35](notes/35-no-flush-and-negative-entry-shipped.md)
+  read off a host comparison (that reading folds in the VM penalty and a host
+  that moved 104 -> 130 s). `CANG_FS_STATS=1` on the cold build: **464 193
+  requests**, `LOOKUP` 33.8 %, `WRITE` 11.7 %, `GETXATTR` 10.9 %, `READ` 9.6 %,
+  `GETATTR` 9.3 %, `CREATE` 6.1 %, `READDIR` 3.9 %, `FORGET` 3.5 %; `OPEN` 3 /
+  `FLUSH` 2 / lookups 0 negative confirm the levers are live. Price any lever
+  as **10 k requests = 1 s of cold build**; judged that way `GETXATTR` (5.1 s)
+  and `GETATTR`+`READDIR`+`READDIRPLUS` (7.5 s) are untapped classes, while
+  `WRITE` (5.4 s) and `CREATE` (2.8 s) still need a write cache or `target/`
+  off the share.
+- **A 23-crate workspace, the per-write `getxattr`, and a seccomp gap
+  (2026-11-05, [note 52](notes/52-cold-build-request-mix-killpriv-and-seccomp.md)).**
+  The reporting session's tree reproduces as a request-bound build: 464 s cold
+  (warm sccache 284 s) for **1 688 991 requests**, mix `WRITE` 30.1 %, `READ`
+  22.3 %, **`GETXATTR` 17.2 %**, `LOOKUP` 12.3 %, `GETATTR` 5.6 %. Those 291 184
+  `getxattr`s are the guest kernel's own pre-write capability check (userspace
+  issues none, `strace` = 0), 199 us each on the share against 2 us on tmpfs -
+  and **acking `FUSE_HANDLE_KILLPRIV_V2` to remove them is a no-op, because
+  `server.rs` already advertises it**: A/B on one binary, 284/289/272 s, opcode
+  counts identical to four digits. The ack does oblige the server side of the
+  contract though, and that was missing - shipped as `drop_file_privileges` in
+  the fork's passthrough (`open`/`create`/`setattr`), so a truncate or chown
+  clears a file's capabilities instead of leaving them. Same pass found that a
+  guest `setxattr`/`removexattr` **killed the VM silently** (`cang` exit 0): the
+  default seccomp policy allowed `fsetxattr` but not `fremovexattr`,
+  `lremovexattr`, `lsetxattr` or `fchmod`, so the fs server's own handlers
+  trapped. Policy fixed, repro re-verified against a stock binary (dies) and the
+  fixed one (completes).
+
 
 ## The governor fact that reorders everything (2026-10-26, verified twice)
 

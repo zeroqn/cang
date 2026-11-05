@@ -64,6 +64,9 @@
         "syscall": "fallocate"
       },
       {
+        "syscall": "fchmod"
+      },
+      {
         "syscall": "fchmodat"
       },
       {
@@ -80,6 +83,9 @@
       },
       {
         "syscall": "flistxattr"
+      },
+      {
+        "syscall": "fremovexattr"
       },
       {
         "syscall": "fsetxattr"
@@ -143,6 +149,12 @@
       },
       {
         "syscall": "llistxattr"
+      },
+      {
+        "syscall": "lremovexattr"
+      },
+      {
+        "syscall": "lsetxattr"
       },
       {
         "syscall": "lseek"
