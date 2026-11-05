@@ -75,8 +75,8 @@ in
   # network, so the wrap's checkout is pinned and vendored by
   # nix/lib/virglrenderer-patched.nix.
   virglrendererSource = {
-    rev = "c8e3fc3bd2f367d92fb1027061fe51afeec5136e";
-    hash = "sha256-Jo1W/6MODXBwuKio97xohfRtMMzbnUNQxUgzFTXI6bA=";
+    rev = "502822354d59757c4b0e0d2c2d6b61ff1a1abd63";
+    hash = "sha256-JFT35ChsNpB7FTEyM2SkWl9Zlu5BmWakzPDQHCTxLfw=";
     venusProtocolTag = "v1.1.3";
     venusProtocolHash = "sha256-epSb26uLAbHYBDr+ju6rzFu4ozD/LUpRuou6hA/BFRM=";
   };
@@ -91,14 +91,17 @@ in
     owner = "zeroqn";
     repo = "cang";
     tag = "alpha";
-    version = "1.3.0-c8e3fc3b-peabcc329";
-    revision = "c8e3fc3bd2f367d92fb1027061fe51afeec5136e";
-    systems = {
-      x86_64-linux = {
-        asset = "virglrenderer-1.3.0-c8e3fc3b-peabcc329-x86_64-linux.tar.gz";
-        hash = "sha256-nshbUuBPoxsr6yv9bOamMw2RVvVVI4zhTZ4venm9YdA=";
-      };
-    };
+    version = "1.3.0-50282235-pde664d85";
+    revision = "502822354d59757c4b0e0d2c2d6b61ff1a1abd63";
+    # Empty on purpose: the asset for this revision does not exist yet. The push
+    # that moves `virglrendererSource.rev` is what makes
+    # `.github/workflows/build-virglrenderer.yml` build it, upload it to the
+    # rolling `alpha` release and commit the `systems` entry here (it reads the
+    # same pin, so this block's `version`/`revision` are already what it writes).
+    # Until then `nix/lib/virglrenderer-cang.nix` falls back to the source build -
+    # and its `prebuiltIsCurrent` guard refuses a stale asset even if one is
+    # listed.
+    systems = { };
   };
 
   # The prebuilt waypipe the guest image ships. It is zeroqn/headless's published

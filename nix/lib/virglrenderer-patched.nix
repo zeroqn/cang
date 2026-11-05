@@ -6,8 +6,21 @@
 # otherwise carries as its own patch. It is not chosen for the panfrost
 # `res_id_count` fix in it: that is unreachable from cang, which does not support
 # ARM/Mali hosts and does not compile the panfrost renderer in (`mesonFlags` in
-# nixpkgs builds `-Ddrm-renderers=amdgpu-experimental,asahi,msm`). Two
-# consequences of moving off the 1.3.0 tarball:
+# nixpkgs builds `-Ddrm-renderers=amdgpu-experimental,asahi,msm`).
+#
+# Over the previous pin (`c8e3fc3b`, 2026-10-08) it adds the venus changes cang's
+# guests actually run: the memory-type spoof (upstream MR 1692), which stops
+# advertising a single DEVICE_LOCAL|HOST_VISIBLE type so a client that allocates
+# for optimal-tiling images no longer gets forced onto the external-memory path
+# (`VKR_DEBUG=no_mem_type_spoof` disables it); `VKR_HEAP_MEMORY_PERCENT`
+# (MR 1646), which shrinks the memoryHeaps a guest is shown; the shm-fd leak on
+# the import path (MR 1698); the device-level `object_mutex` teardown (MR 1702);
+# the proxy `old_busy_mask` locking fix; the render-socket `memcpy` fix; and a
+# Mesa uprev for the venus headers. `tools/zg-vulkan-cang-smoke/` is the live
+# check that those reach a guest: it indexes a corpus with `zg` on venus and
+# fails if anything falls back to the CPU.
+#
+# Two consequences of moving off the 1.3.0 tarball:
 #  * that revision builds venus-protocol as a meson subproject instead of
 #    vendoring it, and a Nix build has no network, so the wrap's checkout is
 #    vendored from `pins.virglrendererSource` in `postPatch`;

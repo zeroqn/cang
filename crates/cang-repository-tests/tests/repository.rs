@@ -1609,6 +1609,116 @@ fn virglrenderer_fix_is_shipped_for_the_cang_build_and_for_hosts() {
     );
 }
 
+/// The prebuilt virglrenderer asset is only the current binary while it was built
+/// from the revision `virglrendererSource` names: the upstream version does not
+/// move with the revision, so nothing else ties the two together. Two things
+/// enforce it - `pins.nix`'s `revision` must equal the source `rev`, and the
+/// selector must refuse a `systems` entry whose `revision` is not the pinned one
+/// (which is what lets a source bump land before CI has published the new asset).
+#[test]
+fn virglrenderer_prebuilt_is_gated_on_the_pinned_source_revision() {
+    const PINS_NIX: &str = include_str!("../../../nix/pins.nix");
+    const VIRGLRENDERER_CANG_NIX: &str = include_str!("../../../nix/lib/virglrenderer-cang.nix");
+
+    let source = PINS_NIX
+        .split("virglrendererSource = {")
+        .nth(1)
+        .expect("nix/pins.nix should carry virglrendererSource");
+    let rev = source
+        .split("rev = \"")
+        .nth(1)
+        .and_then(|tail| tail.split('"').next())
+        .expect("virglrendererSource should pin a rev");
+    assert_eq!(
+        rev.len(),
+        40,
+        "virglrendererSource.rev should be a full sha"
+    );
+    assert!(
+        PINS_NIX.contains(&format!("revision = \"{rev}\";")),
+        "virglrendererPrebuiltRelease.revision should be the pinned source rev ({rev})"
+    );
+    let asset_version = PINS_NIX
+        .split("virglrendererPrebuiltRelease = {")
+        .nth(1)
+        .and_then(|block| block.split("version = \"").nth(1))
+        .and_then(|tail| tail.split('"').next())
+        .expect("virglrendererPrebuiltRelease should pin a version");
+    assert!(
+        asset_version.contains(&rev[..8]),
+        "the prebuilt asset version ({asset_version}) should carry the pinned revision's stem ({})",
+        &rev[..8]
+    );
+
+    assert!(
+        VIRGLRENDERER_CANG_NIX.contains("prebuiltIsCurrent")
+            && VIRGLRENDERER_CANG_NIX.contains("pins.virglrendererSource.rev")
+            && VIRGLRENDERER_CANG_NIX.contains("if prebuiltIsCurrent && builtins.hasAttr"),
+        "nix/lib/virglrenderer-cang.nix should gate the prebuilt on the pinned revision"
+    );
+}
+
+/// `zg` on the guest GPU is checked live by `tools/zg-vulkan-cang-smoke`, not by a
+/// unit test: it boots a `--gpu=drm` guest and indexes a fixed slice of this
+/// repository's sources with the image's GGUF model. What can be asserted here is
+/// that the scoring it documents is the scoring it runs - the checks that make a
+/// silent CPU fallback a failure are the reason the tool exists.
+#[test]
+fn zg_vulkan_smoke_scores_the_guest_gpu_path() {
+    const RUNNER: &str = include_str!("../../../tools/zg-vulkan-cang-smoke/zg-vulkan-smoke.sh");
+    const GUEST: &str =
+        include_str!("../../../tools/zg-vulkan-cang-smoke/smoke/run-guest-zg-vulkan.sh");
+    const README: &str = include_str!("../../../tools/zg-vulkan-cang-smoke/README.md");
+    const GRAPHICS_DOC: &str = include_str!("../../../docs/graphics-audio.md");
+
+    for check in [
+        "zg-vulkan-device",
+        "zg-ggml-device",
+        "zg-backend-vulkan",
+        "zg-no-cpu-fallback",
+        "zg-model-local",
+        "zg-index-ready",
+        "zg-query-hits",
+        "zg-throughput",
+        "virglrenderer-loaded",
+    ] {
+        assert!(
+            RUNNER.contains(check),
+            "the zg-vulkan smoke should score {check}"
+        );
+        assert!(
+            README.contains(check),
+            "tools/zg-vulkan-cang-smoke/README.md should document {check}"
+        );
+    }
+    // The fallback lines are what the smoke fails on, so they have to stay named.
+    for marker in [
+        "falling back to CPU",
+        "vulkan GPU backend is unavailable",
+        "VK_ERROR_OUT_OF_DEVICE_MEMORY",
+    ] {
+        assert!(
+            RUNNER.contains(marker),
+            "the zg-vulkan smoke should fail on `{marker}`"
+        );
+    }
+    // The corpus is this repository's own code, cut to a fixed size, so the
+    // throughput figure is comparable across commits.
+    assert!(
+        RUNNER.contains("crates/cang/src") && RUNNER.contains("corpus_bytes=65536"),
+        "the zg-vulkan smoke should cut a fixed-size corpus out of this repository"
+    );
+    // The guest client is the image's own zg, on the model guest-init seeds.
+    assert!(
+        GUEST.contains("local/qwen3-embedding-0.6b") && GUEST.contains("/dev/null"),
+        "the guest arm should index with the image's GGUF model and never read stdin"
+    );
+    assert!(
+        GRAPHICS_DOC.contains("tools/zg-vulkan-cang-smoke/"),
+        "docs/graphics-audio.md should point at the live smoke for the guest GPU path"
+    );
+}
+
 /// The image's `zg` is the zvec-grep Rust rewrite, built from the pinned
 /// revision's `rust/` workspace - upstream publishes no Rust binary - and cang
 /// publishes a prebuilt of the same derivation through the same

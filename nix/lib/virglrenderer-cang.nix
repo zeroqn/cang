@@ -27,8 +27,20 @@ let
     libGLU
     vulkan-loader
   ];
+  # `build-virglrenderer.yml` publishes an asset and pins it in nix/pins.nix
+  # together, so a `systems` entry is only the current binary while its `revision`
+  # is the pinned one and its version carries that revision's stem. Between a
+  # source move and that pin landing the entry names the previous build (or an
+  # asset that does not exist yet), and the source build is the one that matches -
+  # so it is chosen instead of shipping a library built from a revision the
+  # `virglrendererSource` pin no longer names.
+  prebuiltIsCurrent =
+    (release.revision or null) == pins.virglrendererSource.rev
+    && pkgs.lib.hasPrefix "${pkgs.virglrenderer.version}-${
+      builtins.substring 0 8 pins.virglrendererSource.rev
+    }-p" (release.version or "");
 in
-if builtins.hasAttr system systems then
+if prebuiltIsCurrent && builtins.hasAttr system systems then
   let
     asset = builtins.getAttr system systems;
     prebuilt = pkgs.callPackage ../pkgs/virglrenderer-prebuilt.nix {

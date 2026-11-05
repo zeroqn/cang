@@ -183,6 +183,27 @@ client cannot ask for memory the renderer would map back into it. Growing the
 window is the lever; `VK_EXT_external_memory_host` would need the renderer to
 import guest pointers, which is a renderer-side project of its own.
 
+The renderer side does steer the client away from that path. Since the pinned
+virglrenderer revision `50282235`, venus **spoofs memory types** when the host
+driver's first type is both `DEVICE_LOCAL` and `HOST_VISIBLE` (the UMA case an
+APU presents): type 0 becomes `DEVICE_LOCAL`-only and type 1 loses
+`DEVICE_LOCAL`, with every guest index shifted by one on the way to the host
+driver. A client that allocates for an optimal-tiling image with "the first
+type" therefore stops asking for an exportable allocation it would then map
+through the window. `VKR_DEBUG=no_mem_type_spoof` turns it back off, and
+`VKR_HEAP_MEMORY_PERCENT=<1-100>` shrinks the `memoryHeaps` a guest is shown
+(the same revision) if a guest should be kept away from the host's heap limit.
+
+`tools/zg-vulkan-cang-smoke/` is the live check for all of it: it boots a
+`--gpu=drm` guest, indexes a fixed corpus with `zg` on venus and the qwen3 GGUF
+model, and fails on `falling back to CPU`, an out-of-device-memory allocation, or
+a run that embedded the corpus at under 100 tokens/s - plus, host-side, that the
+`libvirglrenderer.so.1` doing the work is the one `.#virglrenderer` installed. It
+indexes a fixed 64 KiB slice of this repository's own sources, so its throughput is
+comparable from one commit to the next: ~344 t/s whole-run on venus against ~740 t/s
+for the same binary on the host's RADV, both measured 2026-11-05 and recorded in
+`tools/zg-vulkan-cang-smoke/README.md`.
+
 Which model and device a guest uses is decided at boot by `cang-guest-init`
 (`crates/cang-guest-init/src/guest_init/components/zg.rs`):
 

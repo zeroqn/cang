@@ -169,7 +169,9 @@ goes to the input instead of the checkout:
   [the maintenance procedure](maintenance.md#updating-the-libkrun-fork).
 - `.#virglrenderer`: cang's virglrenderer. It is the prebuilt release asset
   `.github/workflows/build-virglrenderer.yml` publishes when one is pinned for
-  the system, otherwise the nixpkgs `virglrenderer` at the upstream revision
+  the system **and** built from the pinned revision
+  (`nix/lib/virglrenderer-cang.nix`'s `prebuiltIsCurrent`), otherwise the nixpkgs
+  `virglrenderer` at the upstream revision
   pinned in `nix/pins.nix` (`virglrendererSource`) with this repo's host-side
   patches (`virglrenderer-enum-26.patch`,
   `virglrenderer-gbm-layout-linear-modifier.patch`,
