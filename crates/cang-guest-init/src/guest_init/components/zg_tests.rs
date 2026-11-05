@@ -60,9 +60,7 @@ fn seed_links_every_file_with_its_directories_into_the_cache() {
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("home should be created");
     let identity = identity_under(&home);
-    unsafe { std::env::set_var(MODELS_DIR_ENV, &models) };
-    seed_models(true, &identity).expect("seeding should succeed");
-    unsafe { std::env::remove_var(MODELS_DIR_ENV) };
+    seed_models_from(Some(&models), true, &identity).expect("seeding should succeed");
 
     let cache = model_cache_dir(&identity);
     for relative in [
@@ -96,9 +94,7 @@ fn seed_keeps_a_model_the_user_already_downloaded() {
     std::fs::create_dir_all(&cache).expect("cache should be created");
     std::fs::write(cache.join("hf_model.gguf"), b"user copy").expect("user copy should be written");
 
-    unsafe { std::env::set_var(MODELS_DIR_ENV, &models) };
-    seed_models(true, &identity).expect("seeding should succeed");
-    unsafe { std::env::remove_var(MODELS_DIR_ENV) };
+    seed_models_from(Some(&models), true, &identity).expect("seeding should succeed");
 
     let contents =
         std::fs::read(cache.join("hf_model.gguf")).expect("cached model should be readable");
@@ -122,9 +118,9 @@ fn seed_without_the_image_directory_leaves_the_cache_alone() {
     std::fs::create_dir_all(&cache).expect("cache should be created");
     std::fs::write(cache.join("own.gguf"), b"keep").expect("cache file should be written");
 
-    unsafe { std::env::set_var(MODELS_DIR_ENV, temp.path().join("absent")) };
-    seed_models(true, &identity).expect("seeding without the image directory should succeed");
-    unsafe { std::env::remove_var(MODELS_DIR_ENV) };
+    let absent = temp.path().join("absent");
+    seed_models_from(Some(&absent), true, &identity)
+        .expect("seeding without the image directory should succeed");
 
     assert!(cache.join("own.gguf").is_file());
     assert_eq!(
@@ -141,7 +137,7 @@ fn seed_is_a_no_op_for_a_non_root_call() {
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("home should be created");
     let identity = identity_under(&home);
-    seed_models(false, &identity).expect("non-root seeding should succeed");
+    seed_models_from(Some(temp.path()), false, &identity).expect("non-root seeding should succeed");
     assert!(!model_cache_dir(&identity).exists());
 }
 
@@ -162,9 +158,7 @@ fn seeded_cache_is_owned_like_the_home() {
         shell: PathBuf::from("fish"),
     };
 
-    unsafe { std::env::set_var(MODELS_DIR_ENV, &models) };
-    seed_models(true, &identity).expect("seeding should succeed");
-    unsafe { std::env::remove_var(MODELS_DIR_ENV) };
+    seed_models_from(Some(&models), true, &identity).expect("seeding should succeed");
 
     let cache = model_cache_dir(&identity);
     let owner = std::fs::metadata(&cache).expect("cache metadata should be readable");

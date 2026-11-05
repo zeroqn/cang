@@ -123,13 +123,27 @@ fn run_probe(bin: &str, args: &[&str], timeout: std::time::Duration) -> Option<S
 /// the cache at the store instead would make the whole cache read-only, so the files
 /// are linked in and `~/.zvec-grep/models` stays writable for anything the user adds.
 pub(in crate::guest_init) fn seed_models(is_root: bool, identity: &DevIdentity) -> Result<()> {
+    let source = std::env::var(MODELS_DIR_ENV).ok().map(PathBuf::from);
+    seed_models_from(source.as_deref(), is_root, identity)
+}
+
+/// Seed from an already-resolved source: `None` means the image ships no models.
+///
+/// Split out of [`seed_models`] so callers that are not the guest runtime (the
+/// tests) do not have to set the process-wide `CANG_ZG_MODELS_DIR`: `set_var`
+/// is process-global and `cargo test` runs these tests in parallel threads, so a
+/// test that went through the environment would race every other one.
+pub(in crate::guest_init) fn seed_models_from(
+    source: Option<&Path>,
+    is_root: bool,
+    identity: &DevIdentity,
+) -> Result<()> {
     if !is_root {
         return Ok(());
     }
-    let Ok(source) = std::env::var(MODELS_DIR_ENV) else {
+    let Some(source) = source else {
         return Ok(());
     };
-    let source = PathBuf::from(source);
     if !source.is_dir() {
         return Ok(());
     }
@@ -137,7 +151,7 @@ pub(in crate::guest_init) fn seed_models(is_root: bool, identity: &DevIdentity) 
     // The cache root has to exist even when the image ships no models, so `zg` can
     // write its own downloads there.
     fs::create_dir_all(&cache)?;
-    link_tree(&source, &source, &cache)?;
+    link_tree(source, source, &cache)?;
     fs::chown_tree_skipping_symlinks(&cache, identity.uid, identity.gid)
 }
 
