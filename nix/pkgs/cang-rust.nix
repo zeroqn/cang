@@ -34,7 +34,7 @@ let
   # (`nix flake update fenix`) from re-hashing it.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-lU7eNEhP1iJV79GFlW+jKkEAI7i3yQ8pfOyso4laWVw=";
+    hash = "sha256-Sb5A/Ib9h13r7LrB5rt2a04zwys10ipk6vvRpnT75R0=";
   };
 
   # Building libkrun is what needs clang/libclang (krun-display and krun-input
