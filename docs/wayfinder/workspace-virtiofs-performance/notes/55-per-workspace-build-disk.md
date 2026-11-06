@@ -108,3 +108,33 @@ policy choice for the workspace owner, not a limitation of the disk.
   options are a primed image cloned per task with a merge on exit, or an exclusive
   lock, or leaving it on virtio-fs as it is now. Not started.
 - the sources themselves - that is the point of the share.
+
+## Does `SCCACHE_BASEDIRS` buy anything for Rust? Measured: no
+
+sccache's own docs (`docs/Configuration.md`) describe it as the ccache-style
+lever: "base directory (or directories) to strip from paths for cache key
+computation... enables cache hits across different absolute paths when compiling
+the same source code", separated by `:` on this platform (a first attempt used
+commas, which is the Windows spelling, and tested nothing).
+
+Measured with it and without, same sources at two different paths
+(`/workspace/ap1`, `/workspace/ap2`), separate target dirs, a real dependency
+graph (serde_json + rayon), cache warm, server restarted per arm:
+
+| arm | build 1 | build 2 (different path) |
+| --- | --- | --- |
+| `SCCACHE_BASEDIRS` unset | 22 requests, 11 hits | 44 requests, 22 hits (+11) |
+| `SCCACHE_BASEDIRS=/workspace/ap1:/workspace/ap2` | 22 requests, 11 hits | 44 requests, 22 hits (+11) |
+
+Identical. The 11 hits the second path got without it are the *registry*
+dependencies - their sources live in the shared `CARGO_HOME`, and sccache already
+normalises `--out-dir`, so a different worktree path does not stop them hitting.
+What cannot hit is the workspace's own crates: cargo derives `-C metadata` from
+the package's source path, so the argument vector differs before sccache sees it,
+and a `bin`/`cdylib`/`proc-macro` crate is not cacheable at all (it invokes the
+system linker). `SCCACHE_BASEDIRS` cannot rewrite an opaque metadata hash, so it
+changes neither.
+
+Conclusion: leave it unset. It also has a failure mode worth avoiding - a path
+sccache does not like prevents the server from starting, which turns a cache
+optimisation into a broken build.
