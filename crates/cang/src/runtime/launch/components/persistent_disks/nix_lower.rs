@@ -25,21 +25,23 @@
 //! failure, a store the host cannot list) leaves the launch on the host-composed
 //! overlay, which is what the guest keeps using when the flag is absent.
 //!
-//! # Status: opt-in, and the guest half does not currently mount
+//! # Status: on by default, and the guest composes `/nix` over it
 //!
-//! Block mode is requested with `CANG_NIX_LOWER_BLOCK=1` and is **off by
-//! default**. The reason is a hard kernel requirement, measured in the guest
-//! (`7.2.10-hardened1`): kernel overlayfs refuses a virtio-fs directory as its
-//! upper/work - `overlayfs: upper fs does not support tmpfile.`,
-//! `overlayfs: upper fs does not support RENAME_WHITEOUT.`,
-//! `overlayfs: upper fs missing required features.` (mount exits 32). So the
-//! guest cannot compose a `/nix` overlay whose upper and work are the host
-//! directories this design deliberately keeps (dedup with the host's own
-//! `/nix/store`), and it falls back to the host-composed overlay. The host half
-//! below (identity, reflinked image, read-only attach, env) works and is
-//! verified: the guest mounts the image read-only at `/run/cang/nix-lower` and
-//! reads it 1.9-8.2x faster than the virtio-fs lower, but only through that
-//! mount, not through `/nix`.
+//! Block mode is on unless `CANG_NIX_LOWER_BLOCK=0`. Default-on was blocked on a
+//! kernel requirement, measured in the guest (`7.2.10-hardened1`): kernel
+//! overlayfs refused the virtio-fs directory this design keeps as upper/work -
+//! `overlayfs: upper fs does not support RENAME_WHITEOUT.`, `upper fs missing
+//! required features.`, mount exits 32 - because the share did not forward
+//! `RENAME_WHITEOUT`. The fork forwards it from v2.0.0-cang.18, so the guest now
+//! composes a `/nix` overlay with the block image as its lower and the shared
+//! host directory as its upper (note 57: `find /nix/store` 206-215 ms against
+//! 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s).
+//!
+//! The guest half lives in the *image's* `cang-guest-init`, so the host reads
+//! which binary will run before paying for an image: one built before the guest
+//! half (0.17.2 and earlier) ignores every `CANG_NIX_LOWER_*` variable, and
+//! building a 12 GB disk it will never mount would leave the guest silently on
+//! the host-composed overlay.
 
 use anyhow::{Context, Result, anyhow, bail};
 use std::ffi::OsStr;
@@ -73,14 +75,7 @@ pub(crate) const GUEST_UPPER_DIR: &str = "/run/cang/nix-overlay/upper";
 pub(crate) const GUEST_WORK_DIR: &str = "/run/cang/nix-overlay/work-guest";
 const BIND_TAG: &str = "cang-nix-overlay-src";
 const BLOCK_MODE_ENV: &str = "CANG_NIX_LOWER_BLOCK";
-/// The host-side switch. Block mode is **opt-in** (`CANG_NIX_LOWER_BLOCK=1`)
-/// rather than the default, because the guest half is measurably impossible with
-/// this guest kernel: kernel overlayfs refuses a virtio-fs directory as its upper
-/// (`upper fs does not support tmpfile` / `does not support RENAME_WHITEOUT` /
-/// `upper fs missing required features`), so a guest-composed `/nix` overlay over
-/// the block lower cannot be mounted while `upper`/`work` stay host directories.
-/// Until that is redesigned, a default-on block mode would only pay the image
-/// build and fall straight back to the host-composed overlay on every launch.
+/// The host-side switch: on unless `CANG_NIX_LOWER_BLOCK=0`.
 pub(crate) const HOST_BLOCK_MODE_ENV: &str = BLOCK_MODE_ENV;
 const STATE_LABEL_KEY: &str = "label";
 const STATE_IDENTITY_KEY: &str = "identity";
@@ -259,14 +254,60 @@ fn judge_mkfs_output(program: &OsStr, output: &std::process::Output) -> Result<(
 
 /// Best-effort entry point: the launch falls back to the host-composed overlay
 /// whenever this returns `None`, and never fails because of it.
-pub(crate) fn prepare_block(intent: &HostNixOverlay) -> Option<NixLowerBlock> {
+///
+/// `guest_init` is the binary this launch will actually run (the image's, or the
+/// `--guest-init` override). Block mode has a guest half, and an image built
+/// before that half existed ignores every `CANG_NIX_LOWER_*` variable: the disk
+/// would be built, attached, and never mounted, which is a `/nix` that silently
+/// stays virtio-fs. Reading the guest binary first turns that into a named
+/// fallback and skips a multi-gigabyte build nothing would read.
+pub(crate) fn prepare_block(intent: &HostNixOverlay, guest_init: &Path) -> Option<NixLowerBlock> {
     if !block_mode_requested() {
         tracing::debug!(
-            "{HOST_BLOCK_MODE_ENV} is not 1: keeping the host-composed /nix overlay on every layer"
+            "{HOST_BLOCK_MODE_ENV} is 0: keeping the host-composed /nix overlay on every layer"
+        );
+        return None;
+    }
+    if !guest_init_mounts_block_lower(guest_init) {
+        tracing::warn!(
+            guest_init = %guest_init.display(),
+            selected_image = %intent.selected_reference,
+            "cang /nix lower: the guest-init in this launch predates block mode and would ignore the lower disk; keeping the host-composed overlay (rebuild the image with a current cang to serve /nix from the block device)"
+        );
+        eprintln!(
+            "cang: /nix block lower skipped: '{}' predates block mode, so /nix stays the host-composed overlay",
+            guest_init.display()
         );
         return None;
     }
     prepare_block_with(intent, &HostNixLowerImageBuilder)
+}
+
+/// The guest half's switch, which is also the contract between the two halves.
+const GUEST_HALF_MARKER: &[u8] = b"CANG_NIX_LOWER_BLOCK";
+
+/// Whether the `cang-guest-init` that will run in this launch knows block mode.
+///
+/// The guest composes the `/nix` overlay itself only if it parses
+/// `CANG_NIX_LOWER_BLOCK` and the four paths beside it, and a release binary
+/// keeps its string literals, so the switch's own name in the file is the
+/// guest's capability. A binary that cannot be read is not evidence of an old
+/// guest-init, so it keeps the legacy assumption (supported) rather than
+/// disabling block mode on an I/O error.
+pub(super) fn guest_init_mounts_block_lower(guest_init: &Path) -> bool {
+    match fs::read(guest_init) {
+        Ok(bytes) => bytes
+            .windows(GUEST_HALF_MARKER.len())
+            .any(|window| window == GUEST_HALF_MARKER),
+        Err(err) => {
+            tracing::debug!(
+                guest_init = %guest_init.display(),
+                error = %err,
+                "cang /nix lower: cannot read the guest-init binary; assuming it supports block mode"
+            );
+            true
+        }
+    }
 }
 
 fn prepare_block_with(
@@ -290,8 +331,16 @@ fn prepare_block_with(
     }
 }
 
+/// Block mode is the default; `CANG_NIX_LOWER_BLOCK=0` turns it off.
+///
+/// Default-on became correct once the fork forwarded `RENAME_WHITEOUT` (v2.0.0-cang.18):
+/// the guest can then compose the overlay over a read-only block lower with the virtio-fs
+/// upper, which is the configuration measured in note 57 - `find /nix/store` 206-215 ms
+/// against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s. The switch remains for A/B and
+/// for a host where the image cannot be built: any failure still falls back to the
+/// host-composed overlay, and a launch never fails because of it.
 fn block_mode_requested() -> bool {
-    matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("1"))
+    !matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("0"))
 }
 
 pub(super) fn ensure_with_builder(
@@ -619,6 +668,10 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
+    /// One lock for every test that reads or writes the block-mode switch: a
+    /// parallel test must not observe another's value.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[derive(Default)]
     struct FakeBuilder {
         builds: RefCell<Vec<(PathBuf, PathBuf, String)>>,
@@ -810,6 +863,64 @@ mod tests {
         );
     }
 
+    /// Block mode has a guest half, and the guest-init that will actually run is
+    /// what decides whether a built disk would ever be mounted.
+    #[test]
+    fn the_guest_init_binary_is_what_says_block_mode_is_supported() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let current = temp.path().join("current-cang-guest-init");
+        fs::write(&current, b"\x7fELF image half CANG_NIX_LOWER_BLOCK=1\x00")
+            .expect("write the current guest-init stand-in");
+        assert!(guest_init_mounts_block_lower(&current));
+
+        let stale = temp.path().join("stale-cang-guest-init");
+        fs::write(&stale, b"\x7fELF an image built before the guest half")
+            .expect("write the stale guest-init stand-in");
+        assert!(!guest_init_mounts_block_lower(&stale));
+
+        // An unreadable binary is not evidence of an old guest-init, so it must
+        // not turn block mode off on an I/O error alone.
+        assert!(guest_init_mounts_block_lower(
+            &temp.path().join("missing-cang-guest-init")
+        ));
+    }
+
+    /// An image whose guest-init predates block mode gets no lower disk: it would
+    /// attach a multi-gigabyte image the guest never mounts and leave `/nix` on
+    /// the host-composed overlay, so the fallback is taken before the build and
+    /// named on the log.
+    #[test]
+    fn a_guest_init_without_block_mode_skips_the_build() {
+        let _guard = ENV_LOCK.lock().expect("env test lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nix_dir = cache_entry(&temp, &["aaaa-one"]);
+        let overlay = intent(&nix_dir, &generation_root(&temp));
+        let guest_init = temp.path().join("cang-guest-init");
+        fs::write(&guest_init, b"\x7fELF an image built before the guest half")
+            .expect("write the stale guest-init stand-in");
+        let before = std::env::var_os(HOST_BLOCK_MODE_ENV);
+
+        // SAFETY: a single-threaded assertion over one process env variable,
+        // serialized by ENV_LOCK.
+        unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) };
+
+        let block = prepare_block(&overlay, &guest_init);
+
+        match before {
+            Some(value) => unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, value) },
+            None => unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) },
+        }
+        assert!(
+            block.is_none(),
+            "a guest that cannot mount the lower keeps the host-composed overlay"
+        );
+        let dir = temp.path().join("btrfs-snapshots").join(DIR_NAME);
+        assert!(
+            !dir.exists(),
+            "no lower image is built for a guest-init that ignores it"
+        );
+    }
+
     #[test]
     fn a_missing_store_leaves_the_host_overlay_in_place() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -888,11 +999,10 @@ mod tests {
         );
     }
 
-    /// Block mode is opt-in: the default launch keeps the host-composed overlay
-    /// and pays nothing for an image it cannot use.
+    /// Block mode is the default; `CANG_NIX_LOWER_BLOCK=0` is the escape hatch
+    /// for a host where the image cannot be built.
     #[test]
-    fn block_mode_is_off_unless_the_host_asks_for_it() {
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn block_mode_is_on_unless_the_host_turns_it_off() {
         let _guard = ENV_LOCK.lock().expect("env test lock");
         let temp = tempfile::tempdir().expect("tempdir");
         let nix_dir = cache_entry(&temp, &["aaaa-one"]);
@@ -902,7 +1012,10 @@ mod tests {
         // SAFETY: a single-threaded assertion over one process env variable,
         // serialized by ENV_LOCK.
         unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) };
-        assert!(!block_mode_requested(), "block mode must default to off");
+        assert!(
+            block_mode_requested(),
+            "block mode is the default now the fork forwards RENAME_WHITEOUT"
+        );
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
@@ -910,7 +1023,7 @@ mod tests {
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "0") };
-        assert!(!block_mode_requested(), "0 must be as off as absent");
+        assert!(!block_mode_requested(), "0 turns it off");
 
         // SAFETY: restore whatever the harness had.
         unsafe {

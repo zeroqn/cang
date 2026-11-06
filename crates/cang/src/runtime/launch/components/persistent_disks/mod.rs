@@ -44,8 +44,9 @@ pub(crate) fn container_store_default_size_bytes() -> u64 {
 /// serve, or `CANG_NIX_LOWER_BLOCK=0`).
 pub(crate) fn prepare_nix_lower_block(
     intent: &crate::runtime::launch::config::HostNixOverlay,
+    guest_init: &Path,
 ) -> Option<nix_lower::NixLowerBlock> {
-    nix_lower::prepare_block(intent)
+    nix_lower::prepare_block(intent, guest_init)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

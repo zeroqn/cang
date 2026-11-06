@@ -239,12 +239,33 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                 );
             }
 
+            // Block mode's guest half lives in the image's `cang-guest-init`, so
+            // which binary will run is decided before the lower disk is built:
+            // an image built before that half existed would get a disk it
+            // ignores, and the guest's /nix would silently stay virtio-fs.
+            let guest_init = profiler.measure_result("guest_init_resolution", || {
+                rootfs::guest_init::resolve_guest_init_with_entrypoint(
+                    lease.handle().rootfs_path(),
+                    plan.guest_init.as_deref(),
+                    lease.handle().process_config().entrypoint.as_slice(),
+                )
+            })?;
+            let guest_init_binary = guest_init
+                .override_mount
+                .as_ref()
+                .map_or(guest_init.host_path.as_path(), |mount| {
+                    mount.source.as_path()
+                });
+
             // The guest's /nix lower on a read-only btrfs block file, built from
             // this image's store content. Best effort by construction: `None`
             // means the guest keeps the host-composed overlay exactly as before.
             let nix_lower_block = profiler
                 .measure_result("nix_lower_block_preparation", || {
-                    Ok(prepare_nix_lower_block(nix_overlay_lease.intent()))
+                    Ok(prepare_nix_lower_block(
+                        nix_overlay_lease.intent(),
+                        guest_init_binary,
+                    ))
                 })
                 .ok()
                 .flatten();
@@ -273,215 +294,205 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                 })
                 .context("failed to prepare cang persistent dev cache disks")
             {
-                Ok(disks) => match profiler.measure_result("guest_init_resolution", || {
-                    rootfs::guest_init::resolve_guest_init_with_entrypoint(
-                        lease.handle().rootfs_path(),
-                        plan.guest_init.as_deref(),
-                        lease.handle().process_config().entrypoint.as_slice(),
+                Ok(disks) => {
+                    let attach_socket = managed_attach_socket::allocate(
+                        lease.handle().task_id(),
+                        lease.handle().task_dir(),
                     )
-                }) {
-                    Ok(guest_init) => {
-                        let attach_socket = managed_attach_socket::allocate(
-                            lease.handle().task_id(),
-                            lease.handle().task_dir(),
-                        )
-                        .context("failed to allocate cang managed attach socket")?;
-                        let exec_socket = managed_attach_socket::allocate_exec(
-                            lease.handle().task_id(),
-                            lease.handle().task_dir(),
-                        )
-                        .context("failed to allocate cang exec socket")?;
-                        let pulse_bridge = if let Some(host_port) =
-                            plan.pulse.and_then(|pulse| pulse.host_loopback_port())
-                        {
-                            Some(PulseBridgeConfig {
-                                socket: managed_attach_socket::allocate_pulse_bridge(
-                                    lease.handle().task_id(),
-                                    lease.handle().task_dir(),
-                                )
-                                .context("failed to allocate cang Pulse bridge socket")?,
-                                guest_port: DEFAULT_PULSE_BRIDGE_PORT,
-                                host_port,
-                            })
-                        } else {
-                            None
-                        };
-                        let waypipe = if plan.waypipe {
-                            Some((
-                                managed_attach_socket::allocate_waypipe_data(
-                                    lease.handle().task_id(),
-                                    lease.handle().task_dir(),
-                                )
-                                .context("failed to allocate cang Waypipe data socket")?,
-                                managed_attach_socket::allocate_waypipe_control(
-                                    lease.handle().task_id(),
-                                    lease.handle().task_dir(),
-                                )
-                                .context("failed to allocate cang Waypipe control socket")?,
-                            ))
-                        } else {
-                            None
-                        };
-                        let exec = ExecConfig {
-                            socket: exec_socket,
-                            guest_port: DEFAULT_EXEC_PORT,
-                            protocol_version: EXEC_PROTOCOL_VERSION,
-                            socket_uid: current_uid(),
-                            socket_gid: current_gid(),
-                        };
-                        let managed_session = ManagedSessionConfig {
-                            attach_socket,
-                            guest_port: DEFAULT_ATTACH_PORT,
-                            protocol_version: PROTOCOL_VERSION,
-                            attach_socket_uid: current_uid(),
-                            attach_socket_gid: current_gid(),
-                            cleanup_task_rootfs_on_exit: !plan.preserve_debug,
-                            guest_kernel_console_log: lease.handle().task_dir().join(
-                                crate::runtime::launch::config::MANAGED_GUEST_KERNEL_CONSOLE_LOG,
-                            ),
-                        };
-                        // A block-mode launch adds two contributions: the
-                        // read-only lower disk, and one writable share carrying the
-                        // generation's `upper` and the guest's work dir so the
-                        // guest can compose the overlay itself.
-                        let mut launch_mounts = plan.bind_mounts.clone();
-                        let mut launch_disks = disks.attachments();
-                        let mut extra_env = disks.env_pairs();
-                        if let Some(block) = &nix_lower_block {
-                            launch_mounts.push(block.bind_mount());
-                            launch_disks.push(block.attachment());
-                            extra_env.extend(block.env_pairs());
-                        }
-                        match profiler.measure_result("launch_config_build", || {
-                            LaunchConfig::build_for_task(LaunchSpec {
-                                task_rootfs: lease.handle().rootfs_path(),
-                                hostname: &plan.hostname,
-                                mounts: &launch_mounts,
-                                guest_init_override: guest_init.override_mount.clone(),
-                                guest_init_exec: &guest_init.guest_exec_path,
-                                guest_command: &plan.guest_command,
-                                image_process_config: lease.handle().process_config(),
-                                mem_gib: plan.mem_gib,
-                                log_level: plan.log_level,
-                                network_mode: plan.network_mode,
-                                pulse: plan.pulse,
-                                gpu_mode: plan.gpu_mode,
-                                gpu_shm_bytes: plan.gpu_shm_bytes,
-                                zero_copy_shm: plan.zero_copy_shm,
-                                zero_message_open: plan.zero_message_open,
-                                no_flush: plan.no_flush,
-                                cache_symlinks: None,
-                                negative_entry_millis: plan.negative_entry_millis,
-                                wayland: plan.wayland,
-                                new_perms: plan.new_perms,
-                                publish: &plan.publish,
-                                profile: plan.profile,
-                                root: plan.root,
-                                allocator: plan.allocator,
-                                host_uid: current_uid(),
-                                host_gid: current_gid(),
-                                vcpus: config::resolve_cpu_count()?,
-                                disks: launch_disks,
-                                extra_env: {
-                                    let mut env = extra_env;
-                                    env.extend(terminal_env::host_terminal_env_pairs());
-                                    if let Some(pair) =
-                                        attach_profile::guest_env_pair_from_process_env()
-                                    {
-                                        env.push(pair);
-                                    }
-                                    if let Some(pair) =
-                                        pty_raw_passthrough::guest_env_pair(pty.mode)
-                                    {
-                                        env.push(pair);
-                                    }
-                                    if let Some(pair) = launcher_command::guest_env_pair(
-                                        &plan.guest_command,
-                                        std::io::stdin().is_terminal(),
-                                    ) {
-                                        env.push(pair);
-                                    }
-                                    if let Some(pair) =
-                                        terminal_trace_env_pair_from_process_env(pty.trace)
-                                    {
-                                        env.push(pair);
-                                    }
-                                    env
-                                },
-                                host_nix_overlay: Some(nix_overlay_lease.intent().clone()),
-                                pulse_bridge,
-                                waypipe: waypipe.as_ref().map(|(socket, _)| WaypipeConfig {
-                                    socket: socket.clone(),
-                                    guest_port: DEFAULT_WAYPIPE_PORT,
-                                }),
-                                exec: Some(exec.clone()),
-                                managed_session: Some(managed_session.clone()),
-                            })
-                        }) {
-                            Ok(mut config) => {
-                                config.seccomp = plan.seccomp.clone();
-                                config.landlock = plan.landlock;
-                                tracing::debug!(
-                                    guest_init = %guest_init.guest_exec_path,
-                                    disks = config.disks.len(),
-                                    ram_mib = config.ram_mib,
-                                    vcpus = config.vcpus,
-                                    network_mode = config.network_mode.as_config_value(),
-                                    gpu_mode = config.gpu_mode.as_config_value(),
-                                    workspace = %plan.workspace_dir.display(),
-                                    mounts = config.mounts.len(),
-                                    "cang libkrun launch"
-                                );
-
-                                let active_task = task_control::ActiveTaskSpec {
-                                    task_id: lease.handle().task_id().to_owned(),
-                                    workspace_slug: plan.workspace_slug.clone(),
-                                    workspace_dir: plan.workspace_dir.clone(),
-                                    task_dir: lease.handle().task_dir().to_path_buf(),
-                                    image_reference: lease
-                                        .handle()
-                                        .selected_image_reference()
-                                        .to_owned(),
-                                    image_digest: lease.handle().image_digest().map(str::to_owned),
-                                    waypipe: waypipe.map(|(_, control_socket)| {
-                                        task_control::WaypipeTaskSpec {
-                                            control_socket,
-                                            initial_target: plan.waypipe_socket.clone(),
-                                        }
-                                    }),
-                                    exec: Some(task_control::ExecTaskSpec {
-                                        socket: exec.socket,
-                                        guest_port: exec.guest_port,
-                                        protocol_version: exec.protocol_version,
-                                    }),
-                                    managed: Some(task_control::ManagedTaskSpec {
-                                        attach_socket: managed_session.attach_socket.clone(),
-                                        guest_port: managed_session.guest_port,
-                                        protocol_version: managed_session.protocol_version,
-                                    }),
-                                };
-                                BtrfsHostRunResult::Helper {
-                                    managed: config.is_managed_session(),
-                                    result: profiler.measure_result_with(
-                                        "helper_session",
-                                        |profiler| {
-                                            HostSupervisor.run(
-                                                &config,
-                                                lease.handle().task_dir(),
-                                                profiler,
-                                                &active_task,
-                                                plan.daemon,
-                                                attach_input_policy,
-                                            )
-                                        },
-                                    ),
-                                }
-                            }
-                            Err(err) => BtrfsHostRunResult::SetupFailed(err),
-                        }
+                    .context("failed to allocate cang managed attach socket")?;
+                    let exec_socket = managed_attach_socket::allocate_exec(
+                        lease.handle().task_id(),
+                        lease.handle().task_dir(),
+                    )
+                    .context("failed to allocate cang exec socket")?;
+                    let pulse_bridge = if let Some(host_port) =
+                        plan.pulse.and_then(|pulse| pulse.host_loopback_port())
+                    {
+                        Some(PulseBridgeConfig {
+                            socket: managed_attach_socket::allocate_pulse_bridge(
+                                lease.handle().task_id(),
+                                lease.handle().task_dir(),
+                            )
+                            .context("failed to allocate cang Pulse bridge socket")?,
+                            guest_port: DEFAULT_PULSE_BRIDGE_PORT,
+                            host_port,
+                        })
+                    } else {
+                        None
+                    };
+                    let waypipe = if plan.waypipe {
+                        Some((
+                            managed_attach_socket::allocate_waypipe_data(
+                                lease.handle().task_id(),
+                                lease.handle().task_dir(),
+                            )
+                            .context("failed to allocate cang Waypipe data socket")?,
+                            managed_attach_socket::allocate_waypipe_control(
+                                lease.handle().task_id(),
+                                lease.handle().task_dir(),
+                            )
+                            .context("failed to allocate cang Waypipe control socket")?,
+                        ))
+                    } else {
+                        None
+                    };
+                    let exec = ExecConfig {
+                        socket: exec_socket,
+                        guest_port: DEFAULT_EXEC_PORT,
+                        protocol_version: EXEC_PROTOCOL_VERSION,
+                        socket_uid: current_uid(),
+                        socket_gid: current_gid(),
+                    };
+                    let managed_session = ManagedSessionConfig {
+                        attach_socket,
+                        guest_port: DEFAULT_ATTACH_PORT,
+                        protocol_version: PROTOCOL_VERSION,
+                        attach_socket_uid: current_uid(),
+                        attach_socket_gid: current_gid(),
+                        cleanup_task_rootfs_on_exit: !plan.preserve_debug,
+                        guest_kernel_console_log: lease
+                            .handle()
+                            .task_dir()
+                            .join(crate::runtime::launch::config::MANAGED_GUEST_KERNEL_CONSOLE_LOG),
+                    };
+                    // A block-mode launch adds two contributions: the
+                    // read-only lower disk, and one writable share carrying the
+                    // generation's `upper` and the guest's work dir so the
+                    // guest can compose the overlay itself.
+                    let mut launch_mounts = plan.bind_mounts.clone();
+                    let mut launch_disks = disks.attachments();
+                    let mut extra_env = disks.env_pairs();
+                    if let Some(block) = &nix_lower_block {
+                        launch_mounts.push(block.bind_mount());
+                        launch_disks.push(block.attachment());
+                        extra_env.extend(block.env_pairs());
                     }
-                    Err(err) => BtrfsHostRunResult::SetupFailed(err),
-                },
+                    match profiler.measure_result("launch_config_build", || {
+                        LaunchConfig::build_for_task(LaunchSpec {
+                            task_rootfs: lease.handle().rootfs_path(),
+                            hostname: &plan.hostname,
+                            mounts: &launch_mounts,
+                            guest_init_override: guest_init.override_mount.clone(),
+                            guest_init_exec: &guest_init.guest_exec_path,
+                            guest_command: &plan.guest_command,
+                            image_process_config: lease.handle().process_config(),
+                            mem_gib: plan.mem_gib,
+                            log_level: plan.log_level,
+                            network_mode: plan.network_mode,
+                            pulse: plan.pulse,
+                            gpu_mode: plan.gpu_mode,
+                            gpu_shm_bytes: plan.gpu_shm_bytes,
+                            zero_copy_shm: plan.zero_copy_shm,
+                            zero_message_open: plan.zero_message_open,
+                            no_flush: plan.no_flush,
+                            cache_symlinks: None,
+                            negative_entry_millis: plan.negative_entry_millis,
+                            wayland: plan.wayland,
+                            new_perms: plan.new_perms,
+                            publish: &plan.publish,
+                            profile: plan.profile,
+                            root: plan.root,
+                            allocator: plan.allocator,
+                            host_uid: current_uid(),
+                            host_gid: current_gid(),
+                            vcpus: config::resolve_cpu_count()?,
+                            disks: launch_disks,
+                            extra_env: {
+                                let mut env = extra_env;
+                                env.extend(terminal_env::host_terminal_env_pairs());
+                                if let Some(pair) =
+                                    attach_profile::guest_env_pair_from_process_env()
+                                {
+                                    env.push(pair);
+                                }
+                                if let Some(pair) = pty_raw_passthrough::guest_env_pair(pty.mode) {
+                                    env.push(pair);
+                                }
+                                if let Some(pair) = launcher_command::guest_env_pair(
+                                    &plan.guest_command,
+                                    std::io::stdin().is_terminal(),
+                                ) {
+                                    env.push(pair);
+                                }
+                                if let Some(pair) =
+                                    terminal_trace_env_pair_from_process_env(pty.trace)
+                                {
+                                    env.push(pair);
+                                }
+                                env
+                            },
+                            host_nix_overlay: Some(nix_overlay_lease.intent().clone()),
+                            pulse_bridge,
+                            waypipe: waypipe.as_ref().map(|(socket, _)| WaypipeConfig {
+                                socket: socket.clone(),
+                                guest_port: DEFAULT_WAYPIPE_PORT,
+                            }),
+                            exec: Some(exec.clone()),
+                            managed_session: Some(managed_session.clone()),
+                        })
+                    }) {
+                        Ok(mut config) => {
+                            config.seccomp = plan.seccomp.clone();
+                            config.landlock = plan.landlock;
+                            tracing::debug!(
+                                guest_init = %guest_init.guest_exec_path,
+                                disks = config.disks.len(),
+                                ram_mib = config.ram_mib,
+                                vcpus = config.vcpus,
+                                network_mode = config.network_mode.as_config_value(),
+                                gpu_mode = config.gpu_mode.as_config_value(),
+                                workspace = %plan.workspace_dir.display(),
+                                mounts = config.mounts.len(),
+                                "cang libkrun launch"
+                            );
+
+                            let active_task = task_control::ActiveTaskSpec {
+                                task_id: lease.handle().task_id().to_owned(),
+                                workspace_slug: plan.workspace_slug.clone(),
+                                workspace_dir: plan.workspace_dir.clone(),
+                                task_dir: lease.handle().task_dir().to_path_buf(),
+                                image_reference: lease
+                                    .handle()
+                                    .selected_image_reference()
+                                    .to_owned(),
+                                image_digest: lease.handle().image_digest().map(str::to_owned),
+                                waypipe: waypipe.map(|(_, control_socket)| {
+                                    task_control::WaypipeTaskSpec {
+                                        control_socket,
+                                        initial_target: plan.waypipe_socket.clone(),
+                                    }
+                                }),
+                                exec: Some(task_control::ExecTaskSpec {
+                                    socket: exec.socket,
+                                    guest_port: exec.guest_port,
+                                    protocol_version: exec.protocol_version,
+                                }),
+                                managed: Some(task_control::ManagedTaskSpec {
+                                    attach_socket: managed_session.attach_socket.clone(),
+                                    guest_port: managed_session.guest_port,
+                                    protocol_version: managed_session.protocol_version,
+                                }),
+                            };
+                            BtrfsHostRunResult::Helper {
+                                managed: config.is_managed_session(),
+                                result: profiler.measure_result_with(
+                                    "helper_session",
+                                    |profiler| {
+                                        HostSupervisor.run(
+                                            &config,
+                                            lease.handle().task_dir(),
+                                            profiler,
+                                            &active_task,
+                                            plan.daemon,
+                                            attach_input_policy,
+                                        )
+                                    },
+                                ),
+                            }
+                        }
+                        Err(err) => BtrfsHostRunResult::SetupFailed(err),
+                    }
+                }
                 Err(err) => BtrfsHostRunResult::SetupFailed(err),
             };
             let managed_helper_succeeded = matches!(
