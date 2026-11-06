@@ -91,3 +91,58 @@ would cost a snapshot per digest and gain much less.
 Two knobs are enough to stay safe: no block file (mkfs failed, no space) means the
 host-composed overlay as today; `CANG_NIX_LOWER_BLOCK=0` forces that path for an
 A/B.
+
+## Built, then blocked by the kernel: overlayfs cannot use a virtio-fs upper
+
+Implemented as above and verified live (`nix-lower-block` session, report at
+`/home/dev/disp/nix-lower-report.md`). The image side is exactly as predicted:
+
+| check | result |
+| --- | --- |
+| build | 38.6 s, 12.4 GB apparent (11.5 GiB), **56.6 MiB of new disk** (reflinked) |
+| reuse (2nd, 3rd launch) | `reused`, 0.6 ms |
+| guest mount | `/dev/vdc btrfs ro,...` at `/run/cang/nix-lower` |
+| store content | 685 `ls` names / 73 790 `find` nodes, identical to the image |
+| `find` over it | **274 / 274 / 292 ms** vs **2 258 / 1 321 / 510 ms** on the virtio-fs lower |
+| `du -s` | **343-2 025 ms** vs 10 495-11 592 ms |
+| 200 file reads | 94 ms vs 331 ms |
+
+And then the whole plan stops at the kernel, in the guest's dmesg:
+
+```
+overlayfs: upper fs does not support tmpfile.
+overlayfs: upper fs does not support RENAME_WHITEOUT.
+overlayfs: upper fs missing required features.
+```
+
+`fs/fuse/inode.c`:
+
+```c
+static struct file_system_type fuse_fs_type = {
+	.owner		= THIS_MODULE,
+	.name		= "fuse",
+	.fs_flags	= FS_HAS_SUBTYPE | FS_USERNS_MOUNT | FS_ALLOW_IDMAP,
+	...
+```
+
+`FS_RENAME_WHITEOUT` is absent, and overlayfs requires it of the **upper's
+filesystem type** at mount time. That is a static kernel flag: no mount option, no
+FUSE INIT flag, and no change to cang's virtio-fs server can set it. So the upper
+of an overlay cannot live on virtio-fs, which means the guest cannot compose a
+`/nix` overlay while upper/work stay host directories - and the host cannot compose
+one over a block lower, because mounting btrfs needs privileges it does not have.
+
+Conclusion: **a block lower and a virtio-fs upper cannot be combined.** The
+remaining routes, none of which is free:
+
+1. **upper/work on a block btrfs image** (a third per-workspace disk): works with
+   kernel overlayfs, gives up the reflink dedup with the host `/nix/store` - the
+   reason note 56 kept the upper where it is.
+2. **fuse-overlayfs in the guest**: keeps the dedup and the block lower, and puts a
+   userspace FUSE layer in front of every `/nix` access - unmeasured, and the
+   opposite direction from what note 56 measured.
+3. Keep the host-composed overlay (today) and drop the block lower.
+
+Shipped state: the host half is opt-in behind `CANG_NIX_LOWER_BLOCK=1` and defaults
+off (default-on would pay 38 s to then fall back). It is useful the moment route 1
+or 2 is chosen; until then it is a verified builder plus a measurement harness.

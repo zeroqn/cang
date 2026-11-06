@@ -8,5 +8,8 @@ pub(crate) mod components;
 pub(crate) mod config;
 pub(crate) mod plan;
 
-pub(crate) use components::persistent_disks::{HostPersistentDiskPreparer, PersistentDiskPreparer};
+pub(crate) use components::persistent_disks::nix_lower::NixLowerDiskStatus;
+pub(crate) use components::persistent_disks::{
+    HostPersistentDiskPreparer, PersistentDiskPreparer, prepare_nix_lower_block,
+};
 pub(crate) use plan::LaunchPlan;

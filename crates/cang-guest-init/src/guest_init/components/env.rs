@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use std::env;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 pub(in crate::guest_init) const DEV_USER: &str = "dev";
@@ -22,6 +23,16 @@ pub(in crate::guest_init) const RAW_BUILD_DISK_ID: &str = "cang-build";
 pub(in crate::guest_init) const RAW_BUILD_DISK_LABEL: &str = "CANG_BUILD";
 pub(in crate::guest_init) const RAW_CONTAINER_DISK_ID: &str = "cang-containers";
 pub(in crate::guest_init) const RAW_CONTAINER_DISK_LABEL: &str = "CANG_CONTAINERS";
+/// The read-only `/nix` lower disk, and the host-written overlay directories the
+/// guest composes over it. All three names are the host's contract: absent the
+/// flag the guest keeps the host-composed overlay.
+pub(in crate::guest_init) const RAW_NIX_LOWER_DISK_ID: &str = "cang-nix-lower";
+pub(in crate::guest_init) const RAW_NIX_LOWER_DISK_LABEL: &str = "CANG_NIX_LOWER";
+pub(in crate::guest_init) const NIX_LOWER_BLOCK_ENV: &str = "CANG_NIX_LOWER_BLOCK";
+pub(in crate::guest_init) const NIX_LOWER_DISK_ID_ENV: &str = "CANG_NIX_LOWER_DISK_ID";
+pub(in crate::guest_init) const NIX_LOWER_DISK_LABEL_ENV: &str = "CANG_NIX_LOWER_DISK_LABEL";
+pub(in crate::guest_init) const NIX_LOWER_UPPERDIR_ENV: &str = "CANG_NIX_LOWER_UPPERDIR";
+pub(in crate::guest_init) const NIX_LOWER_WORKDIR_ENV: &str = "CANG_NIX_LOWER_WORKDIR";
 pub(in crate::guest_init) const ENTER_AS_ROOT_ENV: &str = "CANG_ENTER_AS_ROOT";
 pub(in crate::guest_init) const CONTAINERS_STORE_ENV: &str = "CANG_CONTAINERS_STORE";
 
@@ -157,6 +168,50 @@ pub(in crate::guest_init) struct CangEnv {
     pub(in crate::guest_init) containers_disk_label: String,
     pub(in crate::guest_init) build_disk_id: String,
     pub(in crate::guest_init) build_disk_label: String,
+    /// `Some` only when the host attached a read-only `/nix` lower disk and the
+    /// guest is therefore the one composing the `/nix` overlay.
+    pub(in crate::guest_init) nix_lower: Option<NixLowerContract>,
+}
+
+/// What a guest-composed `/nix` overlay needs from the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::guest_init) struct NixLowerContract {
+    pub(in crate::guest_init) disk_id: String,
+    pub(in crate::guest_init) disk_label: String,
+    pub(in crate::guest_init) upperdir: PathBuf,
+    pub(in crate::guest_init) workdir: PathBuf,
+}
+
+impl NixLowerContract {
+    /// `CANG_NIX_LOWER_BLOCK=1` turns block mode on, and then both directories are
+    /// required: a guest mount without them would fail at boot and leave `/nix`
+    /// as the host overlay anyway, which is the behaviour the flag exists to
+    /// replace.
+    pub(in crate::guest_init) fn from_lookup(
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<Option<Self>> {
+        if lookup(NIX_LOWER_BLOCK_ENV).as_deref() != Some("1") {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            disk_id: lookup(NIX_LOWER_DISK_ID_ENV)
+                .unwrap_or_else(|| RAW_NIX_LOWER_DISK_ID.to_owned()),
+            disk_label: lookup(NIX_LOWER_DISK_LABEL_ENV)
+                .unwrap_or_else(|| RAW_NIX_LOWER_DISK_LABEL.to_owned()),
+            upperdir: required_path(&lookup, NIX_LOWER_UPPERDIR_ENV)?,
+            workdir: required_path(&lookup, NIX_LOWER_WORKDIR_ENV)?,
+        }))
+    }
+}
+
+fn required_path(lookup: &impl Fn(&str) -> Option<String>, name: &str) -> Result<PathBuf> {
+    let value =
+        lookup(name).ok_or_else(|| anyhow!("{name} is required when {NIX_LOWER_BLOCK_ENV}=1"))?;
+    let path = PathBuf::from(&value);
+    if !path.is_absolute() {
+        anyhow::bail!("{name} must be an absolute path (got '{value}')");
+    }
+    Ok(path)
 }
 
 impl CangEnv {
@@ -191,6 +246,9 @@ impl CangEnv {
                 .unwrap_or_else(|_| RAW_BUILD_DISK_ID.to_owned()),
             build_disk_label: env::var("CANG_BUILD_DISK_LABEL")
                 .unwrap_or_else(|_| RAW_BUILD_DISK_LABEL.to_owned()),
+            nix_lower: NixLowerContract::from_lookup(|name| {
+                env::var(name).ok().filter(|value| !value.is_empty())
+            })?,
         })
     }
 

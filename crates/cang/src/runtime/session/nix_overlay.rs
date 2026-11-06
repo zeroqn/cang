@@ -14,6 +14,7 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::runtime::launch::components::persistent_disks::nix_lower::GUEST_WORK_DIR_NAME;
 use crate::runtime::launch::config::HostNixOverlay;
 use crate::runtime::session::rootfs::task::TaskRootfsHandle;
 
@@ -52,6 +53,11 @@ pub(crate) struct NixOverlayPaths {
     pub(crate) root: PathBuf,
     pub(crate) upperdir: PathBuf,
     pub(crate) workdir: PathBuf,
+    /// The work dir a *guest*-composed overlay over the same upper uses when the
+    /// lower comes from a block device: overlayfs insists on upper and work
+    /// sharing a filesystem, and two overlay instances may not share one work
+    /// dir, so the guest gets its own beside the host's.
+    pub(crate) guest_workdir: PathBuf,
     pub(crate) mergeddir: PathBuf,
     pub(crate) lease_lock: PathBuf,
     pub(crate) lease_state: PathBuf,
@@ -63,6 +69,7 @@ impl NixOverlayPaths {
         Self {
             upperdir: root.join(UPPER_DIR),
             workdir: root.join(WORK_DIR),
+            guest_workdir: root.join(GUEST_WORK_DIR_NAME),
             mergeddir: root.join(MERGED_DIR),
             lease_lock: workspace_state_root.join(LEASE_LOCK),
             lease_state: workspace_state_root.join(LEASE_STATE),
@@ -399,9 +406,9 @@ fn seed_from_previous(
         )
     })?;
     reclaim_stale_generations(paths, &stale, commands);
-    // `work` and `merged` came along with the snapshot; overlayfs wants an empty
-    // pair for the new mount.
-    for dir in [&paths.workdir, &paths.mergeddir] {
+    // `work`, the guest's work dir and `merged` came along with the snapshot;
+    // overlayfs wants an empty pair for the new mount.
+    for dir in [&paths.workdir, &paths.guest_workdir, &paths.mergeddir] {
         commands.reset_work(dir)?;
     }
     tracing::info!(

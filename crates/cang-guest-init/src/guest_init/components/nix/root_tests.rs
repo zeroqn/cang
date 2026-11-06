@@ -5,8 +5,9 @@ use std::path::PathBuf;
 
 use crate::guest_init::components::nix::root::{
     NixOperation, PreseedState, attempt_marker, classify_preseed_state, completion_sentinel,
-    ensure_host_overlay_nix_is_directory, overlay_options, planned_host_overlay_operations,
-    planned_operations, planned_profile_labels, preseed_upper_with, store_reconcile_args,
+    ensure_host_overlay_nix_is_directory, overlay_options, planned_host_overlay_block_operations,
+    planned_host_overlay_block_profile_labels, planned_host_overlay_operations, planned_operations,
+    planned_profile_labels, preseed_upper_with, store_reconcile_args,
 };
 
 #[test]
@@ -378,4 +379,68 @@ fn seeded_generation_imports_the_parked_db_and_never_fetches() {
         ]
     );
     assert_eq!(store_reconcile_args(false), Vec::<&str>::new());
+}
+
+/// Block mode is the host-composed path with the guest's own mount in front of
+/// it: the lower disk and the overlay it composes come first, and everything the
+/// host-composed path does (DB repair, socket dir, daemon) still happens.
+#[test]
+fn block_lower_nix_prep_mounts_the_disk_and_composes_the_overlay_first() {
+    let ops = planned_host_overlay_block_operations();
+    let pos = |op| ops.iter().position(|candidate| candidate == &op).unwrap();
+
+    assert_eq!(
+        ops,
+        vec![
+            NixOperation::WriteRunningStatus,
+            NixOperation::FindLowerDisk,
+            NixOperation::MountLowerDisk,
+            NixOperation::MountBlockOverlay,
+            NixOperation::RepairStore,
+            NixOperation::CreateSocketDir,
+            NixOperation::StartDaemon,
+            NixOperation::WriteReadyStatus,
+        ]
+    );
+    assert!(pos(NixOperation::FindLowerDisk) < pos(NixOperation::MountLowerDisk));
+    assert!(pos(NixOperation::MountLowerDisk) < pos(NixOperation::MountBlockOverlay));
+    assert!(
+        pos(NixOperation::MountBlockOverlay) < pos(NixOperation::RepairStore),
+        "the DB repair and the daemon must run on the composed /nix"
+    );
+    assert!(pos(NixOperation::StartDaemon) < pos(NixOperation::WriteReadyStatus));
+}
+
+#[test]
+fn block_lower_prep_profiles_every_mount_step() {
+    assert_eq!(
+        planned_host_overlay_block_profile_labels(),
+        vec![
+            "nix-prep:require-tools",
+            "nix-prep:prepare-run-dirs",
+            "nix-prep:find-lower-disk",
+            "nix-prep:mount-lower-disk",
+            "nix-prep:mount-block-overlay",
+            "nix-prep:repair-store",
+            "nix-prep:create-socket-dir",
+            "nix-prep:start-daemon",
+        ]
+    );
+}
+
+/// The guest overlay puts the read-only block mount first and the host-written
+/// directories next, with `userxattr` (the upper is a virtio-fs share, so
+/// overlayfs cannot use trusted xattrs there).
+#[test]
+fn block_overlay_options_put_the_block_lower_first() {
+    let options = overlay_options(
+        PathBuf::from("/run/cang/nix-lower").as_path(),
+        PathBuf::from("/run/cang/nix-overlay/upper").as_path(),
+        PathBuf::from("/run/cang/nix-overlay/work-guest").as_path(),
+    );
+
+    assert_eq!(
+        options,
+        "lowerdir=/run/cang/nix-lower,upperdir=/run/cang/nix-overlay/upper,workdir=/run/cang/nix-overlay/work-guest,userxattr"
+    );
 }

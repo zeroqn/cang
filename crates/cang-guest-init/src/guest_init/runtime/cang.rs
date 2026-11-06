@@ -487,6 +487,9 @@ fn cang_env_from(env: &impl EnvSource) -> Result<CangEnv> {
         build_disk_label: env
             .var("CANG_BUILD_DISK_LABEL")
             .unwrap_or_else(|| crate::guest_init::components::env::RAW_BUILD_DISK_LABEL.to_owned()),
+        nix_lower: crate::guest_init::components::env::NixLowerContract::from_lookup(|name| {
+            env.var(name)
+        })?,
     })
 }
 

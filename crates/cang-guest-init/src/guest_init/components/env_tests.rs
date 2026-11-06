@@ -1,6 +1,8 @@
 use crate::guest_init::components::env::{
-    CONTAINERS_STORE_ENV, CangEnv, ContainerStoreBackend, ENTER_AS_ROOT_ENV, RAW_CONTAINER_DISK_ID,
-    RAW_CONTAINER_DISK_LABEL, RAW_NIX_DISK_ID, RAW_NIX_DISK_LABEL,
+    CONTAINERS_STORE_ENV, CangEnv, ContainerStoreBackend, ENTER_AS_ROOT_ENV, NIX_LOWER_BLOCK_ENV,
+    NIX_LOWER_DISK_ID_ENV, NIX_LOWER_DISK_LABEL_ENV, NIX_LOWER_UPPERDIR_ENV, NIX_LOWER_WORKDIR_ENV,
+    NixLowerContract, RAW_CONTAINER_DISK_ID, RAW_CONTAINER_DISK_LABEL, RAW_NIX_DISK_ID,
+    RAW_NIX_DISK_LABEL, RAW_NIX_LOWER_DISK_ID, RAW_NIX_LOWER_DISK_LABEL,
 };
 use std::sync::Mutex;
 
@@ -151,4 +153,81 @@ fn internal_runtime_rejects_invalid_permissions() {
     unsafe {
         std::env::remove_var("CANG_PERMISSIONS");
     }
+}
+
+#[test]
+fn nix_lower_contract_is_absent_without_the_block_flag() {
+    let parsed = NixLowerContract::from_lookup(|name| match name {
+        NIX_LOWER_UPPERDIR_ENV => Some("/run/cang/nix-overlay/upper".to_owned()),
+        NIX_LOWER_WORKDIR_ENV => Some("/run/cang/nix-overlay/work-guest".to_owned()),
+        _ => None,
+    })
+    .expect("no flag must not be an error");
+
+    assert_eq!(parsed, None, "the host-composed overlay stays the default");
+}
+
+#[test]
+fn nix_lower_contract_requires_both_overlay_directories() {
+    let err = NixLowerContract::from_lookup(|name| match name {
+        NIX_LOWER_BLOCK_ENV => Some("1".to_owned()),
+        NIX_LOWER_UPPERDIR_ENV => Some("/run/cang/nix-overlay/upper".to_owned()),
+        _ => None,
+    })
+    .expect_err("a missing workdir must fail loudly");
+
+    assert!(format!("{err:#}").contains(NIX_LOWER_WORKDIR_ENV));
+}
+
+#[test]
+fn nix_lower_contract_rejects_relative_directories() {
+    let err = NixLowerContract::from_lookup(|name| match name {
+        NIX_LOWER_BLOCK_ENV => Some("1".to_owned()),
+        NIX_LOWER_UPPERDIR_ENV => Some("upper".to_owned()),
+        NIX_LOWER_WORKDIR_ENV => Some("/run/cang/nix-overlay/work-guest".to_owned()),
+        _ => None,
+    })
+    .expect_err("a relative overlay directory must fail");
+
+    assert!(format!("{err:#}").contains("absolute"));
+}
+
+#[test]
+fn nix_lower_contract_carries_the_host_defaults() {
+    let parsed = NixLowerContract::from_lookup(|name| match name {
+        NIX_LOWER_BLOCK_ENV => Some("1".to_owned()),
+        NIX_LOWER_UPPERDIR_ENV => Some("/run/cang/nix-overlay/upper".to_owned()),
+        NIX_LOWER_WORKDIR_ENV => Some("/run/cang/nix-overlay/work-guest".to_owned()),
+        _ => None,
+    })
+    .expect("block mode should parse")
+    .expect("block mode is on");
+
+    assert_eq!(parsed.disk_id, RAW_NIX_LOWER_DISK_ID);
+    assert_eq!(parsed.disk_label, RAW_NIX_LOWER_DISK_LABEL);
+    assert_eq!(
+        parsed.upperdir,
+        std::path::PathBuf::from("/run/cang/nix-overlay/upper")
+    );
+    assert_eq!(
+        parsed.workdir,
+        std::path::PathBuf::from("/run/cang/nix-overlay/work-guest")
+    );
+}
+
+#[test]
+fn nix_lower_contract_takes_the_attached_disk_names() {
+    let parsed = NixLowerContract::from_lookup(|name| match name {
+        NIX_LOWER_BLOCK_ENV => Some("1".to_owned()),
+        NIX_LOWER_DISK_ID_ENV => Some("cang-nix-lower".to_owned()),
+        NIX_LOWER_DISK_LABEL_ENV => Some("CANG_NIX_LOWER".to_owned()),
+        NIX_LOWER_UPPERDIR_ENV => Some("/run/cang/nix-overlay/upper".to_owned()),
+        NIX_LOWER_WORKDIR_ENV => Some("/run/cang/nix-overlay/work-guest".to_owned()),
+        _ => None,
+    })
+    .expect("block mode should parse")
+    .expect("block mode is on");
+
+    assert_eq!(parsed.disk_id, "cang-nix-lower");
+    assert_eq!(parsed.disk_label, "CANG_NIX_LOWER");
 }

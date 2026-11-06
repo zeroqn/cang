@@ -31,7 +31,10 @@ use crate::runtime::launch::config::{
     self, DEFAULT_PULSE_BRIDGE_PORT, DEFAULT_WAYPIPE_PORT, ExecConfig, LaunchConfig, LaunchSpec,
     ManagedSessionConfig, PulseBridgeConfig, WaypipeConfig,
 };
-use crate::runtime::launch::{HostPersistentDiskPreparer, LaunchPlan, PersistentDiskPreparer};
+use crate::runtime::launch::{
+    HostPersistentDiskPreparer, LaunchPlan, NixLowerDiskStatus, PersistentDiskPreparer,
+    prepare_nix_lower_block,
+};
 use attach::AttachInputPolicy;
 use cang_attach_protocol::{
     DEFAULT_ATTACH_PORT, PROTOCOL_VERSION,
@@ -236,6 +239,34 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                 );
             }
 
+            // The guest's /nix lower on a read-only btrfs block file, built from
+            // this image's store content. Best effort by construction: `None`
+            // means the guest keeps the host-composed overlay exactly as before.
+            let nix_lower_block = profiler
+                .measure_result("nix_lower_block_preparation", || {
+                    Ok(prepare_nix_lower_block(nix_overlay_lease.intent()))
+                })
+                .ok()
+                .flatten();
+            match &nix_lower_block {
+                Some(block) => {
+                    profiler.record_metadata(
+                        "nix_lower_block_status",
+                        match block.disk().status {
+                            NixLowerDiskStatus::Built => "built",
+                            NixLowerDiskStatus::Reused => "reused",
+                        },
+                    );
+                    profiler.record_metadata(
+                        "nix_lower_block_image",
+                        block.disk().path.display().to_string(),
+                    );
+                    profiler
+                        .record_metadata("nix_lower_block_identity", block.disk().identity.clone());
+                }
+                None => profiler.record_metadata("nix_lower_block_status", "disabled"),
+            }
+
             let host_run_result = match profiler
                 .measure_result("persistent_disk_preparation", || {
                     HostPersistentDiskPreparer.prepare(plan.state_layout.root_dir())
@@ -309,11 +340,23 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                 crate::runtime::launch::config::MANAGED_GUEST_KERNEL_CONSOLE_LOG,
                             ),
                         };
+                        // A block-mode launch adds two contributions: the
+                        // read-only lower disk, and one writable share carrying the
+                        // generation's `upper` and the guest's work dir so the
+                        // guest can compose the overlay itself.
+                        let mut launch_mounts = plan.bind_mounts.clone();
+                        let mut launch_disks = disks.attachments();
+                        let mut extra_env = disks.env_pairs();
+                        if let Some(block) = &nix_lower_block {
+                            launch_mounts.push(block.bind_mount());
+                            launch_disks.push(block.attachment());
+                            extra_env.extend(block.env_pairs());
+                        }
                         match profiler.measure_result("launch_config_build", || {
                             LaunchConfig::build_for_task(LaunchSpec {
                                 task_rootfs: lease.handle().rootfs_path(),
                                 hostname: &plan.hostname,
-                                mounts: &plan.bind_mounts,
+                                mounts: &launch_mounts,
                                 guest_init_override: guest_init.override_mount.clone(),
                                 guest_init_exec: &guest_init.guest_exec_path,
                                 guest_command: &plan.guest_command,
@@ -338,9 +381,9 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                 host_uid: current_uid(),
                                 host_gid: current_gid(),
                                 vcpus: config::resolve_cpu_count()?,
-                                disks: disks.attachments(),
+                                disks: launch_disks,
                                 extra_env: {
-                                    let mut env = disks.env_pairs();
+                                    let mut env = extra_env;
                                     env.extend(terminal_env::host_terminal_env_pairs());
                                     if let Some(pair) =
                                         attach_profile::guest_env_pair_from_process_env()

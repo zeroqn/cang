@@ -221,6 +221,7 @@ mod tests {
             containers_disk_label: RAW_CONTAINER_DISK_LABEL.to_owned(),
             build_disk_id: RAW_BUILD_DISK_ID.to_owned(),
             build_disk_label: RAW_BUILD_DISK_LABEL.to_owned(),
+            nix_lower: None,
         }
     }
 }

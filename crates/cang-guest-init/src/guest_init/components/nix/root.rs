@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::guest_init::command;
-use crate::guest_init::components::env::{CangEnv, NIX_LOG_PATH, NIX_STATUS_PATH, RUN_DIR};
+use crate::guest_init::components::env::{
+    CangEnv, NIX_LOG_PATH, NIX_STATUS_PATH, NixLowerContract, RUN_DIR,
+};
 use crate::guest_init::components::nix::status::{self, NixPrepState, NixPrepStatus};
 use crate::guest_init::profile::ProfileRecorder;
 use crate::guest_init::{fs, process};
@@ -21,6 +23,10 @@ const PROFILE_MOUNT_DISK: &str = "nix-prep:mount-disk";
 const PROFILE_PRESEED_UPPER: &str = "nix-prep:preseed-upper";
 const PROFILE_MOUNT_OVERLAY: &str = "nix-prep:mount-overlay";
 const PROFILE_REPAIR_STORE: &str = "nix-prep:repair-store";
+/// Where the guest composes its own `/nix` overlay over a read-only block lower.
+const PROFILE_FIND_LOWER_DISK: &str = "nix-prep:find-lower-disk";
+const PROFILE_MOUNT_LOWER_DISK: &str = "nix-prep:mount-lower-disk";
+const PROFILE_MOUNT_BLOCK_OVERLAY: &str = "nix-prep:mount-block-overlay";
 /// The cang host parks the previous /nix overlay generation's Nix DB here when
 /// it seeds the upper for a new image generation (`PARKED_DB_DIR` on the host).
 const PARKED_DB_DIR: &str = "/nix/.cang-previous-db";
@@ -46,6 +52,9 @@ pub(in crate::guest_init) enum NixOperation {
     PreseedUpper,
     MountOverlay,
     RepairStore,
+    FindLowerDisk,
+    MountLowerDisk,
+    MountBlockOverlay,
     CreateSocketDir,
     StartDaemon,
     WriteReadyStatus,
@@ -74,6 +83,37 @@ pub(in crate::guest_init) fn planned_host_overlay_operations() -> Vec<NixOperati
         NixOperation::CreateSocketDir,
         NixOperation::StartDaemon,
         NixOperation::WriteReadyStatus,
+    ]
+}
+
+/// The host-composed overlay with the lower on a read-only block device: the
+/// guest mounts the disk and composes the overlay itself, then does everything
+/// the host-composed path does.
+#[cfg(test)]
+pub(in crate::guest_init) fn planned_host_overlay_block_operations() -> Vec<NixOperation> {
+    vec![
+        NixOperation::WriteRunningStatus,
+        NixOperation::FindLowerDisk,
+        NixOperation::MountLowerDisk,
+        NixOperation::MountBlockOverlay,
+        NixOperation::RepairStore,
+        NixOperation::CreateSocketDir,
+        NixOperation::StartDaemon,
+        NixOperation::WriteReadyStatus,
+    ]
+}
+
+#[cfg(test)]
+pub(in crate::guest_init) fn planned_host_overlay_block_profile_labels() -> Vec<&'static str> {
+    vec![
+        PROFILE_REQUIRE_TOOLS,
+        PROFILE_PREPARE_RUN_DIRS,
+        PROFILE_FIND_LOWER_DISK,
+        PROFILE_MOUNT_LOWER_DISK,
+        PROFILE_MOUNT_BLOCK_OVERLAY,
+        PROFILE_REPAIR_STORE,
+        PROFILE_CREATE_SOCKET_DIR,
+        PROFILE_START_DAEMON,
     ]
 }
 
@@ -172,7 +212,7 @@ pub(in crate::guest_init) fn run_prep(
         bail!("internal /nix overlay prep must run as root");
     }
     if env_contract.nix_host_overlay {
-        return run_host_overlay_prep(profiler);
+        return run_host_overlay_prep(profiler, env_contract);
     }
 
     profiler.measure_result(PROFILE_REQUIRE_TOOLS, || {
@@ -347,6 +387,56 @@ fn store_reconcile_args(parked_db: bool) -> Vec<&'static str> {
     }
 }
 
+/// Mount the read-only lower disk and compose the `/nix` overlay over it.
+///
+/// Every step is a profile point so a guest profile shows what the block path
+/// cost; the caller keeps the host-composed overlay when any of them fails.
+fn mount_block_lower(
+    profiler: &mut impl ProfileRecorder,
+    contract: &NixLowerContract,
+) -> Result<()> {
+    let disk = profiler.measure_result(PROFILE_FIND_LOWER_DISK, || {
+        crate::guest_init::components::disk::nix_lower::find_disk(
+            &contract.disk_label,
+            &contract.disk_id,
+        )
+    })?;
+    let mount = Path::new(crate::guest_init::components::disk::nix_lower::MOUNT_POINT);
+    profiler.measure_result(PROFILE_MOUNT_LOWER_DISK, || {
+        fs::create_dir_all(mount)?;
+        if findmnt(mount)? {
+            return Ok(());
+        }
+        let args = crate::guest_init::components::disk::nix_lower::mount_args(&disk, mount)?;
+        command::run("mount", &args).with_context(|| {
+            format!(
+                "failed to mount the read-only /nix lower disk '{}' at '{}'",
+                disk.display(),
+                mount.display()
+            )
+        })
+    })?;
+    // Overlayfs wants upper and work on one filesystem, empty, and not shared
+    // with the host-composed overlay that already holds the same upper: the host
+    // therefore writes a second work dir beside it for this mount.
+    let options = overlay_options(mount, &contract.upperdir, &contract.workdir);
+    profiler.measure_result(PROFILE_MOUNT_BLOCK_OVERLAY, || {
+        fs::create_dir_all(&contract.workdir)?;
+        command::run(
+            "mount",
+            &["-t", "overlay", "overlay", "-o", &options, "/nix"],
+        )
+        .with_context(|| {
+            format!(
+                "failed to mount the guest /nix overlay lowerdir='{}' upperdir='{}' workdir='{}'",
+                mount.display(),
+                contract.upperdir.display(),
+                contract.workdir.display()
+            )
+        })
+    })
+}
+
 fn overlay_options(lower_dir: &Path, upper_dir: &Path, work_dir: &Path) -> String {
     format!(
         "lowerdir={},upperdir={},workdir={},userxattr",
@@ -356,15 +446,37 @@ fn overlay_options(lower_dir: &Path, upper_dir: &Path, work_dir: &Path) -> Strin
     )
 }
 
-fn run_host_overlay_prep(profiler: &mut impl ProfileRecorder) -> Result<()> {
+fn run_host_overlay_prep(
+    profiler: &mut impl ProfileRecorder,
+    env_contract: &CangEnv,
+) -> Result<()> {
     profiler.measure_result(PROFILE_REQUIRE_TOOLS, || {
         command::require_on_path("nix-daemon")?;
+        if env_contract.nix_lower.is_some() {
+            for tool in ["blkid", "mount", "findmnt"] {
+                command::require_on_path(tool)?;
+            }
+        }
         Ok(())
     })?;
     profiler.measure_result(PROFILE_PREPARE_RUN_DIRS, || {
         fs::create_dir_all(Path::new(RUN_DIR))?;
         ensure_host_overlay_nix_is_directory(Path::new("/nix"))
     })?;
+    // The host composes the overlay for the image's lower, but when it could also
+    // build a read-only block image of that lower it hands the guest the disk and
+    // the two writable directories instead, and the guest composes the overlay
+    // itself. A failure here is deliberately not fatal: `/nix` is still the
+    // host-composed overlay, which is exactly what a launch without a block image
+    // gets.
+    if let Some(contract) = &env_contract.nix_lower {
+        match mount_block_lower(profiler, contract) {
+            Ok(()) => {}
+            Err(err) => eprintln!(
+                "cang-guest-init: read-only /nix lower unusable, keeping the host-composed overlay: {err:#}"
+            ),
+        }
+    }
     repair_store(profiler)?;
     profiler.measure_result(PROFILE_CREATE_SOCKET_DIR, || {
         fs::create_dir_all(Path::new("/nix/var/nix/daemon-socket"))

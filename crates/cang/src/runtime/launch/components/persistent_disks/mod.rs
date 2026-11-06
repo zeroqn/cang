@@ -1,7 +1,8 @@
 //! Persistent launch disk contributors.
 //!
 //! Host-overlay `/nix` mode contributes `/nix` env plus the selected persistent
-//! container-store carrier.
+//! container-store carrier, and - when an image could be built - the read-only
+//! block lower the guest composes its own `/nix` overlay from (see `nix_lower`).
 
 use anyhow::Result;
 use std::path::Path;
@@ -12,6 +13,7 @@ use raw_btrfs::{HostRawImageCommandRunner, RawBtrfsDisk};
 mod build;
 mod containers;
 mod nix;
+pub(crate) mod nix_lower;
 pub(crate) mod raw_btrfs;
 
 pub(crate) fn grow_container_store(
@@ -35,6 +37,15 @@ pub(crate) fn container_store_raw_disk_env_pairs(disk: &RawBtrfsDisk) -> [(Strin
 
 pub(crate) fn container_store_default_size_bytes() -> u64 {
     containers::default_size_bytes()
+}
+
+/// The read-only block lower for the guest's `/nix` overlay, or `None` when the
+/// launch keeps the host-composed overlay (no image could be built, no store to
+/// serve, or `CANG_NIX_LOWER_BLOCK=0`).
+pub(crate) fn prepare_nix_lower_block(
+    intent: &crate::runtime::launch::config::HostNixOverlay,
+) -> Option<nix_lower::NixLowerBlock> {
+    nix_lower::prepare_block(intent)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
