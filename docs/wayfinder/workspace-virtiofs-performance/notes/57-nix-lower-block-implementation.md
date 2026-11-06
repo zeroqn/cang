@@ -146,3 +146,39 @@ remaining routes, none of which is free:
 Shipped state: the host half is opt-in behind `CANG_NIX_LOWER_BLOCK=1` and defaults
 off (default-on would pay 38 s to then fall back). It is useful the moment route 1
 or 2 is chosen; until then it is a verified builder plus a measurement harness.
+
+### Correction (same day): the blocker was OUR fork, not the kernel
+
+The kernel finding above was half wrong, and the fix is in cang's own virtio-fs server.
+
+`ovl_dentry_remote()` is `d_flags & DCACHE_OP_REVALIDATE`, so a FUSE workdir counts as
+"remote" and overlayfs then *probes* the three features at mount time
+(`ovl_check_rename_whiteout` really performs a `RENAME_WHITEOUT` in the workdir and
+requires a `S_IFCHR 0/0` whiteout to appear). It does not consult
+`fs_type->fs_flags`. Our server was the problem:
+
+```rust
+// deps/libkrun .../virtio/fs/server.rs, before
+let flags = flags & (libc::RENAME_EXCHANGE | libc::RENAME_NOREPLACE);
+```
+
+`RENAME_WHITEOUT` was masked away, so the probe's whiteout rename silently became a plain
+rename, no whiteout appeared, and overlayfs refused. Fixed in the fork
+(`ab184894`): `sanitize_rename2_flags` keeps `EXCHANGE|NOREPLACE|WHITEOUT`, passthrough
+tries `renameat2` with the caller's flags and falls back to rename-then-
+`mknodat(S_IFCHR|0600, makedev(0,0))` at the old name; a `RENAME_WHITEOUT` end-to-end
+test asserts the char device.
+
+Verified live in a guest: an overlay with `upperdir`/`workdir` on the virtio-fs share now
+mounts (`rc=0`; unpatched fork: `rc=32`, `does not support RENAME_WHITEOUT`, `upper fs
+missing required features`), whiteouts are real `c--------- 0,0` entries, create/rename/
+delete/remount/copy-up are consistent, and ordinary renames, `EXCHANGE`/`NOREPLACE`, xattr
+get/set, `cargo build`, and `nix build`/`store add` all still pass.
+
+So the three routes below collapse to route 1 **without** giving up the virtio-fs upper:
+block lower + virtio-fs upper + guest-composed overlay is now possible, with the dedup the
+upper exists for intact.
+
+Fork commit is local only (`ab184894`); `git push` from this sandbox fails on SSH keys, so
+the `libkrun-src` flake input still names `15315dad` and any build needs
+`--override-input libkrun-src path:./deps/libkrun` until it is pushed and re-pinned.
