@@ -506,7 +506,14 @@ fn cang_package_exposes_stable_raw_elf_payload_for_release_workflow() {
         "enableCiSccache ? false,",
         "ciSccacheNativeBuildInputs = pkgs.lib.optionals enableCiSccache [ pkgs.sccache ];",
         r#"RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";"#,
-        r#"SCCACHE_DIR = "/nix/var/cache/sccache";"#,
+        // The shared cache directory is the CI runner's bind mount, so it is
+        // chosen at build time: a plain `nix build` (and `nix flake check`)
+        // cannot create it in the sandbox, and sccache fails the build when
+        // cc-rs routes the C compiler through it.
+        r#"ciSccachePreBuild = pkgs.lib.optionalString enableCiSccache"#,
+        r#"export SCCACHE_DIR=/nix/var/cache/sccache"#,
+        r#"export SCCACHE_DIR="$TMPDIR/sccache""#,
+        "ciSccacheAttrs = pkgs.lib.optionalAttrs enableCiSccache {",
         r#"SCCACHE_IGNORE_SERVER_IO_ERROR = "1";"#,
         r#"mkdir -p "$out/libexec/cang-helpers" "$out/lib/cang""#,
         r#"ln -s ${pkgs.buildah}/bin/buildah "$out/libexec/cang-helpers/buildah""#,

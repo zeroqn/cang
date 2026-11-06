@@ -16,8 +16,28 @@ let
   ciSccacheNativeBuildInputs = pkgs.lib.optionals enableCiSccache [ pkgs.sccache ];
   ciSccacheEnv = pkgs.lib.optionalAttrs enableCiSccache {
     RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
-    SCCACHE_DIR = "/nix/var/cache/sccache";
     SCCACHE_IGNORE_SERVER_IO_ERROR = "1";
+  };
+  # The shared cache directory is the CI runner's bind mount
+  # (`--option extra-sandbox-paths /nix/var/cache/sccache=<dir>`, see the image
+  # workflows), so the derivation cannot name it unconditionally: under
+  # `nix flake check` or any plain `nix build` the directory does not exist and
+  # cannot be created inside the sandbox, and sccache treats that as fatal -- the
+  # C compiler is routed through it too, because cc-rs wraps `CC` with the
+  # `RUSTC_WRAPPER` when that is sccache or ccache, which fails
+  # `rustfs-mimalloc-sys`'s build script with `Permission denied` and exit 254.
+  # Use the shared directory when it is actually writable and a build-local one
+  # otherwise; the cache never affects the output bytes.
+  ciSccachePreBuild = pkgs.lib.optionalString enableCiSccache ''
+    if mkdir -p /nix/var/cache/sccache 2>/dev/null && [ -w /nix/var/cache/sccache ]; then
+      export SCCACHE_DIR=/nix/var/cache/sccache
+    else
+      export SCCACHE_DIR="$TMPDIR/sccache"
+      mkdir -p "$SCCACHE_DIR"
+    fi
+  '';
+  ciSccacheAttrs = pkgs.lib.optionalAttrs enableCiSccache {
+    preBuild = ciSccachePreBuild;
   };
   # cang links libkrun's Rust API (crates/cang-libkrun), so libkrun's crates are
   # part of cang's lock and have to be vendored. The graph's packages that do not
@@ -119,6 +139,7 @@ let
       '';
     }
     // ciSccacheEnv
+    // ciSccacheAttrs
   );
 
   muslTarget =
@@ -157,6 +178,7 @@ let
       ];
     }
     // ciSccacheEnv
+    // ciSccacheAttrs
   );
 in
 {
