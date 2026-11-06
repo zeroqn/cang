@@ -25,9 +25,20 @@
 //! failure, a store the host cannot list) leaves the launch on the host-composed
 //! overlay, which is what the guest keeps using when the flag is absent.
 //!
-//! # Status: on by default, and the guest composes `/nix` over it
+//! # Status: opt-in, and the guest composes `/nix` over it
 //!
-//! Block mode is on unless `CANG_NIX_LOWER_BLOCK=0`. Default-on was blocked on a
+//! Block mode is off unless `CANG_NIX_LOWER_BLOCK=1`. It was briefly on by
+//! default and is not any more: in the guest, ~1 boot in 1 has btrfs report
+//! `csum failed` for a 20-40 KiB window of one `/nix/store` file, which SIGBUSes
+//! any process that has such a page mapped (chromium's cold start). The whole
+//! device reads back byte-identical to the host image in the same boot, the
+//! host-side image passes `btrfs check --check-data-csum`, and the fault is not
+//! the fork's parallel read pool (it reproduces with the pool off and with a
+//! pool size of 1), so the wrong bytes enter between the completed device read
+//! and the page btrfs checksums: an open data-integrity bug in this path, not a
+//! property of the image (see docs/images-and-storage.md).
+//!
+//! Default-on was also blocked on a
 //! kernel requirement, measured in the guest (`7.2.10-hardened1`): kernel
 //! overlayfs refused the virtio-fs directory this design keeps as upper/work -
 //! `overlayfs: upper fs does not support RENAME_WHITEOUT.`, `upper fs missing
@@ -75,7 +86,7 @@ pub(crate) const GUEST_UPPER_DIR: &str = "/run/cang/nix-overlay/upper";
 pub(crate) const GUEST_WORK_DIR: &str = "/run/cang/nix-overlay/work-guest";
 const BIND_TAG: &str = "cang-nix-overlay-src";
 const BLOCK_MODE_ENV: &str = "CANG_NIX_LOWER_BLOCK";
-/// The host-side switch: on unless `CANG_NIX_LOWER_BLOCK=0`.
+/// The host-side switch: off unless `CANG_NIX_LOWER_BLOCK=1`.
 pub(crate) const HOST_BLOCK_MODE_ENV: &str = BLOCK_MODE_ENV;
 const STATE_LABEL_KEY: &str = "label";
 const STATE_IDENTITY_KEY: &str = "identity";
@@ -331,16 +342,19 @@ fn prepare_block_with(
     }
 }
 
-/// Block mode is the default; `CANG_NIX_LOWER_BLOCK=0` turns it off.
+/// Block mode is opt-in: `CANG_NIX_LOWER_BLOCK=1` turns it on.
 ///
-/// Default-on became correct once the fork forwarded `RENAME_WHITEOUT` (v2.0.0-cang.18):
-/// the guest can then compose the overlay over a read-only block lower with the virtio-fs
-/// upper, which is the configuration measured in note 57 - `find /nix/store` 206-215 ms
-/// against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s. The switch remains for A/B and
-/// for a host where the image cannot be built: any failure still falls back to the
-/// host-composed overlay, and a launch never fails because of it.
+/// The configuration it enables is the fast one from note 57 - `find /nix/store`
+/// 206-215 ms against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s - and it
+/// became possible once the fork forwarded `RENAME_WHITEOUT` (v2.0.0-cang.18).
+/// It is not the default because it loses guest-side read data (see the module
+/// doc): until that is fixed, the shipped default stays on the host-composed
+/// overlay.
+///
+/// Any failure still falls back to that overlay, and a launch never fails
+/// because of this switch.
 fn block_mode_requested() -> bool {
-    !matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("0"))
+    matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("1"))
 }
 
 pub(super) fn ensure_with_builder(
@@ -1106,10 +1120,10 @@ mod tests {
         );
     }
 
-    /// Block mode is the default; `CANG_NIX_LOWER_BLOCK=0` is the escape hatch
-    /// for a host where the image cannot be built.
+    /// Block mode is opt-in: only `CANG_NIX_LOWER_BLOCK=1` turns it on, because
+    /// the path loses guest-side read data (see the module doc).
     #[test]
-    fn block_mode_is_on_unless_the_host_turns_it_off() {
+    fn block_mode_needs_the_host_to_opt_in() {
         let _guard = ENV_LOCK.lock().expect("env test lock");
         let temp = tempfile::tempdir().expect("tempdir");
         let nix_dir = cache_entry(&temp, &["aaaa-one"]);
@@ -1120,17 +1134,17 @@ mod tests {
         // serialized by ENV_LOCK.
         unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) };
         assert!(
-            block_mode_requested(),
-            "block mode is the default now the fork forwards RENAME_WHITEOUT"
+            !block_mode_requested(),
+            "block mode is off by default: the guest loses read data on this path"
         );
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
-        assert!(block_mode_requested());
+        assert!(block_mode_requested(), "1 opts in");
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "0") };
-        assert!(!block_mode_requested(), "0 turns it off");
+        assert!(!block_mode_requested(), "0 keeps it off");
 
         // SAFETY: restore whatever the harness had.
         unsafe {

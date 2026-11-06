@@ -126,8 +126,21 @@ reads, and reading it off a block device is what pays: `find /nix/store`
 206-215 ms against 864-2033 ms and `du -s` 267 ms against 9.2-10.4 s with the
 same tree over virtio-fs.
 
-This is on by default. `CANG_NIX_LOWER_BLOCK=0` in the caller's environment
-turns it off for a launch, which keeps the host-composed overlay.
+This is opt-in: `CANG_NIX_LOWER_BLOCK=1` in the caller's environment selects it
+for a launch, and without it `/nix` is the host-composed overlay above.
+
+It is not the default because the path loses guest-side read data. In the guest
+btrfs reports `csum failed` for a 20-40 KiB window of one `/nix/store` file -
+about once per boot, on any block-lower boot, and never on the host-composed
+overlay - and a process that has such a page mapped takes `SIGBUS` on the
+page-in (a cold chromium start does). What is ruled out: the image is correct
+(`btrfs check --check-data-csum` passes and the host image is byte-stable), the
+device is correct (the guest's whole-device hash equals the host `.raw` hash in
+the same boot that loses a window, buffered and `O_DIRECT` alike), and the
+libkrun fork's parallel read pool is not the cause (it reproduces with the pool
+off and with a pool size of 1). The wrong bytes therefore enter between the
+completed device read and the page btrfs checksums, which is still open; the
+block lower stays opt-in until it is closed.
 
 - The image is built with `mkfs.btrfs -q -L CANG_NIX_LOWER
   --rootdir=<image rootfs>/nix --reflink --shrink` inside the Buildah storage
