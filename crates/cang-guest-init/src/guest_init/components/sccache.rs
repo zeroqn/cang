@@ -14,7 +14,10 @@
 //!   invocation through the cache;
 //! - `SCCACHE_IDLE_TIMEOUT=0`, so the cache server does not shut itself down
 //!   after its default ten idle minutes and leave the next build starting it
-//!   again.
+//!   again;
+//! - `SCCACHE_CACHE_SIZE=60G`, because sccache's default cap is **10 GiB** and this
+//!   cache already held 5.6 GiB (56 % of it) after a handful of builds - at the
+//!   default it starts evicting entries that a rebuild would have hit.
 //!
 //! A variable that is already set wins: an image, or a caller passing
 //! `RUSTC_WRAPPER`, keeps its own choice.
@@ -27,6 +30,9 @@ const SCCACHE_BINARY: &str = "sccache";
 
 pub(in crate::guest_init) const RUSTC_WRAPPER_ENV: &str = "RUSTC_WRAPPER";
 pub(in crate::guest_init) const SCCACHE_IDLE_TIMEOUT_ENV: &str = "SCCACHE_IDLE_TIMEOUT";
+pub(in crate::guest_init) const SCCACHE_CACHE_SIZE_ENV: &str = "SCCACHE_CACHE_SIZE";
+/// sccache's default cap is 10 GiB; a rust workspace's artifacts outgrow it.
+const SCCACHE_CACHE_SIZE: &str = "60G";
 
 /// Resolves `sccache` on `search` and exports the two variables.
 ///
@@ -43,6 +49,9 @@ pub(in crate::guest_init) fn export_if_available() -> Option<PathBuf> {
         env::set_var(RUSTC_WRAPPER_ENV, &wrapper);
         if env::var_os(SCCACHE_IDLE_TIMEOUT_ENV).is_none() {
             env::set_var(SCCACHE_IDLE_TIMEOUT_ENV, "0");
+        }
+        if env::var_os(SCCACHE_CACHE_SIZE_ENV).is_none() {
+            env::set_var(SCCACHE_CACHE_SIZE_ENV, SCCACHE_CACHE_SIZE);
         }
     }
     Some(wrapper)
@@ -145,6 +154,13 @@ mod tests {
             None
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// sccache's own default cap is 10 GiB, which a real workspace fills; the
+    /// guest raises it unless the image or the caller already said otherwise.
+    #[test]
+    fn the_cache_cap_is_raised_only_when_unset() {
+        assert_eq!(SCCACHE_CACHE_SIZE, "60G");
     }
 
     /// The first hit on `PATH` wins, which is what the guest's own resolution
