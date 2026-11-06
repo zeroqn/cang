@@ -18,6 +18,8 @@ pub(in crate::guest_init) const PODMAN_LOG_PATH: &str = "/run/cang/podman-prep.l
 pub(in crate::guest_init) const PODMAN_WAIT_TIMEOUT_SECS: u64 = 120;
 pub(in crate::guest_init) const RAW_NIX_DISK_ID: &str = "cang-nix";
 pub(in crate::guest_init) const RAW_NIX_DISK_LABEL: &str = "CANG_NIX";
+pub(in crate::guest_init) const RAW_BUILD_DISK_ID: &str = "cang-build";
+pub(in crate::guest_init) const RAW_BUILD_DISK_LABEL: &str = "CANG_BUILD";
 pub(in crate::guest_init) const RAW_CONTAINER_DISK_ID: &str = "cang-containers";
 pub(in crate::guest_init) const RAW_CONTAINER_DISK_LABEL: &str = "CANG_CONTAINERS";
 pub(in crate::guest_init) const ENTER_AS_ROOT_ENV: &str = "CANG_ENTER_AS_ROOT";
@@ -153,6 +155,8 @@ pub(in crate::guest_init) struct CangEnv {
     pub(in crate::guest_init) nix_disk_label: String,
     pub(in crate::guest_init) containers_disk_id: String,
     pub(in crate::guest_init) containers_disk_label: String,
+    pub(in crate::guest_init) build_disk_id: String,
+    pub(in crate::guest_init) build_disk_label: String,
 }
 
 impl CangEnv {
@@ -183,6 +187,10 @@ impl CangEnv {
                 .unwrap_or_else(|_| RAW_CONTAINER_DISK_ID.to_owned()),
             containers_disk_label: env::var("CANG_CONTAINERS_DISK_LABEL")
                 .unwrap_or_else(|_| RAW_CONTAINER_DISK_LABEL.to_owned()),
+            build_disk_id: env::var("CANG_BUILD_DISK_ID")
+                .unwrap_or_else(|_| RAW_BUILD_DISK_ID.to_owned()),
+            build_disk_label: env::var("CANG_BUILD_DISK_LABEL")
+                .unwrap_or_else(|_| RAW_BUILD_DISK_LABEL.to_owned()),
         })
     }
 

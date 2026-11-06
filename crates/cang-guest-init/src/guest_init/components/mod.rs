@@ -10,6 +10,7 @@ pub(in crate::guest_init) mod opengl;
 pub(in crate::guest_init) mod podman;
 pub(in crate::guest_init) mod pulse;
 pub(in crate::guest_init) mod rootless;
+pub(in crate::guest_init) mod sccache;
 pub(in crate::guest_init) mod shell;
 pub(in crate::guest_init) mod swap;
 pub(in crate::guest_init) mod wayland;

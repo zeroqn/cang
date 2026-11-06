@@ -197,6 +197,31 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     profiler.measure("export-shell-env", || {
         crate::guest_init::components::shell::env::export(&shell_env)
     });
+    profiler.measure_result("mount-build-target", || {
+        // `CARGO_TARGET_DIR` arrives from the host pointing at the disk it
+        // attached; mounting it here is what makes that path the disk. A failure
+        // removes the variable, so a build falls back to the workspace instead of
+        // filling a rootfs directory that dies with the task.
+        let mount = crate::guest_init::components::disk::build::ensure_ready(
+            &env_contract.cang.build_disk_label,
+            &env_contract.cang.build_disk_id,
+            &identity,
+        );
+        match mount {
+            Ok(_mount) => Ok(()),
+            Err(err) => {
+                eprintln!(
+                    "cang-guest-init: build target disk unavailable, cargo builds onto the workspace: {err:#}"
+                );
+                Ok(())
+            }
+        }
+    })?;
+    profiler.measure("export-sccache-env", || {
+        // Every cargo build in the guest goes through the cache cang already
+        // mounts, or the cache why it is mounted there at all.
+        crate::guest_init::components::sccache::export_if_available();
+    });
     profiler.measure("export-gpu-env", || {
         crate::guest_init::components::wayland::export_mesa_if_enabled(env_contract.cang.gpu_drm)
     });
@@ -456,6 +481,12 @@ fn cang_env_from(env: &impl EnvSource) -> Result<CangEnv> {
         containers_disk_label: env.var("CANG_CONTAINERS_DISK_LABEL").unwrap_or_else(|| {
             crate::guest_init::components::env::RAW_CONTAINER_DISK_LABEL.to_owned()
         }),
+        build_disk_id: env
+            .var("CANG_BUILD_DISK_ID")
+            .unwrap_or_else(|| crate::guest_init::components::env::RAW_BUILD_DISK_ID.to_owned()),
+        build_disk_label: env
+            .var("CANG_BUILD_DISK_LABEL")
+            .unwrap_or_else(|| crate::guest_init::components::env::RAW_BUILD_DISK_LABEL.to_owned()),
     })
 }
 

@@ -393,6 +393,18 @@ pub(crate) mod test_support {
     }
 
     impl FakeRunner {
+        /// One queued probe answer per attached disk, in prepare order.
+        pub(crate) fn with_probes(fs_types: &[&str]) -> Self {
+            let runner = Self::default();
+            for fs_type in fs_types {
+                runner
+                    .probe_results
+                    .borrow_mut()
+                    .push_back(Ok((*fs_type).to_owned()));
+            }
+            runner
+        }
+
         pub(crate) fn with_probe(fs_type: &str) -> Self {
             let runner = Self::default();
             runner
