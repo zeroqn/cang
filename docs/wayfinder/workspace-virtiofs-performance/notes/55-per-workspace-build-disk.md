@@ -70,12 +70,36 @@ finish, against **285-288 s** for the same three worktrees at `JOBS=4` with
 `target/` on a virtio-blk disk. The registry race is another reason `.cargo`
 should not be one shared writable tree: with this disk each workspace has its own.
 
-Caveat, measured: one `CARGO_TARGET_DIR` shared by three worktrees makes cargo
-serialise on its `.cargo-lock` and re-fingerprint per worktree path, so the
-per-worktree layout (`target/par1`, `target/par2`, `target/par3` under the same
-disk) keeps both warmth and parallelism. Both layouts were run; the numbers above
-are the shared one, and the choice is a policy question for the workspace owner,
-not a limitation of the disk.
+That 701 s is **three cold builds racing**, not three warm ones: the per-worktree
+logs show 387 / 397 / 391 `Compiling` lines, so each worktree compiled the whole
+graph itself and the last writer won in the shared directory. serially, with the
+cache already populated, the same worktree is far cheaper - one worktree, target
+wiped, built twice in a row:
+
+| | wall | sccache |
+| --- | --- | --- |
+| first wiped-target build | 393 s | 1375 hits / 20 misses (**98.6 %**) |
+| second | 242 s | 2770 hits / 20 misses (**99.3 %**) |
+
+So sccache does what it says as long as the compiles are **sequential**: the cache
+had this configuration from earlier runs, and a wiped target still hit 98.6 %. The
+concurrent arm missed 1318 of 1395 requests because three builds started together
+and each crate was in flight in three jobs at once - sccache has no in-flight
+deduplication, so every duplicate is a miss. Ordering a warm-up build before the
+others, or building worktrees in sequence, is what converts that to hits; it costs
+one build, and only the first round of a fresh tree pays it.
+
+Even at 99 % hits a wiped-target build of the workspace costs 242 s, because cargo
+still invokes rustc 811 times: sccache removes the codegen, not the process or the
+artifact copy. What the disk removes is the round trips those 811 invocations make
+- which is why the same shape on the share was 464 s (note 52) and 1152-1161 s for
+three worktrees.
+
+A single shared `CARGO_TARGET_DIR` for three worktrees also serialises them on
+cargo's own `.cargo-lock` (10 `Blocking waiting for file lock on package cache`
+messages in that arm) and re-fingerprints the local path crates per worktree; the
+per-worktree layout (`target/par1`, ... under the same disk) avoids both. That is a
+policy choice for the workspace owner, not a limitation of the disk.
 
 ## What is still on the share
 
