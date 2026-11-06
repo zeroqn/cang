@@ -64,7 +64,12 @@ VA-API side (one VM boot instead of two, and no compositor).
    `backend = "btrfs-snapshot"`.
 3. **Arm 1** runs the Chromium smoke with `--waypipe` and the already-loaded
    image reference; its exit status is arm 1's result and its own evidence and
-   verdict are kept under `<out-dir>/chromium/`.
+   verdict are kept under `<out-dir>/chromium/`. It screenshots the compositor
+   `--present-wait` seconds after weston starts (90 by default, then a second
+   capture 30 s later): cang's default read-only `/nix` lower spends the first
+   ~40 s of the window building its image on a cold workspace, so the delegated
+   smoke's own 30 s default captures an empty compositor. Lower it with
+   `--present-wait <secs>` once that image is cached.
 4. **Arm 2** stages `smoke/run-guest-vaapi.sh` plus the run's geometry into
    `/workspace/smoke` (the guest has no environment channel: cang passes PATH
    plus its allowlist, so every guest input is a staged file), starts an

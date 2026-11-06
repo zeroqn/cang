@@ -46,6 +46,11 @@ python_bin="${PYTHON:-}"
 out_dir=""
 mem_gib=4
 timeout_seconds=900
+# Arm 1's screenshots are taken this long after weston starts, then 30 s later.
+# 90 rather than the delegated smoke's 30: a cold `/nix` block-lower build keeps
+# the host busy for the first ~40 s of that window, so the presenting browser
+# only appears around 57 s in and a 30 s capture holds an empty compositor.
+present_wait=90
 # 640x360 is the geometry the VA-API investigation used; the guest script reads
 # it from a staged file (environment variables do not reach the guest).
 geom_w=640
@@ -84,6 +89,11 @@ Options:
       --waypipe-bin <path>   waypipe for arm 1 (default: $WAYPIPE_BIN, else PATH)
       --python <path>        python3 for arm 1's pixel check (default: $PYTHON,
                              else `nix build nixpkgs#python3` -> bin/python3)
+      --present-wait <secs>  when arm 1 takes its compositor screenshots, counted
+                             from weston's start (default: 90, the second at +30;
+                             a cold `/nix` block-lower build delays the presenting
+                             browser by up to a minute, so the delegated smoke's
+                             own 30 default captures an empty compositor)
       --out-dir <path>       output root (default: .smoke/virglrenderer-cang/<ts>).
                              Must be on btrfs: cang's only implemented task-rootfs
                              backend snapshots the Buildah graphroot.
@@ -110,6 +120,7 @@ while [ "$#" -gt 0 ]; do
     --weston) weston_bin="${2:?missing value for --weston}"; shift 2 ;;
     --waypipe-bin) waypipe_bin="${2:?missing value for --waypipe-bin}"; shift 2 ;;
     --python) python_bin="${2:?missing value for --python}"; shift 2 ;;
+    --present-wait) present_wait="${2:?missing value for --present-wait}"; shift 2 ;;
     --out-dir) out_dir="${2:?missing value for --out-dir}"; shift 2 ;;
     --mem) mem_gib="${2:?missing value for --mem}"; shift 2 ;;
     --timeout) timeout_seconds="${2:?missing value for --timeout}"; shift 2 ;;
@@ -318,6 +329,7 @@ if [ "$skip_chromium" -eq 0 ]; then
     --weston "$weston_bin"
     --waypipe-bin "$waypipe_bin"
     --python "$python_bin"
+    --present-wait "$present_wait"
   )
   [ -n "$guest_init" ] && chromium_args+=(--guest-init "$guest_init")
   if "$chromium_smoke" "${chromium_args[@]}" >"$out_dir/logs/chromium-smoke.log" 2>&1; then
