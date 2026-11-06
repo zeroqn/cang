@@ -251,6 +251,19 @@ of every request to zero.
   smaller numerator still: the remaining gap is 45 s, spread over
   LOOKUP/FLUSH/WRITE/GETXATTR, none of which is a data-path design.
 
+- **Over-commit: the guard works, the release path cannot rescue it
+  (2026-11-06, [note 54](notes/54-over-commit-recovery-measured.md)).** A guest at
+  82-93% of host RAM with three concurrent builds put the host at 45-262 MB/s swap
+  traffic and the builds never finished. An explicit `--mem` is now classified
+  against host `MemTotal` and refused above 90% (verified live: 22 GiB refused on
+  a 20.65 GiB host, 18 GiB warned, 16 GiB silent). Escalating the existing release
+  to a guest self-inflate was implemented, then falsified: the guest needed
+  **116.8 s** to touch 4 GiB while thrashing, so the host's exchange timed out at
+  5 s and still at 60 s, and the work itself cost two minutes of the failure it
+  was rescuing from. Reverted. The lever that works is the fork's balloon inflate
+  queue - kernel-chosen eviction, no guest userspace work, an exact `actual` - and
+  that is future work.
+
 - **Queue-depth decision (bob, 2026-11-04): chart the multi-queue work; the pool
   is settled shut.** After the shipped-defaults verification, bob asked what was
   left and approved two checks rather than a redesign: *who burns host CPU during
