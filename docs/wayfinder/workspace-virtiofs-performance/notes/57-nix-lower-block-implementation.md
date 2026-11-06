@@ -182,3 +182,34 @@ upper exists for intact.
 Fork commit is local only (`ab184894`); `git push` from this sandbox fails on SSH keys, so
 the `libkrun-src` flake input still names `15315dad` and any build needs
 `--override-input libkrun-src path:./deps/libkrun` until it is pushed and re-pinned.
+
+### Final state: verified end to end
+
+With the fork fix above, `CANG_NIX_LOWER_BLOCK=1` produces, in a guest:
+
+```
+overlay /nix overlay rw,lowerdir=/run/cang/nix-lower,
+        upperdir=/run/cang/nix-overlay/upper,workdir=/run/cang/nix-overlay/work-guest,
+        redirect_dir=nofollow,userxattr
+/dev/vdc on /run/cang/nix-lower type btrfs (ro)
+```
+
+`stat -f -c %T /nix` = `overlayfs`, `/run/cang/nix-lower` = `btrfs`; 685 `ls` names /
+73 790 `find` nodes, identical content; writes copy up into the virtio-fs upper; the
+`nix-prep` socket answers and `nix` works.
+
+| probe (guest, ms, 3 rounds) | block lower | fallback (virtio-fs /nix) |
+| --- | --- | --- |
+| `find /nix/store \| wc -l` | 212 / 206 / 215 | 2 033 / 864 / 234 |
+| `du -s /nix/store` | 1 110 / 272 / 267 | 9 200 / 9 993 / 10 435 |
+| 200-file read loop | 847 / 667 / 822 | 802 / 759 / 727 |
+
+Metadata walks win by 1-10x and are stable; plain file reads do not change (they were
+never the problem); the one 234 ms outlier shows a warm-cache fallback run can approach
+block speed, so the honest claim is "the walk cost collapses", not a fixed multiplier.
+Preparation is 35.9 s on the first launch of an image and 0.56 ms when reused; launch
+wall 58 s first, 10 s after.
+
+Two open items: the docs elsewhere still describe the old blocker, and `/nix` keeps the
+host-composed virtio-fs overlay mounted *underneath* the guest overlay - it should be
+skipped when block mode is on.
