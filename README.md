@@ -26,6 +26,12 @@ rootless Podman tooling for development.
   through `buildah unshare`. Rootless btrfs-snapshot cleanup also requires the
   backing btrfs mount to allow user-owned subvolume removal; add
   `user_subvol_rm_allowed` to that mount's options when using this fast path.
+  The same tools build the default read-only `/nix` lower image
+  (`mkfs.btrfs --rootdir --reflink --shrink`), which is cached under
+  `<state>/cang/microvm/images/btrfs-snapshots/nix-lower/` at ~12 GiB and built
+  on the first launch of each image generation; `CANG_NIX_LOWER_BLOCK=0` keeps
+  the host-composed overlay instead. See
+  [Images and storage](docs/images-and-storage.md#read-only-nix-lower-on-a-block-device).
 - `libkrun` at build time, not at runtime. `cang` links libkrun's Rust API
   (`crates/cang-libkrun`, compiled from the `libkrun-src` flake input grafted
   into `deps/libkrun` by cang's own toolchain), so libkrun is part of the binary
@@ -411,7 +417,8 @@ live in the topic docs:
 - [Networking](docs/networking.md) — passt/TSI network modes, host aliases,
   published ports, and nested virtualization.
 - [Images and storage](docs/images-and-storage.md) — image selection and
-  cache management, task-rootfs backends, the `/nix` host overlay, the
+  cache management, task-rootfs backends, the `/nix` host overlay and its
+  read-only block lower, the
   container-store disk, guest memory, host memory reclamation through the
   virtio-balloon, zram swap, and launch config keys.
 - [Diagnostics](docs/diagnostics.md) — log levels, fd-pressure reports,

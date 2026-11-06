@@ -115,6 +115,41 @@ manual cleanup or a workspace overlay reset if they become inconsistent.
   `--container-store bind` is not supported, and cang does not migrate old
   host-directory container stores.
 
+### Read-only `/nix` lower on a block device
+
+The host overlay above is the fallback. When cang can build one, `/nix` is
+instead served from a read-only btrfs image attached as a virtio-blk disk, and
+the *guest* composes the overlay: `/nix` = overlayfs with the block image
+(attached read-only, mounted at `/run/cang/nix-lower`) as `lowerdir` and the
+workspace's `nix-overlay/upper` as `upperdir`. The lower is what every command
+reads, and reading it off a block device is what pays: `find /nix/store`
+206-215 ms against 864-2033 ms and `du -s` 267 ms against 9.2-10.4 s with the
+same tree over virtio-fs.
+
+This is on by default. `CANG_NIX_LOWER_BLOCK=0` in the caller's environment
+turns it off for a launch, which keeps the host-composed overlay.
+
+- The image is built with `mkfs.btrfs -q -L CANG_NIX_LOWER
+  --rootdir=<image rootfs>/nix --reflink --shrink` inside the Buildah storage
+  namespace and cached at
+  `<state>/cang/microvm/images/btrfs-snapshots/nix-lower/<identity>.raw` with a
+  `.state` sidecar naming the image and its store paths. It is ~12 GiB
+  apparent; it is reused while that identity is unchanged, so only the first
+  launch after an image or store change pays the build (tens of seconds), and
+  the guest's own work starts correspondingly later on that launch. Delete the
+  `nix-lower` directory to reclaim the space or force a rebuild.
+- It needs `mkfs.btrfs`/`btrfs` (`btrfs-progs`) and `buildah` on the host, plus
+  free space under the state root for one image per cached image generation.
+- The guest half lives in the `cang-guest-init` the launch actually runs, so an
+  image built by an older cang (guest-init 0.17.2 or earlier) ignores the
+  switch; cang reads that binary before building anything and says so:
+  `cang: /nix block lower skipped: '<path>' predates block mode`.
+- Every failure keeps the host-composed overlay and names itself on stderr
+  (`cang: /nix block lower unavailable, using the host-composed overlay: <err>`
+  on the host, `cang-guest-init: read-only /nix lower unusable, keeping the
+  host-composed overlay: <err>` in the guest). A launch never fails because of
+  this path.
+
 ## Guest memory and zram swap
 
 When `--mem` is omitted, cang now sizes the direct-libkrun VM to 80% of host
