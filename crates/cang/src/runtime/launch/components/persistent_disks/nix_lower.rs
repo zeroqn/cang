@@ -458,6 +458,7 @@ pub(super) fn ensure_image_with_builder(
         .parent()
         .ok_or_else(|| anyhow!("image store '{}' has no parent", store_dir.display()))?
         .to_path_buf();
+    check_space_for_build(&dir, &source)?;
     if let Err(err) = builder.build_image(&source, &tmp, LABEL) {
         remove_if_present(&tmp).ok();
         return Err(err).with_context(|| {
@@ -540,6 +541,112 @@ fn nix_lower_dir(store_dir: &Path) -> Result<PathBuf> {
 
 /// An image is reusable when the file is there and the state file next to it
 /// names the same identity: an image from another content set is rebuilt.
+/// Bytes a build that can share extents with its source still needs: the image's
+/// own metadata, its superblock, and whatever the guest writes while the build
+/// runs.
+const BUILD_FLOOR_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Refuse a build the target filesystem cannot hold.
+///
+/// `mkfs.btrfs` reports `no space left` as a failure and this module then falls
+/// back, but the price is a multi-gigabyte attempt that can also evict whatever
+/// else shares the filesystem. Price it first instead: the image is written from
+/// the source tree, so its apparent size is the bill - unless the target is on
+/// the source's own filesystem, where `--reflink` shares the extents and only
+/// the metadata is new.
+fn check_space_for_build(target_dir: &Path, source_nix: &Path) -> Result<()> {
+    let free = free_bytes(target_dir).with_context(|| {
+        format!(
+            "failed to measure free space for '{}'",
+            target_dir.display()
+        )
+    })?;
+    let apparent = apparent_bytes(source_nix).with_context(|| {
+        format!(
+            "failed to measure the size of the image store '{}'",
+            source_nix.display()
+        )
+    })?;
+    let same_filesystem = match (device_id(target_dir), device_id(source_nix)) {
+        (Ok(target), Ok(source)) => target == source,
+        // An unreadable device id is not evidence of a shared filesystem, and the
+        // larger estimate only costs a preflight refusal on a tight disk.
+        _ => false,
+    };
+    check_space(free, apparent, same_filesystem)
+}
+
+/// The pure half of [`check_space_for_build`], so the arithmetic is testable
+/// without a filesystem.
+/// Bytes the build needs: the tree's apparent size only when `--reflink` cannot
+/// share it with the source.
+fn required_space(apparent: u64, same_filesystem: bool) -> u64 {
+    if same_filesystem {
+        BUILD_FLOOR_BYTES
+    } else {
+        apparent.saturating_add(BUILD_FLOOR_BYTES)
+    }
+}
+
+fn check_space(free: u64, apparent: u64, same_filesystem: bool) -> Result<()> {
+    let required = required_space(apparent, same_filesystem);
+    if free < required {
+        bail!(
+            "building the /nix lower image needs about {} MiB free but only {} MiB are available{}",
+            required / (1024 * 1024),
+            free / (1024 * 1024),
+            if same_filesystem {
+                ""
+            } else {
+                " (the image store is on a different filesystem, so --reflink cannot share it)"
+            }
+        );
+    }
+    Ok(())
+}
+
+/// Apparent size of a tree: regular files only, symlinks not followed, so it is
+/// what a copy of the tree would have to store.
+fn apparent_bytes(root: &Path) -> Result<u64> {
+    let mut total = 0u64;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in
+            fs::read_dir(&dir).with_context(|| format!("failed to list '{}'", dir.display()))?
+        {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if metadata.is_file() {
+                total = total.saturating_add(metadata.len());
+            }
+        }
+    }
+    Ok(total)
+}
+
+fn free_bytes(path: &Path) -> Result<u64> {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+        .with_context(|| format!("'{}' is not a usable path", path.display()))?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `statvfs` writes one `statvfs` into the pointer it is given, and
+    // the CString outlives the call.
+    if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("statvfs failed");
+    }
+    // SAFETY: the call succeeded, so the value is initialized.
+    let stat = unsafe { stat.assume_init() };
+    // `f_frsize`/`f_bavail` are `c_ulong` on both supported targets, so the
+    // product is already `u64`.
+    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
+}
+
+fn device_id(path: &Path) -> Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(fs::metadata(path)?.dev())
+}
+
 fn complete(image: &Path, state: &Path, identity: &str) -> bool {
     let Ok(metadata) = fs::symlink_metadata(image) else {
         return false;
@@ -1117,5 +1224,68 @@ mod tests {
                 .expect_err("an empty image must not be installed");
 
         assert!(format!("{err:#}").contains("produced no image"));
+    }
+
+    #[test]
+    fn a_build_sharing_one_filesystem_only_needs_the_floor() {
+        assert_eq!(required_space(0, true), BUILD_FLOOR_BYTES);
+        assert_eq!(
+            required_space(12 * 1024 * 1024 * 1024, true),
+            BUILD_FLOOR_BYTES,
+            "--reflink shares the extents, so the tree's size is not the bill"
+        );
+        assert_eq!(
+            required_space(12 * 1024 * 1024 * 1024, false),
+            12 * 1024 * 1024 * 1024 + BUILD_FLOOR_BYTES,
+            "across filesystems the image stores every byte"
+        );
+    }
+
+    #[test]
+    fn a_tight_target_is_refused_before_the_build() {
+        let err = check_space(1024, 4096, false).expect_err("no space");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("needs about 512 MiB free") && message.contains("only 0 MiB"),
+            "{message}"
+        );
+        assert!(
+            message.contains("--reflink cannot share it"),
+            "the refusal has to say why it prices the whole tree: {message}"
+        );
+        assert!(
+            check_space(BUILD_FLOOR_BYTES, 12 * 1024 * 1024 * 1024, true).is_ok(),
+            "a shared source needs only the floor, whatever the tree's size"
+        );
+        assert!(
+            check_space(BUILD_FLOOR_BYTES + 4096, 4096, false).is_ok(),
+            "exactly enough is enough"
+        );
+    }
+
+    #[test]
+    fn apparent_size_counts_regular_files_and_ignores_symlinks() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = cache_entry(&temp, &["first", "second"]).join("store");
+        fs::write(store.join("first").join("payload"), vec![0u8; 1000]).expect("write");
+        fs::write(store.join("second").join("payload"), vec![0u8; 24]).expect("write");
+        std::os::unix::fs::symlink("/nix/store/elsewhere", store.join("link")).expect("symlink");
+
+        assert_eq!(apparent_bytes(&store).expect("apparent size"), 1024);
+    }
+
+    #[test]
+    fn free_space_is_measured_and_the_source_shares_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nix_dir = cache_entry(&temp, &["first"]);
+        assert!(
+            free_bytes(temp.path()).expect("free bytes") > 0,
+            "a tmpfs or disk always reports some free space"
+        );
+        assert_eq!(
+            device_id(temp.path()).expect("device"),
+            device_id(&nix_dir).expect("device"),
+            "both live under the same tmpdir"
+        );
     }
 }

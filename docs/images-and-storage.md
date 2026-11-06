@@ -144,6 +144,11 @@ turns it off for a launch, which keeps the host-composed overlay.
   image built by an older cang (guest-init 0.17.2 or earlier) ignores the
   switch; cang reads that binary before building anything and says so:
   `cang: /nix block lower skipped: '<path>' predates block mode`.
+- The build is priced before it starts: with the target on the image store's
+  own filesystem `--reflink` shares the extents, so only a 512 MiB floor is
+  required, and across filesystems the tree's apparent size is. A filesystem
+  that cannot hold it is refused up front rather than left to a multi-gigabyte
+  `mkfs.btrfs` that fails late.
 - Every failure keeps the host-composed overlay and names itself on stderr
   (`cang: /nix block lower unavailable, using the host-composed overlay: <err>`
   on the host, `cang-guest-init: read-only /nix lower unusable, keeping the
