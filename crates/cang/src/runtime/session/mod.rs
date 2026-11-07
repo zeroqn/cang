@@ -258,17 +258,16 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                 });
 
             // The guest's /nix lower on a read-only btrfs block file, built from
-            // this image's store content. Best effort by construction: `None`
-            // means the guest keeps the host-composed overlay exactly as before.
-            let nix_lower_block = profiler
-                .measure_result("nix_lower_block_preparation", || {
-                    Ok(prepare_nix_lower_block(
-                        nix_overlay_lease.intent(),
-                        guest_init_binary,
-                    ))
-                })
-                .ok()
-                .flatten();
+            // this image's store content. `None` means the launch asked for the
+            // host-composed overlay; an unavailable lower is an error unless the
+            // user allowed the fallback, so a slow `/nix` is never silent.
+            let nix_lower_block = profiler.measure_result("nix_lower_block_preparation", || {
+                prepare_nix_lower_block(
+                    nix_overlay_lease.intent(),
+                    guest_init_binary,
+                    plan.nix_lower_fallback,
+                )
+            })?;
             match &nix_lower_block {
                 Some(block) => {
                     profiler.record_metadata(
@@ -659,6 +658,7 @@ mod tests {
             container_store_backend: None,
             guest_init: None,
             preserve_debug: false,
+            nix_lower_fallback: false,
             mem_gib: None,
             network_mode: config::NetworkMode::Tsi,
             pulse: None,

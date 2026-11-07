@@ -232,6 +232,12 @@ pub(crate) struct Cli {
     preserve_debug: bool,
 
     #[arg(
+        long = "nix-lower-fallback",
+        help = "Keep the host-composed /nix overlay when the block lower is unavailable instead of refusing the launch"
+    )]
+    nix_lower_fallback: bool,
+
+    #[arg(
         long = "mem",
         value_name = "GiB",
         value_parser = parse_mem_gib_arg,
@@ -602,6 +608,7 @@ impl Cli {
             container_store_backend: self.container_store_backend,
             guest_init: self.guest_init,
             preserve_debug: self.preserve_debug,
+            nix_lower_fallback: self.nix_lower_fallback,
             mem_gib: self.mem_gib,
             network_mode: if self.tsi {
                 NetworkMode::Tsi
@@ -657,6 +664,7 @@ pub(crate) struct RuntimeOptions {
     pub(crate) container_store_backend: Option<ContainerStoreBackend>,
     pub(crate) guest_init: Option<PathBuf>,
     pub(crate) preserve_debug: bool,
+    pub(crate) nix_lower_fallback: bool,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,

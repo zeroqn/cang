@@ -126,10 +126,16 @@ reads, and reading it off a block device is what pays: `find /nix/store`
 206-215 ms against 864-2033 ms and `du -s` 267 ms against 9.2-10.4 s with the
 same tree over virtio-fs.
 
-This is opt-in: `CANG_NIX_LOWER_BLOCK=1` in the caller's environment selects it
-for a launch, and without it `/nix` is the host-composed overlay above.
+It is opt-in for now: `CANG_NIX_LOWER_BLOCK=1` selects it, and without it `/nix`
+is the host-composed overlay above. Once selected it is not silently given up:
+when a launch cannot be served the block lower - the image cannot be built or is
+locked by another launch, or the image's `cang-guest-init` predates the guest
+half or its request-size cap - cang refuses the launch and names the reason.
+`--nix-lower-fallback` accepts the host-composed overlay for that launch instead.
+A quiet fallback was the wrong default: it is up to five times slower on the
+store and nothing in the run said so.
 
-It is the default. It used to lose guest pages on every boot, and the reason was
+It used to lose guest pages on every boot, and the reason was
 not this module: with cang's 7.x guest kernel, btrfs merges reads into
 multi-extent, multi-folio bios, and a merged bio can carry a device LBA taken from
 one extent while its payload pages belong to another. The guest then reads the

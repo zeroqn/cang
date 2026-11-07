@@ -25,23 +25,26 @@
 //! failure, a store the host cannot list) leaves the launch on the host-composed
 //! overlay, which is what the guest keeps using when the flag is absent.
 //!
-//! # Status: on by default, and safe because the guest caps its request size
+//! # Status: opt-in, because the guest kernel still loses /nix pages
 //!
-//! This module used to ship opt-in because an ordinary cold read of `/nix/store`
-//! lost a 20-40 KiB window of one file in most boots (csum of a zero page in the
-//! guest's btrfs log, `SIGBUS` for a mapping over those pages). The cause was not
-//! this module: with the 7.x guest kernel btrfs merges reads into multi-extent,
-//! multi-folio bios and a merged bio can carry a device LBA from one extent with
-//! payload pages from another, so the guest reads the wrong device range. It
-//! happened on the writable btrfs disks too, with block mode off.
+//! An ordinary cold read of `/nix/store` loses a 20-40 KiB window of one file
+//! (csum of a zero page in the guest's btrfs log, `SIGBUS` for a mapping over
+//! those pages). The cause is not this module: with the 7.x guest kernel btrfs
+//! merges reads into multi-extent, multi-folio bios, and a merged bio can carry a
+//! device LBA from one extent with payload pages from another, so the guest reads
+//! the wrong device range. It happens on the writable btrfs disks too, with block
+//! mode off.
 //!
-//! `cang-guest-init` now caps every virtio-blk disk at `max_sectors_kb=64`, which
-//! keeps btrfs from building such a bio: 0 failing sectors over 15 cold sweeps
-//! against 210 over 12 without the cap, at ~1.5 % on a cold 2.4 GB read. The host
-//! side was never at fault - a diagnostic build that aborts the VM when the data
-//! about to be copied into guest memory holds an all-zero page while the image has
-//! data there never fired, and the guest's own `O_DIRECT` read of the failing
-//! physical offset equals the image.
+//! `cang-guest-init` caps every virtio-blk disk at `max_sectors_kb=64`, which
+//! keeps btrfs from building most of those bios: 23 cold sweeps of 40 files each
+//! at the cap logged no failure against 210 failing sectors over 12 sweeps without
+//! it, at ~1.5 % on a cold 2.4 GB read. It is a reduction and not a cure - one
+//! later boot at the cap still lost a window - so block mode stays opt-in while a
+//! lost page is a `SIGBUS` for the reader. The host side was never at fault: a
+//! diagnostic build that aborts the VM when the data about to be copied into
+//! guest memory holds an all-zero page while the image has data there never
+//! fired, and the guest's own `O_DIRECT` read of the failing physical offset
+//! equals the image.
 //!
 //! A *second*, deterministic fault used to live here and is fixed: two launches
 //! sharing one `[state] location` where the second rebuilt the image replaced
@@ -328,35 +331,67 @@ fn judge_mkfs_output(program: &OsStr, output: &std::process::Output) -> Result<(
     Ok(())
 }
 
-/// Best-effort entry point: the launch falls back to the host-composed overlay
-/// whenever this returns `None`, and never fails because of it.
+/// Entry point for a launch's `/nix` lower.
+///
+/// `Ok(None)` means the launch asked for the host-composed overlay
+/// (`CANG_NIX_LOWER_BLOCK=0`); anything that would silently substitute that
+/// overlay for the block lower is an error unless the caller allowed the
+/// fallback with `--nix-lower-fallback`. A quiet fallback is the wrong default:
+/// it is five times slower on the store and nothing in the run says so.
 ///
 /// `guest_init` is the binary this launch will actually run (the image's, or the
 /// `--guest-init` override). Block mode has a guest half, and an image built
 /// before that half existed ignores every `CANG_NIX_LOWER_*` variable: the disk
 /// would be built, attached, and never mounted, which is a `/nix` that silently
 /// stays virtio-fs. Reading the guest binary first turns that into a named
-/// fallback and skips a multi-gigabyte build nothing would read.
-pub(crate) fn prepare_block(intent: &HostNixOverlay, guest_init: &Path) -> Option<NixLowerBlock> {
+/// refusal and skips a multi-gigabyte build nothing would read.
+pub(crate) fn prepare_block(
+    intent: &HostNixOverlay,
+    guest_init: &Path,
+    allow_fallback: bool,
+) -> Result<Option<NixLowerBlock>> {
     if !block_mode_requested() {
         tracing::debug!(
             "{HOST_BLOCK_MODE_ENV} is 0: keeping the host-composed /nix overlay on every layer"
         );
-        return None;
+        return Ok(None);
     }
     if !guest_init_mounts_block_lower(guest_init) {
-        tracing::warn!(
-            guest_init = %guest_init.display(),
-            selected_image = %intent.selected_reference,
-            "cang /nix lower: the guest-init in this launch predates either block mode or the virtio-blk request-size cap that keeps it safe; keeping the host-composed overlay (rebuild the image with a current cang to serve /nix from the block device)"
-        );
-        eprintln!(
-            "cang: /nix block lower skipped: the cang-guest-init '{}' predates block mode or its request-size cap, so /nix stays the host-composed overlay",
+        let reason = format!(
+            "the cang-guest-init this launch would run ('{}') predates block mode or its virtio-blk request-size cap, so the /nix lower disk would be ignored",
             guest_init.display()
         );
-        return None;
+        return fallback_or_error(intent, reason, allow_fallback);
     }
-    prepare_block_with(intent, &HostNixLowerImageBuilder)
+    match prepare_block_with(intent, &HostNixLowerImageBuilder) {
+        Ok(block) => Ok(block),
+        Err(err) => fallback_or_error(intent, format!("{err:#}"), allow_fallback),
+    }
+}
+
+/// Keep the host-composed overlay, or refuse the launch. Either way the reason
+/// is named once, on stderr, in the same words the refusal carries.
+fn fallback_or_error(
+    intent: &HostNixOverlay,
+    reason: String,
+    allow_fallback: bool,
+) -> Result<Option<NixLowerBlock>> {
+    if allow_fallback {
+        tracing::warn!(
+            selected_image = %intent.selected_reference,
+            %reason,
+            "cang /nix lower: keeping the host-composed overlay because --nix-lower-fallback was passed"
+        );
+        eprintln!(
+            "cang: /nix block lower unavailable, keeping the host-composed overlay because --nix-lower-fallback was passed: {reason}"
+        );
+        return Ok(None);
+    }
+    bail!(
+        "/nix block lower requested but unavailable: {reason}\n\
+         cang: pass --nix-lower-fallback to keep the host-composed /nix overlay instead (slower store walks), \
+         or CANG_NIX_LOWER_BLOCK=0 to opt out of the block lower for this launch"
+    )
 }
 
 /// The guest half's switch, which is also the contract between the two halves.
@@ -407,40 +442,36 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 fn prepare_block_with(
     intent: &HostNixOverlay,
     builder: &impl NixLowerImageBuilder,
-) -> Option<NixLowerBlock> {
+) -> Result<Option<NixLowerBlock>> {
     match ensure_with_builder(intent, builder) {
-        Ok(Some(block)) => Some(block),
-        Ok(None) => None,
+        Ok(block) => Ok(block),
         Err(err) => {
             tracing::warn!(
                 lowerdir = %intent.lowerdir.display(),
                 error = %format!("{err:#}"),
-                "cang could not build the /nix block lower; the guest keeps the host-composed overlay"
+                "cang could not build the /nix block lower"
             );
-            eprintln!(
-                "cang: /nix block lower unavailable, using the host-composed overlay: {err:#}"
-            );
-            None
+            Err(err).context("could not build the /nix block lower image")
         }
     }
 }
 
-/// Block mode is on by default; `CANG_NIX_LOWER_BLOCK=0` turns it off.
+/// Block mode is opt-in: `CANG_NIX_LOWER_BLOCK=1` turns it on.
 ///
 /// The configuration it enables is the fast one from note 57 - `find /nix/store`
 /// 206-215 ms against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s - and it
 /// became possible once the fork forwarded `RENAME_WHITEOUT` (v2.0.0-cang.18).
 ///
-/// It is safe to default because the guest kernel's read bug that used to lose
-/// these pages is capped off in the guest (see the module doc and
-/// `cang-guest-init`'s `disk::queue`): with `max_sectors_kb=64` on every
-/// virtio-blk disk, six cold sweeps of 40 files each over an engaged block lower
-/// lost no page where the same pattern failed in most boots before.
+/// It cannot default on yet: the guest kernel's read bug that loses these pages
+/// is reduced but not eliminated by the request-size cap (see the module doc and
+/// `cang-guest-init`'s `disk::queue`), and a lost page is a `SIGBUS` for anyone
+/// mapped over it.
 ///
-/// Any failure still falls back to the host-composed overlay, and a launch never
-/// fails because of this switch; the fallback names its reason on stderr.
+/// Block mode that is requested but cannot be served refuses the launch unless
+/// `--nix-lower-fallback` was passed, so a user who opted in never silently gets
+/// the slower overlay.
 fn block_mode_requested() -> bool {
-    !matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("0"))
+    matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("1"))
 }
 
 pub(super) fn ensure_with_builder(
@@ -1184,19 +1215,36 @@ mod tests {
             .expect("write the stale guest-init stand-in");
         let before = std::env::var_os(HOST_BLOCK_MODE_ENV);
 
+        // The guest-init is only consulted when block mode is selected, so this
+        // test opts in first.
         // SAFETY: a single-threaded assertion over one process env variable,
         // serialized by ENV_LOCK.
-        unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) };
+        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
 
-        let block = prepare_block(&overlay, &guest_init);
+        let refused = prepare_block(&overlay, &guest_init, false);
+        let allowed = prepare_block(&overlay, &guest_init, true);
 
         match before {
             Some(value) => unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, value) },
             None => unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) },
         }
+        let message = format!(
+            "{:#}",
+            refused.expect_err("a stale guest-init refuses the launch")
+        );
         assert!(
-            block.is_none(),
-            "a guest that cannot mount the lower keeps the host-composed overlay"
+            message.contains("predates block mode or its virtio-blk request-size cap"),
+            "{message}"
+        );
+        assert!(
+            message.contains("--nix-lower-fallback"),
+            "the refusal names the way out: {message}"
+        );
+        assert!(
+            allowed
+                .expect("the fallback flag keeps the launch")
+                .is_none(),
+            "with --nix-lower-fallback the launch keeps the host-composed overlay"
         );
         let dir = temp.path().join("btrfs-snapshots").join(DIR_NAME);
         assert!(
@@ -1225,9 +1273,9 @@ mod tests {
         let nix_dir = cache_entry(&temp, &["aaaa-one"]);
         let builder = FakeBuilder::failing();
 
-        let block = prepare_block_with(&intent(&nix_dir, &generation_root(&temp)), &builder);
-
-        assert!(block.is_none(), "a failed build must not fail the launch");
+        let err = prepare_block_with(&intent(&nix_dir, &generation_root(&temp)), &builder)
+            .expect_err("a failed build is reported, not swallowed");
+        assert!(format!("{err:#}").contains("failed"), "{err:#}");
         assert_eq!(builder.build_count(), 1);
         let dir = temp.path().join("btrfs-snapshots").join(DIR_NAME);
         let leftovers: Vec<String> = fs::read_dir(&dir)
@@ -1250,7 +1298,9 @@ mod tests {
         let generation_root = generation_root(&temp);
         let overlay = intent(&nix_dir, &generation_root);
 
-        let block = prepare_block_with(&overlay, &builder).expect("block mode");
+        let block = prepare_block_with(&overlay, &builder)
+            .expect("block mode")
+            .expect("an image is built");
 
         let attachment = block.attachment();
         assert_eq!(attachment.id, "cang-nix-lower");
@@ -1289,9 +1339,10 @@ mod tests {
         );
     }
 
-    /// Block mode is on unless the host opts out (see the module doc).
+    /// Block mode is opt-in until the guest kernel stops losing pages (see the
+    /// module doc).
     #[test]
-    fn block_mode_is_on_unless_the_host_opts_out() {
+    fn block_mode_needs_the_host_to_opt_in() {
         let _guard = ENV_LOCK.lock().expect("env test lock");
         let temp = tempfile::tempdir().expect("tempdir");
         let nix_dir = cache_entry(&temp, &["aaaa-one"]);
@@ -1301,15 +1352,15 @@ mod tests {
         // SAFETY: a single-threaded assertion over one process env variable,
         // serialized by ENV_LOCK.
         unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) };
-        assert!(block_mode_requested(), "block mode is on by default");
+        assert!(!block_mode_requested(), "block mode is off by default");
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
-        assert!(block_mode_requested(), "1 keeps it on");
+        assert!(block_mode_requested(), "1 opts in");
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "0") };
-        assert!(!block_mode_requested(), "0 opts out");
+        assert!(!block_mode_requested(), "0 keeps it off");
 
         // SAFETY: restore whatever the harness had.
         unsafe {
