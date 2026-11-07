@@ -129,18 +129,27 @@ same tree over virtio-fs.
 This is opt-in: `CANG_NIX_LOWER_BLOCK=1` in the caller's environment selects it
 for a launch, and without it `/nix` is the host-composed overlay above.
 
-It is not the default because the path loses guest-side read data. In the guest
-btrfs reports `csum failed` for a 20-40 KiB window of one `/nix/store` file -
-about once per boot, on any block-lower boot, and never on the host-composed
-overlay - and a process that has such a page mapped takes `SIGBUS` on the
-page-in (a cold chromium start does). What is ruled out: the image is correct
-(`btrfs check --check-data-csum` passes and the host image is byte-stable), the
-device is correct (the guest's whole-device hash equals the host `.raw` hash in
-the same boot that loses a window, buffered and `O_DIRECT` alike), and the
-libkrun fork's parallel read pool is not the cause (it reproduces with the pool
-off and with a pool size of 1). The wrong bytes therefore enter between the
-completed device read and the page btrfs checksums, which is still open; the
-block lower stays opt-in until it is closed.
+It is not the default because it still loses guest-side read data
+intermittently. Wipe the state root so the image is built, and roughly one cold
+boot in five loses a 20-40 KiB window of one `/nix/store` file: the guest's btrfs
+logs `csum failed`, the observed csum is the crc32c of a 4 KiB zero page, and a
+process with such a page mapped takes `SIGBUS` on the page-in (a cold chromium
+start does). It is not tied to a guest kernel (6.12.x and the 7.2/7.3 hardened
+ones both do it), nor to the read pool, `O_DIRECT`, the balloon, the mkfs recipe,
+device order or host reclaim, and in the boot that loses a window the host image
+passes `btrfs check --check-data-csum` while the guest's whole-device hash equals
+the host `.raw` hash.
+
+A separate, *deterministic* variant is fixed: two launches sharing one `[state]
+location`, where the second rebuilds the image while the first one's VM has it
+attached, hand that VM blocks from the other image (2 of 2 measured; this is what
+makes concurrent smoke arms corrupt each other even though each boot is clean on
+its own). cang now locks the image per launch - shared for the life of the VM,
+exclusive for a rebuild - so a launch that would have to rebuild under a live VM
+keeps the host-composed overlay and says so:
+`cang: /nix block lower unavailable, using the host-composed overlay: another
+cang launch is using the /nix lower image ...`. Give concurrent launches their own
+`[state] location` and they share the image read-only instead.
 
 - The image is built with `mkfs.btrfs -q -L CANG_NIX_LOWER
   --rootdir=<image rootfs>/nix --reflink --shrink` inside the Buildah storage

@@ -30,8 +30,8 @@ rootless Podman tooling for development.
   (`mkfs.btrfs --rootdir --reflink --shrink`) that `CANG_NIX_LOWER_BLOCK=1`
   selects: cached under
   `<state>/cang/microvm/images/btrfs-snapshots/nix-lower/` at ~12 GiB, built on
-  the first launch of each image generation. It is opt-in because that path
-  still loses guest-side read data (see the linked section).
+  the first launch of each image generation. It stays opt-in because that path
+  still loses guest-side read data intermittently (see the linked section).
 - `libkrun` at build time, not at runtime. `cang` links libkrun's Rust API
   (`crates/cang-libkrun`, compiled from the `libkrun-src` flake input grafted
   into `deps/libkrun` by cang's own toolchain), so libkrun is part of the binary

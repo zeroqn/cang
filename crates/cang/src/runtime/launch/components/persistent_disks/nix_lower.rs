@@ -25,34 +25,25 @@
 //! failure, a store the host cannot list) leaves the launch on the host-composed
 //! overlay, which is what the guest keeps using when the flag is absent.
 //!
-//! # Status: opt-in, and the guest composes `/nix` over it
+//! # Status: opt-in until the intermittent read loss is understood
 //!
-//! Block mode is off unless `CANG_NIX_LOWER_BLOCK=1`. It was briefly on by
-//! default and is not any more: in the guest, ~1 boot in 1 has btrfs report
-//! `csum failed` for a 20-40 KiB window of one `/nix/store` file, which SIGBUSes
-//! any process that has such a page mapped (chromium's cold start). The whole
-//! device reads back byte-identical to the host image in the same boot, the
-//! host-side image passes `btrfs check --check-data-csum`, and the fault is not
-//! the fork's parallel read pool (it reproduces with the pool off and with a
-//! pool size of 1), so the wrong bytes enter between the completed device read
-//! and the page btrfs checksums: an open data-integrity bug in this path, not a
-//! property of the image (see docs/images-and-storage.md).
+//! Block mode is off unless `CANG_NIX_LOWER_BLOCK=1`. On a cold boot (state
+//! wiped, so the image is built) about one boot in five loses a 20-40 KiB window
+//! of one `/nix/store` file: the guest's btrfs logs `csum failed`, the observed
+//! csum is the crc32c of a 4 KiB zero page (`0x8941f998`), and whatever has that
+//! page mapped takes `SIGBUS` - a cold chromium start does. It follows neither
+//! kernel in play (6.12.x and 7.2/7.3 hardened), nor the read pool, `O_DIRECT`,
+//! the balloon, the mkfs recipe, device order or host reclaim; the image and the
+//! device's own bytes verify clean in the same boot that loses a window.
 //!
-//! Default-on was also blocked on a
-//! kernel requirement, measured in the guest (`7.2.10-hardened1`): kernel
-//! overlayfs refused the virtio-fs directory this design keeps as upper/work -
-//! `overlayfs: upper fs does not support RENAME_WHITEOUT.`, `upper fs missing
-//! required features.`, mount exits 32 - because the share did not forward
-//! `RENAME_WHITEOUT`. The fork forwards it from v2.0.0-cang.18, so the guest now
-//! composes a `/nix` overlay with the block image as its lower and the shared
-//! host directory as its upper (note 57: `find /nix/store` 206-215 ms against
-//! 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s).
-//!
-//! The guest half lives in the *image's* `cang-guest-init`, so the host reads
-//! which binary will run before paying for an image: one built before the guest
-//! half (0.17.2 and earlier) ignores every `CANG_NIX_LOWER_*` variable, and
-//! building a 12 GB disk it will never mount would leave the guest silently on
-//! the host-composed overlay.
+//! A *second*, deterministic variant is fixed here: two launches sharing one
+//! `[state] location` where the second rebuilds the image replaced the file a
+//! live VM had attached, and that VM then read blocks belonging to the other
+//! image (measured 2 of 2, and it is what makes concurrent smoke arms corrupt
+//! each other). Launches now hold the image shared for the life of the VM and a
+//! rebuild needs it exclusively (see [`ImageLock`]), so that variant cannot
+//! happen. It does not explain the intermittent one, which is why the default
+//! stays on the host-composed overlay until it is.
 
 use anyhow::{Context, Result, anyhow, bail};
 use std::ffi::OsStr;
@@ -93,6 +84,73 @@ const STATE_IDENTITY_KEY: &str = "identity";
 const STATE_STORE_PATHS_KEY: &str = "store_paths";
 const STATE_BUILT_AT_KEY: &str = "built_at";
 
+/// The launch's hold on one lower image, released when the launch ends.
+///
+/// A rebuild renames a fresh image over the old name, and the two sides of that
+/// only stay consistent while nobody is reading the file it replaces: with two
+/// launches sharing one state root - two smoke arms, two agent sessions, a
+/// benchmark beside a manual run - the second launch's rebuild ran while the
+/// first VM had the image attached, and the guest's btrfs then read blocks that
+/// belonged to the other image (`csum failed`, `SIGBUS` on page-in, chromium
+/// dying before it can log). Every launch therefore holds the image *shared* for
+/// as long as the VM can read it, and only a rebuild takes it *exclusive*.
+#[derive(Clone)]
+pub(crate) struct ImageLock {
+    file: std::sync::Arc<std::fs::File>,
+}
+
+impl ImageLock {
+    fn acquire(path: &Path, exclusive: bool) -> Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .with_context(|| format!("failed to open the /nix lower lock '{}'", path.display()))?;
+        let operation = if exclusive {
+            libc::LOCK_EX
+        } else {
+            libc::LOCK_SH
+        } | libc::LOCK_NB;
+        // SAFETY: `flock` takes a valid fd and a lock operation; a failure is
+        // reported by the return value, not by memory.
+        let rc = unsafe { libc::flock(std::os::unix::io::AsRawFd::as_raw_fd(&file), operation) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                bail!(
+                    "another cang launch is using the /nix lower image '{}' (state root '{}'): concurrent launches must not rebuild an image a live VM is reading - give each one its own [state] location",
+                    path.display(),
+                    path.parent()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default()
+                );
+            }
+            return Err(err).with_context(|| {
+                format!("failed to lock the /nix lower image '{}'", path.display())
+            });
+        }
+        Ok(Self {
+            file: std::sync::Arc::new(file),
+        })
+    }
+}
+
+impl std::fmt::Debug for ImageLock {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ImageLock")
+    }
+}
+
+impl PartialEq for ImageLock {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.file, &other.file)
+    }
+}
+
+impl Eq for ImageLock {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NixLowerDiskStatus {
     Built,
@@ -115,6 +173,8 @@ pub(crate) struct NixLowerDisk {
 pub(crate) struct NixLowerBlock {
     disk: NixLowerDisk,
     generation_root: PathBuf,
+    /// Kept for the whole launch: the image cannot be rebuilt underneath it.
+    _lock: ImageLock,
 }
 
 impl NixLowerBlock {
@@ -347,12 +407,9 @@ fn prepare_block_with(
 /// The configuration it enables is the fast one from note 57 - `find /nix/store`
 /// 206-215 ms against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s - and it
 /// became possible once the fork forwarded `RENAME_WHITEOUT` (v2.0.0-cang.18).
-/// It is not the default because it loses guest-side read data (see the module
-/// doc): until that is fixed, the shipped default stays on the host-composed
-/// overlay.
 ///
-/// Any failure still falls back to that overlay, and a launch never fails
-/// because of this switch.
+/// Any failure still falls back to the host-composed overlay, and a launch never
+/// fails because of this switch.
 fn block_mode_requested() -> bool {
     matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("1"))
 }
@@ -378,7 +435,7 @@ pub(super) fn ensure_with_builder(
         return Ok(None);
     }
     let identity = identity_of(&names);
-    let disk = ensure_image_with_builder(&store_dir, &identity, names.len(), builder)?;
+    let (disk, lock) = ensure_image_with_builder(&store_dir, &identity, names.len(), builder)?;
 
     let generation_root = intent
         .upperdir
@@ -401,6 +458,7 @@ pub(super) fn ensure_with_builder(
     Ok(Some(NixLowerBlock {
         disk,
         generation_root,
+        _lock: lock,
     }))
 }
 
@@ -449,22 +507,34 @@ pub(super) fn ensure_image_with_builder(
     identity: &str,
     store_paths: usize,
     builder: &impl NixLowerImageBuilder,
-) -> Result<NixLowerDisk> {
+) -> Result<(NixLowerDisk, ImageLock)> {
     let dir = nix_lower_dir(store_dir)?;
     fs::create_dir_all(&dir).with_context(|| format!("failed to create '{}'", dir.display()))?;
     let image = dir.join(format!("{identity}.{RAW_SUFFIX}"));
     let state = dir.join(format!("{identity}.{STATE_SUFFIX}"));
+    let lock_path = dir.join(format!("{identity}.{RAW_SUFFIX}.lock"));
 
+    // Shared when the image is already usable, so any number of launches can
+    // attach it at once; exclusive around a rebuild, so a rebuild never runs
+    // while another launch is reading the file it replaces.
     if complete(&image, &state, identity) {
-        return Ok(NixLowerDisk {
-            path: image,
-            id: ID.to_owned(),
-            label: LABEL.to_owned(),
-            identity: identity.to_owned(),
-            store_paths,
-            status: NixLowerDiskStatus::Reused,
-        });
+        let lock = ImageLock::acquire(&lock_path, false)?;
+        if complete(&image, &state, identity) {
+            return Ok((
+                NixLowerDisk {
+                    path: image,
+                    id: ID.to_owned(),
+                    label: LABEL.to_owned(),
+                    identity: identity.to_owned(),
+                    store_paths,
+                    status: NixLowerDiskStatus::Reused,
+                },
+                lock,
+            ));
+        }
     }
+
+    let exclusive = ImageLock::acquire(&lock_path, true)?;
 
     let tmp = dir.join(format!("{identity}.{RAW_SUFFIX}.tmp"));
     remove_if_present(&tmp)?;
@@ -510,14 +580,19 @@ pub(super) fn ensure_image_with_builder(
         "cang built the /nix block lower image"
     );
 
-    Ok(NixLowerDisk {
-        path: image,
-        id: ID.to_owned(),
-        label: LABEL.to_owned(),
-        identity: identity.to_owned(),
-        store_paths,
-        status: NixLowerDiskStatus::Built,
-    })
+    Ok((
+        NixLowerDisk {
+            path: image,
+            id: ID.to_owned(),
+            label: LABEL.to_owned(),
+            identity: identity.to_owned(),
+            store_paths,
+            status: NixLowerDiskStatus::Built,
+        },
+        // The freshly built image stays held shared for the launch: this lock
+        // also carries the exclusive hold taken above, so it is handed over.
+        exclusive,
+    ))
 }
 
 /// `<...>/btrfs-snapshots/nix-lower`, from `<...>/btrfs-snapshots/<digest>/rootfs/nix`.
@@ -931,7 +1006,8 @@ mod tests {
         let identity = identity_of(&store_names(&store).expect("names"));
         let builder = FakeBuilder::default();
 
-        let first = ensure_image_with_builder(&store, &identity, 2, &builder).expect("first build");
+        let (first, first_lock) =
+            ensure_image_with_builder(&store, &identity, 2, &builder).expect("first build");
         assert_eq!(first.status, NixLowerDiskStatus::Built);
         assert_eq!(first.store_paths, 2);
         assert_eq!(first.id, ID);
@@ -952,9 +1028,52 @@ mod tests {
         assert_eq!(tmp, first.path.with_extension("raw.tmp"));
         assert!(!tmp.exists());
 
-        let second = ensure_image_with_builder(&store, &identity, 2, &builder).expect("reuse");
+        // The first launch's VM has exited by the time the next one starts.
+        drop(first_lock);
+        let (second, second_lock) =
+            ensure_image_with_builder(&store, &identity, 2, &builder).expect("reuse");
         assert_eq!(second.status, NixLowerDiskStatus::Reused);
         assert_eq!(builder.build_count(), 1, "a complete pair is never rebuilt");
+        assert_eq!(second_lock, second_lock);
+    }
+
+    #[test]
+    fn a_rebuild_is_refused_while_another_launch_holds_the_image() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nix_dir = cache_entry(&temp, &["aaaa-one"]);
+        let store = nix_dir.join("store");
+        let identity = identity_of(&store_names(&store).expect("names"));
+        let builder = FakeBuilder::default();
+        let lock_path = temp
+            .path()
+            .join("btrfs-snapshots")
+            .join(DIR_NAME)
+            .join(format!("{identity}.raw.lock"));
+        fs::create_dir_all(lock_path.parent().expect("parent")).expect("nix-lower dir");
+
+        // A live launch: it holds the image for as long as its VM can read it.
+        let held = ImageLock::acquire(&lock_path, true).expect("hold the image");
+
+        let err = ensure_image_with_builder(&store, &identity, 1, &builder)
+            .map(|_| ())
+            .expect_err("a rebuild under a live launch must be refused");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("another cang launch is using the /nix lower image"),
+            "{message}"
+        );
+        assert_eq!(
+            builder.build_count(),
+            0,
+            "the refused launch builds nothing"
+        );
+
+        // With the launch gone the image is built normally.
+        drop(held);
+        let (built, _lock) =
+            ensure_image_with_builder(&store, &identity, 1, &builder).expect("build after release");
+        assert_eq!(built.status, NixLowerDiskStatus::Built);
+        assert_eq!(builder.build_count(), 1);
     }
 
     #[test]
@@ -973,7 +1092,8 @@ mod tests {
             .join(format!("{identity}.state"));
         fs::write(&state, format!("{STATE_IDENTITY_KEY}=other\n")).expect("stale state");
 
-        let rebuilt = ensure_image_with_builder(&store, &identity, 1, &builder).expect("rebuild");
+        let (rebuilt, _rebuilt_lock) =
+            ensure_image_with_builder(&store, &identity, 1, &builder).expect("rebuild");
         assert_eq!(rebuilt.status, NixLowerDiskStatus::Built);
         assert_eq!(builder.build_count(), 2);
         assert!(
@@ -1067,9 +1187,15 @@ mod tests {
         assert!(block.is_none(), "a failed build must not fail the launch");
         assert_eq!(builder.build_count(), 1);
         let dir = temp.path().join("btrfs-snapshots").join(DIR_NAME);
+        let leftovers: Vec<String> = fs::read_dir(&dir)
+            .expect("nix-lower dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| !name.ends_with(".lock"))
+            .collect();
         assert!(
-            fs::read_dir(&dir).expect("nix-lower dir").next().is_none(),
-            "a failed build leaves no partial image behind"
+            leftovers.is_empty(),
+            "a failed build leaves no partial image behind, found {leftovers:?}"
         );
     }
 
@@ -1120,8 +1246,8 @@ mod tests {
         );
     }
 
-    /// Block mode is opt-in: only `CANG_NIX_LOWER_BLOCK=1` turns it on, because
-    /// the path loses guest-side read data (see the module doc).
+    /// Block mode is opt-in until the intermittent read loss is understood (see
+    /// the module doc).
     #[test]
     fn block_mode_needs_the_host_to_opt_in() {
         let _guard = ENV_LOCK.lock().expect("env test lock");
@@ -1133,10 +1259,7 @@ mod tests {
         // SAFETY: a single-threaded assertion over one process env variable,
         // serialized by ENV_LOCK.
         unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) };
-        assert!(
-            !block_mode_requested(),
-            "block mode is off by default: the guest loses read data on this path"
-        );
+        assert!(!block_mode_requested(), "block mode is off by default");
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
@@ -1235,6 +1358,7 @@ mod tests {
 
         let err =
             ensure_image_with_builder(&store, &identity, 1, &FakeBuilder::default().writes(0))
+                .map(|_| ())
                 .expect_err("an empty image must not be installed");
 
         assert!(format!("{err:#}").contains("produced no image"));
