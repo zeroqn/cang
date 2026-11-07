@@ -398,8 +398,8 @@ them.
 `zeroqn/libkrunfw` keeps one kernel line per branch, so a kernel re-base never
 has to drag a second line along:
 
-- **`cang`** is the newest kernel line (currently linux-7.2.10 + linux-hardened
-  v7.2.10-hardened1). cang's `libkrunfw-src` input and the primary
+- **`cang`** is the newest kernel line (currently linux-7.3.1 + linux-hardened
+  v7.3.1-hardened1). cang's `libkrunfw-src` input and the primary
   `libkrunfwRelease` pin follow it.
 - **`cang-lts`** is the LTS line (linux-6.12.109 + v6.12.109-hardened1). It also
   carries the fork's arm64 patches; a re-base of the newest line drops them.
@@ -414,7 +414,7 @@ for `cang-lts`.
 Pin a permanent libkrunfw release, and use it for any tagged cang release:
 
 ```bash
-nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.4
+nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.5
 nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang-lts.1
 nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang-lts.1
 ```

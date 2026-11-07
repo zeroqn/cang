@@ -261,11 +261,11 @@ in
   libkrunfwRelease = {
     owner = "zeroqn";
     repo = "libkrunfw";
-    tag = "v5.6.2-cang.4";
+    tag = "v5.6.2-cang.5";
     systems = {
       x86_64-linux = {
         asset = "libkrunfw-x86_64-kvm-lto.tgz";
-        hash = "sha256-HXGOcPCPvXcF8oiO6mdHBMnftpuTFQi5dDZ3ih57a8M=";
+        hash = "sha256-EdEU4SKaTQhX74TPOfSiKC4DUFY1x7AZthqwnEB34sA=";
       };
       aarch64-linux = {
         tag = "v5.6.2-cang-lts.1";
