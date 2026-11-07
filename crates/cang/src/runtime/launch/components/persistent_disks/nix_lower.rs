@@ -348,10 +348,10 @@ pub(crate) fn prepare_block(intent: &HostNixOverlay, guest_init: &Path) -> Optio
         tracing::warn!(
             guest_init = %guest_init.display(),
             selected_image = %intent.selected_reference,
-            "cang /nix lower: the guest-init in this launch predates block mode and would ignore the lower disk; keeping the host-composed overlay (rebuild the image with a current cang to serve /nix from the block device)"
+            "cang /nix lower: the guest-init in this launch predates either block mode or the virtio-blk request-size cap that keeps it safe; keeping the host-composed overlay (rebuild the image with a current cang to serve /nix from the block device)"
         );
         eprintln!(
-            "cang: /nix block lower skipped: '{}' predates block mode, so /nix stays the host-composed overlay",
+            "cang: /nix block lower skipped: the cang-guest-init '{}' predates block mode or its request-size cap, so /nix stays the host-composed overlay",
             guest_init.display()
         );
         return None;
@@ -362,19 +362,31 @@ pub(crate) fn prepare_block(intent: &HostNixOverlay, guest_init: &Path) -> Optio
 /// The guest half's switch, which is also the contract between the two halves.
 const GUEST_HALF_MARKER: &[u8] = b"CANG_NIX_LOWER_BLOCK";
 
-/// Whether the `cang-guest-init` that will run in this launch knows block mode.
+/// The guest half's request-size cap, which block mode now depends on.
+///
+/// Block mode first shipped opt-in, and the guest could not yet cap virtio-blk
+/// request size; on the 7.x guest kernel that cap is what keeps btrfs from
+/// building a bio whose device LBA and payload pages belong to different files
+/// (see the module doc). An image built before the cap therefore must not be
+/// served a block lower just because it knows `CANG_NIX_LOWER_BLOCK` - it would
+/// lose pages in most boots. The cap's own log line is the marker: it is a
+/// string literal in the binary, and it only exists in a guest-init that applies
+/// the cap.
+const GUEST_HALF_CAP_MARKER: &[u8] = b"capped the request size of";
+
+/// Whether the `cang-guest-init` that will run in this launch knows block mode
+/// *and* caps its virtio-blk request size.
 ///
 /// The guest composes the `/nix` overlay itself only if it parses
 /// `CANG_NIX_LOWER_BLOCK` and the four paths beside it, and a release binary
 /// keeps its string literals, so the switch's own name in the file is the
-/// guest's capability. A binary that cannot be read is not evidence of an old
-/// guest-init, so it keeps the legacy assumption (supported) rather than
-/// disabling block mode on an I/O error.
+/// guest's capability; the cap's log line is the same trick for the newer half.
+/// A binary that cannot be read is not evidence of an old guest-init, so it keeps
+/// the legacy assumption (supported) rather than disabling block mode on an I/O
+/// error.
 pub(super) fn guest_init_mounts_block_lower(guest_init: &Path) -> bool {
     match fs::read(guest_init) {
-        Ok(bytes) => bytes
-            .windows(GUEST_HALF_MARKER.len())
-            .any(|window| window == GUEST_HALF_MARKER),
+        Ok(bytes) => contains(&bytes, GUEST_HALF_MARKER) && contains(&bytes, GUEST_HALF_CAP_MARKER),
         Err(err) => {
             tracing::debug!(
                 guest_init = %guest_init.display(),
@@ -384,6 +396,12 @@ pub(super) fn guest_init_mounts_block_lower(guest_init: &Path) -> bool {
             true
         }
     }
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn prepare_block_with(
@@ -1121,9 +1139,23 @@ mod tests {
     fn the_guest_init_binary_is_what_says_block_mode_is_supported() {
         let temp = tempfile::tempdir().expect("tempdir");
         let current = temp.path().join("current-cang-guest-init");
-        fs::write(&current, b"\x7fELF image half CANG_NIX_LOWER_BLOCK=1\x00")
-            .expect("write the current guest-init stand-in");
+        fs::write(
+            &current,
+            b"\x7fELF image half CANG_NIX_LOWER_BLOCK=1 \x00cang-guest-init: capped the request size of 3 virtio-blk disk(s) to 64 KiB\x00",
+        )
+        .expect("write the current guest-init stand-in");
         assert!(guest_init_mounts_block_lower(&current));
+
+        // An image that knows block mode but predates the request-size cap must
+        // not be served a lower disk: it would lose pages in most boots on the
+        // 7.x guest kernel.
+        let uncapped = temp.path().join("uncapped-cang-guest-init");
+        fs::write(&uncapped, b"\x7fELF image half CANG_NIX_LOWER_BLOCK=1\x00")
+            .expect("write the uncapped guest-init stand-in");
+        assert!(
+            !guest_init_mounts_block_lower(&uncapped),
+            "block mode alone is not enough without the cap"
+        );
 
         let stale = temp.path().join("stale-cang-guest-init");
         fs::write(&stale, b"\x7fELF an image built before the guest half")
