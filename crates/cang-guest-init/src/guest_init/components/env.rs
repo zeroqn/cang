@@ -183,10 +183,10 @@ pub(in crate::guest_init) struct NixLowerContract {
 }
 
 impl NixLowerContract {
-    /// `CANG_NIX_LOWER_BLOCK=1` turns block mode on, and then both directories are
-    /// required: a guest mount without them would fail at boot and leave `/nix`
-    /// as the host overlay anyway, which is the behaviour the flag exists to
-    /// replace.
+    /// The host sets the lower directory pair when it attached the read-only image,
+    /// and then both are required: a guest mount without them would fail at boot
+    /// and leave `/nix` as the host overlay anyway, which is the behaviour the
+    /// disk exists to replace.
     pub(in crate::guest_init) fn from_lookup(
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<Option<Self>> {

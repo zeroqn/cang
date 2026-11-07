@@ -41,7 +41,7 @@ pub(crate) fn container_store_default_size_bytes() -> u64 {
 
 /// The read-only block lower for the guest's `/nix` overlay, or `None` when the
 /// launch keeps the host-composed overlay (no image could be built, no store to
-/// serve, or `CANG_NIX_LOWER_BLOCK=1`).
+/// serve, or `CANG_NIX_LOWER_BLOCK=0` turns it off).
 pub(crate) fn prepare_nix_lower_block(
     intent: &crate::runtime::launch::config::HostNixOverlay,
     guest_init: &Path,

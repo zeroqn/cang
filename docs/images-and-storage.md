@@ -129,35 +129,33 @@ same tree over virtio-fs.
 This is opt-in: `CANG_NIX_LOWER_BLOCK=1` in the caller's environment selects it
 for a launch, and without it `/nix` is the host-composed overlay above.
 
-It is not the default because the guest loses pages on this path. With cang's
-7.x guest kernel, an ordinary cold read of `/nix/store` files through the guest's
-overlay intermittently hands a zero page to btrfs: the guest logs
-`BTRFS warning (device vdc): csum failed ... csum 0x8941f998` (crc32c of a 4 KiB
-zero page) and any process with that page mapped takes `SIGBUS` on the page-in -
-a cold chromium start does. With one fixed read pattern (`find /nix/store -size
-+8M | head -12` then `sha256sum`) it happened in every batch measured (5/5, 4/4,
-3/3, 2/2 boots; 40+ boots); the same pattern on the 6.12 firmware blobs was clean
-4/4, so it follows the guest kernel rather than the image build.
+It is the default. It used to lose guest pages on every boot, and the reason was
+not this module: with cang's 7.x guest kernel, btrfs merges reads into
+multi-extent, multi-folio bios, and a merged bio can carry a device LBA taken from
+one extent while its payload pages belong to another. The guest then reads the
+wrong device range, the pages fail their data checksum, btrfs zeroes them and the
+reader gets `EIO`, or `SIGBUS` if the page is mapped - a cold chromium start did.
+Measured with one fixed read pattern (`find /nix/store -size +8M | head -12` then
+`sha256sum`): failing pages in most boots, on the read-only lower *and* on the
+writable btrfs disks (210 failing sectors over 12 cold 2.4 GB sweeps, 40 on the
+containers disk and 170 on the build-cache disk, with block mode off entirely).
+The 6.12 firmware never failed.
 
-The host side is not at fault. A diagnostic build that aborts the VM whenever the
-data about to be copied into guest memory carries an all-zero 4 KiB page while
-the image has data at that offset (proven live by aborting on the first read)
-never fired in a dirty boot, and the guest's own `O_DIRECT` read of the failing
-physical offset matched the host image byte for byte. Reading the same files
-straight from the read-only lower mount - or after walking that mount first - was
-clean in 6 of 6 boots, so the trigger involves the guest's overlay over the
-lower. `transparent_hugepage=never` and `init_on_free=0 init_on_alloc=0` on the
-guest cmdline changed nothing (5/5 and 4/4 dirty).
+The guest now caps every virtio-blk disk's request size at 64 KiB
+(`/sys/block/vd*/queue/max_sectors_kb`, in `cang-guest-init`), which keeps btrfs
+from building a bio that spans more than one extent: 0 failing sectors over 15
+cold sweeps at that cap against 210 over 12 without it, on both the read-only
+lower and the writable disks, at about 1.5 % on a cold 2.4 GB read - the cap
+bounds request size, not queue depth. Data checksums stay on, so a genuinely bad
+byte still surfaces as `EIO` instead of silently becoming wrong data.
 
-A separate, *deterministic* fault is fixed: two launches sharing one `[state]
+A separate, *deterministic* fault is also fixed: two launches sharing one `[state]
 location`, where the second rebuilt the image while the first one's VM had it
 attached, handed that VM blocks from the other image (2 of 2 measured). cang now
 locks the image per launch - shared for the life of the VM, exclusive for a
 rebuild - so a launch that would have to rebuild under a live VM keeps the
-host-composed overlay and says so:
-`cang: /nix block lower unavailable, using the host-composed overlay: another
-cang launch is using the /nix lower image ...`. Give concurrent launches their own
-`[state] location` and they share the image read-only instead.
+host-composed overlay and says so. Give concurrent launches their own `[state]
+location` and they share the image read-only instead.
 
 - The image is built with `mkfs.btrfs -q -L CANG_NIX_LOWER
   --rootdir=<image rootfs>/nix --reflink --shrink` inside the Buildah storage

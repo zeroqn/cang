@@ -25,28 +25,23 @@
 //! failure, a store the host cannot list) leaves the launch on the host-composed
 //! overlay, which is what the guest keeps using when the flag is absent.
 //!
-//! # Status: opt-in, because the guest kernel loses /nix pages on this path
+//! # Status: on by default, and safe because the guest caps its request size
 //!
-//! Block mode is off unless `CANG_NIX_LOWER_BLOCK=1`, because with cang's 7.x
-//! guest kernel an ordinary cold read of `/nix/store` files through the guest's
-//! overlay intermittently hands a zero page to btrfs: the guest logs
-//! `BTRFS warning ... csum failed ... csum 0x8941f998` (the crc32c of a 4 KiB
-//! zero page) and anything with that page mapped takes `SIGBUS` - a cold
-//! chromium start does. Measured on one host with a fixed read pattern
-//! (`find /nix/store -size +8M | head -12`, then `sha256sum`): 5/5, 4/4, 3/3 and
-//! 2/2 boots lost a window across four batches, 40+ boots in all. The same
-//! pattern with the 6.12 firmware is clean 4/4, so the loss follows the guest
-//! kernel, not this module.
+//! This module used to ship opt-in because an ordinary cold read of `/nix/store`
+//! lost a 20-40 KiB window of one file in most boots (csum of a zero page in the
+//! guest's btrfs log, `SIGBUS` for a mapping over those pages). The cause was not
+//! this module: with the 7.x guest kernel btrfs merges reads into multi-extent,
+//! multi-folio bios and a merged bio can carry a device LBA from one extent with
+//! payload pages from another, so the guest reads the wrong device range. It
+//! happened on the writable btrfs disks too, with block mode off.
 //!
-//! The host side is exonerated: a diagnostic build that aborts the VM whenever
-//! the data about to be copied into guest memory carries an all-zero 4 KiB page
-//! while the image has data at that offset (proven live by aborting on the first
-//! read) never fired in any dirty boot, and the guest's own `O_DIRECT` read of
-//! the failing physical offset matched the image byte for byte. Reading the same
-//! files straight from the read-only lower mount, or after walking that mount
-//! first, was clean 6/6 - so the trigger involves the guest overlay over the
-//! lower, which is where the next investigation belongs (see
-//! docs/images-and-storage.md and the fork's libkrunfw kernel).
+//! `cang-guest-init` now caps every virtio-blk disk at `max_sectors_kb=64`, which
+//! keeps btrfs from building such a bio: 0 failing sectors over 15 cold sweeps
+//! against 210 over 12 without the cap, at ~1.5 % on a cold 2.4 GB read. The host
+//! side was never at fault - a diagnostic build that aborts the VM when the data
+//! about to be copied into guest memory holds an all-zero page while the image has
+//! data there never fired, and the guest's own `O_DIRECT` read of the failing
+//! physical offset equals the image.
 //!
 //! A *second*, deterministic fault used to live here and is fixed: two launches
 //! sharing one `[state] location` where the second rebuilt the image replaced
@@ -412,16 +407,22 @@ fn prepare_block_with(
     }
 }
 
-/// Block mode is opt-in: `CANG_NIX_LOWER_BLOCK=1` turns it on.
+/// Block mode is on by default; `CANG_NIX_LOWER_BLOCK=0` turns it off.
 ///
 /// The configuration it enables is the fast one from note 57 - `find /nix/store`
 /// 206-215 ms against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s - and it
 /// became possible once the fork forwarded `RENAME_WHITEOUT` (v2.0.0-cang.18).
 ///
+/// It is safe to default because the guest kernel's read bug that used to lose
+/// these pages is capped off in the guest (see the module doc and
+/// `cang-guest-init`'s `disk::queue`): with `max_sectors_kb=64` on every
+/// virtio-blk disk, six cold sweeps of 40 files each over an engaged block lower
+/// lost no page where the same pattern failed in most boots before.
+///
 /// Any failure still falls back to the host-composed overlay, and a launch never
-/// fails because of this switch.
+/// fails because of this switch; the fallback names its reason on stderr.
 fn block_mode_requested() -> bool {
-    matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("1"))
+    !matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("0"))
 }
 
 pub(super) fn ensure_with_builder(
@@ -1256,10 +1257,9 @@ mod tests {
         );
     }
 
-    /// Block mode is opt-in until the intermittent read loss is understood (see
-    /// the module doc).
+    /// Block mode is on unless the host opts out (see the module doc).
     #[test]
-    fn block_mode_needs_the_host_to_opt_in() {
+    fn block_mode_is_on_unless_the_host_opts_out() {
         let _guard = ENV_LOCK.lock().expect("env test lock");
         let temp = tempfile::tempdir().expect("tempdir");
         let nix_dir = cache_entry(&temp, &["aaaa-one"]);
@@ -1269,15 +1269,15 @@ mod tests {
         // SAFETY: a single-threaded assertion over one process env variable,
         // serialized by ENV_LOCK.
         unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) };
-        assert!(!block_mode_requested(), "block mode is off by default");
+        assert!(block_mode_requested(), "block mode is on by default");
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
-        assert!(block_mode_requested(), "1 opts in");
+        assert!(block_mode_requested(), "1 keeps it on");
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "0") };
-        assert!(!block_mode_requested(), "0 keeps it off");
+        assert!(!block_mode_requested(), "0 opts out");
 
         // SAFETY: restore whatever the harness had.
         unsafe {
