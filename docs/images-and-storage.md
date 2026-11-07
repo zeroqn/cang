@@ -129,24 +129,32 @@ same tree over virtio-fs.
 This is opt-in: `CANG_NIX_LOWER_BLOCK=1` in the caller's environment selects it
 for a launch, and without it `/nix` is the host-composed overlay above.
 
-It is not the default because it still loses guest-side read data
-intermittently. Wipe the state root so the image is built, and roughly one cold
-boot in five loses a 20-40 KiB window of one `/nix/store` file: the guest's btrfs
-logs `csum failed`, the observed csum is the crc32c of a 4 KiB zero page, and a
-process with such a page mapped takes `SIGBUS` on the page-in (a cold chromium
-start does). It is not tied to a guest kernel (6.12.x and the 7.2/7.3 hardened
-ones both do it), nor to the read pool, `O_DIRECT`, the balloon, the mkfs recipe,
-device order or host reclaim, and in the boot that loses a window the host image
-passes `btrfs check --check-data-csum` while the guest's whole-device hash equals
-the host `.raw` hash.
+It is not the default because the guest loses pages on this path. With cang's
+7.x guest kernel, an ordinary cold read of `/nix/store` files through the guest's
+overlay intermittently hands a zero page to btrfs: the guest logs
+`BTRFS warning (device vdc): csum failed ... csum 0x8941f998` (crc32c of a 4 KiB
+zero page) and any process with that page mapped takes `SIGBUS` on the page-in -
+a cold chromium start does. With one fixed read pattern (`find /nix/store -size
++8M | head -12` then `sha256sum`) it happened in every batch measured (5/5, 4/4,
+3/3, 2/2 boots; 40+ boots); the same pattern on the 6.12 firmware blobs was clean
+4/4, so it follows the guest kernel rather than the image build.
 
-A separate, *deterministic* variant is fixed: two launches sharing one `[state]
-location`, where the second rebuilds the image while the first one's VM has it
-attached, hand that VM blocks from the other image (2 of 2 measured; this is what
-makes concurrent smoke arms corrupt each other even though each boot is clean on
-its own). cang now locks the image per launch - shared for the life of the VM,
-exclusive for a rebuild - so a launch that would have to rebuild under a live VM
-keeps the host-composed overlay and says so:
+The host side is not at fault. A diagnostic build that aborts the VM whenever the
+data about to be copied into guest memory carries an all-zero 4 KiB page while
+the image has data at that offset (proven live by aborting on the first read)
+never fired in a dirty boot, and the guest's own `O_DIRECT` read of the failing
+physical offset matched the host image byte for byte. Reading the same files
+straight from the read-only lower mount - or after walking that mount first - was
+clean in 6 of 6 boots, so the trigger involves the guest's overlay over the
+lower. `transparent_hugepage=never` and `init_on_free=0 init_on_alloc=0` on the
+guest cmdline changed nothing (5/5 and 4/4 dirty).
+
+A separate, *deterministic* fault is fixed: two launches sharing one `[state]
+location`, where the second rebuilt the image while the first one's VM had it
+attached, handed that VM blocks from the other image (2 of 2 measured). cang now
+locks the image per launch - shared for the life of the VM, exclusive for a
+rebuild - so a launch that would have to rebuild under a live VM keeps the
+host-composed overlay and says so:
 `cang: /nix block lower unavailable, using the host-composed overlay: another
 cang launch is using the /nix lower image ...`. Give concurrent launches their own
 `[state] location` and they share the image read-only instead.

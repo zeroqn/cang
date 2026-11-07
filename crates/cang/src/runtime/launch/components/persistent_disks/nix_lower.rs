@@ -25,25 +25,35 @@
 //! failure, a store the host cannot list) leaves the launch on the host-composed
 //! overlay, which is what the guest keeps using when the flag is absent.
 //!
-//! # Status: opt-in until the intermittent read loss is understood
+//! # Status: opt-in, because the guest kernel loses /nix pages on this path
 //!
-//! Block mode is off unless `CANG_NIX_LOWER_BLOCK=1`. On a cold boot (state
-//! wiped, so the image is built) about one boot in five loses a 20-40 KiB window
-//! of one `/nix/store` file: the guest's btrfs logs `csum failed`, the observed
-//! csum is the crc32c of a 4 KiB zero page (`0x8941f998`), and whatever has that
-//! page mapped takes `SIGBUS` - a cold chromium start does. It follows neither
-//! kernel in play (6.12.x and 7.2/7.3 hardened), nor the read pool, `O_DIRECT`,
-//! the balloon, the mkfs recipe, device order or host reclaim; the image and the
-//! device's own bytes verify clean in the same boot that loses a window.
+//! Block mode is off unless `CANG_NIX_LOWER_BLOCK=1`, because with cang's 7.x
+//! guest kernel an ordinary cold read of `/nix/store` files through the guest's
+//! overlay intermittently hands a zero page to btrfs: the guest logs
+//! `BTRFS warning ... csum failed ... csum 0x8941f998` (the crc32c of a 4 KiB
+//! zero page) and anything with that page mapped takes `SIGBUS` - a cold
+//! chromium start does. Measured on one host with a fixed read pattern
+//! (`find /nix/store -size +8M | head -12`, then `sha256sum`): 5/5, 4/4, 3/3 and
+//! 2/2 boots lost a window across four batches, 40+ boots in all. The same
+//! pattern with the 6.12 firmware is clean 4/4, so the loss follows the guest
+//! kernel, not this module.
 //!
-//! A *second*, deterministic variant is fixed here: two launches sharing one
-//! `[state] location` where the second rebuilds the image replaced the file a
-//! live VM had attached, and that VM then read blocks belonging to the other
-//! image (measured 2 of 2, and it is what makes concurrent smoke arms corrupt
-//! each other). Launches now hold the image shared for the life of the VM and a
-//! rebuild needs it exclusively (see [`ImageLock`]), so that variant cannot
-//! happen. It does not explain the intermittent one, which is why the default
-//! stays on the host-composed overlay until it is.
+//! The host side is exonerated: a diagnostic build that aborts the VM whenever
+//! the data about to be copied into guest memory carries an all-zero 4 KiB page
+//! while the image has data at that offset (proven live by aborting on the first
+//! read) never fired in any dirty boot, and the guest's own `O_DIRECT` read of
+//! the failing physical offset matched the image byte for byte. Reading the same
+//! files straight from the read-only lower mount, or after walking that mount
+//! first, was clean 6/6 - so the trigger involves the guest overlay over the
+//! lower, which is where the next investigation belongs (see
+//! docs/images-and-storage.md and the fork's libkrunfw kernel).
+//!
+//! A *second*, deterministic fault used to live here and is fixed: two launches
+//! sharing one `[state] location` where the second rebuilt the image replaced
+//! the file a live VM had attached, and that VM read blocks belonging to the
+//! other image (2 of 2 measured; arbitrary csum values). Launches now hold the
+//! image shared for the life of the VM and a rebuild needs it exclusively (see
+//! [`ImageLock`]).
 
 use anyhow::{Context, Result, anyhow, bail};
 use std::ffi::OsStr;
