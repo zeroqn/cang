@@ -274,4 +274,5 @@ pub(in crate::guest_init) struct ResizeCommand {
 pub(in crate::guest_init) enum ResizeTarget {
     Nix,
     Containers,
+    Build,
 }

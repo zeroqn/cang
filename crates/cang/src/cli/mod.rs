@@ -96,6 +96,7 @@ impl PtyOptions {
   cang images remove ghcr.io/example/cang:d
   cang container-store resize --size 128G
   cang container-store reset --force
+  cang build-disk resize --size 100G
   cang ps
   cang attach <task-id-or-handle-selector>
   cang attach --force <task-id-or-handle-selector>
@@ -362,6 +363,15 @@ pub(crate) enum CliCommand {
     },
 
     #[command(
+        name = "build-disk",
+        about = "Maintain cang's workspace-scoped raw build disk"
+    )]
+    BuildDisk {
+        #[command(subcommand)]
+        command: BuildDiskCommand,
+    },
+
+    #[command(
         name = "decode-launch-conf",
         about = "Decode a hex-encoded cang launch.conf for debugging"
     )]
@@ -462,6 +472,22 @@ pub(crate) enum ContainerStoreCommand {
 }
 
 #[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub(crate) enum BuildDiskCommand {
+    #[command(
+        name = "resize",
+        about = "Grow the raw build disk and guest btrfs filesystem"
+    )]
+    Resize {
+        #[arg(
+            long = "size",
+            value_name = "SIZE",
+            help = "New grow-only build disk size, for example 100G"
+        )]
+        size: String,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
 pub(crate) enum ImagesCommand {
     #[command(
         name = "sync",
@@ -506,7 +532,11 @@ pub(crate) enum CliAction {
     },
     ContainerStore {
         command: ContainerStoreCommand,
-        options: ContainerStoreOptions,
+        options: DiskMaintenanceOptions,
+    },
+    BuildDisk {
+        command: BuildDiskCommand,
+        options: DiskMaintenanceOptions,
     },
     Images {
         command: ImagesCommand,
@@ -545,7 +575,11 @@ impl Cli {
             match command {
                 CliCommand::ContainerStore { command } => CliAction::ContainerStore {
                     command,
-                    options: self.container_store_options(),
+                    options: self.disk_maintenance_options(),
+                },
+                CliCommand::BuildDisk { command } => CliAction::BuildDisk {
+                    command,
+                    options: self.disk_maintenance_options(),
                 },
                 CliCommand::DecodeLaunchConf { path } => CliAction::DecodeLaunchConf { path },
                 CliCommand::Images { command } => CliAction::Images {
@@ -583,8 +617,8 @@ impl Cli {
         }
     }
 
-    fn container_store_options(&self) -> ContainerStoreOptions {
-        ContainerStoreOptions {
+    fn disk_maintenance_options(&self) -> DiskMaintenanceOptions {
+        DiskMaintenanceOptions {
             image: self.image.clone(),
             pull_latest: self.pull_latest,
             guest_init: self.guest_init.clone(),
@@ -645,8 +679,10 @@ impl Cli {
     }
 }
 
+/// Options a raw-disk maintenance VM needs: an image to boot, an optional
+/// `cang-guest-init` override, the maintenance VM's memory, and logging.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ContainerStoreOptions {
+pub(crate) struct DiskMaintenanceOptions {
     pub(crate) image: Option<String>,
     pub(crate) pull_latest: bool,
     pub(crate) guest_init: Option<PathBuf>,
@@ -2378,6 +2414,26 @@ fn container_store_reset_accepts_missing_force_for_runtime_error() {
         ),
         other => panic!("expected container-store reset action, got {other:?}"),
     }
+}
+
+#[test]
+fn parses_build_disk_resize_and_requires_a_size() {
+    let resize = Cli::try_parse_from(["cang", "build-disk", "resize", "--size", "100G"])
+        .expect("build-disk resize should parse");
+
+    match resize.into_action() {
+        crate::cli::CliAction::BuildDisk { command, .. } => assert_eq!(
+            command,
+            crate::cli::BuildDiskCommand::Resize {
+                size: "100G".to_owned()
+            }
+        ),
+        other => panic!("expected build-disk resize action, got {other:?}"),
+    }
+    assert!(
+        Cli::try_parse_from(["cang", "build-disk", "resize"]).is_err(),
+        "a build-disk resize without --size must not parse"
+    );
 }
 
 #[test]

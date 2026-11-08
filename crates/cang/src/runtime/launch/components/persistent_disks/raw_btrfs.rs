@@ -130,9 +130,58 @@ pub(crate) fn grow_existing_with_runner(
         );
     }
     validate_existing(&path, spec, runner)?;
+    extend_file(&path, target_size_bytes, spec)?;
+
+    Ok(RawBtrfsDisk {
+        size_bytes: target_size_bytes,
+        ..disk(path, spec, RawBtrfsDiskStatus::Reused)
+    })
+}
+
+/// Grow an existing disk to at least `target_size_bytes`, accepting an image that
+/// is already at the target.
+///
+/// The equal case is the retry path: a resize run that grew the host image and
+/// then failed in the guest leaves exactly that state, and rerunning the command
+/// has to reach the guest again instead of demanding a bigger size.
+pub(crate) fn grow_existing_at_least_with_runner(
+    state_root: &Path,
+    spec: &RawDiskSpec,
+    target_size_bytes: u64,
+    runner: &impl RawImageCommandRunner,
+) -> Result<RawBtrfsDisk> {
+    let path = raw_disk_path(state_root, spec);
+    let current_len = inspect_existing_regular_file(&path, spec)?.ok_or_else(|| {
+        anyhow!(
+            "{} '{}' does not exist; launch cang once in this workspace so it is created, then retry",
+            spec.diagnostic_name,
+            path.display()
+        )
+    })?;
+    if target_size_bytes < current_len {
+        bail!(
+            "requested {} size {} bytes must not be smaller than its current size {} bytes for '{}'",
+            spec.diagnostic_name,
+            target_size_bytes,
+            current_len,
+            path.display()
+        );
+    }
+    validate_existing(&path, spec, runner)?;
+    if target_size_bytes > current_len {
+        extend_file(&path, target_size_bytes, spec)?;
+    }
+
+    Ok(RawBtrfsDisk {
+        size_bytes: target_size_bytes,
+        ..disk(path, spec, RawBtrfsDiskStatus::Reused)
+    })
+}
+
+fn extend_file(path: &Path, target_size_bytes: u64, spec: &RawDiskSpec) -> Result<()> {
     File::options()
         .write(true)
-        .open(&path)
+        .open(path)
         .with_context(|| format!("failed to open '{}' for resize", path.display()))?
         .set_len(target_size_bytes)
         .with_context(|| {
@@ -142,12 +191,7 @@ pub(crate) fn grow_existing_with_runner(
                 path.display(),
                 target_size_bytes
             )
-        })?;
-
-    Ok(RawBtrfsDisk {
-        size_bytes: target_size_bytes,
-        ..disk(path, spec, RawBtrfsDiskStatus::Reused)
-    })
+        })
 }
 
 pub(crate) fn recreate_with_runner(

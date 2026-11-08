@@ -62,6 +62,20 @@ pub(super) fn prepare_with_runner(
         .context("failed to prepare cang persistent build disk")
 }
 
+/// Grow the existing build disk to `target_size_bytes`, which must not be below
+/// the disk's current size.
+///
+/// The guest expands the btrfs filesystem to the new device size when it mounts
+/// the disk on the next task, so the host only extends the sparse image here.
+pub(crate) fn grow_with_runner(
+    state_root: &Path,
+    target_size_bytes: u64,
+    runner: &impl raw_btrfs::RawImageCommandRunner,
+) -> Result<RawBtrfsDisk> {
+    raw_btrfs::grow_existing_at_least_with_runner(state_root, &SPEC, target_size_bytes, runner)
+        .context("failed to grow cang persistent build disk")
+}
+
 pub(super) fn attachment(disk: &RawBtrfsDisk) -> DiskAttachment {
     DiskAttachment {
         id: disk.id.clone(),
@@ -124,6 +138,86 @@ mod tests {
                 "{value} must be under {MOUNT_POINT}"
             );
         }
+    }
+
+    fn sized_file(dir: &Path, name: &str, len: u64) {
+        let file = std::fs::File::create(dir.join(name)).expect("disk file");
+        file.set_len(len).expect("disk size");
+    }
+
+    /// The resize command's whole purpose: a 96 GiB image grows to the requested
+    /// size without touching the filesystem on the host.
+    #[test]
+    fn grow_reaches_a_larger_target_without_reformatting() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        sized_file(temp.path(), FILE_NAME, SIZE_BYTES);
+        let runner = FakeRunner::with_probe("btrfs");
+        let target = 100 * 1024 * 1024 * 1024;
+
+        let disk = grow_with_runner(temp.path(), target, &runner).expect("grow");
+
+        assert_eq!(disk.size_bytes, target);
+        assert_eq!(disk.status, raw_btrfs::RawBtrfsDiskStatus::Reused);
+        assert_eq!(
+            std::fs::metadata(temp.path().join(FILE_NAME))
+                .expect("metadata")
+                .len(),
+            target
+        );
+        assert_eq!(runner.mkfs_call_count(), 0);
+    }
+
+    /// A resize whose guest half failed leaves the host image already at the
+    /// target; rerunning with the same size must get back to the guest.
+    #[test]
+    fn grow_accepts_an_image_already_at_the_target() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let target = 100 * 1024 * 1024 * 1024;
+        sized_file(temp.path(), FILE_NAME, target);
+        let runner = FakeRunner::with_probe("btrfs");
+
+        let disk = grow_with_runner(temp.path(), target, &runner).expect("retry grow");
+
+        assert_eq!(disk.size_bytes, target);
+        assert_eq!(runner.mkfs_call_count(), 0);
+    }
+
+    /// Grow-only: a smaller request must not truncate a disk that holds a warm
+    /// `target/` and registry.
+    #[test]
+    fn grow_rejects_a_smaller_target() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        sized_file(temp.path(), FILE_NAME, SIZE_BYTES);
+        let runner = FakeRunner::with_probe("btrfs");
+
+        let err = grow_with_runner(temp.path(), SIZE_BYTES - 1024, &runner)
+            .expect_err("shrink should fail");
+
+        assert!(
+            format!("{err:#}").contains("must not be smaller"),
+            "{err:#}"
+        );
+        assert_eq!(
+            std::fs::metadata(temp.path().join(FILE_NAME))
+                .expect("metadata")
+                .len(),
+            SIZE_BYTES
+        );
+    }
+
+    /// The resize command grows an existing disk; it does not create one, because
+    /// a launch owns creation and its btrfs format.
+    #[test]
+    fn grow_reports_a_missing_disk_instead_of_creating_one() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let runner = FakeRunner::default();
+
+        let err = grow_with_runner(temp.path(), SIZE_BYTES, &runner)
+            .expect_err("missing disk should fail");
+
+        assert!(format!("{err:#}").contains("does not exist"), "{err:#}");
+        assert!(!temp.path().join(FILE_NAME).exists());
+        assert_eq!(runner.mkfs_call_count(), 0);
     }
 
     #[test]

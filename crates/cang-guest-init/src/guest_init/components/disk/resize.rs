@@ -56,6 +56,10 @@ impl ResizeOps for SystemResizeOps {
                 &env.containers_disk_label,
                 &env.containers_disk_id,
             ),
+            ResizeTarget::Build => crate::guest_init::components::disk::build::find_disk(
+                &env.build_disk_label,
+                &env.build_disk_id,
+            ),
         }
     }
 
@@ -90,6 +94,7 @@ impl ResizeTarget {
         match self {
             Self::Nix => "/nix",
             Self::Containers => "container storage",
+            Self::Build => "build disk cache",
         }
     }
 
@@ -97,6 +102,7 @@ impl ResizeTarget {
         match self {
             Self::Nix => Path::new("/run/cang/resize-nix"),
             Self::Containers => Path::new("/run/cang/resize-containers"),
+            Self::Build => Path::new("/run/cang/resize-build"),
         }
     }
 }
@@ -144,6 +150,26 @@ mod tests {
         );
     }
 
+    /// The build disk resizes through its own mount point, found by the id and
+    /// label the host sends on the maintenance VM.
+    #[test]
+    fn resize_mounts_the_build_disk_at_the_build_mount_point() {
+        let ops = FakeResizeOps::new(false);
+        run_with_ops(ResizeTarget::Build, &test_env(), &ops).unwrap();
+
+        assert_eq!(
+            ops.operations.borrow().as_slice(),
+            [
+                "find:build",
+                "mkdir:/run/cang/resize-build",
+                "findmnt:/run/cang/resize-build",
+                "mount:/dev/vdc:/run/cang/resize-build",
+                "resize:/run/cang/resize-build",
+                "umount:/run/cang/resize-build",
+            ]
+        );
+    }
+
     struct FakeResizeOps {
         mounted: bool,
         operations: RefCell<Vec<String>>,
@@ -172,6 +198,10 @@ mod tests {
                 ResizeTarget::Containers => {
                     self.record("find:containers");
                     Ok(PathBuf::from("/dev/vdb"))
+                }
+                ResizeTarget::Build => {
+                    self.record("find:build");
+                    Ok(PathBuf::from("/dev/vdc"))
                 }
             }
         }

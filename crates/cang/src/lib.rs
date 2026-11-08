@@ -67,6 +67,22 @@ pub fn entrypoint() -> ExitCode {
                 }
             }
         }
+        CliAction::BuildDisk { command, options } => {
+            if let Err(err) = logging::init_tracing(&options.log_settings) {
+                eprintln!("cang: {err:#}");
+                return ExitCode::from(1);
+            }
+            match runtime::run_build_disk_command(command, options) {
+                Ok(output) => {
+                    print!("{output}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("cang: {err:#}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         CliAction::DecodeLaunchConf { path } => {
             match runtime::launch::config::LaunchConfig::decode_file_for_debug(&path) {
                 Ok(decoded) => {

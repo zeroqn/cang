@@ -204,6 +204,39 @@ For a manual smoke test on a host with Buildah, btrfs-progs, and libkrun
 available, run `cang --container-store raw-disk` once, then run the `resize`
 and `reset --force` commands above.
 
+## Build-disk maintenance
+
+```bash
+./result/bin/cang build-disk resize --size 100G
+```
+
+The build disk is the workspace's `cang-build.raw` btrfs image, created by the
+first launch at 96 GiB. The guest mounts it at `/home/dev/.cache/cang-build` and
+cargo puts both working sets there, so a warm `target/` and registry survive
+across tasks:
+
+- `CARGO_TARGET_DIR=/home/dev/.cache/cang-build/target`
+- `CARGO_HOME=/home/dev/.cache/cang-build/cargo`
+
+`resize` grows that image when a workspace's build output outgrows it. `--size`
+accepts the same bytes or binary suffixes as the container-store command (`K`,
+`M`, `G`, `T`, `KiB`, `MiB`, `GiB`, `TiB`), must not be smaller than the image's
+current size, and an equal size is accepted: a run that grew the host file and
+then failed in the guest is retried by rerunning the same command. It grows the
+host sparse file first, then starts the same narrow one-shot direct-libkrun
+maintenance VM and runs `cang-guest-init internal resize build`, which mounts the
+image and expands its btrfs filesystem to the new device size. The disk must
+already exist, so launch `cang` once in the workspace before the first resize.
+
+The extra space appears in the guest only after the guest's btrfs filesystem has
+been expanded; if that guest step fails, the host image stays grown and the
+error names the rerun command.
+
+Like the container-store command, `resize` prepares the maintenance VM's root on
+the host, and that step bind-mounts and so needs `CAP_SYS_ADMIN`: run it as root
+or inside a rootless user namespace, for example
+`podman unshare -- cang build-disk resize --size 100G`.
+
 ## Guest-init override
 
 For cang guest-side debugging, `--guest-init <host-binary>` validates the

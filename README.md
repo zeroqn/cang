@@ -404,6 +404,7 @@ Run/help:
 ./result/bin/cang kill <task-id-or-handle-selector>
 ./result/bin/cang container-store resize --size 128G
 ./result/bin/cang container-store reset --force
+./result/bin/cang build-disk resize --size 100G
 ```
 
 `cang exec`, the session lifecycle, and the rest of the day-to-day reference
@@ -411,7 +412,7 @@ live in the topic docs:
 
 - [Usage reference](docs/usage.md) — `cang exec`, detach/attach sessions,
   task control (`ps`/`kill`), volumes, the root shell handoff, container-store
-  maintenance, and guest-init overrides.
+  and build-disk maintenance, and guest-init overrides.
 - [Graphics and audio](docs/graphics-audio.md) — Pulse TCP audio, remote
   Waypipe, GPU, and Wayland passthrough.
 - [Security](docs/security.md) — host Landlock, host seccomp policies, guest

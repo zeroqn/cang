@@ -39,6 +39,18 @@ pub(crate) fn container_store_default_size_bytes() -> u64 {
     containers::default_size_bytes()
 }
 
+pub(crate) fn grow_build_disk(state_root: &Path, target_size_bytes: u64) -> Result<RawBtrfsDisk> {
+    build::grow_with_runner(state_root, target_size_bytes, &HostRawImageCommandRunner)
+}
+
+pub(crate) fn build_disk_attachment(disk: &RawBtrfsDisk) -> DiskAttachment {
+    build::attachment(disk)
+}
+
+pub(crate) fn build_disk_env_pairs(disk: &RawBtrfsDisk) -> [(String, String); 4] {
+    build::env_pairs(disk)
+}
+
 /// The read-only block lower for the guest's `/nix` overlay.
 ///
 /// `Ok(None)` means the launch kept the host-composed overlay: either it asked for
