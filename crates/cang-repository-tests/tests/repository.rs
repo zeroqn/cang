@@ -434,6 +434,10 @@ fn publish_release_gates_tagged_releases_on_permanent_fork_pins() {
         "Require a versioned libkrunfw pin",
         "refusing to publish a tagged cang release with a rolling fork pin",
         "libkrunfwRelease",
+        // The gate's shell glob must accept the same permanent shapes as
+        // `is_versioned_fork_release_tag`, including the LTS line the pin
+        // currently installs; accepting only `-cang.<n>` fails every tag.
+        "v[0-9]*-cang-lts.*",
     ] {
         assert!(PUBLISH_RELEASE_YML.contains(required), "missing {required}");
     }
