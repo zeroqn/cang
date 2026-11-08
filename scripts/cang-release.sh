@@ -30,6 +30,9 @@
 #                               deps/libkrun or deps/libkrunfw move
 #   CANG_RELEASE_SKIP_NIX_LOWER_SMOKE=1  skip the block-lower smoke the driver
 #                               otherwise runs itself when that surface moved
+#   CANG_RELEASE_SMOKE_DIR=<dir>  output root for that smoke (default
+#                               <repo>/.smoke/nix-lower-release); it must be on a
+#                               btrfs filesystem
 #   CANG_RELEASE_ASSUME_YES=1   do not ask before pushing
 #   CANG_RELEASE_CI_TIMEOUT     seconds to wait for one CI run (default 2400)
 #   CANG_RELEASE_CI_POLL        seconds between polls (default 20)
@@ -279,8 +282,10 @@ require_smoke_ack() {
     if [ "${CANG_RELEASE_SKIP_NIX_LOWER_SMOKE:-0}" = 1 ]; then
       say "/nix lower surface moved since $previous, block-lower smoke skipped on request"
     else
+      # The smoke's output root must be on btrfs (cang's only task-rootfs
+      # backend snapshots the graphroot), and the repo checkout need not be.
       local out
-      out="$repo_root/.smoke/nix-lower-release/$(git rev-parse --short HEAD)"
+      out="${CANG_RELEASE_SMOKE_DIR:-$repo_root/.smoke/nix-lower-release}/$(git rev-parse --short HEAD)"
       say "/nix lower surface moved since $previous: running tools/nix-lower-cang-smoke"
       # A lost page is the guest kernel's open read-merge bug, not this change;
       # it is recorded as KNOWN so a kernel defect cannot block a release forever.
