@@ -475,7 +475,9 @@ recorded as `KNOWN` rather than blocking a release; every other check in it is
 cang's own and fails the release. Its output root must be on btrfs (cang's only
 task-rootfs backend snapshots the graphroot), so point
 `CANG_RELEASE_SMOKE_DIR` at one when the checkout itself is not:
-`CANG_RELEASE_SMOKE_DIR=/home/dev/disp/release-smoke just release 0.19.2`. It never computes the asset SRI locally: it pins
+`CANG_RELEASE_SMOKE_DIR=/home/dev/disp/release-smoke just release 0.19.2`.
+
+The driver never computes the asset SRI locally: it pins
 the hash CI published for the same source, which is why the patchelf question in
 step 2 cannot go wrong with it. `just release-plan <version>` prints the phases
 without touching anything, and `just release-verify <published-version>`
