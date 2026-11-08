@@ -319,10 +319,12 @@ require_smoke_ack() {
 require_permanent_libkrunfw_pin() {
   local tag
   tag="$(nix eval --raw --impure --expr "(import $repo_root/nix/pins.nix).libkrunfwRelease.tag")"
-  case "$tag" in
-    v[0-9]*-cang.*) ;;
-    *) die "libkrunfwRelease.tag is rolling ($tag); publish a permanent v<version>-cang.<n> fork release and re-pin first" ;;
-  esac
+  # The fork publishes one permanent line per kernel branch - v<version>-cang.<n>
+  # for the newest kernel and v<version>-cang-lts.<n> for the LTS one - and a
+  # rolling cang-<sha> prerelease for every branch push, which its CI prunes.
+  if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-cang(-lts)?\.[0-9]+$ ]]; then
+    die "libkrunfwRelease.tag is rolling ($tag); publish a permanent v<version>-cang.<n> or v<version>-cang-lts.<n> fork release and re-pin first"
+  fi
 }
 
 cmd_plan() {
