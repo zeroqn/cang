@@ -41,16 +41,15 @@ pub(crate) fn container_store_default_size_bytes() -> u64 {
 
 /// The read-only block lower for the guest's `/nix` overlay.
 ///
-/// `Ok(None)` means the launch asked for the host-composed overlay
-/// (`CANG_NIX_LOWER_BLOCK=0`). Anything that would substitute that overlay for a
-/// requested block lower is an error unless `allow_fallback` is set.
+/// `Ok(None)` means the launch kept the host-composed overlay: either it asked for
+/// it (`--nix-lower=virtiofs`) or the block lower could not be served under
+/// `--nix-lower=auto`. `--nix-lower=blk` is strict and turns that into an error.
 pub(crate) fn prepare_nix_lower_block(
     intent: &crate::runtime::launch::config::HostNixOverlay,
     guest_init: &Path,
     mode: Option<nix_lower::NixLowerMode>,
-    allow_fallback: bool,
 ) -> Result<Option<nix_lower::NixLowerBlock>> {
-    nix_lower::prepare_block(intent, guest_init, mode, allow_fallback)
+    nix_lower::prepare_block(intent, guest_init, mode)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

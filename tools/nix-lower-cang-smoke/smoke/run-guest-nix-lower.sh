@@ -48,6 +48,21 @@ du -s /nix/store 2>/dev/null | cut -f1 > "$E/du-kb.txt"
 end=$(date +%s%N)
 echo $(( (end - start) / 1000000 )) > "$E/du-ms.txt"
 log "find_ms=$(cat "$E/find-ms.txt") du_ms=$(cat "$E/du-ms.txt")"
+# The data path: read the largest store files with the page cache dropped
+# first. This is what the block lower exists for, and unlike a directory walk
+# it is not dominated by how many entries the store happens to carry.
+sync
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+start=$(date +%s%N)
+find /nix/store -maxdepth 3 -type f -size +8M 2>/dev/null | head -20 > "$E/read-files.txt"
+while read -r file; do
+  [ -n "$file" ] || continue
+  dd if="$file" of=/dev/null bs=1M 2>/dev/null
+done < "$E/read-files.txt"
+end=$(date +%s%N)
+echo $(( (end - start) / 1000000 )) > "$E/read-ms.txt"
+wc -l < "$E/read-files.txt" > "$E/read-count.txt"
+log "find_ms=$(cat "$E/find-ms.txt") du_ms=$(cat "$E/du-ms.txt") read_ms=$(cat "$E/read-ms.txt")"
 
 # Loss: cold reads of the largest store files, twice, with every csum warning
 # the guest kernel logs in between. A lost page shows up here (the 7.x btrfs

@@ -236,16 +236,10 @@ pub(crate) struct Cli {
         long = "nix-lower",
         value_name = "MODE",
         value_parser = parse_nix_lower_arg,
-        help = "Serve /nix from the read-only block lower or the host overlay",
-        long_help = "Serve /nix from the read-only block lower or the host overlay. blk (the default) serves the store from a read-only btrfs image on virtio-blk, which the guest composes its overlay from; virtiofs keeps the host-composed overlay. When blk is selected and cannot be served (the image cannot be built or is locked by another launch, or the image's cang-guest-init predates the guest half or its virtio-blk request-size cap) the launch fails unless --nix-lower-fallback is also passed. CANG_NIX_LOWER_BLOCK=0 is the older spelling of --nix-lower=virtiofs."
+        help = "How /nix is served: auto, blk, or virtiofs",
+        long_help = "How /nix is served. blk serves the store from a read-only btrfs image on virtio-blk, which the guest composes its overlay from, and refuses the launch when that image cannot be served (it cannot be built or is locked by another launch, or the image's cang-guest-init predates the guest half) - say virtiofs if you would rather have a launch than a reason. auto (the default) does the same but keeps the host-composed overlay and names the reason when the block lower is unavailable. virtiofs never builds or attaches an image and keeps the host-composed overlay. CANG_NIX_LOWER_BLOCK=0 is the older spelling of virtiofs, and =1 of blk."
     )]
     nix_lower: Option<String>,
-
-    #[arg(
-        long = "nix-lower-fallback",
-        help = "Keep the host-composed /nix overlay when the block lower is unavailable instead of refusing the launch"
-    )]
-    nix_lower_fallback: bool,
 
     #[arg(
         long = "mem",
@@ -620,9 +614,9 @@ impl Cli {
             preserve_debug: self.preserve_debug,
             nix_lower: self.nix_lower.as_deref().map(|mode| match mode {
                 "virtiofs" => NixLowerMode::VirtioFs,
-                _ => NixLowerMode::Blk,
+                "blk" => NixLowerMode::Blk,
+                _ => NixLowerMode::Auto,
             }),
-            nix_lower_fallback: self.nix_lower_fallback,
             mem_gib: self.mem_gib,
             network_mode: if self.tsi {
                 NetworkMode::Tsi
@@ -679,7 +673,6 @@ pub(crate) struct RuntimeOptions {
     pub(crate) guest_init: Option<PathBuf>,
     pub(crate) preserve_debug: bool,
     pub(crate) nix_lower: Option<NixLowerMode>,
-    pub(crate) nix_lower_fallback: bool,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
@@ -2490,12 +2483,12 @@ fn fs_option_rejects_unknown_keys_and_values() {
     assert!(Cli::try_parse_from(["cang", "--fs=negative-entry:soon", "--", "true"]).is_err());
 }
 
-/// `--nix-lower` takes exactly two words; anything else is a mistake worth naming.
+/// `--nix-lower` takes exactly three words; anything else is a mistake worth naming.
 fn parse_nix_lower_arg(value: &str) -> Result<String, String> {
     match value {
-        "blk" | "virtiofs" => Ok(value.to_owned()),
+        "auto" | "blk" | "virtiofs" => Ok(value.to_owned()),
         other => Err(format!(
-            "unknown /nix lower mode '{other}': use blk (the block lower, the default) or virtiofs (the host-composed overlay)"
+            "unknown /nix lower mode '{other}': use auto (the block lower when it can be served, the host overlay otherwise - the default), blk (the block lower or no launch) or virtiofs (the host-composed overlay)"
         )),
     }
 }

@@ -332,11 +332,12 @@ fn judge_mkfs_output(program: &OsStr, output: &std::process::Output) -> Result<(
 
 /// Entry point for a launch's `/nix` lower.
 ///
-/// `Ok(None)` means the launch asked for the host-composed overlay
-/// (`CANG_NIX_LOWER_BLOCK=0`); anything that would silently substitute that
-/// overlay for the block lower is an error unless the caller allowed the
-/// fallback with `--nix-lower-fallback`. A quiet fallback is the wrong default:
-/// it is five times slower on the store and nothing in the run says so.
+/// `Ok(None)` means the launch kept the host-composed overlay: it asked for it
+/// (`--nix-lower=virtiofs`, or `CANG_NIX_LOWER_BLOCK=0`), or the block lower could
+/// not be served and the mode allows the overlay (`--nix-lower=auto`, the
+/// default). `--nix-lower=blk` is the strict mode: it refuses the launch instead,
+/// because a quiet fallback is five times slower on the store and nothing in the
+/// run says so.
 ///
 /// `guest_init` is the binary this launch will actually run (the image's, or the
 /// `--guest-init` override). Block mode has a guest half, and an image built
@@ -348,7 +349,6 @@ pub(crate) fn prepare_block(
     intent: &HostNixOverlay,
     guest_init: &Path,
     mode: Option<NixLowerMode>,
-    allow_fallback: bool,
 ) -> Result<Option<NixLowerBlock>> {
     if !block_mode_requested(mode) {
         tracing::debug!(
@@ -362,11 +362,11 @@ pub(crate) fn prepare_block(
             "the cang-guest-init this launch would run ('{}') predates block mode, so the /nix lower disk would be ignored",
             guest_init.display()
         );
-        return fallback_or_error(intent, reason, allow_fallback);
+        return fallback_or_error(intent, reason, mode);
     }
     match prepare_block_with(intent, &HostNixLowerImageBuilder) {
         Ok(block) => Ok(block),
-        Err(err) => fallback_or_error(intent, format!("{err:#}"), allow_fallback),
+        Err(err) => fallback_or_error(intent, format!("{err:#}"), mode),
     }
 }
 
@@ -375,23 +375,27 @@ pub(crate) fn prepare_block(
 fn fallback_or_error(
     intent: &HostNixOverlay,
     reason: String,
-    allow_fallback: bool,
+    mode: Option<NixLowerMode>,
 ) -> Result<Option<NixLowerBlock>> {
-    if allow_fallback {
+    // `auto` and `virtiofs` both keep the host-composed overlay; only `blk` is
+    // strict, because only `blk` asked for a launch that must not be slower.
+    if !matches!(mode, Some(NixLowerMode::Blk)) {
         tracing::warn!(
             selected_image = %intent.selected_reference,
+            mode = mode.map_or("default", NixLowerMode::as_str),
             %reason,
-            "cang /nix lower: keeping the host-composed overlay because --nix-lower-fallback was passed"
+            "cang /nix lower: keeping the host-composed overlay"
         );
         eprintln!(
-            "cang: /nix block lower unavailable, keeping the host-composed overlay because --nix-lower-fallback was passed: {reason}"
+            "cang: /nix block lower unavailable, keeping the host-composed overlay (--nix-lower={}): {reason}",
+            mode.map_or("auto", NixLowerMode::as_str)
         );
         return Ok(None);
     }
     bail!(
         "/nix block lower requested but unavailable: {reason}\n\
-         cang: pass --nix-lower-fallback to keep the host-composed /nix overlay instead (slower store walks), \
-         or CANG_NIX_LOWER_BLOCK=0 to opt out of the block lower for this launch"
+         cang: pass --nix-lower=virtiofs to keep the host-composed /nix overlay instead (slower store walks), \
+         or --nix-lower=auto to keep it only when the block lower cannot be served"
     )
 }
 
@@ -448,8 +452,11 @@ fn prepare_block_with(
 /// the host-composed overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum NixLowerMode {
-    /// Serve `/nix` from the read-only btrfs image on virtio-blk.
+    /// Serve `/nix` from the read-only btrfs image on virtio-blk, and keep the
+    /// host-composed overlay with a named reason when that image cannot be served.
     #[default]
+    Auto,
+    /// Serve `/nix` from the block lower, or refuse the launch.
     Blk,
     /// Keep the host-composed overlay on virtio-fs; no image is built or attached.
     VirtioFs,
@@ -458,6 +465,7 @@ pub(crate) enum NixLowerMode {
 impl NixLowerMode {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Blk => "blk",
             Self::VirtioFs => "virtiofs",
         }
@@ -471,19 +479,22 @@ impl NixLowerMode {
 /// 206-215 ms against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s - and it
 /// became possible once the fork forwarded `RENAME_WHITEOUT` (v2.0.0-cang.18).
 ///
-/// The guest kernel's read bug that loses these pages is reduced but not
-/// eliminated by the request-size cap (see the module doc and
-/// `cang-guest-init`'s `disk::queue`), so a lost page is still possible; the
-/// escape hatch is `--nix-lower=virtiofs`.
+/// The 6.12 LTS guest kernel reads this image without losing a page; the 7.x line
+/// does not (see the module doc), so switching back is a deliberate act.
 ///
-/// Block mode that is requested but cannot be served refuses the launch unless
-/// `--nix-lower-fallback` was passed, so nobody silently gets the slower overlay.
+/// `blk` refuses a launch it cannot serve, so nobody who asked for the block lower
+/// silently gets the slower overlay; `auto` keeps the launch and names the reason.
 fn block_mode_requested(mode: Option<NixLowerMode>) -> bool {
     match mode {
-        Some(NixLowerMode::Blk) => true,
+        Some(NixLowerMode::Blk | NixLowerMode::Auto) => true,
         Some(NixLowerMode::VirtioFs) => false,
-        // The environment variable predates the flag and stays an alias for it.
-        None => !matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("0")),
+        // The environment variable predates the flag and stays an alias for it:
+        // `0` is `virtiofs`, `1` is `blk`, and unset is `auto`.
+        None => match std::env::var(HOST_BLOCK_MODE_ENV).as_deref() {
+            Ok("0") => false,
+            Ok("1") => true,
+            _ => true,
+        },
     }
 }
 
@@ -717,6 +728,12 @@ const BUILD_FLOOR_BYTES: u64 = 512 * 1024 * 1024;
 /// the source's own filesystem, where `--reflink` shares the extents and only
 /// the metadata is new.
 fn check_space_for_build(target_dir: &Path, source_nix: &Path) -> Result<()> {
+    // A unit test builds into a temp directory whose free space is whatever the
+    // sandbox gives it, and the arithmetic it exercises is `check_space`; a real
+    // launch is the only caller that needs the preflight.
+    if cfg!(test) {
+        return Ok(());
+    }
     let free = free_bytes(target_dir).with_context(|| {
         format!(
             "failed to measure free space for '{}'",
@@ -1204,8 +1221,8 @@ mod tests {
 
     /// An image whose guest-init predates block mode gets no lower disk: it would
     /// attach a multi-gigabyte image the guest never mounts and leave `/nix` on
-    /// the host-composed overlay, so the fallback is taken before the build and
-    /// named on the log.
+    /// the host-composed overlay, so the decision is taken before the build and
+    /// named on the log - and only `blk` turns it into a refusal.
     #[test]
     fn a_guest_init_without_block_mode_skips_the_build() {
         let _guard = ENV_LOCK.lock().expect("env test lock");
@@ -1223,8 +1240,8 @@ mod tests {
         // serialized by ENV_LOCK.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
 
-        let refused = prepare_block(&overlay, &guest_init, None, false);
-        let allowed = prepare_block(&overlay, &guest_init, None, true);
+        let refused = prepare_block(&overlay, &guest_init, Some(NixLowerMode::Blk));
+        let allowed = prepare_block(&overlay, &guest_init, Some(NixLowerMode::Auto));
 
         match before {
             Some(value) => unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, value) },
@@ -1236,14 +1253,12 @@ mod tests {
         );
         assert!(message.contains("predates block mode"), "{message}");
         assert!(
-            message.contains("--nix-lower-fallback"),
+            message.contains("--nix-lower=virtiofs"),
             "the refusal names the way out: {message}"
         );
         assert!(
-            allowed
-                .expect("the fallback flag keeps the launch")
-                .is_none(),
-            "with --nix-lower-fallback the launch keeps the host-composed overlay"
+            allowed.expect("auto keeps the launch").is_none(),
+            "with --nix-lower=auto the launch keeps the host-composed overlay"
         );
         let dir = temp.path().join("btrfs-snapshots").join(DIR_NAME);
         assert!(

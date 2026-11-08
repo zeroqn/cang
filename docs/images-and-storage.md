@@ -126,15 +126,14 @@ reads, and reading it off a block device is what pays: `find /nix/store`
 206-215 ms against 864-2033 ms and `du -s` 267 ms against 9.2-10.4 s with the
 same tree over virtio-fs.
 
-`--nix-lower=blk` (the default) selects it and `--nix-lower=virtiofs` keeps the
-host-composed overlay above for that launch; `CANG_NIX_LOWER_BLOCK=0` is the older
-spelling of the latter. Once selected it is not silently given up: when a launch
-cannot be served the block lower - the image cannot be built or is locked by
-another launch, or the image's `cang-guest-init` predates the guest half - cang
-refuses the launch and names the reason.
-`--nix-lower-fallback` accepts the host-composed overlay for that launch instead.
-A quiet fallback was the wrong default: it is up to five times slower on the
-store and nothing in the run said so.
+`--nix-lower=auto` (the default) serves it whenever it can and otherwise keeps the
+host-composed overlay above, naming the reason on stderr; `--nix-lower=blk` is the
+same thing with no fallback - the launch is refused instead of quietly getting a
+store that is up to five times slower; `--nix-lower=virtiofs` never builds or
+attaches an image. `CANG_NIX_LOWER_BLOCK=0` is the older spelling of `virtiofs`
+and `=1` of `blk`. A launch cannot be served the block lower when the image cannot
+be built or is locked by another launch, or when the image's `cang-guest-init`
+predates the guest half.
 
 The block lower depends on the guest kernel, and that is why cang pins the
 6.12 LTS line for it. With cang's 7.x guest kernel an ordinary cold read of the

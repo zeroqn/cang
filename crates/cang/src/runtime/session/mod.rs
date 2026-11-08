@@ -266,7 +266,6 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                     nix_overlay_lease.intent(),
                     guest_init_binary,
                     plan.nix_lower,
-                    plan.nix_lower_fallback,
                 )
             })?;
             match &nix_lower_block {
@@ -660,7 +659,6 @@ mod tests {
             guest_init: None,
             preserve_debug: false,
             nix_lower: None,
-            nix_lower_fallback: false,
             mem_gib: None,
             network_mode: config::NetworkMode::Tsi,
             pulse: None,

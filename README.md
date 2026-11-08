@@ -30,9 +30,9 @@ rootless Podman tooling for development.
   (`mkfs.btrfs --rootdir --reflink --shrink`) that launches use by default:
   cached under `<state>/cang/microvm/images/btrfs-snapshots/nix-lower/` at
   ~12 GiB, built on the first launch of each image generation, ~512 MiB of free
-  space required up front. `--nix-lower=virtiofs` keeps the host-composed overlay
-  instead; a launch that cannot be served the block lower refuses to start and
-  names why, and `--nix-lower-fallback` accepts the overlay for that launch (see
+  space required up front. `--nix-lower=auto` (the default) keeps the host-composed
+  overlay when the block lower cannot be served and names why, `--nix-lower=blk`
+  refuses the launch instead, and `--nix-lower=virtiofs` never builds an image (see
   the linked section).
 - `libkrun` at build time, not at runtime. `cang` links libkrun's Rust API
   (`crates/cang-libkrun`, compiled from the `libkrun-src` flake input grafted

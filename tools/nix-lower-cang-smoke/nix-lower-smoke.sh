@@ -181,14 +181,16 @@ if [ -n "$guest_init" ] && [ -r "$guest_init" ]; then
   stale_init="$out_dir/stale-cang-guest-init"
   cp "$guest_init" "$stale_init" && chmod 755 "$stale_init"
   if command -v perl >/dev/null 2>&1; then
-    perl -0pi -e 's/CANG_NIX_LOWER_BLOCK/xxxxxxxxxxxxxxxxxxx/' "$stale_init"
+    perl -0pi -e 's/CANG_NIX_LOWER_BLOCK/XXXXXXXXXXXXXXXXXXXX/' "$stale_init"
   else
-    sed -i 's/CANG_NIX_LOWER_BLOCK/xxxxxxxxxxxxxxxxxxx/' "$stale_init"
+    sed -i 's/CANG_NIX_LOWER_BLOCK/XXXXXXXXXXXXXXXXXXXX/' "$stale_init"
   fi
 fi
 if [ -n "$stale_init" ] && ! grep -qa 'CANG_NIX_LOWER_BLOCK' "$stale_init"; then
-  run_boot "refuse-stale" "" "$stale_init"
-  run_boot "allow-fallback" "" "$stale_init" "--nix-lower-fallback"
+  # Strict mode refuses; auto keeps the launch and names why. Same binary,
+  # so the mode is the only difference.
+  run_boot "refuse-stale" "" "$stale_init" "--nix-lower=blk"
+  run_boot "auto-fallback" "" "$stale_init" "--nix-lower=auto"
 else
   say "no readable guest-init to derive a stale one from; skipping the refusal arm"
 fi
@@ -249,46 +251,57 @@ require no-read-errors "$([ "$eio" -ge 2 ] && echo 0 || echo 1)" \
   "both cold sweeps completed without EIO" "$(value "$block_ev/eio.txt")"
 
 # The reason the block lower exists: faster metadata work on the store.
+# The reason the block lower exists: the same store, served off a block device
+# instead of virtio-fs. The metric is `du -s`, which walks the store's metadata and
+# block counts: it is the per-node cost that virtio-fs pays a round trip for, and
+# it stays meaningful when the host page cache is warm (a cold data read does not -
+# both sides are then cached on the host). A plain `find` is dominated by how many
+# entries the image carries and can invert on a big store, so it is reported, not
+# required.
 find_block="$(value "$block_ev/find-ms.txt")"
 du_block="$(value "$block_ev/du-ms.txt")"
+read_block="$(value "$block_ev/read-ms.txt")"
+read_files="$(value "$block_ev/read-count.txt")"
 if [ "$skip_opt_out" -eq 0 ]; then
   find_opt="$(value "$optout_ev/find-ms.txt")"
   du_opt="$(value "$optout_ev/du-ms.txt")"
+  read_opt="$(value "$optout_ev/read-ms.txt")"
   require opt-out-keeps-host-overlay \
     "$(grep -q 'virtiofs /nix\| /nix virtiofs' "$optout_ev/mounts.txt" 2>/dev/null && echo 0 || echo 1)" \
     "CANG_NIX_LOWER_BLOCK=0 keeps the host-composed overlay" "$(value "$optout_ev/mounts.txt")"
   # A regression that silently turns the block lower off would look "clean"; the
-  # speed difference is what distinguishes the two paths.
-  # The bar is 1.3x, not the 4-10x a store walk can show: a busy host or a cold
-  # page cache shrinks the gap, and this check only has to tell "on the block
-  # device" from "on virtio-fs".
+  # speed difference is what distinguishes the two paths. The bar is 1.3x, not the
+  # 4-10x a cold read can show: a busy host or a warm page cache shrinks the gap,
+  # and this check only has to tell "on the block device" from "on virtio-fs".
   faster=1
   ratio="?"
-  if [ "${find_block:-0}" -gt 0 ] && [ "${find_opt:-0}" -gt 0 ]; then
-    hundredths=$(( find_opt * 100 / find_block ))
+  if [ "${du_block:-0}" -gt 0 ] && [ "${du_opt:-0}" -gt 0 ]; then
+    hundredths=$(( du_opt * 100 / du_block ))
     ratio="$(( hundredths / 100 )).$(( (hundredths % 100) / 10 ))x"
-    if [ $(( find_block * 13 )) -le $(( find_opt * 10 )) ]; then
+    if [ $(( du_block * 13 )) -le $(( du_opt * 10 )) ]; then
       faster=0
     fi
   fi
   require block-lower-is-faster "$faster" \
-    "find over the store is faster on the block lower ($ratio: ${find_block:-?} ms vs ${find_opt:-?} ms; du ${du_block:-?} ms vs ${du_opt:-?} ms)"
+    "walking the store is faster on the block lower ($ratio: du ${du_block:-?} ms vs ${du_opt:-?} ms; cold read of ${read_files:-?} files ${read_block:-?} vs ${read_opt:-?} ms; find ${find_block:-?} vs ${find_opt:-?} ms)"
 fi
 
-# The explicit-fallback contract: a block lower that cannot be served refuses
-# the launch, and only --nix-lower-fallback keeps the host-composed overlay.
+# The two strict-ness contracts: blk refuses a launch it cannot serve, auto keeps
+# it and names the reason, so nobody silently gets the slower overlay.
 if [ -s "$out_dir/logs/refuse-stale.rc" ]; then
   refuse_rc="$(value "$out_dir/logs/refuse-stale.rc")"
   refuse_msg="$(sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$out_dir/logs/cang-refuse-stale.console" 2>/dev/null | tr -d '\r')"
   require refuses-a-stale-guest "$([ "$refuse_rc" != 0 ] && echo 0 || echo 1)" \
     "a guest-init without block mode refuses the launch instead of falling back (exit $refuse_rc)" \
-    "$(printf '%s' "$refuse_msg" | grep -m2 'block lower\|nix-lower-fallback')"
-  require refusal-names-the-flag \
-    "$(printf '%s' "$refuse_msg" | grep -q 'nix-lower-fallback' && echo 0 || echo 1)" \
-    "the refusal names --nix-lower-fallback"
-  allow_rc="$(value "$out_dir/logs/allow-fallback.rc")"
-  require fallback-is-explicit "$([ "$allow_rc" = 0 ] && echo 0 || echo 1)" \
-    "--nix-lower-fallback keeps the host-composed overlay and the launch runs (exit ${allow_rc:-?})"
+    "$(printf '%s' "$refuse_msg" | grep -m2 'block lower\|nix-lower=virtiofs')"
+  require refusal-names-the-way-out \
+    "$(printf '%s' "$refuse_msg" | grep -q 'nix-lower=virtiofs' && echo 0 || echo 1)" \
+    "the refusal names --nix-lower=virtiofs"
+  auto_rc="$(value "$out_dir/logs/auto-fallback.rc" 2>/dev/null)"
+  auto_msg="$(sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$out_dir/logs/cang-auto-fallback.console" 2>/dev/null | tr -d '\r')"
+  require auto-keeps-the-launch "$([ "$auto_rc" = 0 ] && echo 0 || echo 1)" \
+    "--nix-lower=auto keeps the host-composed overlay and the launch runs (exit ${auto_rc:-?})" \
+    "$(printf '%s' "$auto_msg" | grep -m2 'block lower unavailable\|--nix-lower=auto')"
 fi
 
 echo
