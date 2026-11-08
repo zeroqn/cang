@@ -405,11 +405,15 @@ them.
 `zeroqn/libkrunfw` keeps one kernel line per branch, so a kernel re-base never
 has to drag a second line along:
 
-- **`cang`** is the newest kernel line (currently linux-7.3.1 + linux-hardened
-  v7.3.1-hardened1). cang's `libkrunfw-src` input and the primary
-  `libkrunfwRelease` pin follow it.
-- **`cang-lts`** is the LTS line (linux-6.12.109 + v6.12.109-hardened1). It also
-  carries the fork's arm64 patches; a re-base of the newest line drops them.
+- **`cang`** is the newest kernel line (linux-7.3.1 + linux-hardened
+  v7.3.1-hardened1). It is the development lane: cang's `libkrunfw-src` input and
+  the `deps/libkrunfw` submodule follow it, which is what `nix build .#cang-dev`
+  compiles. Nothing shipped loads it, because the 7.x guest kernel intermittently
+  loses a page of a `/nix` read (see
+  [the `/nix` block lower](images-and-storage.md#the-nix-block-lower)).
+- **`cang-lts`** is the LTS line (linux-6.12.115 + v6.12.115-hardened1, rebased
+  onto upstream `libkrunfw` main). It also carries the fork's arm64 patches, and
+  it is what the `libkrunfwRelease` pin installs for every architecture.
 
 `release-arches` in the fork tree names the architectures a line's release
 carries, and the publish workflow builds and asserts exactly those: a line whose
@@ -421,9 +425,9 @@ for `cang-lts`.
 Pin a permanent libkrunfw release, and use it for any tagged cang release:
 
 ```bash
-nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.5
-nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang-lts.1
-nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang-lts.1
+nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang-lts.2
+nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang-lts.2
+nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang-lts.2
 ```
 
 Each `update-libkrunfw.sh` run rewrites one system: the x86_64 run moves the

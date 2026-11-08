@@ -695,13 +695,16 @@ the published `ghcr.io/<repo-owner>/cang` image. `nix build .#cang-dev` is the
 same host package built against a locally compiled libkrunfw kernel; point
 either target at fork work in the checkout with
 `--override-input libkrun-src "git+file://$PWD/deps/libkrun"` (or
-`libkrunfw-src`, or `rutabaga-gfx-src`). The `libkrunfw-src` input follows the fork's `cang` branch, its
-newest kernel line (linux-7.3.1 + linux-hardened); the fork's `cang-lts` branch
-keeps the LTS kernel line (linux-6.12.109), which is also the line that still
-carries its arm64 patches. Each line publishes its own permanent release
-(`v5.6.2-cang.<n>` and `v<version>-cang-lts.<n>`), and `nix/pins.nix` pins
-x86_64 from the newest line while aarch64 and riscv64 come from the LTS line -
-see `docs/maintenance.md`. In-tree `cargo` builds still read the `deps/libkrun`,
+`libkrunfw-src`, or `rutabaga-gfx-src`). The fork keeps one kernel line per
+branch: `cang` is the newest kernel (linux-7.3.1 + linux-hardened), which
+`libkrunfw-src`, `deps/libkrunfw` and therefore `nix build .#cang-dev` follow,
+and `cang-lts` is the LTS kernel (linux-6.12.115 + linux-hardened), which is what
+every launch actually runs. Each line publishes its own permanent release
+(`v5.6.2-cang.<n>` and `v<version>-cang-lts.<n>`), and `nix/pins.nix` pins the
+LTS line for every architecture. The shipped line is the LTS one because the 7.x
+guest kernel intermittently loses a page of a `/nix` read (see
+[the `/nix` block lower](docs/images-and-storage.md#the-nix-block-lower)); the
+newest line stays available as a development lane - see `docs/maintenance.md`. In-tree `cargo` builds still read the `deps/libkrun`,
 `deps/libkrunfw` and `deps/rutabaga_gfx` submodules, so clone with
 `git submodule update --init --recursive` for those.
 
