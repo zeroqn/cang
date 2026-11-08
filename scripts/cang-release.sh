@@ -272,7 +272,7 @@ require_smoke_ack() {
   previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
   [ -n "$previous" ] || return 0
 
-  # The block lower's host half, its guest half, the request-size cap and the
+  # The block lower's host half, its guest half, the lost-page check and the
   # smoke that scores them.
   if ! git diff --quiet "$previous" HEAD -- \
     crates/cang-guest-init \

@@ -25,7 +25,7 @@
 //! failure, a store the host cannot list) leaves the launch on the host-composed
 //! overlay, which is what the guest keeps using when the flag is absent.
 //!
-//! # Status: on by default, with the guest's request-size cap as its guard
+//! # Status: on by default, on the 6.12 LTS guest kernel
 //!
 //! An ordinary cold read of `/nix/store` can lose a 20-40 KiB window of one file:
 //! the guest's btrfs logs a csum of a zero page and anything mapped over those
@@ -35,16 +35,15 @@
 //! guest reads the wrong device range. It happens on the writable btrfs disks too,
 //! and 6.12 firmware never does it on these same images.
 //!
-//! `cang-guest-init` caps every virtio-blk disk at `max_sectors_kb=64`, which
-//! keeps btrfs from building most of those bios: 23 cold sweeps of 40 files each
-//! at the cap logged no failure against 210 failing sectors over 12 sweeps without
-//! it. The cap is a guard and not a cure - one later boot at the cap still lost a
-//! window - so `--nix-lower=virtiofs` is the per-launch way out, and the fix
-//! belongs in the guest kernel (see docs/images-and-storage.md for the measured
-//! rates and the open work). The host side was never at fault: a diagnostic build
-//! that aborts the VM when the data about to be copied into guest memory holds an
-//! all-zero page while the image has data there never fired, and the guest's own
-//! `O_DIRECT` read of the failing physical offset equals the image.
+//! The 7.x line of cang's guest kernel does the same thing on the writable btrfs
+//! disks, and no cang-side setting closes it: 130 of 130 measured lost windows sat
+//! inside a single 1 MiB extent, the host was proved to hand over correct bytes
+//! (an instrumented libkrun compared the guest's own sg pages with the image after
+//! every read), and capping the request size to 64 KiB only lowered the rate (24
+//! clean sweeps, then one lost window) while costing throughput. cang therefore
+//! pins the 6.12 LTS kernel, where the same 40-file sweep at an uncapped
+//! `max_sectors_kb` reads the store without a single lost page; if the 7.x line
+//! comes back, the cap is the stop-gap to measure against, not a fix.
 //!
 //! A *second*, deterministic fault used to live here and is fixed: two launches
 //! sharing one `[state] location` where the second rebuilt the image replaced
@@ -360,7 +359,7 @@ pub(crate) fn prepare_block(
     }
     if !guest_init_mounts_block_lower(guest_init) {
         let reason = format!(
-            "the cang-guest-init this launch would run ('{}') predates block mode or its virtio-blk request-size cap, so the /nix lower disk would be ignored",
+            "the cang-guest-init this launch would run ('{}') predates block mode, so the /nix lower disk would be ignored",
             guest_init.display()
         );
         return fallback_or_error(intent, reason, allow_fallback);
@@ -399,31 +398,18 @@ fn fallback_or_error(
 /// The guest half's switch, which is also the contract between the two halves.
 const GUEST_HALF_MARKER: &[u8] = b"CANG_NIX_LOWER_BLOCK";
 
-/// The guest half's request-size cap, which block mode now depends on.
-///
-/// Block mode first shipped opt-in, and the guest could not yet cap virtio-blk
-/// request size; on the 7.x guest kernel that cap is what keeps btrfs from
-/// building a bio whose device LBA and payload pages belong to different files
-/// (see the module doc). An image built before the cap therefore must not be
-/// served a block lower just because it knows `CANG_NIX_LOWER_BLOCK` - it would
-/// lose pages in most boots. The cap's own log line is the marker: it is a
-/// string literal in the binary, and it only exists in a guest-init that applies
-/// the cap.
-const GUEST_HALF_CAP_MARKER: &[u8] = b"capped the request size of";
-
-/// Whether the `cang-guest-init` that will run in this launch knows block mode
-/// *and* caps its virtio-blk request size.
+/// Whether the `cang-guest-init` that will run in this launch knows block mode.
 ///
 /// The guest composes the `/nix` overlay itself only if it parses
 /// `CANG_NIX_LOWER_BLOCK` and the four paths beside it, and a release binary
 /// keeps its string literals, so the switch's own name in the file is the
-/// guest's capability; the cap's log line is the same trick for the newer half.
+/// guest's capability.
 /// A binary that cannot be read is not evidence of an old guest-init, so it keeps
 /// the legacy assumption (supported) rather than disabling block mode on an I/O
 /// error.
 pub(super) fn guest_init_mounts_block_lower(guest_init: &Path) -> bool {
     match fs::read(guest_init) {
-        Ok(bytes) => contains(&bytes, GUEST_HALF_MARKER) && contains(&bytes, GUEST_HALF_CAP_MARKER),
+        Ok(bytes) => contains(&bytes, GUEST_HALF_MARKER),
         Err(err) => {
             tracing::debug!(
                 guest_init = %guest_init.display(),
@@ -1199,21 +1185,10 @@ mod tests {
         let current = temp.path().join("current-cang-guest-init");
         fs::write(
             &current,
-            b"\x7fELF image half CANG_NIX_LOWER_BLOCK=1 \x00cang-guest-init: capped the request size of 3 virtio-blk disk(s) to 64 KiB\x00",
+            b"\x7fELF image half CANG_NIX_LOWER_BLOCK=1 \x00cang-guest-init: /nix overlay ready\x00",
         )
         .expect("write the current guest-init stand-in");
         assert!(guest_init_mounts_block_lower(&current));
-
-        // An image that knows block mode but predates the request-size cap must
-        // not be served a lower disk: it would lose pages in most boots on the
-        // 7.x guest kernel.
-        let uncapped = temp.path().join("uncapped-cang-guest-init");
-        fs::write(&uncapped, b"\x7fELF image half CANG_NIX_LOWER_BLOCK=1\x00")
-            .expect("write the uncapped guest-init stand-in");
-        assert!(
-            !guest_init_mounts_block_lower(&uncapped),
-            "block mode alone is not enough without the cap"
-        );
 
         let stale = temp.path().join("stale-cang-guest-init");
         fs::write(&stale, b"\x7fELF an image built before the guest half")
@@ -1259,10 +1234,7 @@ mod tests {
             "{:#}",
             refused.expect_err("a stale guest-init refuses the launch")
         );
-        assert!(
-            message.contains("predates block mode or its virtio-blk request-size cap"),
-            "{message}"
-        );
+        assert!(message.contains("predates block mode"), "{message}");
         assert!(
             message.contains("--nix-lower-fallback"),
             "the refusal names the way out: {message}"

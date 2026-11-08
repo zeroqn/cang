@@ -1,7 +1,7 @@
 # /nix Block-Lower Cang Live Smoke
 
 A live smoke for **the `/nix` block lower**: that a launch serves `/nix` from the
-read-only btrfs image on virtio-blk, that the guest's request-size cap is in
+read-only btrfs image on virtio-blk, that the guest mounts it
 force, that cold reads lose no page, and that `CANG_NIX_LOWER_BLOCK=0` still keeps
 the host-composed overlay.
 
@@ -15,7 +15,7 @@ Two, both quiet.
    wrong device range, the pages fail their data checksum, btrfs zeroes them and
    the reader gets `EIO` — or `SIGBUS` when the page is mapped, which is how a
    cold chromium used to die in the presenting arm. The guest caps every
-   virtio-blk disk at `max_sectors_kb=64` to keep that bio from being built;
+   virtio-blk disk at whatever the kernel defaults to;
    this smoke asserts the cap and then does the cold reads that used to fail.
 2. **The block lower silently not engaged.** The host falls back to the
    host-composed overlay when it cannot build or lock the image, and the launch
@@ -47,7 +47,6 @@ path when it only needs the engagement and no-loss checks.
 |---|---|
 | `block-vm-exit` | the guest ran to completion |
 | `nix-lower-engaged` | `/nix` is an overlay over `/run/cang/nix-lower` |
-| `guest-request-cap` | every `vd*` disk reads 64 in `queue/max_sectors_kb` |
 | `no-lost-pages` | cold reads of 40 store files logged no new `csum failed` |
 | `no-read-errors` | both sweeps finished without `Input/output error` |
 | `opt-out-keeps-host-overlay` | `CANG_NIX_LOWER_BLOCK=0` leaves `/nix` on virtio-fs |

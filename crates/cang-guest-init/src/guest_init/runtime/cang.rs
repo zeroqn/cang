@@ -288,12 +288,6 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         }
         Ok(())
     })?;
-    profiler.measure_result("cap-blk-request-size", || {
-        if process::is_root() {
-            crate::guest_init::components::disk::queue::cap_request_size()?;
-        }
-        Ok(())
-    })?;
     profiler.measure_result("start-nix-prep", || {
         crate::guest_init::components::nix::root::start_background_prep(&env_contract.cang)
     })?;

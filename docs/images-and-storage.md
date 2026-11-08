@@ -130,31 +130,31 @@ same tree over virtio-fs.
 host-composed overlay above for that launch; `CANG_NIX_LOWER_BLOCK=0` is the older
 spelling of the latter. Once selected it is not silently given up: when a launch
 cannot be served the block lower - the image cannot be built or is locked by
-another launch, or the image's `cang-guest-init` predates the guest half or its
-request-size cap - cang refuses the launch and names the reason.
+another launch, or the image's `cang-guest-init` predates the guest half - cang
+refuses the launch and names the reason.
 `--nix-lower-fallback` accepts the host-composed overlay for that launch instead.
 A quiet fallback was the wrong default: it is up to five times slower on the
 store and nothing in the run said so.
 
-It used to lose guest pages on every boot, and the reason was
-not this module: with cang's 7.x guest kernel, btrfs merges reads into
-multi-extent, multi-folio bios, and a merged bio can carry a device LBA taken from
-one extent while its payload pages belong to another. The guest then reads the
-wrong device range, the pages fail their data checksum, btrfs zeroes them and the
-reader gets `EIO`, or `SIGBUS` if the page is mapped - a cold chromium start did.
-Measured with one fixed read pattern (`find /nix/store -size +8M | head -12` then
-`sha256sum`): failing pages in most boots, on the read-only lower *and* on the
-writable btrfs disks (210 failing sectors over 12 cold 2.4 GB sweeps, 40 on the
-containers disk and 170 on the build-cache disk, with block mode off entirely).
-The 6.12 firmware never failed.
+The block lower depends on the guest kernel, and that is why cang pins the
+6.12 LTS line for it. With cang's 7.x guest kernel an ordinary cold read of the
+store intermittently returned wrong contents for a 40 KiB window: the guest's btrfs
+logged `csum failed` (most often the checksum of a zero page, sometimes of a page
+of `0xcc` padding), zeroed the window and returned `EIO` - or `SIGBUS` for a
+mapping over it, which is what killed a cold chromium start. It was not this
+module and not the host: the same read pattern failed on the read-only lower *and*
+on the writable btrfs disks (210 failing sectors over 12 cold 2.4 GB sweeps), an
+instrumented libkrun that compared the guest's own pages against the image after
+every read never found a difference, and 130 of 130 measured windows lay inside a
+single 1 MiB extent. Capping the guest's request size to 64 KiB only lowered the
+rate (24 clean sweeps, then one lost window), so the cap was removed again rather
+than shipped as a fix.
 
-The guest now caps every virtio-blk disk's request size at 64 KiB
-(`/sys/block/vd*/queue/max_sectors_kb`, in `cang-guest-init`), which keeps btrfs
-from building a bio that spans more than one extent: 0 failing sectors over 15
-cold sweeps at that cap against 210 over 12 without it, on both the read-only
-lower and the writable disks, at about 1.5 % on a cold 2.4 GB read - the cap
-bounds request size, not queue depth. Data checksums stay on, so a genuinely bad
-byte still surfaces as `EIO` instead of silently becoming wrong data.
+On the 6.12 LTS kernel the same 40-file, 1.7 GB cold sweep at an uncapped
+`max_sectors_kb` reads the store without a single lost page, which is what
+`tools/nix-lower-cang-smoke` asserts on every release. If the 7.x line is ever
+pinned again, that smoke is the gate, and the request-size cap is the stop-gap to
+measure against.
 
 A separate, *deterministic* fault is also fixed: two launches sharing one `[state]
 location`, where the second rebuilt the image while the first one's VM had it

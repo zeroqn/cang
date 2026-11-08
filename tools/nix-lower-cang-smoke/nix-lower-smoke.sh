@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Live smoke for the /nix block lower: that a launch serves /nix from the
-# read-only btrfs image on virtio-blk (with the guest's request-size cap in
+# read-only btrfs image on virtio-blk (with the guest's block lower in
 # force) and loses no pages, and that CANG_NIX_LOWER_BLOCK=0 still keeps the
 # host-composed overlay. Two cold boots, scored on engagement, the cap, lost
 # pages and the speed the feature exists for.
@@ -8,8 +8,7 @@
 # The failure this exists for: btrfs on the 7.x guest kernel merges reads into
 # multi-extent bios whose device LBA can belong to another file, so a guest read
 # returns EIO (or SIGBUS for a mapping) on pages that are fine on disk. The guest
-# caps virtio-blk request size at 64 KiB to keep that merge from happening; if
-# the cap or the block lower silently regresses, this smoke fails instead of a
+# reads the store through it; if the block lower silently regresses, this smoke fails instead of a
 # user's chromium dying on SIGBUS.
 set -uo pipefail
 
@@ -32,7 +31,7 @@ usage() {
 Usage: nix-lower-smoke.sh [OPTIONS]
 
 Boots one guest with the /nix block lower and one with CANG_NIX_LOWER_BLOCK=0,
-and scores engagement, the guest's request-size cap, lost pages and the speed
+and scores engagement, lost pages and the speed
 difference between the two.
 
 Options:
@@ -173,25 +172,25 @@ if [ "$skip_opt_out" -eq 0 ]; then
   run_boot "opt-out" "$block_env=0"
 fi
 
-# A guest-init that knows block mode but not the request-size cap must be
-# refused, not quietly served the slow path. The stale binary is made here by
-# renaming the cap's log literal in a copy, which keeps the ELF intact and is the
-# only part of the binary the host's capability gate reads.
+# A guest-init that predates block mode must be refused, not quietly served the
+# slow path. The stale binary is made here by renaming the marker in a copy,
+# which keeps the ELF intact and is the only part of the binary the host's
+# capability gate reads.
 stale_init=""
 if [ -n "$guest_init" ] && [ -r "$guest_init" ]; then
   stale_init="$out_dir/stale-cang-guest-init"
   cp "$guest_init" "$stale_init" && chmod 755 "$stale_init"
   if command -v perl >/dev/null 2>&1; then
-    perl -0pi -e 's/capped the request size of/xxxxxx the request size of/' "$stale_init"
+    perl -0pi -e 's/CANG_NIX_LOWER_BLOCK/xxxxxxxxxxxxxxxxxxx/' "$stale_init"
   else
-    sed -i 's/capped the request size of/xxxxxx the request size of/' "$stale_init"
+    sed -i 's/CANG_NIX_LOWER_BLOCK/xxxxxxxxxxxxxxxxxxx/' "$stale_init"
   fi
 fi
-if [ -n "$stale_init" ] && ! grep -qa 'capped the request size of' "$stale_init"; then
-  run_boot "refuse-uncapped" "" "$stale_init"
+if [ -n "$stale_init" ] && ! grep -qa 'CANG_NIX_LOWER_BLOCK' "$stale_init"; then
+  run_boot "refuse-stale" "" "$stale_init"
   run_boot "allow-fallback" "" "$stale_init" "--nix-lower-fallback"
 else
-  say "no cappable guest-init to derive a stale one from; skipping the refusal arm"
+  say "no readable guest-init to derive a stale one from; skipping the refusal arm"
 fi
 
 # ---- scoring ---------------------------------------------------------------
@@ -219,20 +218,6 @@ require nix-lower-engaged \
   "$(grep -q '^engaged=yes' "$block_ev/engaged.txt" 2>/dev/null && echo 0 || echo 1)" \
   "/nix is an overlay over the read-only block lower ($(value "$block_ev/engaged.txt"))" \
   "$(value "$block_ev/mounts.txt") $(value "$block_ev/nix-prep.log")"
-
-# The cap is what keeps btrfs from building a bio that spans another file; a
-# disk at the old 4096 KiB cap silently re-opens the loss.
-cap_ok=0
-cap_lines=""
-while read -r path cap; do
-  [ -n "$path" ] || continue
-  [ "$cap" = 64 ] || cap_ok=1
-  cap_lines="$cap_lines$path=$cap
-"
-done < <(value "$block_ev/queue.txt")
-[ -n "$cap_lines" ] || cap_ok=1
-require guest-request-cap "$cap_ok" \
-  "every virtio-blk disk caps requests at 64 KiB" "$(printf '%s' "$cap_lines" | tr '\n' ' ')"
 
 # Lost pages: the guest kernel logs `csum failed`, and a reader sees EIO.
 csum_summary="$(value "$block_ev/csum.txt")"
@@ -292,11 +277,11 @@ fi
 
 # The explicit-fallback contract: a block lower that cannot be served refuses
 # the launch, and only --nix-lower-fallback keeps the host-composed overlay.
-if [ -s "$out_dir/logs/refuse-uncapped.rc" ]; then
-  refuse_rc="$(value "$out_dir/logs/refuse-uncapped.rc")"
-  refuse_msg="$(sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$out_dir/logs/cang-refuse-uncapped.console" 2>/dev/null | tr -d '\r')"
-  require refuses-an-uncapped-guest "$([ "$refuse_rc" != 0 ] && echo 0 || echo 1)" \
-    "a guest-init without the request-size cap refuses the launch instead of falling back (exit $refuse_rc)" \
+if [ -s "$out_dir/logs/refuse-stale.rc" ]; then
+  refuse_rc="$(value "$out_dir/logs/refuse-stale.rc")"
+  refuse_msg="$(sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$out_dir/logs/cang-refuse-stale.console" 2>/dev/null | tr -d '\r')"
+  require refuses-a-stale-guest "$([ "$refuse_rc" != 0 ] && echo 0 || echo 1)" \
+    "a guest-init without block mode refuses the launch instead of falling back (exit $refuse_rc)" \
     "$(printf '%s' "$refuse_msg" | grep -m2 'block lower\|nix-lower-fallback')"
   require refusal-names-the-flag \
     "$(printf '%s' "$refuse_msg" | grep -q 'nix-lower-fallback' && echo 0 || echo 1)" \
