@@ -289,8 +289,14 @@ require_smoke_ack() {
       say "/nix lower surface moved since $previous: running tools/nix-lower-cang-smoke"
       # A lost page is the guest kernel's open read-merge bug, not this change;
       # it is recorded as KNOWN so a kernel defect cannot block a release forever.
+      # Load its own image from the flake: the driver's containers storage need
+      # not hold one, and the smoke is hermetic when it loads `.#container`.
+      local container
+      container="$(nix build "$repo_root#container" --no-link --print-out-paths)" ||
+        die "could not build .#container for the block-lower smoke"
       CANG_LENIENT_NIX_LOWER_LOSS=1 \
         "$repo_root/tools/nix-lower-cang-smoke/nix-lower-smoke.sh" \
+        --container "$container" \
         --out-dir "$out" >&2 ||
         die "tools/nix-lower-cang-smoke failed (evidence: $out); a FAIL here is cang's own side, not the known kernel loss"
       say "block-lower smoke passed (evidence: $out)"
