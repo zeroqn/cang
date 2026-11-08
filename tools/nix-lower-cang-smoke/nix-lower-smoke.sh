@@ -68,7 +68,17 @@ while [ $# -gt 0 ]; do
 done
 
 # ---- resolve the build under test -----------------------------------------
-[ -n "$cang_bin" ] || cang_bin="$(nix build "$repo_root#cang" --no-link --print-out-paths 2>/dev/null || true)"
+# Anything this smoke builds is rooted in the output directory before it is used:
+# a run is several boots long, and a store GC (an automatic one under disk
+# pressure, say) must not pull the binary out from under the last arm.
+[ -z "$out_dir" ] && out_dir="$repo_root/.smoke/nix-lower-cang/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$out_dir/logs" "$out_dir/roots"
+root_build() { # root_build <attr> -> the store path, rooted in the output directory
+  local attr="$1" name="${1//\//-}" path
+  path="$(nix build "$repo_root#$attr" -o "$out_dir/roots/$name" --print-out-paths 2>/dev/null || true)"
+  printf '%s\n' "$path"
+}
+[ -n "$cang_bin" ] || cang_bin="$(root_build cang)"
 [ -n "$cang_bin" ] || die "could not resolve a cang binary; pass --cang <path> or set CANG_BIN"
 if [ -d "$cang_bin" ]; then
   [ -x "$cang_bin/bin/cang" ] || die "$cang_bin is neither a cang binary nor a package prefix"
@@ -77,12 +87,10 @@ fi
 [ -x "$cang_bin" ] || die "cang is not executable: $cang_bin"
 
 if [ -z "$guest_init" ]; then
-  musl="$(nix build "$repo_root#cang-musl" --no-link --print-out-paths 2>/dev/null || true)"
+  musl="$(root_build cang-musl)"
   [ -n "$musl" ] && [ -x "$musl/bin/cang-guest-init" ] && guest_init="$musl/bin/cang-guest-init"
 fi
 [ -z "$guest_init" ] || [ -x "$guest_init" ] || die "guest-init not executable: $guest_init"
-
-[ -z "$out_dir" ] && out_dir="$repo_root/.smoke/nix-lower-cang/$(date -u +%Y%m%dT%H%M%SZ)"
 
 # ---- preflight -------------------------------------------------------------
 [ -e /dev/kvm ] || die "/dev/kvm is not accessible"

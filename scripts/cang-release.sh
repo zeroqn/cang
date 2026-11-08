@@ -291,8 +291,11 @@ require_smoke_ack() {
       # it is recorded as KNOWN so a kernel defect cannot block a release forever.
       # Load its own image from the flake: the driver's containers storage need
       # not hold one, and the smoke is hermetic when it loads `.#container`.
+      # Root both the image and the smoke's own builds: this gate runs several
+      # boots, and a store GC in between must not pull them out from under it.
       local container
-      container="$(nix build "$repo_root#container" --no-link --print-out-paths)" ||
+      mkdir -p "$(dirname "$out")"
+      container="$(nix build "$repo_root#container" -o "$(dirname "$out")/container.tgz" --print-out-paths)" ||
         die "could not build .#container for the block-lower smoke"
       CANG_LENIENT_NIX_LOWER_LOSS=1 \
         "$repo_root/tools/nix-lower-cang-smoke/nix-lower-smoke.sh" \
