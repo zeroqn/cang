@@ -25,26 +25,26 @@
 //! failure, a store the host cannot list) leaves the launch on the host-composed
 //! overlay, which is what the guest keeps using when the flag is absent.
 //!
-//! # Status: opt-in, because the guest kernel still loses /nix pages
+//! # Status: on by default, with the guest's request-size cap as its guard
 //!
-//! An ordinary cold read of `/nix/store` loses a 20-40 KiB window of one file
-//! (csum of a zero page in the guest's btrfs log, `SIGBUS` for a mapping over
-//! those pages). The cause is not this module: with the 7.x guest kernel btrfs
-//! merges reads into multi-extent, multi-folio bios, and a merged bio can carry a
-//! device LBA from one extent with payload pages from another, so the guest reads
-//! the wrong device range. It happens on the writable btrfs disks too, with block
-//! mode off.
+//! An ordinary cold read of `/nix/store` can lose a 20-40 KiB window of one file:
+//! the guest's btrfs logs a csum of a zero page and anything mapped over those
+//! pages takes `SIGBUS`. The cause is the guest kernel, not this module - with
+//! 7.x, btrfs merges reads into multi-extent, multi-folio bios and a merged bio
+//! can carry a device LBA from one extent with payload pages from another, so the
+//! guest reads the wrong device range. It happens on the writable btrfs disks too,
+//! and 6.12 firmware never does it on these same images.
 //!
 //! `cang-guest-init` caps every virtio-blk disk at `max_sectors_kb=64`, which
 //! keeps btrfs from building most of those bios: 23 cold sweeps of 40 files each
 //! at the cap logged no failure against 210 failing sectors over 12 sweeps without
-//! it, at ~1.5 % on a cold 2.4 GB read. It is a reduction and not a cure - one
-//! later boot at the cap still lost a window - so block mode stays opt-in while a
-//! lost page is a `SIGBUS` for the reader. The host side was never at fault: a
-//! diagnostic build that aborts the VM when the data about to be copied into
-//! guest memory holds an all-zero page while the image has data there never
-//! fired, and the guest's own `O_DIRECT` read of the failing physical offset
-//! equals the image.
+//! it. The cap is a guard and not a cure - one later boot at the cap still lost a
+//! window - so `--nix-lower=virtiofs` is the per-launch way out, and the fix
+//! belongs in the guest kernel (see docs/images-and-storage.md for the measured
+//! rates and the open work). The host side was never at fault: a diagnostic build
+//! that aborts the VM when the data about to be copied into guest memory holds an
+//! all-zero page while the image has data there never fired, and the guest's own
+//! `O_DIRECT` read of the failing physical offset equals the image.
 //!
 //! A *second*, deterministic fault used to live here and is fixed: two launches
 //! sharing one `[state] location` where the second rebuilt the image replaced
@@ -348,11 +348,13 @@ fn judge_mkfs_output(program: &OsStr, output: &std::process::Output) -> Result<(
 pub(crate) fn prepare_block(
     intent: &HostNixOverlay,
     guest_init: &Path,
+    mode: Option<NixLowerMode>,
     allow_fallback: bool,
 ) -> Result<Option<NixLowerBlock>> {
-    if !block_mode_requested() {
+    if !block_mode_requested(mode) {
         tracing::debug!(
-            "{HOST_BLOCK_MODE_ENV} is 0: keeping the host-composed /nix overlay on every layer"
+            mode = mode.map_or("default", NixLowerMode::as_str),
+            "the /nix block lower was not selected: keeping the host-composed overlay"
         );
         return Ok(None);
     }
@@ -456,22 +458,47 @@ fn prepare_block_with(
     }
 }
 
-/// Block mode is opt-in: `CANG_NIX_LOWER_BLOCK=1` turns it on.
+/// How a launch serves `/nix`: from the read-only block lower (the default) or on
+/// the host-composed overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum NixLowerMode {
+    /// Serve `/nix` from the read-only btrfs image on virtio-blk.
+    #[default]
+    Blk,
+    /// Keep the host-composed overlay on virtio-fs; no image is built or attached.
+    VirtioFs,
+}
+
+impl NixLowerMode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Blk => "blk",
+            Self::VirtioFs => "virtiofs",
+        }
+    }
+}
+
+/// Block mode is on by default: `--nix-lower=virtiofs`, or the legacy
+/// `CANG_NIX_LOWER_BLOCK=0`, keeps the host-composed overlay.
 ///
 /// The configuration it enables is the fast one from note 57 - `find /nix/store`
 /// 206-215 ms against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s - and it
 /// became possible once the fork forwarded `RENAME_WHITEOUT` (v2.0.0-cang.18).
 ///
-/// It cannot default on yet: the guest kernel's read bug that loses these pages
-/// is reduced but not eliminated by the request-size cap (see the module doc and
-/// `cang-guest-init`'s `disk::queue`), and a lost page is a `SIGBUS` for anyone
-/// mapped over it.
+/// The guest kernel's read bug that loses these pages is reduced but not
+/// eliminated by the request-size cap (see the module doc and
+/// `cang-guest-init`'s `disk::queue`), so a lost page is still possible; the
+/// escape hatch is `--nix-lower=virtiofs`.
 ///
 /// Block mode that is requested but cannot be served refuses the launch unless
-/// `--nix-lower-fallback` was passed, so a user who opted in never silently gets
-/// the slower overlay.
-fn block_mode_requested() -> bool {
-    matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("1"))
+/// `--nix-lower-fallback` was passed, so nobody silently gets the slower overlay.
+fn block_mode_requested(mode: Option<NixLowerMode>) -> bool {
+    match mode {
+        Some(NixLowerMode::Blk) => true,
+        Some(NixLowerMode::VirtioFs) => false,
+        // The environment variable predates the flag and stays an alias for it.
+        None => !matches!(std::env::var(HOST_BLOCK_MODE_ENV).as_deref(), Ok("0")),
+    }
 }
 
 pub(super) fn ensure_with_builder(
@@ -1221,8 +1248,8 @@ mod tests {
         // serialized by ENV_LOCK.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
 
-        let refused = prepare_block(&overlay, &guest_init, false);
-        let allowed = prepare_block(&overlay, &guest_init, true);
+        let refused = prepare_block(&overlay, &guest_init, None, false);
+        let allowed = prepare_block(&overlay, &guest_init, None, true);
 
         match before {
             Some(value) => unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, value) },
@@ -1339,10 +1366,9 @@ mod tests {
         );
     }
 
-    /// Block mode is opt-in until the guest kernel stops losing pages (see the
-    /// module doc).
+    /// The flag decides, then the legacy environment variable, then the default.
     #[test]
-    fn block_mode_needs_the_host_to_opt_in() {
+    fn the_flag_beats_the_environment_variable_and_blk_is_the_default() {
         let _guard = ENV_LOCK.lock().expect("env test lock");
         let temp = tempfile::tempdir().expect("tempdir");
         let nix_dir = cache_entry(&temp, &["aaaa-one"]);
@@ -1352,15 +1378,31 @@ mod tests {
         // SAFETY: a single-threaded assertion over one process env variable,
         // serialized by ENV_LOCK.
         unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) };
-        assert!(!block_mode_requested(), "block mode is off by default");
-
-        // SAFETY: as above.
-        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
-        assert!(block_mode_requested(), "1 opts in");
+        assert!(block_mode_requested(None), "the block lower is the default");
 
         // SAFETY: as above.
         unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "0") };
-        assert!(!block_mode_requested(), "0 keeps it off");
+        assert!(!block_mode_requested(None), "0 keeps the host overlay");
+
+        // SAFETY: as above.
+        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
+        assert!(block_mode_requested(None), "1 requests the block lower");
+
+        // The flag wins over the environment in both directions, so a stale
+        // exported variable cannot override an explicit choice.
+        // SAFETY: as above.
+        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "0") };
+        assert!(
+            block_mode_requested(Some(NixLowerMode::Blk)),
+            "--nix-lower=blk beats CANG_NIX_LOWER_BLOCK=0"
+        );
+
+        // SAFETY: as above.
+        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
+        assert!(
+            !block_mode_requested(Some(NixLowerMode::VirtioFs)),
+            "--nix-lower=virtiofs beats CANG_NIX_LOWER_BLOCK=1"
+        );
 
         // SAFETY: restore whatever the harness had.
         unsafe {

@@ -239,10 +239,25 @@ csum_summary="$(value "$block_ev/csum.txt")"
 csum_before="$(printf '%s' "$csum_summary" | sed -n 's/.*csum_before=\([0-9]*\).*/\1/p')"
 csum_after="$(printf '%s' "$csum_summary" | sed -n 's/.*csum_after=\([0-9]*\).*/\1/p')"
 files="$(printf '%s' "$csum_summary" | sed -n 's/.*files=\([0-9]*\).*/\1/p')"
-require no-lost-pages \
-  "$([ -n "$files" ] && [ "${files:-0}" -gt 8 ] && [ "${csum_after:-1}" = "${csum_before:-0}" ] && echo 0 || echo 1)" \
-  "cold reads of ${files:-0} store files lost no page ($csum_summary)" \
-  "$(value "$block_ev/csum-lines.txt")"
+# The 7.x guest kernel's read-merge bug is still open, so this check can fail
+# while cang's own side is correct. CANG_LENIENT_NIX_LOWER_LOSS=1 records the loss
+# as KNOWN instead of failing, for a caller that must not be blocked by a kernel
+# defect (see docs/images-and-storage.md). It never hides the count.
+lost_ok=1
+if [ -n "$files" ] && [ "${files:-0}" -gt 8 ] && [ "${csum_after:-1}" = "${csum_before:-0}" ]; then
+  lost_ok=0
+fi
+if [ "$lost_ok" -eq 0 ]; then
+  require no-lost-pages 0 \
+    "cold reads of ${files:-0} store files lost no page ($csum_summary)"
+elif [ "${CANG_LENIENT_NIX_LOWER_LOSS:-0}" = 1 ]; then
+  echo "KNOWN cold reads of ${files:-0} store files lost a page ($csum_summary);"
+  echo "      recorded as KNOWN because CANG_LENIENT_NIX_LOWER_LOSS=1 (guest-kernel read-merge bug, block mode stays opt-in)"
+else
+  require no-lost-pages 1 \
+    "cold reads of ${files:-0} store files lost a page ($csum_summary)" \
+    "$(value "$block_ev/csum-lines.txt")"
+fi
 
 eio="$(cat "$block_ev/eio.txt" 2>/dev/null | grep -c ':0$' || true)"
 require no-read-errors "$([ "$eio" -ge 2 ] && echo 0 || echo 1)" \

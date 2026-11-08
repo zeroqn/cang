@@ -175,10 +175,17 @@ A libkrun update is therefore:
    blob, which is not a workspace member and vendors from its own
    `init/init-binary/Cargo.lock`). `nix build .#cang` reports whichever
    mismatches first.
-5. Re-verify with a live boot and **all three** smokes, not just a green build:
+5. Re-verify with a live boot and **all five** smokes, not just a green build:
    `tools/chromium-cang-smoke` (GPU and `--waypipe` modes),
    `tools/virglrenderer-cang-smoke` (the Chromium smoke plus its VA-API
-   encode/decode arms and host-side attribution) and
+   encode/decode arms and host-side attribution),
+   `tools/zg-vulkan-cang-smoke` (`zg` indexing a workspace with its
+   qwen3-embedding-0.6b GGUF on the guest's venus device, scored on device,
+   fallback, retrieval and throughput: a venus memory-window regression falls
+   back to the CPU silently and only this smoke sees it),
+   `tools/nix-lower-cang-smoke` (the `/nix` read-only block lower: engagement, the
+   guest's per-disk request-size cap, cold-read page loss, the explicit-fallback
+   refusal and the speed the block lower exists for) and
    `tools/nix-generation-smoke` (a workspace `/nix` moving between two images:
    the generation is a btrfs subvolume, the move seeds it by snapshot, and the
    guest's DB merge keeps every store path valid). Chromium/venus being green
@@ -457,7 +464,15 @@ v<version>`) to trigger it again.
 
 `just release <version>` runs the phases below as one command - gates, version
 bump, the CI-checked pin, the tag, and the post-publish verification - and is the
-supported way to cut a release. It never computes the asset SRI locally: it pins
+supported way to cut a release. Before the gates it resolves the live smokes: a
+move in the `/nix` block-lower surface (`crates/cang-guest-init`, the
+`persistent_disks` and `disk` components, `tools/nix-lower-cang-smoke`) makes the
+driver *run* `tools/nix-lower-cang-smoke` itself, while a move in
+`deps/libkrun`/`deps/libkrunfw` requires `CANG_RELEASE_SMOKE_OK=1` after the three
+GPU smokes (chromium, virglrenderer, zg-vulkan). The block-lower smoke runs with
+`CANG_LENIENT_NIX_LOWER_LOSS=1` so the still-open 7.x guest-kernel read-merge bug is
+recorded as `KNOWN` rather than blocking a release; every other check in it is
+cang's own and fails the release. It never computes the asset SRI locally: it pins
 the hash CI published for the same source, which is why the patchelf question in
 step 2 cannot go wrong with it. `just release-plan <version>` prints the phases
 without touching anything, and `just release-verify <published-version>`

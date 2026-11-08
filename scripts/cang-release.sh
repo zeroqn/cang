@@ -26,7 +26,10 @@
 #
 # Environment:
 #   CANG_RELEASE_SKIP_GATES=1   skip fmt/clippy/deny/test (already run)
-#   CANG_RELEASE_SMOKE_OK=1     acknowledge a live smoke after a deps/libkrun move
+#   CANG_RELEASE_SMOKE_OK=1     acknowledge the live GPU smokes after a
+#                               deps/libkrun or deps/libkrunfw move
+#   CANG_RELEASE_SKIP_NIX_LOWER_SMOKE=1  skip the block-lower smoke the driver
+#                               otherwise runs itself when that surface moved
 #   CANG_RELEASE_ASSUME_YES=1   do not ask before pushing
 #   CANG_RELEASE_CI_TIMEOUT     seconds to wait for one CI run (default 2400)
 #   CANG_RELEASE_CI_POLL        seconds between polls (default 20)
@@ -257,19 +260,44 @@ gate() {
   cargo test
 }
 
-# A libkrun pin move is release-blocking until both live smokes pass; that is a
-# 25-40 minute GPU job, so the driver asks for the acknowledgement rather than
-# pretending to run it.
+# Live smokes. The /nix block-lower smoke is cheap (four boots) and gates the
+# surfaces it covers, so the driver runs it itself; the GPU smokes are 25-40
+# minute jobs, so a move in the libkrun or libkrunfw pins asks for the
+# acknowledgement rather than pretending to run them.
 require_smoke_ack() {
   local previous
   previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
   [ -n "$previous" ] || return 0
-  if git diff --quiet "$previous" HEAD -- deps/libkrun; then
+
+  # The block lower's host half, its guest half, the request-size cap and the
+  # smoke that scores them.
+  if ! git diff --quiet "$previous" HEAD -- \
+    crates/cang-guest-init \
+    crates/cang/src/runtime/launch/components/persistent_disks \
+    crates/cang/src/runtime/launch/components/disk \
+    tools/nix-lower-cang-smoke; then
+    if [ "${CANG_RELEASE_SKIP_NIX_LOWER_SMOKE:-0}" = 1 ]; then
+      say "/nix lower surface moved since $previous, block-lower smoke skipped on request"
+    else
+      local out
+      out="$repo_root/.smoke/nix-lower-release/$(git rev-parse --short HEAD)"
+      say "/nix lower surface moved since $previous: running tools/nix-lower-cang-smoke"
+      # A lost page is the guest kernel's open read-merge bug, not this change;
+      # it is recorded as KNOWN so a kernel defect cannot block a release forever.
+      CANG_LENIENT_NIX_LOWER_LOSS=1 \
+        "$repo_root/tools/nix-lower-cang-smoke/nix-lower-smoke.sh" \
+        --out-dir "$out" >&2 ||
+        die "tools/nix-lower-cang-smoke failed (evidence: $out); a FAIL here is cang's own side, not the known kernel loss"
+      say "block-lower smoke passed (evidence: $out)"
+    fi
+  fi
+
+  if git diff --quiet "$previous" HEAD -- deps/libkrun deps/libkrunfw; then
     return 0
   fi
   [ "${CANG_RELEASE_SMOKE_OK:-0}" = 1 ] ||
-    die "deps/libkrun moved since $previous: run tools/chromium-cang-smoke and tools/virglrenderer-cang-smoke, then re-run with CANG_RELEASE_SMOKE_OK=1"
-  say "deps/libkrun moved since $previous, live smoke acknowledged"
+    die "deps/libkrun or deps/libkrunfw moved since $previous: run tools/chromium-cang-smoke, tools/virglrenderer-cang-smoke and tools/zg-vulkan-cang-smoke (the zg + qwen3-embedding-0.6b on the guest Vulkan device), then re-run with CANG_RELEASE_SMOKE_OK=1"
+  say "deps/libkrun/libkrunfw moved since $previous, live GPU smokes acknowledged (chromium, virglrenderer, zg-vulkan)"
 }
 
 # The tag gate in publish_release.yml refuses a tagged release while the

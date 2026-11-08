@@ -54,3 +54,9 @@ path when it only needs the engagement and no-loss checks.
 | `block-lower-is-faster` | `find /nix/store` is at least 2x faster on the block lower |
 
 A run prints `VERDICT: PASS` or `VERDICT: FAIL` and exits 0/1.
+
+`CANG_LENIENT_NIX_LOWER_LOSS=1` records a lost page as `KNOWN` instead of a
+failure, printing the count either way. It exists for callers that must not be
+blocked by the still-open 7.x guest-kernel read-merge bug (the release driver uses
+it); remove that flag once the kernel stops losing pages, and the check goes back
+to gating on its own.

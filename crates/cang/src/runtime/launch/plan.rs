@@ -63,6 +63,8 @@ pub(crate) struct LaunchPlan {
     pub(crate) landlock: LandlockMode,
     pub(crate) allocator: AllocatorMode,
     pub(crate) preserve_debug: bool,
+    pub(crate) nix_lower:
+        Option<crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode>,
     pub(crate) nix_lower_fallback: bool,
     pub(crate) config_diagnostics: ConfigDiagnostics,
 }
@@ -167,6 +169,7 @@ impl LaunchPlan {
             landlock,
             allocator: options.allocator,
             preserve_debug: options.preserve_debug,
+            nix_lower: options.nix_lower,
             nix_lower_fallback: options.nix_lower_fallback,
             config_diagnostics: ConfigDiagnostics {
                 config_path: config.path().to_path_buf(),
@@ -371,6 +374,7 @@ mod tests {
             container_store_backend: None,
             guest_init: None,
             preserve_debug: false,
+            nix_lower: None,
             nix_lower_fallback: false,
             mem_gib: None,
             network_mode: NetworkMode::Tsi,

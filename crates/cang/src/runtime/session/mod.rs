@@ -265,6 +265,7 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                 prepare_nix_lower_block(
                     nix_overlay_lease.intent(),
                     guest_init_binary,
+                    plan.nix_lower,
                     plan.nix_lower_fallback,
                 )
             })?;
@@ -658,6 +659,7 @@ mod tests {
             container_store_backend: None,
             guest_init: None,
             preserve_debug: false,
+            nix_lower: None,
             nix_lower_fallback: false,
             mem_gib: None,
             network_mode: config::NetworkMode::Tsi,

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::logging::{LogLevel, LogSettings};
 use crate::runtime::landlock::LandlockMode;
+use crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode;
 use crate::runtime::launch::config::{AllocatorMode, GuestPermissions, NetworkMode, PulseServer};
 use crate::runtime::seccomp::{AuditMode, SeccompCommand, SeccompMode};
 use crate::runtime::vm::gpu::GpuMode;
@@ -230,6 +231,15 @@ pub(crate) struct Cli {
 
     #[arg(long = "preserve-debug", help = "Preserve task debug state after exit")]
     preserve_debug: bool,
+
+    #[arg(
+        long = "nix-lower",
+        value_name = "MODE",
+        value_parser = parse_nix_lower_arg,
+        help = "Serve /nix from the read-only block lower or the host overlay",
+        long_help = "Serve /nix from the read-only block lower or the host overlay. blk (the default) serves the store from a read-only btrfs image on virtio-blk, which the guest composes its overlay from; virtiofs keeps the host-composed overlay. When blk is selected and cannot be served (the image cannot be built or is locked by another launch, or the image's cang-guest-init predates the guest half or its virtio-blk request-size cap) the launch fails unless --nix-lower-fallback is also passed. CANG_NIX_LOWER_BLOCK=0 is the older spelling of --nix-lower=virtiofs."
+    )]
+    nix_lower: Option<String>,
 
     #[arg(
         long = "nix-lower-fallback",
@@ -608,6 +618,10 @@ impl Cli {
             container_store_backend: self.container_store_backend,
             guest_init: self.guest_init,
             preserve_debug: self.preserve_debug,
+            nix_lower: self.nix_lower.as_deref().map(|mode| match mode {
+                "virtiofs" => NixLowerMode::VirtioFs,
+                _ => NixLowerMode::Blk,
+            }),
             nix_lower_fallback: self.nix_lower_fallback,
             mem_gib: self.mem_gib,
             network_mode: if self.tsi {
@@ -664,6 +678,7 @@ pub(crate) struct RuntimeOptions {
     pub(crate) container_store_backend: Option<ContainerStoreBackend>,
     pub(crate) guest_init: Option<PathBuf>,
     pub(crate) preserve_debug: bool,
+    pub(crate) nix_lower: Option<NixLowerMode>,
     pub(crate) nix_lower_fallback: bool,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,
@@ -1079,6 +1094,20 @@ mod tests {
         assert!(parse_gpu_shm_arg("0M").is_err());
         assert!(parse_gpu_shm_arg("4X").is_err());
         assert!(parse_gpu_shm_arg("").is_err());
+    }
+
+    #[test]
+    fn parses_nix_lower_modes_and_rejects_anything_else() {
+        use crate::cli::parse_nix_lower_arg;
+
+        assert_eq!(parse_nix_lower_arg("blk").expect("blk"), "blk");
+        assert_eq!(
+            parse_nix_lower_arg("virtiofs").expect("virtiofs"),
+            "virtiofs"
+        );
+        let err = parse_nix_lower_arg("block").expect_err("an unknown mode is refused");
+        assert!(err.contains("blk"), "{err}");
+        assert!(err.contains("virtiofs"), "{err}");
     }
 
     #[test]
@@ -2459,4 +2488,14 @@ fn fs_option_rejects_unknown_keys_and_values() {
     assert!(Cli::try_parse_from(["cang", "--fs=no-flush:maybe", "--", "true"]).is_err());
     assert!(Cli::try_parse_from(["cang", "--fs=cache-symlinks:maybe", "--", "true"]).is_err());
     assert!(Cli::try_parse_from(["cang", "--fs=negative-entry:soon", "--", "true"]).is_err());
+}
+
+/// `--nix-lower` takes exactly two words; anything else is a mistake worth naming.
+fn parse_nix_lower_arg(value: &str) -> Result<String, String> {
+    match value {
+        "blk" | "virtiofs" => Ok(value.to_owned()),
+        other => Err(format!(
+            "unknown /nix lower mode '{other}': use blk (the block lower, the default) or virtiofs (the host-composed overlay)"
+        )),
+    }
 }

@@ -27,13 +27,13 @@ rootless Podman tooling for development.
   backing btrfs mount to allow user-owned subvolume removal; add
   `user_subvol_rm_allowed` to that mount's options when using this fast path.
   The same tools build the read-only `/nix` lower image
-  (`mkfs.btrfs --rootdir --reflink --shrink`) that `CANG_NIX_LOWER_BLOCK=1`
-  selects: cached under
-  `<state>/cang/microvm/images/btrfs-snapshots/nix-lower/` at ~12 GiB, built on
-  the first launch of each image generation, ~512 MiB of free space required up
-  front. Once selected, a launch that cannot be served the block lower refuses to
-  start and names why; `--nix-lower-fallback` keeps the host-composed overlay for
-  that launch (see the linked section).
+  (`mkfs.btrfs --rootdir --reflink --shrink`) that launches use by default:
+  cached under `<state>/cang/microvm/images/btrfs-snapshots/nix-lower/` at
+  ~12 GiB, built on the first launch of each image generation, ~512 MiB of free
+  space required up front. `--nix-lower=virtiofs` keeps the host-composed overlay
+  instead; a launch that cannot be served the block lower refuses to start and
+  names why, and `--nix-lower-fallback` accepts the overlay for that launch (see
+  the linked section).
 - `libkrun` at build time, not at runtime. `cang` links libkrun's Rust API
   (`crates/cang-libkrun`, compiled from the `libkrun-src` flake input grafted
   into `deps/libkrun` by cang's own toolchain), so libkrun is part of the binary
