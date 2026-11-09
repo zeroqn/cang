@@ -84,21 +84,29 @@ jobs:
             echo "tag1=dev"
             echo "tag2=sha-${short_sha}"
           } >> "${GITHUB_OUTPUT}"
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Tag ${{ matrix.image_name }} image for GHCR
-        run: |
-          set -euo pipefail
-
-          docker tag "${{ matrix.local_image }}" "${{ steps.image_meta.outputs.target_image }}:${{ steps.image_meta.outputs.tag1 }}"
-          docker tag "${{ matrix.local_image }}" "${{ steps.image_meta.outputs.target_image }}:${{ steps.image_meta.outputs.tag2 }}"
       - name: Push ${{ matrix.image_name }} image to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_IMAGE: ${{ steps.image_meta.outputs.target_image }}
+          GHCR_TAG1: ${{ steps.image_meta.outputs.tag1 }}
+          GHCR_TAG2: ${{ steps.image_meta.outputs.tag2 }}
         run: |
           set -euo pipefail
 
-          docker push "${{ steps.image_meta.outputs.target_image }}:${{ steps.image_meta.outputs.tag1 }}"
-          docker push "${{ steps.image_meta.outputs.target_image }}:${{ steps.image_meta.outputs.tag2 }}"
+          # The docker-archive carries uncompressed layer tars, and Docker
+          # publishes them as-is, so a push through the daemon would leave every
+          # pull fetching 8.4 GB of layers. skopeo recompresses each layer with
+          # zstd, which is what a puller actually downloads.
+          archive="$(cat "${{ matrix.image_name }}-container-path.txt")"
+          nix shell --inputs-from . nixpkgs#skopeo -c skopeo copy \
+            --dest-creds "${GHCR_USER}:${GHCR_TOKEN}" \
+            --dest-compress-format zstd \
+            --dest-compress-level 12 \
+            "docker-archive:${archive}" "docker://${GHCR_IMAGE}:${GHCR_TAG1}"
+          # The second tag is the same blobs; copy inside the registry so nothing
+          # is recompressed or re-uploaded.
+          nix shell --inputs-from . nixpkgs#skopeo -c skopeo copy \
+            --src-creds "${GHCR_USER}:${GHCR_TOKEN}" \
+            --dest-creds "${GHCR_USER}:${GHCR_TOKEN}" \
+            "docker://${GHCR_IMAGE}:${GHCR_TAG1}" "docker://${GHCR_IMAGE}:${GHCR_TAG2}"

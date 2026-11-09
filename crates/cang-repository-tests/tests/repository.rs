@@ -285,10 +285,23 @@ fn publish_image_workflows_publish_only_cang() {
             "uses: actions/cache@v6",
             r#"docker load --input "$(cat "${{ matrix.image_name }}-container-path.txt")""#,
             r#"docker run --rm --entrypoint "${{ matrix.init_binary }}" "${{ matrix.local_image }}" --help > /dev/null"#,
-            r#"docker tag "${{ matrix.local_image }}" "${{ steps.image_meta.outputs.target_image }}:${{ steps.image_meta.outputs.tag1 }}""#,
-            r#"docker tag "${{ matrix.local_image }}" "${{ steps.image_meta.outputs.target_image }}:${{ steps.image_meta.outputs.tag2 }}""#,
+            "nix shell --inputs-from . nixpkgs#skopeo -c skopeo copy",
+            "--dest-compress-format zstd",
+            "--dest-compress-level 12",
+            r#"--dest-creds "${GHCR_USER}:${GHCR_TOKEN}""#,
+            r#""docker-archive:${archive}" "docker://${GHCR_IMAGE}:${GHCR_TAG1}""#,
+            r#""docker://${GHCR_IMAGE}:${GHCR_TAG1}" "docker://${GHCR_IMAGE}:${GHCR_TAG2}""#,
         ] {
             assert!(workflow.contains(required), "missing {required}");
+        }
+
+        // Docker publishes the archive's uncompressed layer tars as they are, so
+        // a push through it leaves every pull fetching all 8.4 GB of layers.
+        for forbidden in ["docker push", "docker tag ", "docker/login-action"] {
+            assert!(
+                !workflow.contains(forbidden),
+                "the published image must be pushed with zstd layers by skopeo, found {forbidden}"
+            );
         }
     }
 

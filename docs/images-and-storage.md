@@ -11,6 +11,24 @@ contract. `--pull-latest` refreshes the canonical image through Buildah before
 cache lookup, and `--image` uses exactly the supplied image reference with
 `--pull=missing`. `--image` and `--pull-latest` are mutually exclusive.
 
+### Published image compression
+
+`publish_image.yml` and `publish_dev_image.yml` push the image with skopeo
+(`--dest-compress-format zstd --dest-compress-level 12`), not with `docker push`.
+The flake's `.#container` archive carries uncompressed layer tars, and Docker
+publishes those as they are - a pull of this image used to transfer all 8.4 GB of
+layers. Per-layer zstd brings the same ten layers to 2.5 GB (measured; per-layer
+`gzip -6` would be 3.0 GB), so the published manifest is OCI with
+`application/vnd.oci.image.layer.v1.tar+zstd` layers. Buildah - and so every cang
+pull path - reads that media type; Docker Engine's graphdriver does not, so
+`docker pull` is not a supported way to obtain the cang image.
+
+Compressing layers does not by itself make a changed layer cheaper: a layer whose
+content changed is still re-downloaded in full. Only `zstd:chunked` layers
+together with `pull_options.enable_partial_images` in the containers storage
+config let a puller reuse the files it already has, and cang inherits the user's
+containers configuration rather than setting that option.
+
 ## Image cache management
 
 Cang also exposes a local image-cache management surface:
