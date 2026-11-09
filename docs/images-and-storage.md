@@ -135,25 +135,25 @@ and `=1` of `blk`. A launch cannot be served the block lower when the image cann
 be built or is locked by another launch, or when the image's `cang-guest-init`
 predates the guest half.
 
-The block lower depends on the guest kernel, and that is why cang pins the
-6.12 LTS line for it. With cang's 7.x guest kernel an ordinary cold read of the
-store intermittently returned wrong contents for a 40 KiB window: the guest's btrfs
-logged `csum failed` (most often the checksum of a zero page, sometimes of a page
-of `0xcc` padding), zeroed the window and returned `EIO` - or `SIGBUS` for a
-mapping over it, which is what killed a cold chromium start. It was not this
-module and not the host: the same read pattern failed on the read-only lower *and*
-on the writable btrfs disks (210 failing sectors over 12 cold 2.4 GB sweeps), an
-instrumented libkrun that compared the guest's own pages against the image after
-every read never found a difference, and 130 of 130 measured windows lay inside a
-single 1 MiB extent. Capping the guest's request size to 64 KiB only lowered the
-rate (24 clean sweeps, then one lost window), so the cap was removed again rather
-than shipped as a fix.
+An ordinary cold 7.x-kernel read of the store used to intermittently return
+stale contents for a 40 KiB window: the guest's btrfs logged `csum failed` (the
+checksum of a zero page), zeroed the window and returned `EIO` - or `SIGBUS` for a
+mapping over it, which is what killed a cold chromium start. The cause was in
+libkrun, not in this module, the image or btrfs: a virtio-blk descriptor whose
+buffer spanned two adjacent guest-memory regions was rejected whole, and the
+request completed with no data and no status, which the guest's driver scored as
+success - so btrfs verified pages that were never written. libkrun's map has such
+a boundary at the end of the kernel image it inserts (`[16 MiB, 16 MiB +
+kernel_size)`), inside RAM the guest is free to allocate from, and the 7.x kernel
+merges reads into multi-folio, multi-megabyte requests whose scatter-gather
+entries cross it (the 6.12 line emits page-sized entries, which cannot). Buffers
+are now split per region (`descriptor_utils::buffer_region_slices`), so the
+request shape no longer matters.
 
-On the 6.12 LTS kernel the same 40-file, 1.7 GB cold sweep at an uncapped
-`max_sectors_kb` reads the store without a single lost page, which is what
-`tools/nix-lower-cang-smoke` asserts on every release. If the 7.x line is ever
-pinned again, that smoke is the gate, and the request-size cap is the stop-gap to
-measure against.
+`tools/nix-lower-cang-smoke` asserts the no-lost-page property on every release:
+40 files, 1.7 GB of cold reads at the disk's default request size. With the split
+in place an instrumented 7.3.1 firmware reads them with no lost page in 9 of 9
+sweeps, where the same device lost 1-19 pages per sweep before.
 
 A separate, *deterministic* fault is also fixed: two launches sharing one `[state]
 location`, where the second rebuilt the image while the first one's VM had it

@@ -9,14 +9,17 @@ the host-composed overlay.
 
 Two, both quiet.
 
-1. **Lost pages.** With the 7.x guest kernel, btrfs merges reads into
-   multi-extent, multi-folio bios, and a merged bio can carry a device LBA taken
-   from one extent while its payload pages belong to another. The guest reads the
-   wrong device range, the pages fail their data checksum, btrfs zeroes them and
-   the reader gets `EIO` — or `SIGBUS` when the page is mapped, which is how a
-   cold chromium used to die in the presenting arm. The guest caps every
-   virtio-blk disk at whatever the kernel defaults to;
-   this smoke asserts the cap and then does the cold reads that used to fail.
+1. **Lost pages.** A virtio-blk request whose buffer spanned two guest-memory
+   regions used to be rejected whole by libkrun (the guest-memory map has a
+   region boundary at the end of the kernel image, inside RAM the guest is free
+   to use), and the request completed with no data and no status - which the
+   guest's virtio-blk driver scored as success. btrfs then failed the checksum of
+   pages that were never written, zeroed them and returned `EIO`, or `SIGBUS` for
+   a mapping over them, which is how a cold chromium used to die in the
+   presenting arm. The 7.x guest kernel only made such a buffer common (large
+   folios, merged scatter-gather entries); the split is fixed in
+   `deps/libkrun`'s `descriptor_utils`, and this smoke does the cold reads that
+   used to fail at the disk's own default request size.
 2. **The block lower silently not engaged.** The host falls back to the
    host-composed overlay when it cannot build or lock the image, and the launch
    never fails because of it. Without an assertion the run looks clean and is
@@ -55,7 +58,7 @@ path when it only needs the engagement and no-loss checks.
 A run prints `VERDICT: PASS` or `VERDICT: FAIL` and exits 0/1.
 
 `CANG_LENIENT_NIX_LOWER_LOSS=1` records a lost page as `KNOWN` instead of a
-failure, printing the count either way. It exists for callers that must not be
-blocked by the still-open 7.x guest-kernel read-merge bug (the release driver uses
-it); remove that flag once the kernel stops losing pages, and the check goes back
-to gating on its own.
+failure, printing the count either way. It was added while the region-spanning
+descriptor fault was live (the release driver still passes it); a run on a kernel
+whose reads were clean without it can drop the flag and let the check gate on its
+own.

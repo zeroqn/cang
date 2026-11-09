@@ -234,10 +234,10 @@ csum_summary="$(value "$block_ev/csum.txt")"
 csum_before="$(printf '%s' "$csum_summary" | sed -n 's/.*csum_before=\([0-9]*\).*/\1/p')"
 csum_after="$(printf '%s' "$csum_summary" | sed -n 's/.*csum_after=\([0-9]*\).*/\1/p')"
 files="$(printf '%s' "$csum_summary" | sed -n 's/.*files=\([0-9]*\).*/\1/p')"
-# The 7.x guest kernel's read-merge bug is still open, so this check can fail
-# while cang's own side is correct. CANG_LENIENT_NIX_LOWER_LOSS=1 records the loss
-# as KNOWN instead of failing, for a caller that must not be blocked by a kernel
-# defect (see docs/images-and-storage.md). It never hides the count.
+# A lost page is a defect in the runtime, not in the launch being scored, so
+# CANG_LENIENT_NIX_LOWER_LOSS=1 records the loss as KNOWN instead of failing, for a
+# caller that must not be blocked by it (see docs/images-and-storage.md). It never
+# hides the count.
 lost_ok=1
 if [ -n "$files" ] && [ "${files:-0}" -gt 8 ] && [ "${csum_after:-1}" = "${csum_before:-0}" ]; then
   lost_ok=0

@@ -287,8 +287,8 @@ require_smoke_ack() {
       local out
       out="${CANG_RELEASE_SMOKE_DIR:-$repo_root/.smoke/nix-lower-release}/$(git rev-parse --short HEAD)"
       say "/nix lower surface moved since $previous: running tools/nix-lower-cang-smoke"
-      # A lost page is the guest kernel's open read-merge bug, not this change;
-      # it is recorded as KNOWN so a kernel defect cannot block a release forever.
+      # A lost page is the runtime's descriptor handling, not this change; it is
+      # recorded as KNOWN so that defect cannot block a release forever.
       # Load its own image from the flake: the driver's containers storage need
       # not hold one, and the smoke is hermetic when it loads `.#container`.
       # Root both the image and the smoke's own builds: this gate runs several

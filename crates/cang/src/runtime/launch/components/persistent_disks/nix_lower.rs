@@ -25,25 +25,29 @@
 //! failure, a store the host cannot list) leaves the launch on the host-composed
 //! overlay, which is what the guest keeps using when the flag is absent.
 //!
-//! # Status: on by default, on the 6.12 LTS guest kernel
+//! # Status: on by default, on both kernel lines
 //!
-//! An ordinary cold read of `/nix/store` can lose a 20-40 KiB window of one file:
-//! the guest's btrfs logs a csum of a zero page and anything mapped over those
-//! pages takes `SIGBUS`. The cause is the guest kernel, not this module - with
-//! 7.x, btrfs merges reads into multi-extent, multi-folio bios and a merged bio
-//! can carry a device LBA from one extent with payload pages from another, so the
-//! guest reads the wrong device range. It happens on the writable btrfs disks too,
-//! and 6.12 firmware never does it on these same images.
+//! Under the 7.x guest kernel an ordinary cold read of `/nix/store` lost a
+//! 20-40 KiB window of one file: the guest's btrfs logged a csum of a zero page
+//! and anything mapped over those pages took `SIGBUS`. The cause was libkrun's
+//! descriptor handling, not this module and not btrfs: the guest-memory map has a
+//! region boundary at the end of the kernel image that libkrunfw inserts
+//! (`[0x1000000, 0x1000000 + kernel_size)`, a separate region from the RAM on
+//! either side), while the guest is told the whole span is RAM and hands out
+//! pages there once it frees its own image. A merged scatter-gather entry could
+//! then straddle that boundary, and `Reader`/`Writer::from_guest_buffers`
+//! rejected the entire chain - the request completed with no data and no status,
+//! which the guest's virtio-blk driver scored as success, so btrfs verified pages
+//! that were never written. Buffers are now split per region instead
+//! (`crates/.../descriptor_utils.rs::buffer_region_slices`), which is what makes
+//! the 7.x line safe: its large folios and merged SG entries only made a
+//! boundary-spanning descriptor common, they were never the fault.
 //!
-//! The 7.x line of cang's guest kernel does the same thing on the writable btrfs
-//! disks, and no cang-side setting closes it: 130 of 130 measured lost windows sat
-//! inside a single 1 MiB extent, the host was proved to hand over correct bytes
-//! (an instrumented libkrun compared the guest's own sg pages with the image after
-//! every read), and capping the request size to 64 KiB only lowered the rate (24
-//! clean sweeps, then one lost window) while costing throughput. cang therefore
-//! pins the 6.12 LTS kernel, where the same 40-file sweep at an uncapped
-//! `max_sectors_kb` reads the store without a single lost page; if the 7.x line
-//! comes back, the cap is the stop-gap to measure against, not a fix.
+//! `max_sectors_kb` was the former stop-gap and is no longer needed: with the
+//! split in place, an instrumented 7.3.1 firmware reads the same 40 files
+//! (1.74 GB) at the default 4096 KiB with no lost page in 9 of 9 sweeps, where
+//! the unfixed device lost 1-19 pages per sweep. A 64 KiB cap stays a
+//! measurement knob, not a fix.
 //!
 //! A *second*, deterministic fault used to live here and is fixed: two launches
 //! sharing one `[state] location` where the second rebuilt the image replaced
@@ -479,8 +483,8 @@ impl NixLowerMode {
 /// 206-215 ms against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s - and it
 /// became possible once the fork forwarded `RENAME_WHITEOUT` (v2.0.0-cang.18).
 ///
-/// The 6.12 LTS guest kernel reads this image without losing a page; the 7.x line
-/// does not (see the module doc), so switching back is a deliberate act.
+/// Both kernel lines read this image without losing a page (see the module doc
+/// for the descriptor split that made 7.x safe).
 ///
 /// `blk` refuses a launch it cannot serve, so nobody who asked for the block lower
 /// silently gets the slower overlay; `auto` keeps the launch and names the reason.
