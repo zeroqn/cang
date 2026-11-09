@@ -65,6 +65,17 @@ is not on it exists for the image's own processes but not for a `cargo build`
 inside a task. A guest build therefore links with `wild` and sees the pinned
 toolchain's `rust-src`; `RUSTC_WRAPPER` (`sccache`) stays host-only on purpose.
 
+### Cargo's output location
+
+The dev shell exports `CARGO_TARGET_DIR=$HOME/.cache/cang-build/target/<checkout>`
+(one directory per checkout, named after the git root) unless the caller already
+set it. Two copies of the tree then never serialise on one cargo lock, and the
+checkout stays free of the multi-GiB `target/` that `nix develop path:$PWD` and
+`nix build path:$PWD#container` would otherwise copy into the store: the ordinary
+git flake copy skips `target/` because it is in `.gitignore`, but a `path:` input
+has no such filter. `cargo clean` in that directory is the lever when the build
+output outgrows the disk.
+
 ## Build outputs
 
 Source builds of the host package compile libkrun's Rust API from the fork
@@ -213,6 +224,34 @@ goes to the input instead of the checkout:
   includes rootless Podman tooling such as Podman, Buildah, crun, netavark,
   aardvark-dns, passt, and docker-compose, and Nix formatting tooling such as
   `nixfmt`.
+
+### Image layer layout
+
+`nix/image/layers.nix` builds the image from `dockerTools.buildLayeredImage`'s
+layering pipeline: `split_paths` moves a named root and its exclusive closure
+into its own layer, and `limit_layers` keeps the first `budget - 1` groups while
+merging every group after them into one layer that `reverse` then puts at the
+bottom of the image. The budget (`cangImageMaxLayers - 1`) therefore has to stay
+above the number of groups the pipeline emits; below it, the toolchain layers
+collapse into the bottom layer, which is how a single 3.8 GiB layer holding the
+base rest, the C/C++ toolchain and the Rust toolchain came about, and every input
+change re-shipped it whole. A repository test fails if the budget no longer
+exceeds twice the number of `split_paths` stages.
+
+Two kinds of content are deliberately not in that shared bottom layer:
+
+- the guest-init binary (`cangInitLayerPaths`), and
+- the five compat wrappers that name it (`compatLayerPaths`: `nix`, `podman`,
+  `docker`, `docker-compose`, `cang-as-dev`), whose store path changes with every
+  cang version bump because they embed `${cangMuslPackage}`. `split_paths` gives
+  a group its exclusive closure too, so that layer also carries the `nix`,
+  `podman`, `docker` and `docker-compose` packages - about 98 MiB, moved there
+  from the bottom layer it would otherwise be pinned by, and re-shipped on a
+  bump along with the 3.4 MiB guest-init layer and the config layer. Measured
+  0.21.0 -> 0.21.1: 13 of 16 layer tars byte-identical, 112.9 MiB re-shipped
+  instead of the 3.9 GiB the merged bottom layer used to cost.
+
+Anything else version-coupled belongs in `compatLayerPaths`, not in the base rest.
 
 Keep a GC root for any image you build and load: an unrooted `nix build` output
 that `podman load` has consumed is not protected, so `nix-collect-garbage` can

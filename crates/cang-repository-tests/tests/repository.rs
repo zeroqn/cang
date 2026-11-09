@@ -623,6 +623,61 @@ fn image_includes_seccomp_policy_data_without_adding_it_to_path() {
 }
 
 #[test]
+fn image_layers_keep_version_coupled_wrappers_out_of_the_bottom_layer() {
+    // The compat wrappers name `${cangMuslPackage}`, so a cang version bump
+    // changes their store path. Splitting them into their own layer is what
+    // keeps a bump from rewriting the multi-GiB bottom layer they used to
+    // share with the toolchains.
+    let compat = LAYERS
+        .split("compatLayerPaths =")
+        .nth(1)
+        .and_then(|tail| tail.split("];").next())
+        .expect("compatLayerPaths should exist");
+    for required in [
+        "nixCommandCompat",
+        "podmanCommandCompat",
+        "dockerCommandCompat",
+        "dockerComposeCommandCompat",
+        "cangAsDevCommandCompat",
+    ] {
+        assert!(
+            compat.contains(required),
+            "compatLayerPaths should carry {required}"
+        );
+    }
+
+    let pipeline = &LAYERS[LAYERS
+        .find("cangImageLayeringPipeline =")
+        .expect("cangImageLayeringPipeline should exist")..];
+    assert!(
+        pipeline.contains("compatLayerPaths"),
+        "the layering pipeline should split compatLayerPaths into its own layer"
+    );
+
+    // `limit_layers` keeps (budget - 1) groups and merges every group after
+    // them into the bottom layer, so a budget below the group count silently
+    // collapses the per-group split. Each `split_paths` stage contributes at
+    // most a main and a common group, plus the trailing "rest": a budget above
+    // twice the stage count cannot merge anything.
+    let stage_count = LAYERS.matches("\"split_paths\"").count();
+    let max_layers = LAYERS
+        .split("cangImageMaxLayers = ")
+        .nth(1)
+        .and_then(|tail| tail.split(';').next())
+        .expect("cangImageMaxLayers should exist");
+    let max_layers: usize = max_layers
+        .trim()
+        .parse()
+        .expect("cangImageMaxLayers should be a number");
+    assert!(
+        max_layers > 2 * stage_count,
+        "cangImageMaxLayers ({max_layers}) must exceed twice the {stage_count} \
+         layering pipeline stages, or limit_layers merges the toolchain layers \
+         back into the image's bottom layer"
+    );
+}
+
+#[test]
 fn image_config_defines_cang_entrypoint() {
     for required in [
         r#""${cangMuslPackage}/bin/cang-guest-init""#,
@@ -2273,6 +2328,11 @@ fn one_pinned_fenix_rust_toolchain_serves_builds_the_devshell_and_the_image() {
         "refusing to start with a",
         "exit 1",
         "RUSTC points at",
+        // Cargo's output stays out of the checkout: `path:$PWD` builds copy the
+        // whole tree into the store, so an in-tree `target/` would be copied too.
+        "CARGO_TARGET_DIR",
+        "cang-build/target/",
+        "git rev-parse --show-toplevel",
     ] {
         assert!(
             DEVSHELL_NIX.contains(required),

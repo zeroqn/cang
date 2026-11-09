@@ -542,7 +542,16 @@ let
     ++ imagePathPackages
   );
   realPodmanBin = "${pkgs.podman}/bin/podman";
-  cangImageMaxLayers = 10;
+  # `limit_layers` keeps the first (budget - 1) layer groups and merges every
+  # group after them into a single layer, which `reverse` then puts at the
+  # bottom of the image. A budget below the number of groups the pipeline
+  # emits therefore silences the per-group split: at 9 the rust toolchain, the
+  # C/C++ toolchain and the base rest collapsed into one 3.8 GiB layer, which
+  # any input change then re-shipped whole. The pipeline emits 16 groups (the
+  # bottom layer is the base rest, then the toolchains, the runtime groups and
+  # one layer per named split), so this budget keeps every group its own layer;
+  # raise it when a `split_paths` is added.
+  cangImageMaxLayers = 17;
   cangImageStoreLayers = cangImageMaxLayers - 1;
   imageContents =
     imagePackages
@@ -566,6 +575,17 @@ let
     ];
   browserLayerPaths = [ (toString browserImageLayer) ];
   cangInitLayerPaths = [ (toString cangMuslPackage) ];
+  # The compat wrappers name the guest-init binary, so their store path changes
+  # with every cang version bump. As roots of their own layer they only cost
+  # that layer plus the guest-init layer a re-pull, instead of rewriting the
+  # bottom layer they used to share with the toolchains.
+  compatLayerPaths = builtins.map toString [
+    nixCommandCompat
+    podmanCommandCompat
+    dockerCommandCompat
+    dockerComposeCommandCompat
+    cangAsDevCommandCompat
+  ];
   agentLayerPaths = [ (toString agentImageLayer) ];
   toolingLayerPaths = [ (toString toolingImageLayer) ];
   cToolchainLayerPaths = builtins.map toString cToolchainImagePackages;
@@ -671,7 +691,21 @@ let
       "rest"
       [
         "pipe"
-        agentAndBelow
+        [
+          [
+            "split_paths"
+            compatLayerPaths
+          ]
+          [
+            "over"
+            "rest"
+            [
+              "pipe"
+              agentAndBelow
+            ]
+          ]
+          [ "flatten" ]
+        ]
       ]
     ]
     [
