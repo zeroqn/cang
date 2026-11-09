@@ -131,12 +131,38 @@ green.
     directory/subvolume, and the task rootfs is a btrfs snapshot rather than an
     overlay (`runtime/session/mod.rs:529-531`). Guest Podman storage is the btrfs
     driver, not overlay (`components/podman/config.rs:41-47`).
+  - **Verified 2026-11-10 against the pinned tarball** (note 02, spot-checked by
+    hand in `linux-7.3.1/fs/overlayfs/super.c`): the fatal requirements branch is
+    `if (ovl_dentry_remote(ofs->workdir) && (!d_type || !rename_whiteout ||
+    ofs->noxattr))` (`super.c:759-769`), so a local btrfs upper never trips it; and
+    `if (ofs->numfs - !ovl_upper_mnt(ofs) == 1)` forces `xino_mode = 0` with
+    "xino=on is useless with all layers on same fs, ignore" (`super.c:1144-1147`),
+    which is why two btrfs *subvolumes* collide and two independent btrfs
+    *filesystems* cannot.
+  - The price of a separate upper filesystem: **copy-up cannot reflink across two
+    btrfs filesystems** (`-EXDEV`, `fs/btrfs/remap_range.c:384-385`), so a
+    copied-up lower file costs a full data copy - size the disk for real data, not
+    for shared extents. A full raw host file surfaces as `-EIO`, not `-ENOSPC`;
+    btrfs data reservations never overcommit (`-ENOSPC` at write), while metadata
+    overcommit can abort a transaction and flip the filesystem read-only.
+    Overlayfs translates none of it (`fs/overlayfs/*` has no `ENOSPC`/`EDQUOT`
+    site).
+  - **Measured 2026-11-09 (note 03): a btrfs subvolume root cannot be an
+    overlayfs upperdir.** Every write through the composed overlay returned
+    `EXDEV` (mkdir, touch, cp, unlink) with nothing in `dmesg`; a plain directory
+    on the same filesystem, same lower and same options, works (A/B in one guest).
+    The subvolume belongs to the *generation* directory, with `upper` and `work`
+    plain directories inside it - which is also the host's own seeding shape.
+  - The smoke scored that broken run **PASS**: `tools/nix-lower-cang-smoke` read
+    the mount table and the store, never the guest's own verdict. It now requires
+    `state=ready` in `/run/cang/nix-prep.status`.
 
 ## Decisions so far
 - [Where the upper lives on the shared build disk, and how that disk grows](tickets/04-upper-home-and-auto-grow.md):
   one generation directory per **image digest** inside the build disk
-  (`nix-overlay/<digest-key>/{upper,work}`, `<gen>/upper` a subvolume the guest
-  creates and seeds), and **no auto-grow**: manual `cang build-disk resize
+  (`nix-overlay/<digest-key>/{upper,work}`, with the **generation** directory the
+  btrfs subvolume and `upper`/`work` plain dirs inside it - a subvolume root
+  cannot be an upperdir, note 03), and **no auto-grow**: manual `cang build-disk resize
   --size`, which already grows image + guest btrfs. A mid-run grow is impossible
   (virtio-blk capacity is fixed at device creation).
 

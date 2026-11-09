@@ -78,10 +78,10 @@ disk's own btrfs filesystem, one per **image generation**, next to `cargo/` and
     /home/dev/.cache/cang-build/nix-overlay/<digest-key>/upper
     /home/dev/.cache/cang-build/nix-overlay/<digest-key>/work
 
-The guest is the only writer of that tree, so `<gen>/upper` is a btrfs subvolume
-(the guest snapshots a sibling's into it) and `<gen>` itself stays a plain
-directory so a generation can be pruned with `rm -rf` rather than a subvolume
-dance. The host only ever writes the path into the env. **The name is the digest
+The guest is the only writer of that tree. `<gen>` is the btrfs subvolume - it is
+what a new generation is snapshotted from - and `upper`/`work` are plain
+directories inside it, because **a btrfs subvolume root cannot be an overlayfs
+upperdir** (measured, note 03: every write returns `EXDEV`). The host only ever writes the path into the env. **The name is the digest
 key, not the workspace's constant `nix-overlay` directory**: the first host cut
 keyed on `generation_root.file_name()` and so gave every generation one upper,
 which the guest's `already seeded` sentinel then turned into an image move that

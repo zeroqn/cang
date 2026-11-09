@@ -38,6 +38,21 @@ if [ -r /run/cang/nix-prep.log ] && [ "$engaged" = no ]; then
   tail -20 /run/cang/nix-prep.log > "$E/nix-prep.log" 2>/dev/null || true
 fi
 
+# The overlay being mounted is not the same as nix prep having succeeded: a prep
+# worker can compose /nix and then fail while swapping the image's Nix DB in, and
+# a smoke that only reads mounts would score that green. Wait for the worker to
+# finish and keep its own verdict, so the host can require it.
+prep=0
+while [ "$prep" -lt 300 ]; do
+  grep -q '^state=ready' /run/cang/nix-prep.status 2>/dev/null && break
+  grep -q '^state=failed' /run/cang/nix-prep.status 2>/dev/null && break
+  sleep 1
+  prep=$((prep + 1))
+done
+cp /run/cang/nix-prep.status "$E/nix-prep.status" 2>/dev/null || true
+tail -20 /run/cang/nix-prep.log > "$E/nix-prep.log" 2>/dev/null || true
+log "nix_prep=$(head -1 "$E/nix-prep.status" 2>/dev/null) waited=${prep}s"
+
 # Speed: the numbers the feature exists for, on the store the image ships.
 start=$(date +%s%N)
 find /nix/store -name '*.nix' 2>/dev/null | wc -l > "$E/find-count.txt"

@@ -274,6 +274,14 @@ else
     "$(value "$block_ev/csum-lines.txt")"
 fi
 
+# `state=ready` is the guest's own verdict on composing /nix, installing the
+# image's Nix DB and reconciling the store. Reading only the mount table scores a
+# prep worker that mounted the overlay and then failed as a pass.
+prep_state="$(grep -m1 '^state=' "$block_ev/nix-prep.status" 2>/dev/null || true)"
+prep_error="$(grep -m1 '^error=' "$block_ev/nix-prep.status" 2>/dev/null || true)"
+require nix-prep-ready "$([ "$prep_state" = "state=ready" ] && echo 0 || echo 1)" \
+  "/nix prep finished cleanly (${prep_state:-no status} ${prep_error:-})" \
+  "$(tail -3 "$block_ev/nix-prep.log" 2>/dev/null | tr '\n' ' ')"
 eio="$(cat "$block_ev/eio.txt" 2>/dev/null | grep -c ':0$' || true)"
 require no-read-errors "$([ "$eio" -ge 2 ] && echo 0 || echo 1)" \
   "both cold sweeps completed without EIO" "$(value "$block_ev/eio.txt")"
