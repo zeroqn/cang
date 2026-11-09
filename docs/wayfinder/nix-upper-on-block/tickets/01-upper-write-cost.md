@@ -82,7 +82,7 @@ the guest's `/proc/mounts` (`fuse`/`65735546` vs `btrfs`/`9123683e`).
 | `sync` after the copy | 28 ms | 168 ms | the FUSE upper defers its commit |
 
 **Verdict against this ticket's threshold (`>= 20 %` off arm A on the
-store-write workload): NOT CLEARED.** The clean estimate is **10.9 %**, i.e. half
+store-write workload): NOT CLEARED - and overridden by bob, see below.** The clean estimate is **10.9 %**, i.e. half
 the threshold and inside the spread of the three contended sets, whose write
 ratios were +24.7 %, -6.5 % and +14.5 % (dead-heat, sign-unstable; kept as a
 discarded appendix, not comparable). A write-throughput argument for moving the
@@ -120,3 +120,13 @@ arms measure filesystem behaviour, not HEAD's guest-init; nothing was built,
 loaded, pruned or deleted outside this session's own arm directories.
 
 Raw logs: `/home/dev/disp/nix-upper-cost/{logs,results*.txt,ws/evidence}`.
+
+**Decision (bob, 2026-11-10): the cycle is the metric, not the bare write.** The
+bar was set on store-write wall time before any data existed; the data then showed
+the write is bandwidth-bound on both filesystems (12.06 MB per path) while the
+costs a `/nix` upper actually pays every day - walking the store, `du`, deleting a
+generation - are 7.7-15.4x cheaper on the disk, i.e. a **37.9 % cheaper
+write+delete cycle**. bob's call: take the cycle as the win, record the override
+and its reason here so it is not quietly re-litigated, and unblock the design
+tickets. The 12.5 % cold-re-read regression on the block upper is carried into
+those tickets as a cost to weigh, not dropped.

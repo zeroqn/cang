@@ -165,6 +165,10 @@ green.
   upper). Two limits stay open: the workload is **12.06 MB per path**, 10x fatter
   than the harmony upper's ~1.2 MB, and a metadata-*shaped* arm is impossible with
   this image (685 store paths; any closed 3 GB subset expands back to 684 paths).
+  **Overridden by bob (2026-11-10): the write+delete cycle is the metric, not the
+  bare write** - 37.9 % cheaper on the block upper - so the route continues and the
+  design tickets are unblocked. The 12.5 % cold-re-read regression is carried
+  forward as a cost.
 
 ## Not yet specified
 
