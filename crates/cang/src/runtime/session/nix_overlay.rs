@@ -529,7 +529,7 @@ impl UpperSeedCommands for HostUpperSeedCommands {
         // and impossible for an unprivileged host process.
         let from = source.join(UPPER_DIR);
         if from.is_dir() {
-            clone_tree(&from, &target.join(UPPER_DIR)).with_context(|| {
+            clone_tree(&from, &target.join(UPPER_DIR), &from).with_context(|| {
                 format!(
                     "failed to clone the /nix overlay upper '{}' into '{}'",
                     from.display(),
@@ -707,18 +707,39 @@ fn btrfs_ok(args: &[&str], path: &Path) -> bool {
 /// (shared extents, works for files owned by another uid — `fs.protected_hardlinks`
 /// forbids linking those, and after a guest has run every store object in the
 /// upper is one), then a plain copy.
-fn clone_tree(source: &Path, target: &Path) -> Result<()> {
+///
+/// `upper_root` is the upper this tree belongs to, and it is what tells cache from
+/// state when an entry cannot be carried over: `store/` is the cache (a skipped
+/// object leaves the DB naming something that is not there, so a failure there is
+/// fatal), while `var/nix` is the guest's own state - a lock file its root wrote is
+/// mode 0600 under the guest's uid, which this process cannot read at all, and
+/// failing a launch over a lock the next boot recreates is the wrong outcome.
+fn clone_tree(source: &Path, target: &Path, upper_root: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(source)
         .with_context(|| format!("failed to stat '{}'", source.display()))?;
     let file_type = metadata.file_type();
     if file_type.is_dir() {
         fs::create_dir_all(target)
             .with_context(|| format!("failed to create '{}' while cloning", target.display()))?;
-        for entry in fs::read_dir(source)
-            .with_context(|| format!("failed to read '{}'", source.display()))?
-        {
+        let entries = match fs::read_dir(source) {
+            Ok(entries) => entries,
+            Err(err) if is_guest_state(upper_root, source) => {
+                tracing::warn!(
+                    path = %source.display(),
+                    %err,
+                    "skipping /nix upper state the host cannot read; the guest recreates it"
+                );
+                // Only the empty directory this call just made.
+                let _ = fs::remove_dir(target);
+                return Ok(());
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("failed to read '{}'", source.display()));
+            }
+        };
+        for entry in entries {
             let entry = entry?;
-            clone_tree(&entry.path(), &target.join(entry.file_name()))?;
+            clone_tree(&entry.path(), &target.join(entry.file_name()), upper_root)?;
         }
         // Store objects are 0555; restore the source mode only after the
         // directory is populated, and keep it exact so `nix-store --verify-path`
@@ -735,19 +756,44 @@ fn clone_tree(source: &Path, target: &Path) -> Result<()> {
     if file_type.is_file() {
         let cloned = fs::hard_link(source, target).is_ok() || reflink(source, target).is_ok();
         if !cloned {
-            fs::copy(source, target).with_context(|| {
-                format!(
-                    "failed to copy '{}' to '{}' while cloning the /nix overlay upper",
-                    source.display(),
-                    target.display()
-                )
-            })?;
+            match fs::copy(source, target) {
+                Ok(_) => {}
+                Err(err) if is_guest_state(upper_root, source) => {
+                    let _ = fs::remove_file(target);
+                    tracing::warn!(
+                        path = %source.display(),
+                        %err,
+                        "skipping /nix upper state the host cannot read; the guest recreates it"
+                    );
+                    return Ok(());
+                }
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!(
+                            "failed to copy '{}' to '{}' while cloning the /nix overlay upper",
+                            source.display(),
+                            target.display()
+                        )
+                    });
+                }
+            }
         }
         fs::set_permissions(target, metadata.permissions())?;
     }
     // Sockets and fifos are never store content; a stale daemon socket is
     // dropped with the rest of `var/nix` state by the seed.
     Ok(())
+}
+
+/// Whether `path` is the guest's own `/nix` state rather than the store cache.
+///
+/// Everything under `var/nix` is state a running guest owns: lock files it creates
+/// mode 0600 under its own uid, socket directories, the `temproots` trees. The
+/// store's objects live under `store/` and nowhere else.
+fn is_guest_state(upper_root: &Path, path: &Path) -> bool {
+    path.strip_prefix(upper_root)
+        .map(|relative| relative.starts_with("var/nix"))
+        .unwrap_or(false)
 }
 
 /// `ioctl(dst, FICLONE, src)`: a copy-on-write clone sharing the source's
@@ -1146,6 +1192,49 @@ mod tests {
         fs::set_permissions(&store_path, fs::Permissions::from_mode(0o555))
             .expect("read-only store path");
         store_path
+    }
+
+    /// A guest's own `/nix` state is often unreadable to the host: its root writes
+    /// lock files 0600 under the guest's uid, and a directory it created 0700
+    /// cannot be listed here at all. Seeding a new generation has to skip that
+    /// state - the next boot recreates it - while a store object, which the DB
+    /// keeps naming, stays a hard failure.
+    #[test]
+    fn cloning_skips_unreadable_guest_state_but_not_the_store() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Root reads everything, so the case needs an unprivileged uid.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let temp = tempfile::tempdir().expect("tempdir");
+        let upper = temp.path().join("upper");
+        let store_object = upper.join("store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-obj");
+        let guest_state = upper.join("var/nix/temproots");
+        fs::create_dir_all(&guest_state).expect("state dir");
+        fs::create_dir_all(&store_object).expect("store object");
+        fs::write(store_object.join("file"), "x").expect("store file");
+        fs::set_permissions(&guest_state, fs::Permissions::from_mode(0o000)).expect("chmod state");
+
+        let target = temp.path().join("clone");
+        clone_tree(&upper, &target, &upper).expect("unreadable guest state is skipped");
+        assert!(
+            target
+                .join("store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-obj/file")
+                .is_file()
+        );
+        assert!(!target.join("var/nix/temproots").exists());
+
+        fs::set_permissions(&store_object, fs::Permissions::from_mode(0o000)).expect("chmod store");
+        let err = clone_tree(&upper, &temp.path().join("clone2"), &upper)
+            .expect_err("an unreadable store object must not be skipped");
+        assert!(
+            format!("{err:#}").contains("failed to read"),
+            "unexpected error: {err:#}"
+        );
+
+        fs::set_permissions(&store_object, fs::Permissions::from_mode(0o755)).expect("restore");
+        fs::set_permissions(&guest_state, fs::Permissions::from_mode(0o755)).expect("restore");
     }
 
     fn lease_state_text(image_digest: &str, lowerdir: &Path, paths: &NixOverlayPaths) -> String {
