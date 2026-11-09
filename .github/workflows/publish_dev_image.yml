@@ -99,14 +99,34 @@ jobs:
           # pull fetching 8.4 GB of layers. skopeo recompresses each layer with
           # zstd, which is what a puller actually downloads.
           archive="$(cat "${{ matrix.image_name }}-container-path.txt")"
-          nix shell --inputs-from . nixpkgs#skopeo -c skopeo copy \
-            --dest-creds "${GHCR_USER}:${GHCR_TOKEN}" \
-            --dest-compress-format zstd \
-            --dest-compress-level 12 \
-            "docker-archive:${archive}" "docker://${GHCR_IMAGE}:${GHCR_TAG1}"
+          skopeo() {
+            nix shell --inputs-from . nixpkgs#skopeo -c skopeo "$@"
+          }
+
+          # GHCR's upload edge has answered a chunked layer PATCH with an HTML 400
+          # part way through a push. Blobs are content addressed, so a retry skips
+          # everything already accepted and re-sends only the layer that failed.
+          for attempt in 1 2 3; do
+            if skopeo copy \
+              --retry-times 5 \
+              --retry-delay 10s \
+              --dest-creds "${GHCR_USER}:${GHCR_TOKEN}" \
+              --dest-compress-format zstd \
+              --dest-compress-level 12 \
+              "docker-archive:${archive}" "docker://${GHCR_IMAGE}:${GHCR_TAG1}"; then
+              break
+            fi
+            if [ "${attempt}" = 3 ]; then
+              echo "push to ${GHCR_IMAGE}:${GHCR_TAG1} failed 3 times" >&2
+              exit 1
+            fi
+            echo "push attempt ${attempt} failed; retrying with the uploaded blobs skipped" >&2
+          done
           # The second tag is the same blobs; copy inside the registry so nothing
           # is recompressed or re-uploaded.
-          nix shell --inputs-from . nixpkgs#skopeo -c skopeo copy \
+          skopeo copy \
+            --retry-times 5 \
+            --retry-delay 10s \
             --src-creds "${GHCR_USER}:${GHCR_TOKEN}" \
             --dest-creds "${GHCR_USER}:${GHCR_TOKEN}" \
             "docker://${GHCR_IMAGE}:${GHCR_TAG1}" "docker://${GHCR_IMAGE}:${GHCR_TAG2}"
