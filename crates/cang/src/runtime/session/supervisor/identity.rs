@@ -111,12 +111,11 @@ impl KeepIdLauncher {
         OsString::from(UNSHARE_PROGRAM)
     }
 
-    pub(crate) fn args(
-        &self,
-        executable: &Path,
-        internal_arg: &str,
-        config_path: &Path,
-    ) -> Vec<OsString> {
+    /// The `unshare` flags that create the keep-id namespace, without a command.
+    ///
+    /// Shared with the maintenance commands, which re-execute an ordinary CLI
+    /// invocation inside the same namespace rather than an internal worker.
+    pub(crate) fn namespace_args(&self) -> Vec<OsString> {
         let mut args = vec![
             OsString::from("--user"),
             OsString::from("--mount"),
@@ -133,6 +132,18 @@ impl KeepIdLauncher {
             OsString::from("--setgid"),
             OsString::from("0"),
             OsString::from("--keep-caps"),
+        ]);
+        args
+    }
+
+    pub(crate) fn args(
+        &self,
+        executable: &Path,
+        internal_arg: &str,
+        config_path: &Path,
+    ) -> Vec<OsString> {
+        let mut args = self.namespace_args();
+        args.extend([
             executable.as_os_str().to_os_string(),
             OsString::from("internal"),
             OsString::from(internal_arg),

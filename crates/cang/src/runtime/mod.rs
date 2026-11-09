@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use crate::cli::{DiskCommand, DiskMaintenanceOptions, RuntimeOptions};
+use crate::cli::{DiskCommand, DiskMaintenanceOptions, NixCommand, RuntimeOptions};
 use crate::runtime::seccomp::SeccompCommand;
 use crate::runtime::session::rootfs::image_source::ImageCacheCommand;
 use crate::runtime::session::task_control::TaskControlCommand;
@@ -52,6 +52,13 @@ pub(crate) fn run_disk_command(
     options: DiskMaintenanceOptions,
 ) -> Result<String> {
     maintenance::run_disk_command(command, options)
+}
+
+pub(crate) fn run_nix_command(
+    command: NixCommand,
+    options: DiskMaintenanceOptions,
+) -> Result<String> {
+    maintenance::run_nix_command(command, options)
 }
 
 pub(crate) fn run_task_control_command(command: TaskControlCommand) -> Result<String> {

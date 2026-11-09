@@ -43,6 +43,11 @@ pub(crate) fn grow_build_disk(state_root: &Path, target_size_bytes: u64) -> Resu
     build::grow_with_runner(state_root, target_size_bytes, &HostRawImageCommandRunner)
 }
 
+/// The build disk this workspace already has, without creating one.
+pub(crate) fn existing_build_disk(state_root: &Path) -> Result<Option<RawBtrfsDisk>> {
+    build::existing(state_root)
+}
+
 pub(crate) fn build_disk_attachment(disk: &RawBtrfsDisk) -> DiskAttachment {
     build::attachment(disk)
 }

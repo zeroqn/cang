@@ -95,6 +95,25 @@ pub(super) fn env_pairs(disk: &RawBtrfsDisk) -> [(String, String); 4] {
     ]
 }
 
+/// The build disk this workspace already has, without creating or growing it.
+///
+/// A maintenance run that only *reads* the disk (reclaiming the `/nix` upper) must
+/// not invent one: `Ok(None)` means this workspace has never launched with a build
+/// disk, so there is nothing on it to collect.
+pub(crate) fn existing(state_root: &Path) -> Result<Option<RawBtrfsDisk>> {
+    let path = raw_btrfs::raw_disk_path(state_root, &SPEC);
+    let Some(size_bytes) = raw_btrfs::inspect_existing_regular_file(&path, &SPEC)? else {
+        return Ok(None);
+    };
+    Ok(Some(RawBtrfsDisk {
+        path,
+        id: ID.to_owned(),
+        label: LABEL.to_owned(),
+        size_bytes,
+        status: raw_btrfs::RawBtrfsDiskStatus::Reused,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::raw_btrfs::test_support::FakeRunner;

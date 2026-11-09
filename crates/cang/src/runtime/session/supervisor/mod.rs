@@ -27,7 +27,10 @@ pub(crate) const RENDER_SERVER_BOOTSTRAP_ARG: &str = "render-server-bootstrap";
 pub(crate) fn is_supervisor_internal_arg(arg: &str) -> bool {
     matches!(
         arg,
-        LIBKRUN_ENTER_HELPER_ARG | LIBKRUN_VM_WORKER_ARG | RENDER_SERVER_BOOTSTRAP_ARG
+        LIBKRUN_ENTER_HELPER_ARG
+            | LIBKRUN_VM_WORKER_ARG
+            | RENDER_SERVER_BOOTSTRAP_ARG
+            | crate::runtime::maintenance::MAINTENANCE_VM_ARG
     )
 }
 

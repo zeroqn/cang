@@ -416,8 +416,8 @@ live in the topic docs:
 
 - [Usage reference](docs/usage.md) — `cang exec`, detach/attach sessions,
   task control (`ps`/`kill`), volumes, the root shell handoff, raw-disk
-  maintenance (`cang disk resize --build|--containers`), and guest-init
-  overrides.
+  maintenance (`cang disk resize --build|--containers`,
+  `cang nix gc`), and guest-init overrides.
 - [Graphics and audio](docs/graphics-audio.md) — Pulse TCP audio, remote
   Waypipe, GPU, and Wayland passthrough.
 - [Security](docs/security.md) — host Landlock, host seccomp policies, guest

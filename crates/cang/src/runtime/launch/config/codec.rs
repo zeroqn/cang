@@ -79,6 +79,10 @@ impl LaunchConfig {
             push_field(&mut out, "workspace_tag", &workspace.tag);
             push_field(&mut out, "workspace_target", &workspace.target);
         }
+        // Explicit, so a config with no bind mounts at all - a maintenance VM's,
+        // which boots only to mount a disk - is distinguishable from one whose
+        // mounts went missing.
+        push_field(&mut out, "mount_count", &self.mounts.len().to_string());
         for (index, mount) in self.mounts.iter().enumerate() {
             push_field(
                 &mut out,
@@ -388,6 +392,7 @@ impl LaunchConfig {
             } else if matches!(
                 key,
                 "task_rootfs"
+                    | "mount_count"
                     | "workspace_source"
                     | "workspace_tag"
                     | "workspace_target"
@@ -776,6 +781,14 @@ fn parse_mounts(
     indexed_mounts: BTreeMap<usize, PartialBindMount>,
 ) -> Result<Vec<BindMount>> {
     let has_indexed_mounts = !indexed_mounts.is_empty();
+    // A maintenance VM's config declares zero mounts: it boots to mount a disk, not
+    // to share a workspace, and nothing in it depends on a mount existing.
+    if fields.get("mount_count").map(String::as_str) == Some("0") {
+        if has_indexed_mounts || has_legacy_workspace_fields(fields) {
+            anyhow::bail!("cang launch config declares no bind mounts but carries mount fields");
+        }
+        return Ok(Vec::new());
+    }
     let mounts = if !has_indexed_mounts {
         vec![BindMount::directory(
             PathBuf::from(required_field(fields, "workspace_source")?),

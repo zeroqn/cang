@@ -97,6 +97,24 @@ pub(in crate::guest_init) struct NixCommand {
 pub(in crate::guest_init) enum NixSubcommand {
     Prep,
     Wait,
+    /// Reclaim the build disk from `/nix` upper generations the workspace no
+    /// longer needs. Runs in a maintenance VM, because the upper lives inside a
+    /// raw image the host cannot mount.
+    Gc(GcCommand),
+}
+
+#[derive(Debug, Args, Clone, PartialEq, Eq)]
+pub(in crate::guest_init) struct GcCommand {
+    #[arg(
+        long = "all",
+        help = "Collect the generation the workspace used last as well, so the next launch starts from an empty upper"
+    )]
+    pub(in crate::guest_init) all: bool,
+    #[arg(
+        long = "dry-run",
+        help = "Report what would be collected without deleting anything"
+    )]
+    pub(in crate::guest_init) dry_run: bool,
 }
 
 #[derive(Debug, Args, Clone, PartialEq, Eq)]

@@ -167,6 +167,11 @@ generations are pruned: a seed keeps the generation that booted plus the newest
 other completed one (the generation the next digest clones from), and deletes the
 rest so the disk does not grow one generation per image forever.
 
+Retired generations are collected at seed time, and on demand with
+`cang nix gc` (`--all` collects the generation in use as well), which runs in the
+same kind of narrow maintenance VM as `cang disk resize` because the disk cannot be
+mounted on the host.
+
 The upper shares the build disk's capacity, so it grows with it:
 `cang disk resize --build 100G` extends the image and the guest's btrfs in one
 maintenance VM (see [usage](usage.md)). A mid-run grow is not available - the

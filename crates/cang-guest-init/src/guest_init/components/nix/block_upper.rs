@@ -74,7 +74,7 @@ pub(in crate::guest_init) const IMAGE_DB_DIR: &str = ".cang-image-db";
 /// Where the cloned generation's DB is parked for the post-mount merge.
 pub(in crate::guest_init) const PREVIOUS_DB_DIR: &str = ".cang-previous-db";
 /// The overlay's writable layer, relative to a generation directory.
-const UPPER_DIR: &str = "upper";
+pub(in crate::guest_init) const UPPER_DIR: &str = "upper";
 /// Where store objects live inside a `/nix` root or an overlay upper.
 const STORE_DIR: &str = "store";
 /// A Nix DB directory, relative to a `/nix` root.

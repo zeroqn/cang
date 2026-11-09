@@ -27,6 +27,9 @@ pub(in crate::guest_init) fn run(command: GuestInitCommand) -> Result<()> {
                     crate::guest_init::components::nix::root::run_prep_to_status()
                 }
                 NixSubcommand::Wait => crate::guest_init::components::nix::user::wait_for_prep(),
+                NixSubcommand::Gc(gc) => {
+                    crate::guest_init::components::nix::gc::run(gc.all, gc.dry_run)
+                }
             },
             InternalSubcommand::Podman(podman) => match podman.command {
                 PodmanSubcommand::Prep => {

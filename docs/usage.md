@@ -216,6 +216,29 @@ Both disks are grown by the same command, so one invocation can name both:
 ./result/bin/cang disk resize --build 100G --containers 128G
 ```
 
+## Reclaiming the `/nix` upper
+
+The writable `/nix` upper lives inside the build disk, so cang collects it in a
+short maintenance VM rather than on the host:
+
+```bash
+./result/bin/cang nix gc --dry-run     # what would go, and its size
+./result/bin/cang nix gc               # collect everything but the cache in use
+./result/bin/cang nix gc --all         # collect that too, so the next launch starts empty
+```
+
+One generation directory per image digest keeps its cache. `gc` keeps the
+generation this workspace used last and collects the rest; `--all` collects it as
+well, which costs a re-substitution of anything the image does not ship on the next
+launch. The guest prints each generation it keeps or collects with its size, and a
+`--all` run is the only way to reclaim the space of the image you are currently
+running.
+
+The maintenance VM is booted from the image, so a `cang-guest-init` that predates
+this subcommand cannot run it: reload the image (or pass
+`--guest-init <path-to-a-newer-cang-guest-init>` on the launch that builds it)
+before using `gc`.
+
 The build disk is the workspace's `cang-build.raw` btrfs image, created by the
 first launch at 96 GiB. The guest mounts it at `/home/dev/.cache/cang-build` and
 cargo puts both working sets there, so a warm `target/` and registry survive

@@ -33,6 +33,12 @@ use crate::runtime::vm::libkrun::{DirectLibkrunLauncher, LinkedLibkrunApi};
 use crate::runtime::vm::prepared_root;
 use crate::state::StateLayout;
 
+use super::MAINTENANCE_VM_ARG;
+use super::namespace;
+
+/// The launch config a maintenance VM's own process reads back.
+const MAINTENANCE_LAUNCH_CONF: &str = "maintenance-launch.conf";
+
 const CONTAINER_STORE_TASK_PREFIX: &str = "container-store-resize";
 const BUILD_DISK_TASK_PREFIX: &str = "build-disk-resize";
 
@@ -150,8 +156,37 @@ fn run_guest_resize(
     disk: &RawBtrfsDisk,
     runner: &impl MaintenanceVmRunner,
 ) -> Result<()> {
+    run_maintenance_guest(
+        kind.task_prefix(),
+        kind.hostname(),
+        vec![
+            "internal".to_owned(),
+            "resize".to_owned(),
+            kind.guest_target().to_owned(),
+        ],
+        vec![kind.attachment(disk)],
+        kind.env_pairs(disk),
+        layout,
+        options,
+        runner,
+    )
+}
+
+/// One maintenance VM: materialize a rootfs from the image, boot it with `argv` and
+/// the disks it needs, then clean the rootfs up whether the guest succeeded or not.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_maintenance_guest(
+    task_prefix: &str,
+    hostname: &str,
+    argv: Vec<String>,
+    attachments: Vec<DiskAttachment>,
+    env: Vec<(String, String)>,
+    layout: &StateLayout,
+    options: &DiskMaintenanceOptions,
+    runner: &impl MaintenanceVmRunner,
+) -> Result<()> {
     let manager = TaskRootfsManager::new(layout.root_dir().to_path_buf(), layout.image_cache_dir());
-    let task_id = maintenance_task_id(kind.task_prefix())?;
+    let task_id = maintenance_task_id(task_prefix)?;
     let handle = manager.materialize_btrfs_from_buildah(
         &image_selection(options),
         &task_id,
@@ -168,11 +203,13 @@ fn run_guest_resize(
             &handle.process_config().entrypoint,
         )?;
         let config = maintenance_launch_config(
-            kind,
+            hostname,
             handle.rootfs_path(),
             &guest_init.guest_exec_path,
             guest_init.override_mount,
-            disk,
+            attachments,
+            env,
+            argv,
             options,
             handle.process_config(),
         )?;
@@ -184,21 +221,24 @@ fn run_guest_resize(
         (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
         (Err(run_error), Ok(_)) => Err(run_error),
         (Err(run_error), Err(cleanup_error)) => Err(cleanup_error.context(format!(
-            "failed to clean cang resize maintenance rootfs after guest resize error: {run_error:#}"
+            "failed to clean cang maintenance rootfs after guest error: {run_error:#}"
         ))),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn maintenance_launch_config(
-    kind: DiskKind,
+    hostname: &str,
     task_rootfs: &Path,
     guest_init_exec: &str,
     guest_init_override: Option<crate::runtime::launch::config::GuestInitOverrideMount>,
-    disk: &RawBtrfsDisk,
+    attachments: Vec<DiskAttachment>,
+    disk_env: Vec<(String, String)>,
+    argv: Vec<String>,
     options: &DiskMaintenanceOptions,
     process_config: &OciProcessConfig,
 ) -> Result<LaunchConfig> {
-    let mut env = kind.env_pairs(disk);
+    let mut env = disk_env;
     if let Some(path) = process_config
         .env
         .iter()
@@ -212,11 +252,11 @@ fn maintenance_launch_config(
 
     Ok(LaunchConfig {
         task_rootfs: task_rootfs.to_path_buf(),
-        hostname: kind.hostname().to_owned(),
+        hostname: hostname.to_owned(),
         mounts: Vec::new(),
         host_nix_overlay: None,
         guest_init_override,
-        disks: vec![kind.attachment(disk)],
+        disks: attachments,
         ram_mib: maintenance_ram_mib(options.mem_gib)?,
         vcpus: 1,
         log_level: options.log_settings.level,
@@ -232,11 +272,7 @@ fn maintenance_launch_config(
         publish: Vec::new(),
         workdir: "/".to_owned(),
         exec_path: guest_init_exec.to_owned(),
-        argv: vec![
-            "internal".to_owned(),
-            "resize".to_owned(),
-            kind.guest_target().to_owned(),
-        ],
+        argv,
         env,
         guest_config_env: Vec::new(),
         passt_fd: None,
@@ -267,30 +303,64 @@ pub(crate) struct HostMaintenanceVmRunner;
 
 impl MaintenanceVmRunner for HostMaintenanceVmRunner {
     fn run(&self, config: &LaunchConfig, task_state_dir: &Path) -> Result<()> {
-        let prepared_root = prepared_root::prepare(config, task_state_dir)?;
-        let launch_config = config.with_root_export(prepared_root.root().to_path_buf());
-        launch_config.write_guest_config_to_rootfs()?;
-        // libkrun's VMM ends the process it runs in, so the guest runs in a
-        // forked child: the parent keeps the prepared-root mounts, can unmount
-        // them and let the caller delete the task state dir, and learns whether
-        // the guest resize actually succeeded.
-        let guest_status = run_vmm_in_child(&launch_config)?;
-        let unmount_result = prepared_root.unmount();
-        match (guest_status, unmount_result) {
-            (0, Ok(())) => Ok(()),
-            (0, Err(err)) => Err(err),
-            (code, Ok(())) => bail!("cang maintenance VM exited with status {code}"),
-            (code, Err(err)) => {
-                Err(err.context(format!("cang maintenance VM exited with status {code}")))
-            }
+        // The VM step runs as its own process, wrapped in the keep-id user
+        // namespace: preparing the root, mounting the disk and starting `libkrun`
+        // need privileges a rootless caller only has inside one, while the rootfs
+        // materialization that already happened must stay outside it.
+        let config_path = task_state_dir.join(MAINTENANCE_LAUNCH_CONF);
+        config.write_to(&config_path)?;
+        let exe = std::env::current_exe()
+            .context("failed to resolve the cang executable for a maintenance VM")?;
+        let mut command = std::process::Command::new(exe);
+        command
+            .arg("internal")
+            .arg(MAINTENANCE_VM_ARG)
+            .arg(&config_path);
+        namespace::wrap(&mut command)?;
+        let status = command.status().with_context(|| {
+            format!(
+                "failed to start the cang maintenance VM for '{}'",
+                config.hostname
+            )
+        })?;
+        if status.success() {
+            Ok(())
+        } else {
+            bail!("cang maintenance VM exited with status {status}")
         }
     }
 }
 
-fn run_vmm_in_child(config: &LaunchConfig) -> Result<i32> {
+/// The maintenance VM's own process, inside the namespace: prepare the root, hand
+/// libkrun the prepared root as its rootfs, boot in a child, unmount.
+pub(crate) fn run_maintenance_vm(config_path: &Path) -> Result<()> {
+    let config = LaunchConfig::read_from(config_path)?;
+    let task_state_dir = config_path
+        .parent()
+        .ok_or_else(|| anyhow!("cang maintenance launch config has no directory"))?;
+    let prepared_root = prepared_root::prepare(&config, task_state_dir)?;
+    // libkrun boots the *prepared* root - that is where the guest init override and
+    // the disk's grafts live - not the bare task rootfs.
+    let config = config.with_root_export(prepared_root.root().to_path_buf());
+    let run_result = (|| -> Result<()> {
+        config.write_guest_config_to_rootfs()?;
+        run_vmm_in_child(&config)
+    })();
+    let unmount_result = prepared_root.unmount();
+    match (run_result, unmount_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(err)) => Err(err),
+        (Err(err), Ok(())) => Err(err),
+        (Err(err), Err(unmount_err)) => Err(err.context(format!(
+            "and failed to unmount the prepared root: {unmount_err:#}"
+        ))),
+    }
+}
+
+fn run_vmm_in_child(config: &LaunchConfig) -> Result<()> {
     // SAFETY: fork only duplicates this process. The maintenance CLI has not
-    // started the VMM yet and runs no other thread, so the child has no
-    // inherited lock to block on.
+    // started the VMM yet and runs no other thread, so the child has no inherited
+    // lock to block on.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         bail!(
@@ -311,7 +381,12 @@ fn run_vmm_in_child(config: &LaunchConfig) -> Result<i32> {
         }
         fork_child::exit_child(0);
     }
-    wait_for_guest_exit(pid)
+    let status = wait_for_guest_exit(pid)?;
+    if status == 0 {
+        Ok(())
+    } else {
+        bail!("cang maintenance VM exited with status {status}")
+    }
 }
 
 fn wait_for_guest_exit(pid: libc::pid_t) -> Result<i32> {
@@ -496,12 +571,19 @@ mod tests {
             "cang-containers",
             "CANG_CONTAINERS",
         );
+        let kind = DiskKind::ContainerStore;
         let config = maintenance_launch_config(
-            DiskKind::ContainerStore,
+            kind.hostname(),
             Path::new("/rootfs"),
             "/nix/store/hash/bin/cang-guest-init",
             None,
-            &disk,
+            vec![kind.attachment(&disk)],
+            kind.env_pairs(&disk),
+            vec![
+                "internal".to_owned(),
+                "resize".to_owned(),
+                kind.guest_target().to_owned(),
+            ],
             &test_options(),
             &OciProcessConfig::default(),
         )
@@ -532,12 +614,19 @@ mod tests {
             "cang-build",
             "CANG_BUILD",
         );
+        let kind = DiskKind::BuildDisk;
         let config = maintenance_launch_config(
-            DiskKind::BuildDisk,
+            kind.hostname(),
             Path::new("/rootfs"),
             "/nix/store/hash/bin/cang-guest-init",
             None,
-            &disk,
+            vec![kind.attachment(&disk)],
+            kind.env_pairs(&disk),
+            vec![
+                "internal".to_owned(),
+                "resize".to_owned(),
+                kind.guest_target().to_owned(),
+            ],
             &test_options(),
             &OciProcessConfig::default(),
         )

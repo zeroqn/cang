@@ -359,6 +359,12 @@ pub(crate) enum CliCommand {
         command: DiskCommand,
     },
 
+    #[command(name = "nix", about = "Maintain the workspace's writable /nix upper")]
+    Nix {
+        #[command(subcommand)]
+        command: NixCommand,
+    },
+
     #[command(
         name = "decode-launch-conf",
         about = "Decode a hex-encoded cang launch.conf for debugging"
@@ -523,6 +529,32 @@ pub(crate) enum ImagesCommand {
     },
 }
 
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub(crate) enum NixCommand {
+    #[command(
+        name = "gc",
+        about = "Reclaim the /nix upper on the build disk: keep the generation this workspace used last, collect the rest"
+    )]
+    Gc {
+        #[arg(
+            long = "all",
+            help = "Collect the generation this workspace used last as well, so the next launch starts from an empty upper"
+        )]
+        all: bool,
+        #[arg(
+            long = "dry-run",
+            help = "Report what would be collected without deleting anything"
+        )]
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NixGcOptions {
+    pub(crate) all: bool,
+    pub(crate) dry_run: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CliAction {
     /// Boxed because a launch's option set is much larger than every other
@@ -533,6 +565,10 @@ pub(crate) enum CliAction {
     },
     Disk {
         command: DiskCommand,
+        options: DiskMaintenanceOptions,
+    },
+    Nix {
+        command: NixCommand,
         options: DiskMaintenanceOptions,
     },
     Images {
@@ -577,6 +613,10 @@ impl Cli {
                         options: self.disk_maintenance_options(),
                     }
                 }
+                CliCommand::Nix { command } => CliAction::Nix {
+                    command,
+                    options: self.disk_maintenance_options(),
+                },
                 CliCommand::DecodeLaunchConf { path } => CliAction::DecodeLaunchConf { path },
                 CliCommand::Images { command } => CliAction::Images {
                     command,
@@ -676,8 +716,9 @@ impl Cli {
     }
 }
 
-/// Options a raw-disk maintenance VM needs: an image to boot, an optional
-/// `cang-guest-init` override, the maintenance VM's memory, and logging.
+/// Options a maintenance VM needs: an image to boot, an optional
+/// `cang-guest-init` override, the VM's memory, and logging. Shared by every
+/// maintenance command (`cang disk ...`, `cang nix ...`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DiskMaintenanceOptions {
     pub(crate) image: Option<String>,

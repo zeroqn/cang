@@ -48,6 +48,17 @@ pub(crate) fn run_internal(args: Vec<OsString>) -> Result<()> {
         Some(RENDER_SERVER_BOOTSTRAP_ARG) => {
             render_server::run_render_server_bootstrap(args.collect())
         }
+        Some(crate::runtime::maintenance::MAINTENANCE_VM_ARG) => {
+            let tail: Vec<_> = args.collect();
+            let [config_path]: [OsString; 1] = tail.try_into().map_err(|tail: Vec<OsString>| {
+                anyhow!(
+                    "expected internal {} <launch.conf>, got {} argument(s)",
+                    crate::runtime::maintenance::MAINTENANCE_VM_ARG,
+                    tail.len() + 1
+                )
+            })?;
+            crate::runtime::maintenance::run_maintenance_vm(Path::new(&config_path))
+        }
         _ => bail!(
             "unknown cang internal command '{subcommand_text}'; expected {LIBKRUN_ENTER_HELPER_ARG}, {LIBKRUN_VM_WORKER_ARG}, or {RENDER_SERVER_BOOTSTRAP_ARG}"
         ),
