@@ -130,6 +130,21 @@ pkgs.mkShell {
       ]
     }''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+    # Cargo's output does not belong in the checkout. The git flake copy these
+    # commands use normally skips `target/` (it copies git-tracked files only),
+    # but `nix develop path:$PWD`, `nix build path:$PWD#container` and
+    # `--override-input ... path:$PWD/...` copy the whole tree, which turns a
+    # multi-GiB `target/` into a fresh multi-GiB store path every time. One
+    # directory per checkout keeps two worktrees off one cargo lock.
+    if [ -z "''${CARGO_TARGET_DIR-}" ]; then
+      cang_repo_root=""
+      if command -v git >/dev/null 2>&1; then
+        cang_repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+      fi
+      export CARGO_TARGET_DIR="$HOME/.cache/cang-build/target/$(basename "''${cang_repo_root:-$PWD}")"
+      unset cang_repo_root
+    fi
+
     export SHELL=${pkgs.fish}/bin/fish
 
     if [ -z "''${CANG_DISABLE_AUTO_FISH-}" ] && [ -t 0 ] && [ -t 1 ] && [ -z "''${CANG_IN_AUTO_FISH-}" ]; then
