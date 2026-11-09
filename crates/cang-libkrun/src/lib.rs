@@ -62,14 +62,14 @@ pub const CANG_FS_WORKER_THREADS: usize = 4;
 /// visible to the guest when the attributes refresh (attr_timeout, 5 s) rather
 /// than at the next `open`. Files the host rewrites by rename (every editor, `git
 /// checkout`, `sed -i`) are new inodes and unaffected, as are host-added
-/// directory entries. `CANG_FS_ZERO_MESSAGE_OPEN=0|1` overrides the default per
+/// directory entries. `CANG_VIRTIOFS_ZERO_MESSAGE_OPEN=0|1` overrides the default per
 /// launch, so an A/B - or a workspace that needs strict close-to-open - needs no
 /// rebuild.
-pub const CANG_FS_ZERO_MESSAGE_OPEN: bool = true;
+pub const CANG_VIRTIOFS_ZERO_MESSAGE_OPEN: bool = true;
 
-/// Env var that overrides [`CANG_FS_ZERO_MESSAGE_OPEN`] (`0`/`false` or
+/// Env var that overrides [`CANG_VIRTIOFS_ZERO_MESSAGE_OPEN`] (`0`/`false` or
 /// `1`/`true`; anything else is refused rather than guessed at).
-pub const CANG_FS_ZERO_MESSAGE_OPEN_ENV: &str = "CANG_FS_ZERO_MESSAGE_OPEN";
+pub const CANG_VIRTIOFS_ZERO_MESSAGE_OPEN_ENV: &str = "CANG_VIRTIOFS_ZERO_MESSAGE_OPEN";
 
 /// Whether cang asks the share to answer `FUSE_FLUSH` with `-ENOSYS` by default.
 ///
@@ -87,13 +87,13 @@ pub const CANG_FS_ZERO_MESSAGE_OPEN_ENV: &str = "CANG_FS_ZERO_MESSAGE_OPEN";
 /// FLUSH 211,877 -> 2 at the 1 M-request mark (-21.2% of all requests) and
 /// 171.4 s -> 153.5 s (-10.5%), against a 112.9 -> 117.4 s host drift over the
 /// same campaign and a 16.1 s same-setting spread. See note 33 and note 35 of the
-/// workspace-virtiofs-performance map. `CANG_FS_NO_FLUSH=0` restores the round
+/// workspace-virtiofs-performance map. `CANG_VIRTIOFS_NO_FLUSH=0` restores the round
 /// trip per launch.
-pub const CANG_FS_NO_FLUSH: bool = true;
+pub const CANG_VIRTIOFS_NO_FLUSH: bool = true;
 
-/// Env var that overrides [`CANG_FS_NO_FLUSH`] (`0`/`false` or `1`/`true`;
+/// Env var that overrides [`CANG_VIRTIOFS_NO_FLUSH`] (`0`/`false` or `1`/`true`;
 /// anything else is refused rather than guessed at).
-pub const CANG_FS_NO_FLUSH_ENV: &str = "CANG_FS_NO_FLUSH";
+pub const CANG_VIRTIOFS_NO_FLUSH_ENV: &str = "CANG_VIRTIOFS_NO_FLUSH";
 
 /// Whether cang asks the share to advertise `FUSE_CACHE_SYMLINKS` by default.
 ///
@@ -113,14 +113,14 @@ pub const CANG_FS_NO_FLUSH_ENV: &str = "CANG_FS_NO_FLUSH";
 ///
 /// The one semantic it gives up: a symlink target the *host* retargets stays
 /// stale in the guest for the share's `entry_timeout` (5 s), which is the same
-/// window [`CANG_FS_ZERO_MESSAGE_OPEN`] already exposes file contents to. A path
+/// window [`CANG_VIRTIOFS_ZERO_MESSAGE_OPEN`] already exposes file contents to. A path
 /// whose target never changes - every `/nix/store` entry - pays nothing.
-/// `CANG_FS_CACHE_SYMLINKS=0|1` overrides the default per launch.
-pub const CANG_FS_CACHE_SYMLINKS: bool = true;
+/// `CANG_VIRTIOFS_CACHE_SYMLINKS=0|1` overrides the default per launch.
+pub const CANG_VIRTIOFS_CACHE_SYMLINKS: bool = true;
 
-/// Env var that overrides [`CANG_FS_CACHE_SYMLINKS`] (`0`/`false` or `1`/`true`;
+/// Env var that overrides [`CANG_VIRTIOFS_CACHE_SYMLINKS`] (`0`/`false` or `1`/`true`;
 /// anything else is refused rather than guessed at).
-pub const CANG_FS_CACHE_SYMLINKS_ENV: &str = "CANG_FS_CACHE_SYMLINKS";
+pub const CANG_VIRTIOFS_CACHE_SYMLINKS_ENV: &str = "CANG_VIRTIOFS_CACHE_SYMLINKS";
 
 /// How long cang lets the guest cache the answer "this name does not exist".
 ///
@@ -150,13 +150,13 @@ pub const CANG_FS_CACHE_SYMLINKS_ENV: &str = "CANG_FS_CACHE_SYMLINKS";
 /// note 45 of the workspace-virtiofs-performance map). Metadata that a host
 /// process created *outside* the guest stays unseen for that window; a host
 /// `git checkout` of an existing path is a rename and still shows immediately.
-/// `CANG_FS_NEGATIVE_ENTRY_TIMEOUT=0` disables it (error path only) and a bare
+/// `CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT=0` disables it (error path only) and a bare
 /// millisecond value overrides this default for one launch.
-pub const CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS: u64 = 30_000;
+pub const CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS: u64 = 30_000;
 
-/// Env var that overrides [`CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS`], in
+/// Env var that overrides [`CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS`], in
 /// milliseconds (`0` disables the negative entry).
-pub const CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV: &str = "CANG_FS_NEGATIVE_ENTRY_TIMEOUT";
+pub const CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_ENV: &str = "CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT";
 
 /// Env var that makes the fork log the opcode mix it served when the device
 /// stops (`1`/`true`).
@@ -164,7 +164,7 @@ pub const CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV: &str = "CANG_FS_NEGATIVE_ENTRY_TIM
 /// The pinned guest kernel has neither ftrace nor debugfs, so the only place a
 /// workload's opcode histogram can be counted is the server. Off by default: it
 /// is a measurement switch, not a diagnostic a normal launch wants to pay for.
-pub const CANG_FS_STATS_ENV: &str = "CANG_FS_STATS";
+pub const CANG_VIRTIOFS_STATS_ENV: &str = "CANG_VIRTIOFS_STATS";
 
 const CANG_NET_FEATURE_CSUM: u32 = 1 << 0;
 const CANG_NET_FEATURE_GUEST_CSUM: u32 = 1 << 1;

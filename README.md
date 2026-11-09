@@ -490,7 +490,7 @@ What that costs is bounded visibility, and the bounds are:
   to 30 s - the negative-entry lifetime, because "this name is not there" is
   cached for that long. This is the widest window cang ships; lower it for a
   workspace a host process populates while the guest reads it
-  (`--fs=negative-entry:250`, or `0` to disable).
+  (`--virtiofs=negative-entry:250`, or `0` to disable).
 - Only a **host-side in-place rewrite** of a file the guest has already read
   (e.g. `echo >> file` from the host) can lag by up to 5 s, the `attr_timeout`
   the guest uses to revalidate attributes.
@@ -501,11 +501,11 @@ What that costs is bounded visibility, and the bounds are:
 Measured together on a cold 2401-crate `cargo build`: 171.4 s before, 116.3 s
 with all three (the host itself builds the same tree in 115 s), i.e. the share
 costs ~1% where it used to cost 49%. Each lever can be turned off for a launch
-that needs the strict semantics - `--fs=zero-message-open:off`,
-`--fs=no-flush:off`, `--fs=negative-entry:off` (or a millisecond value),
-`--fs=cache-symlinks:off` - and the
-matching `CANG_FS_*` environment variables do the same thing, which is what makes
-a one-binary A/B possible. `CANG_FS_STATS=1` makes the share log the opcode mix
+that needs the strict semantics - `--virtiofs=zero-message-open:off`,
+`--virtiofs=no-flush:off`, `--virtiofs=negative-entry:off` (or a millisecond value),
+`--virtiofs=cache-symlinks:off` - and the
+matching `CANG_VIRTIOFS_*` environment variables do the same thing, which is what makes
+a one-binary A/B possible. `CANG_VIRTIOFS_STATS=1` makes the share log the opcode mix
 it served when the VM stops, for measuring a workload without a guest-side tracer.
 
 ---

@@ -281,13 +281,13 @@ pub(crate) struct Cli {
     zero_copy_shm: bool,
 
     #[arg(
-        long = "fs",
+        long = "virtiofs",
         value_name = "KEY:VALUE",
-        value_parser = parse_fs_option,
+        value_parser = parse_virtiofs_option,
         help = "Set a virtio-fs share option",
-        long_help = "Set a virtio-fs share option as KEY:VALUE; repeat for more than one.\n\n  zero-message-open:on|off\n    `on` (cang's default) asks the share for zero-message opens: the guest kernel stops sending FUSE_OPEN/FUSE_RELEASE and keeps a file's page cache across opens, which is worth ~2x on a rust build but means a host-side IN-PLACE rewrite of a file the guest has already read can take up to the attr_timeout (5 s) to appear. A file the host replaces by rename (every editor, git checkout, sed -i) is a new inode and is unaffected. `off` keeps strict close-to-open visibility at the cost of the round trips.\n\n  no-flush:on|off\n    `on` (cang's default) answers FUSE_FLUSH with -ENOSYS, so the guest stops sending the close-time flush: 21% of the requests a rust build issues. The share has nothing to report through it (its flush body is a dup+close of the passthrough descriptor), so what is given up is only a deferred host error at close(2). `off` restores the round trip per close.\n\n  negative-entry:on|off|<milliseconds>\n    `on` (cang's default, 30 s) answers a lookup of a name that does not exist with the FUSE negative entry, which the guest can cache for that long; `-ENOENT` cannot be cached at all, and 91% of a build's lookups are misses. It removes 72% of the lookups and 21% of a cold build's wall time, and at 30 s it also removes the ~9.6k missing-candidate probes a compile-test iteration re-issues, taking an 11.8 s iteration on a 2401-crate tree to 7.9 s. The price is that a file the HOST adds to a directory stays invisible to the guest for up to that lifetime - lower it for a workspace a host process populates while the guest reads it, or `off`/`0` to disable it; a bare number sets the lifetime.\n\n  cache-symlinks:on|off\n    `on` (cang's default) advertises FUSE_CACHE_SYMLINKS, so the guest kernel keeps a symlink's target in the inode instead of issuing a READLINK on every resolution of the same path. A FUSE round trip costs the same whatever opcode it carries, and repeated symlink resolutions were 35-57% of the requests of a spawn-heavy workload (a process-spawn loop, a /nix tool-read loop, a workspace read loop, a compiler-cache write loop, an append loop); advertising the flag removed 98-99% of them. The price is the target's freshness: a symlink the HOST retargets stays stale for entry_timeout (5 s), the same window zero-message-open already exposes file contents to, and nothing at all for a target that never changes such as any /nix/store entry. `off` restores a READLINK per resolution."
+        long_help = "Set a virtio-fs share option as KEY:VALUE; repeat for more than one.\n\n  zero-message-open:on|off\n    `on` (cang's default) asks the share for zero-message opens: the guest kernel stops sending FUSE_OPEN/FUSE_RELEASE and keeps a file's page cache across opens, which is worth ~2x on a rust build but means a host-side IN-PLACE rewrite of a file the guest has already read can take up to the attr_timeout (5 s) to appear. A file the host replaces by rename (every editor, git checkout, sed -i) is a new inode and is unaffected. `off` keeps strict close-to-open visibility at the cost of the round trips.\n\n  no-flush:on|off\n    `on` (cang's default) answers FUSE_FLUSH with -ENOSYS, so the guest stops sending the close-time flush: 21% of the requests a rust build issues. The share has nothing to report through it (its flush body is a dup+close of the passthrough descriptor), so what is given up is only a deferred host error at close(2). `off` restores the round trip per close.\n\n  negative-entry:on|off|<milliseconds>\n    `on` (cang's default, 30 s) answers a lookup of a name that does not exist with the FUSE negative entry, which the guest can cache for that long; `-ENOENT` cannot be cached at all, and 91% of a build's lookups are misses. It removes 72% of the lookups and 21% of a cold build's wall time, and at 30 s it also removes the ~9.6k missing-candidate probes a compile-test iteration re-issues, taking an 11.8 s iteration on a 2401-crate tree to 7.9 s. The price is that a file the HOST adds to a directory stays invisible to the guest for up to that lifetime - lower it for a workspace a host process populates while the guest reads it, or `off`/`0` to disable it; a bare number sets the lifetime.\n\n  cache-symlinks:on|off\n    `on` (cang's default) advertises FUSE_CACHE_SYMLINKS, so the guest kernel keeps a symlink's target in the inode instead of issuing a READLINK on every resolution of the same path. A FUSE round trip costs the same whatever opcode it carries, and repeated symlink resolutions were 35-57% of the requests of a spawn-heavy workload (a process-spawn loop, a /nix tool-read loop, a workspace read loop, a compiler-cache write loop, an append loop); advertising the flag removed 98-99% of them. The price is the target's freshness: a symlink the HOST retargets stays stale for entry_timeout (5 s), the same window zero-message-open already exposes file contents to, and nothing at all for a target that never changes such as any /nix/store entry. `off` restores a READLINK per resolution.\n\nRenamed from `--fs=`, and its environment variables from `CANG_FS_*` to `CANG_VIRTIOFS_*`: the old spellings are rejected rather than silently ignored."
     )]
-    fs: Vec<FsOption>,
+    virtiofs: Vec<FsOption>,
 
     #[arg(
         long = "wayland",
@@ -665,10 +665,10 @@ impl Cli {
             },
             gpu_shm_bytes: self.gpu.shm_bytes,
             zero_copy_shm: self.zero_copy_shm,
-            zero_message_open: fs_zero_message_open(&self.fs),
-            no_flush: fs_no_flush(&self.fs),
-            cache_symlinks: fs_cache_symlinks(&self.fs),
-            negative_entry_millis: fs_negative_entry(&self.fs),
+            zero_message_open: virtiofs_zero_message_open(&self.virtiofs),
+            no_flush: virtiofs_no_flush(&self.virtiofs),
+            cache_symlinks: virtiofs_cache_symlinks(&self.virtiofs),
+            negative_entry_millis: virtiofs_negative_entry(&self.virtiofs),
             wayland: self.wayland,
             workspace: self.workspace,
             waypipe: self.waypipe,
@@ -727,7 +727,7 @@ pub(crate) struct RuntimeOptions {
     pub(crate) guest_command: Vec<String>,
 }
 
-/// One `--fs=KEY:VALUE` share option.
+/// One `--virtiofs=KEY:VALUE` share option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FsOption {
     ZeroMessageOpen(bool),
@@ -738,10 +738,10 @@ pub(crate) enum FsOption {
     NegativeEntry(u64),
 }
 
-/// Parse `--fs=KEY:VALUE`. An unknown key or value is an error rather than a
+/// Parse `--virtiofs=KEY:VALUE`. An unknown key or value is an error rather than a
 /// silently ignored flag, because a launch that asked for a behaviour it did not
 /// get is worse than a launch that failed.
-fn parse_fs_option(value: &str) -> Result<FsOption, String> {
+fn parse_virtiofs_option(value: &str) -> Result<FsOption, String> {
     let (key, raw) = value
         .split_once(':')
         .ok_or_else(|| format!("{value}: expected KEY:VALUE"))?;
@@ -781,7 +781,7 @@ fn parse_on_off(value: &str) -> Option<bool> {
 fn parse_negative_entry(value: &str) -> Option<u64> {
     if let Some(on) = parse_on_off(value) {
         return Some(if on {
-            cang_libkrun::CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS
+            cang_libkrun::CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS
         } else {
             0
         });
@@ -789,35 +789,35 @@ fn parse_negative_entry(value: &str) -> Option<u64> {
     value.trim().parse::<u64>().ok()
 }
 
-/// The launch's `FUSE_FLUSH` choice, from the `--fs` options.
-fn fs_no_flush(options: &[FsOption]) -> Option<bool> {
+/// The launch's `FUSE_FLUSH` choice, from the `--virtiofs` options.
+fn virtiofs_no_flush(options: &[FsOption]) -> Option<bool> {
     options.iter().rev().find_map(|option| match option {
         FsOption::NoFlush(enabled) => Some(*enabled),
         _ => None,
     })
 }
 
-/// The launch's `FUSE_CACHE_SYMLINKS` choice, from the `--fs` options.
-fn fs_cache_symlinks(options: &[FsOption]) -> Option<bool> {
+/// The launch's `FUSE_CACHE_SYMLINKS` choice, from the `--virtiofs` options.
+fn virtiofs_cache_symlinks(options: &[FsOption]) -> Option<bool> {
     options.iter().rev().find_map(|option| match option {
         FsOption::CacheSymlinks(enabled) => Some(*enabled),
         _ => None,
     })
 }
 
-/// The launch's negative-entry lifetime, in milliseconds, from the `--fs`
+/// The launch's negative-entry lifetime, in milliseconds, from the `--virtiofs`
 /// options.
-fn fs_negative_entry(options: &[FsOption]) -> Option<u64> {
+fn virtiofs_negative_entry(options: &[FsOption]) -> Option<u64> {
     options.iter().rev().find_map(|option| match option {
         FsOption::NegativeEntry(millis) => Some(*millis),
         _ => None,
     })
 }
 
-/// The launch's zero-message-open choice, from the `--fs` options: `None` keeps
+/// The launch's zero-message-open choice, from the `--virtiofs` options: `None` keeps
 /// the environment override and then cang's default in play, `Some` is the user
 /// overriding both for this launch.
-fn fs_zero_message_open(options: &[FsOption]) -> Option<bool> {
+fn virtiofs_zero_message_open(options: &[FsOption]) -> Option<bool> {
     // Last one wins, so a repeated option behaves like a flag given twice.
     options.iter().rev().find_map(|option| match option {
         FsOption::ZeroMessageOpen(enabled) => Some(*enabled),
@@ -2446,17 +2446,17 @@ fn images_words_after_delimiter_remain_guest_command() {
 }
 
 #[test]
-fn fs_zero_message_open_option_is_parsed_and_overrides() {
-    let cli = Cli::try_parse_from(["cang", "--fs=zero-message-open:off", "--", "true"])
-        .expect("--fs=zero-message-open:off should parse");
+fn virtiofs_zero_message_open_option_is_parsed_and_overrides() {
+    let cli = Cli::try_parse_from(["cang", "--virtiofs=zero-message-open:off", "--", "true"])
+        .expect("--virtiofs=zero-message-open:off should parse");
     assert_eq!(
         cli.into_runtime_options().zero_message_open,
         Some(false),
         "an explicit off reaches the launcher as a choice, not as a default"
     );
 
-    let cli = Cli::try_parse_from(["cang", "--fs=zero-message-open:on", "--", "true"])
-        .expect("--fs=zero-message-open:on should parse");
+    let cli = Cli::try_parse_from(["cang", "--virtiofs=zero-message-open:on", "--", "true"])
+        .expect("--virtiofs=zero-message-open:on should parse");
     assert_eq!(cli.into_runtime_options().zero_message_open, Some(true));
 
     let cli = Cli::try_parse_from(["cang", "--", "true"]).expect("plain launch should parse");
@@ -2468,28 +2468,28 @@ fn fs_zero_message_open_option_is_parsed_and_overrides() {
 }
 
 #[test]
-fn fs_no_flush_and_negative_entry_options_are_parsed_and_overridden() {
-    let cli = Cli::try_parse_from(["cang", "--fs=no-flush:off", "--", "true"])
-        .expect("--fs=no-flush:off should parse");
+fn virtiofs_no_flush_and_negative_entry_options_are_parsed_and_overridden() {
+    let cli = Cli::try_parse_from(["cang", "--virtiofs=no-flush:off", "--", "true"])
+        .expect("--virtiofs=no-flush:off should parse");
     assert_eq!(cli.into_runtime_options().no_flush, Some(false));
 
-    let cli = Cli::try_parse_from(["cang", "--fs=negative-entry:1000", "--", "true"])
-        .expect("--fs=negative-entry:1000 should parse");
+    let cli = Cli::try_parse_from(["cang", "--virtiofs=negative-entry:1000", "--", "true"])
+        .expect("--virtiofs=negative-entry:1000 should parse");
     assert_eq!(cli.into_runtime_options().negative_entry_millis, Some(1000));
 
-    let cli = Cli::try_parse_from(["cang", "--fs=negative-entry:off", "--", "true"])
-        .expect("--fs=negative-entry:off should parse");
+    let cli = Cli::try_parse_from(["cang", "--virtiofs=negative-entry:off", "--", "true"])
+        .expect("--virtiofs=negative-entry:off should parse");
     assert_eq!(
         cli.into_runtime_options().negative_entry_millis,
         Some(0),
         "off reaches the launcher as 0, which is the disabled lifetime"
     );
 
-    let cli = Cli::try_parse_from(["cang", "--fs=negative-entry:on", "--", "true"])
-        .expect("--fs=negative-entry:on should parse");
+    let cli = Cli::try_parse_from(["cang", "--virtiofs=negative-entry:on", "--", "true"])
+        .expect("--virtiofs=negative-entry:on should parse");
     assert_eq!(
         cli.into_runtime_options().negative_entry_millis,
-        Some(cang_libkrun::CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS),
+        Some(cang_libkrun::CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS),
         "on means cang's default lifetime, not every launch spelling its own number"
     );
 
@@ -2502,23 +2502,23 @@ fn fs_no_flush_and_negative_entry_options_are_parsed_and_overridden() {
     // flag given twice rather than like an error.
     let cli = Cli::try_parse_from([
         "cang",
-        "--fs=no-flush:on",
-        "--fs=no-flush:off",
+        "--virtiofs=no-flush:on",
+        "--virtiofs=no-flush:off",
         "--",
         "true",
     ])
-    .expect("repeated --fs keys should parse");
+    .expect("repeated --virtiofs keys should parse");
     assert_eq!(cli.into_runtime_options().no_flush, Some(false));
 }
 
 #[test]
-fn fs_cache_symlinks_option_is_parsed_and_overridden() {
-    let cli = Cli::try_parse_from(["cang", "--fs=cache-symlinks:off", "--", "true"])
-        .expect("--fs=cache-symlinks:off should parse");
+fn virtiofs_cache_symlinks_option_is_parsed_and_overridden() {
+    let cli = Cli::try_parse_from(["cang", "--virtiofs=cache-symlinks:off", "--", "true"])
+        .expect("--virtiofs=cache-symlinks:off should parse");
     assert_eq!(cli.into_runtime_options().cache_symlinks, Some(false));
 
-    let cli = Cli::try_parse_from(["cang", "--fs=cache-symlinks:on", "--", "true"])
-        .expect("--fs=cache-symlinks:on should parse");
+    let cli = Cli::try_parse_from(["cang", "--virtiofs=cache-symlinks:on", "--", "true"])
+        .expect("--virtiofs=cache-symlinks:on should parse");
     assert_eq!(cli.into_runtime_options().cache_symlinks, Some(true));
 
     let cli = Cli::try_parse_from(["cang", "--", "true"]).expect("plain launch should parse");
@@ -2530,13 +2530,17 @@ fn fs_cache_symlinks_option_is_parsed_and_overridden() {
 }
 
 #[test]
-fn fs_option_rejects_unknown_keys_and_values() {
-    assert!(Cli::try_parse_from(["cang", "--fs=no-such-thing:on", "--", "true"]).is_err());
-    assert!(Cli::try_parse_from(["cang", "--fs=zero-message-open:maybe", "--", "true"]).is_err());
-    assert!(Cli::try_parse_from(["cang", "--fs=zero-message-open", "--", "true"]).is_err());
-    assert!(Cli::try_parse_from(["cang", "--fs=no-flush:maybe", "--", "true"]).is_err());
-    assert!(Cli::try_parse_from(["cang", "--fs=cache-symlinks:maybe", "--", "true"]).is_err());
-    assert!(Cli::try_parse_from(["cang", "--fs=negative-entry:soon", "--", "true"]).is_err());
+fn virtiofs_option_rejects_unknown_keys_and_values() {
+    assert!(Cli::try_parse_from(["cang", "--virtiofs=no-such-thing:on", "--", "true"]).is_err());
+    assert!(
+        Cli::try_parse_from(["cang", "--virtiofs=zero-message-open:maybe", "--", "true"]).is_err()
+    );
+    assert!(Cli::try_parse_from(["cang", "--virtiofs=zero-message-open", "--", "true"]).is_err());
+    assert!(Cli::try_parse_from(["cang", "--virtiofs=no-flush:maybe", "--", "true"]).is_err());
+    assert!(
+        Cli::try_parse_from(["cang", "--virtiofs=cache-symlinks:maybe", "--", "true"]).is_err()
+    );
+    assert!(Cli::try_parse_from(["cang", "--virtiofs=negative-entry:soon", "--", "true"]).is_err());
 }
 
 /// `--nix-lower` takes exactly three words; anything else is a mistake worth naming.

@@ -15,10 +15,11 @@ use crate::runtime::session::supervisor::rlimits::host_nofile_hard_limit;
 use crate::runtime::vm::gpu::GpuMode;
 
 use cang_libkrun::{
-    CANG_FS_CACHE_SYMLINKS, CANG_FS_CACHE_SYMLINKS_ENV, CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV,
-    CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS, CANG_FS_NO_FLUSH, CANG_FS_NO_FLUSH_ENV,
-    CANG_FS_ROOT_TAG, CANG_FS_STATS_ENV, CANG_FS_WORKER_THREADS, CANG_FS_ZERO_MESSAGE_OPEN,
-    CANG_FS_ZERO_MESSAGE_OPEN_ENV, CANG_LIBKRUN_COMPAT_NET_FEATURES, Handle, LibkrunApi,
+    CANG_FS_ROOT_TAG, CANG_FS_WORKER_THREADS, CANG_LIBKRUN_COMPAT_NET_FEATURES,
+    CANG_VIRTIOFS_CACHE_SYMLINKS, CANG_VIRTIOFS_CACHE_SYMLINKS_ENV,
+    CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_ENV, CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS,
+    CANG_VIRTIOFS_NO_FLUSH, CANG_VIRTIOFS_NO_FLUSH_ENV, CANG_VIRTIOFS_STATS_ENV,
+    CANG_VIRTIOFS_ZERO_MESSAGE_OPEN, CANG_VIRTIOFS_ZERO_MESSAGE_OPEN_ENV, Handle, LibkrunApi,
 };
 
 pub(in crate::runtime::vm::libkrun) const PROFILE_KERNEL_CMDLINE_APPEND: &str =
@@ -92,7 +93,7 @@ pub(crate) const RENDER_SERVER_FD_ENV: &str = "CANG_RENDER_SERVER_FD";
 
 /// Whether this launch asks for zero-message opens on the virtio-fs share.
 ///
-/// cang's default is [`CANG_FS_ZERO_MESSAGE_OPEN`]; `CANG_FS_ZERO_MESSAGE_OPEN`
+/// cang's default is [`CANG_VIRTIOFS_ZERO_MESSAGE_OPEN`]; `CANG_VIRTIOFS_ZERO_MESSAGE_OPEN`
 /// in the environment overrides it so an A/B can run one binary twice. An
 /// unparseable value is refused rather than silently taking either arm, because
 /// an A/B that quietly ran the same arm on both sides is worse than a launch
@@ -100,13 +101,15 @@ pub(crate) const RENDER_SERVER_FD_ENV: &str = "CANG_RENDER_SERVER_FD";
 fn zero_message_open_enabled(cli_choice: Option<bool>) -> bool {
     resolve_zero_message_open(
         cli_choice,
-        std::env::var(CANG_FS_ZERO_MESSAGE_OPEN_ENV).ok().as_deref(),
+        std::env::var(CANG_VIRTIOFS_ZERO_MESSAGE_OPEN_ENV)
+            .ok()
+            .as_deref(),
     )
 }
 
 /// Resolve the knob from the CLI flag and the environment override.
 ///
-/// Precedence: `--fs=zero-message-open:on|off` (an instruction for this launch) wins
+/// Precedence: `--virtiofs=zero-message-open:on|off` (an instruction for this launch) wins
 /// over the environment, which wins over cang's default. The environment stays
 /// because it is what makes an A/B run possible with one binary.
 fn resolve_zero_message_open(cli_choice: Option<bool>, env_value: Option<&str>) -> bool {
@@ -119,12 +122,12 @@ fn resolve_zero_message_open(cli_choice: Option<bool>, env_value: Option<&str>) 
             None => {
                 tracing::warn!(
                     value = %value,
-                    "{CANG_FS_ZERO_MESSAGE_OPEN_ENV} is not 0/1, ignoring it"
+                    "{CANG_VIRTIOFS_ZERO_MESSAGE_OPEN_ENV} is not 0/1, ignoring it"
                 );
-                CANG_FS_ZERO_MESSAGE_OPEN
+                CANG_VIRTIOFS_ZERO_MESSAGE_OPEN
             }
         },
-        None => CANG_FS_ZERO_MESSAGE_OPEN,
+        None => CANG_VIRTIOFS_ZERO_MESSAGE_OPEN,
     }
 }
 
@@ -132,11 +135,11 @@ fn resolve_zero_message_open(cli_choice: Option<bool>, env_value: Option<&str>) 
 fn no_flush_enabled(cli_choice: Option<bool>) -> bool {
     resolve_no_flush(
         cli_choice,
-        std::env::var(CANG_FS_NO_FLUSH_ENV).ok().as_deref(),
+        std::env::var(CANG_VIRTIOFS_NO_FLUSH_ENV).ok().as_deref(),
     )
 }
 
-/// Resolve the no-flush knob: `--fs=no-flush:on|off` over the environment, which
+/// Resolve the no-flush knob: `--virtiofs=no-flush:on|off` over the environment, which
 /// overrides cang's default. An unparseable environment value keeps the default
 /// and says so, rather than running an arm the caller did not ask for.
 fn resolve_no_flush(cli_choice: Option<bool>, env_value: Option<&str>) -> bool {
@@ -149,12 +152,12 @@ fn resolve_no_flush(cli_choice: Option<bool>, env_value: Option<&str>) -> bool {
             None => {
                 tracing::warn!(
                     value = %value,
-                    "{CANG_FS_NO_FLUSH_ENV} is not 0/1, ignoring it"
+                    "{CANG_VIRTIOFS_NO_FLUSH_ENV} is not 0/1, ignoring it"
                 );
-                CANG_FS_NO_FLUSH
+                CANG_VIRTIOFS_NO_FLUSH
             }
         },
-        None => CANG_FS_NO_FLUSH,
+        None => CANG_VIRTIOFS_NO_FLUSH,
     }
 }
 
@@ -162,11 +165,13 @@ fn resolve_no_flush(cli_choice: Option<bool>, env_value: Option<&str>) -> bool {
 fn cache_symlinks_enabled(cli_choice: Option<bool>) -> bool {
     resolve_cache_symlinks(
         cli_choice,
-        std::env::var(CANG_FS_CACHE_SYMLINKS_ENV).ok().as_deref(),
+        std::env::var(CANG_VIRTIOFS_CACHE_SYMLINKS_ENV)
+            .ok()
+            .as_deref(),
     )
 }
 
-/// Resolve the symlink-cache knob: `--fs=cache-symlinks:on|off` over the
+/// Resolve the symlink-cache knob: `--virtiofs=cache-symlinks:on|off` over the
 /// environment, which overrides cang's default. An unparseable environment value
 /// keeps the default and says so, rather than running an arm the caller did not
 /// ask for.
@@ -180,21 +185,21 @@ fn resolve_cache_symlinks(cli_choice: Option<bool>, env_value: Option<&str>) -> 
             None => {
                 tracing::warn!(
                     value = %value,
-                    "{CANG_FS_CACHE_SYMLINKS_ENV} is not 0/1, ignoring it"
+                    "{CANG_VIRTIOFS_CACHE_SYMLINKS_ENV} is not 0/1, ignoring it"
                 );
-                CANG_FS_CACHE_SYMLINKS
+                CANG_VIRTIOFS_CACHE_SYMLINKS
             }
         },
-        None => CANG_FS_CACHE_SYMLINKS,
+        None => CANG_VIRTIOFS_CACHE_SYMLINKS,
     }
 }
 
 /// How long a lookup of a *missing* name may be cached in the guest, from
-/// `--fs=negative-entry:<milliseconds>` and then the environment.
+/// `--virtiofs=negative-entry:<milliseconds>` and then the environment.
 fn negative_entry_timeout(cli_choice: Option<u64>) -> Option<Duration> {
     resolve_negative_entry_millis(
         cli_choice,
-        std::env::var(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV)
+        std::env::var(CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_ENV)
             .ok()
             .as_deref(),
     )
@@ -215,18 +220,18 @@ fn resolve_negative_entry_millis(cli_choice: Option<u64>, env_value: Option<&str
             Err(_) => {
                 tracing::warn!(
                     value = %value,
-                    "{CANG_FS_NEGATIVE_ENTRY_TIMEOUT_ENV} is not milliseconds, ignoring it"
+                    "{CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_ENV} is not milliseconds, ignoring it"
                 );
-                Some(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS)
+                Some(CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS)
             }
         },
-        None => Some(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS),
+        None => Some(CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS),
     }
 }
 
 /// Whether this launch asks the fork to log the fuse opcode histogram.
 fn opcode_stats_enabled() -> bool {
-    std::env::var(CANG_FS_STATS_ENV)
+    std::env::var(CANG_VIRTIOFS_STATS_ENV)
         .ok()
         .and_then(|value| parse_env_flag(&value))
         .unwrap_or(false)
@@ -959,11 +964,14 @@ pub(in crate::runtime::vm::libkrun) fn guest_nofile_rlimit_entry(
 
 #[test]
 fn no_flush_precedence_is_flag_then_env_then_default() {
-    assert_eq!(resolve_no_flush(None, None), CANG_FS_NO_FLUSH);
+    assert_eq!(resolve_no_flush(None, None), CANG_VIRTIOFS_NO_FLUSH);
     assert!(!resolve_no_flush(None, Some("0")));
     assert!(resolve_no_flush(None, Some("1")));
     // An unparseable environment value keeps the default rather than guessing.
-    assert_eq!(resolve_no_flush(None, Some("yes-please")), CANG_FS_NO_FLUSH);
+    assert_eq!(
+        resolve_no_flush(None, Some("yes-please")),
+        CANG_VIRTIOFS_NO_FLUSH
+    );
     // The flag wins over the environment in both directions.
     assert!(!resolve_no_flush(Some(false), Some("1")));
     assert!(resolve_no_flush(Some(true), Some("0")));
@@ -971,13 +979,16 @@ fn no_flush_precedence_is_flag_then_env_then_default() {
 
 #[test]
 fn cache_symlinks_precedence_is_flag_then_env_then_default() {
-    assert_eq!(resolve_cache_symlinks(None, None), CANG_FS_CACHE_SYMLINKS);
+    assert_eq!(
+        resolve_cache_symlinks(None, None),
+        CANG_VIRTIOFS_CACHE_SYMLINKS
+    );
     assert!(!resolve_cache_symlinks(None, Some("0")));
     assert!(resolve_cache_symlinks(None, Some("1")));
     // An unparseable environment value keeps the default rather than guessing.
     assert_eq!(
         resolve_cache_symlinks(None, Some("yes-please")),
-        CANG_FS_CACHE_SYMLINKS
+        CANG_VIRTIOFS_CACHE_SYMLINKS
     );
     // The flag wins over the environment in both directions.
     assert!(!resolve_cache_symlinks(Some(false), Some("1")));
@@ -988,7 +999,7 @@ fn cache_symlinks_precedence_is_flag_then_env_then_default() {
 fn negative_entry_lifetime_is_flag_then_env_then_default() {
     assert_eq!(
         resolve_negative_entry_millis(None, None),
-        Some(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS)
+        Some(CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS)
     );
     assert_eq!(
         resolve_negative_entry_millis(None, Some("1000")),
@@ -997,7 +1008,7 @@ fn negative_entry_lifetime_is_flag_then_env_then_default() {
     assert_eq!(resolve_negative_entry_millis(None, Some("0")), Some(0));
     assert_eq!(
         resolve_negative_entry_millis(None, Some("soon")),
-        Some(CANG_FS_NEGATIVE_ENTRY_TIMEOUT_MILLIS)
+        Some(CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS)
     );
     assert_eq!(
         resolve_negative_entry_millis(Some(500), Some("1000")),
@@ -1016,7 +1027,7 @@ fn zero_message_open_precedence_is_flag_then_env_then_default() {
     // No flag, no override: cang's default (on).
     assert_eq!(
         resolve_zero_message_open(None, None),
-        CANG_FS_ZERO_MESSAGE_OPEN
+        CANG_VIRTIOFS_ZERO_MESSAGE_OPEN
     );
     // The environment is what makes a one-binary A/B possible.
     assert!(!resolve_zero_message_open(None, Some("0")));
@@ -1024,7 +1035,7 @@ fn zero_message_open_precedence_is_flag_then_env_then_default() {
     // An unparseable value does not silently pick an arm.
     assert_eq!(
         resolve_zero_message_open(None, Some("yes-please")),
-        CANG_FS_ZERO_MESSAGE_OPEN
+        CANG_VIRTIOFS_ZERO_MESSAGE_OPEN
     );
     // The CLI option is an instruction for this launch and wins both ways.
     assert!(!resolve_zero_message_open(Some(false), None));

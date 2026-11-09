@@ -3,7 +3,7 @@ label: wayfinder:task
 title: Rename `--fs=` to `--virtiofs=` and retire its env vars
 status: open
 blocked_by: []
-claimed_by: ""
+claimed_by: "pi (2026-11-10)"
 ---
 
 ## Question
