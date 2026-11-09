@@ -156,16 +156,16 @@ green.
   both virtio-fs in the meantime (commit 74702df).
 
 - [What does the writable /nix upper cost today, and what would the block disk save?](tickets/01-upper-write-cost.md):
-  the **write** question is **unanswered - blocked on a clean window**. Two
-  six-arm sets (685 paths / 7.84 GiB `nix copy` through overlayfs, virtio-fs
-  upper vs btrfs upper) gave write ratios of **+24.7 % (B slower)** and
-  **-6.5 % (B faster)** with a 50 % spread on B, so the `>= 20 %` threshold is
-  not evaluated and neither direction may be quoted; both sets also ran with a
-  sibling campaign's VM live (run 2 passed the gate and was taken 96 s in). What
-  *is* established in 12 of 12 arms and never reverses: metadata walk 6.1-6.7x,
-  `du` 15.0-16.1x, delete 14.7-17.2x and cold re-read 24.6-38.9 % cheaper on the
-  block disk, so a substitution-plus-GC cycle is 13.4 % cheaper even where its
-  write lost - the metadata premise holds, the write half does not.
+  the **`>= 20 %` write threshold is not cleared**: the one uncontended A/B pair
+  (4 arms, after a co-tenant left) puts the block-disk upper **10.9 % ahead** on a
+  684-path / 7.98 GB `nix copy` (paired -4.0 % / -17.6 %), while three contended
+  sets straddled zero (+24.7 %, -6.5 %, +14.5 %). What the move *does* buy, and now
+  uncontended, is metadata and GC: walk **7.7x**, `du` **15.4x**, delete **13.3x**
+  faster, so write+delete is 166.4 s (virtio-fs upper) against 103.3 s (block
+  upper). Two limits stay open: the workload is **12.06 MB per path**, 10x fatter
+  than the harmony upper's ~1.2 MB, and a metadata-*shaped* arm is impossible with
+  this image (685 store paths; any closed 3 GB subset expands back to 684 paths).
+
 ## Not yet specified
 
 - The implementation slices themselves - host disk preparation and the
