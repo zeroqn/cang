@@ -33,6 +33,9 @@ pub(in crate::guest_init) const NIX_LOWER_DISK_ID_ENV: &str = "CANG_NIX_LOWER_DI
 pub(in crate::guest_init) const NIX_LOWER_DISK_LABEL_ENV: &str = "CANG_NIX_LOWER_DISK_LABEL";
 pub(in crate::guest_init) const NIX_LOWER_UPPERDIR_ENV: &str = "CANG_NIX_LOWER_UPPERDIR";
 pub(in crate::guest_init) const NIX_LOWER_WORKDIR_ENV: &str = "CANG_NIX_LOWER_WORKDIR";
+/// The host-seeded upper a fresh build-disk generation imports once, when the
+/// workspace's cache predates the move onto the disk.
+pub(in crate::guest_init) const NIX_LOWER_IMPORT_UPPER_ENV: &str = "CANG_NIX_LOWER_IMPORT_UPPER";
 pub(in crate::guest_init) const ENTER_AS_ROOT_ENV: &str = "CANG_ENTER_AS_ROOT";
 pub(in crate::guest_init) const CONTAINERS_STORE_ENV: &str = "CANG_CONTAINERS_STORE";
 
@@ -180,6 +183,10 @@ pub(in crate::guest_init) struct NixLowerContract {
     pub(in crate::guest_init) disk_label: String,
     pub(in crate::guest_init) upperdir: PathBuf,
     pub(in crate::guest_init) workdir: PathBuf,
+    /// The host-seeded upper on the share, when there is one: a fresh generation
+    /// on the build disk imports it once instead of starting empty, so moving
+    /// `/nix` onto the disk does not re-substitute a cache that already exists.
+    pub(in crate::guest_init) import_upper: Option<PathBuf>,
 }
 
 impl NixLowerContract {
@@ -200,6 +207,9 @@ impl NixLowerContract {
                 .unwrap_or_else(|| RAW_NIX_LOWER_DISK_LABEL.to_owned()),
             upperdir: required_path(&lookup, NIX_LOWER_UPPERDIR_ENV)?,
             workdir: required_path(&lookup, NIX_LOWER_WORKDIR_ENV)?,
+            import_upper: lookup(NIX_LOWER_IMPORT_UPPER_ENV)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from),
         }))
     }
 }

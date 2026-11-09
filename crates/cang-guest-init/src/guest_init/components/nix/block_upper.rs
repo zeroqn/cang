@@ -75,6 +75,8 @@ pub(in crate::guest_init) const IMAGE_DB_DIR: &str = ".cang-image-db";
 pub(in crate::guest_init) const PREVIOUS_DB_DIR: &str = ".cang-previous-db";
 /// The overlay's writable layer, relative to a generation directory.
 const UPPER_DIR: &str = "upper";
+/// Where store objects live inside a `/nix` root or an overlay upper.
+const STORE_DIR: &str = "store";
 /// A Nix DB directory, relative to a `/nix` root.
 const LIVE_DB_RELATIVE: &str = "var/nix/db";
 /// The files a Nix DB is made of: the database, the write-ahead log SQLite may
@@ -103,6 +105,9 @@ pub(in crate::guest_init) enum SeedOutcome {
     Fresh,
     /// A fresh generation was cloned from a sibling generation.
     Cloned(PathBuf, CloneKind),
+    /// A fresh generation imported the host-seeded upper, so a workspace whose
+    /// `/nix` upper predates the disk keeps its cache.
+    Imported(PathBuf),
 }
 
 /// How a sibling generation was cloned.
@@ -122,14 +127,16 @@ pub(in crate::guest_init) fn seed_block_upper(
     upper: &Path,
     work: &Path,
     lower: &Path,
+    import_upper: Option<&Path>,
 ) -> Result<SeedOutcome> {
-    seed_block_upper_with(upper, work, lower, &SystemSeedOps)
+    seed_block_upper_with(upper, work, lower, import_upper, &SystemSeedOps)
 }
 
 fn seed_block_upper_with(
     upper: &Path,
     work: &Path,
     lower: &Path,
+    import_upper: Option<&Path>,
     ops: &impl SeedOps,
 ) -> Result<SeedOutcome> {
     // Seeding is only ever useful on the disk it is meant for: on an unmounted
@@ -164,7 +171,7 @@ fn seed_block_upper_with(
 
     // The generation directory is only created when something is going into it:
     // the second boot of a seeded generation must touch nothing at all.
-    let outcome = match plan_seed(upper, ops)? {
+    let outcome = match plan_seed(upper, import_upper, ops)? {
         SeedPlan::AlreadySeeded => return Ok(SeedOutcome::AlreadySeeded),
         SeedPlan::Resumed => {
             // An interrupted seed keeps its partial upper; both overlayfs
@@ -173,6 +180,13 @@ fn seed_block_upper_with(
             ops.create_dir_all(upper)?;
             reset_work_dir(work, ops)?;
             SeedOutcome::Resumed
+        }
+        SeedPlan::Imported(source) => {
+            create_generation(generation, ops)?;
+            ops.create_dir_all(upper)?;
+            reset_work_dir(work, ops)?;
+            import_cache(&source, upper, ops)?;
+            SeedOutcome::Imported(source)
         }
         SeedPlan::Fresh => {
             create_generation(generation, ops)?;
@@ -192,6 +206,14 @@ fn seed_block_upper_with(
     clear_inherited_state(upper, ops)?;
     park_previous_db(upper, ops)?;
     stage_image_db(upper, lower, ops)?;
+    // A seeded generation is the only one worth keeping besides the newest other
+    // completed one, which is where the next fresh generation clones from: anything
+    // older is dead weight on a disk the workspace shares with its build caches.
+    // This runs before the sentinel, so a prune that fails leaves the generation
+    // unseeded and the next boot retries rather than accepting a half state.
+    if let Err(err) = prune_generations(generation, ops) {
+        eprintln!("cang-guest-init: warning: failed to prune retired /nix generations: {err:#}");
+    }
     ops.write_file(&upper.join(SEEDED_SENTINEL), "seeded\n")
         .with_context(|| {
             format!(
@@ -213,21 +235,72 @@ enum SeedPlan {
     Resumed,
     /// Empty and a sibling generation can be cloned.
     Cloned(PathBuf),
+    /// Empty, with nothing to clone from inside the disk, but the workspace has a
+    /// host-seeded upper from before `/nix` moved onto the disk: import it once.
+    Imported(PathBuf),
     /// Empty with nothing to clone from.
     Fresh,
 }
 
-fn plan_seed(upper: &Path, ops: &impl SeedOps) -> Result<SeedPlan> {
+fn plan_seed(upper: &Path, import_upper: Option<&Path>, ops: &impl SeedOps) -> Result<SeedPlan> {
     if ops.is_file(&upper.join(SEEDED_SENTINEL)) {
         return Ok(SeedPlan::AlreadySeeded);
     }
     if ops.is_dir(upper) && !ops.read_dir(upper)?.is_empty() {
         return Ok(SeedPlan::Resumed);
     }
-    Ok(match newest_sibling_generation(upper, ops)? {
-        Some(sibling) => SeedPlan::Cloned(sibling),
-        None => SeedPlan::Fresh,
-    })
+    // Inside the disk beats off it: a sibling generation is this workspace's own
+    // block-disk history and costs a snapshot, while the import is a full copy over
+    // virtio-fs that exists only to carry a cache over from the host-seeded era.
+    if let Some(sibling) = newest_sibling_generation(upper, ops)? {
+        return Ok(SeedPlan::Cloned(sibling));
+    }
+    if let Some(source) = import_upper {
+        // An upper with no store in it - a generation the host seeded for an image
+        // that never ran - is not worth a copy.
+        let store = source.join(STORE_DIR);
+        if ops.is_dir(&store) && !ops.read_dir(&store)?.is_empty() {
+            return Ok(SeedPlan::Imported(source.to_path_buf()));
+        }
+    }
+    Ok(SeedPlan::Fresh)
+}
+
+/// Import the *cache* of a host-seeded upper, not the directory wholesale.
+///
+/// A `/nix` root that ran under the host overlay carries live artefacts that must
+/// not be copied: `var/nix/daemon-socket/socket` is a socket, and `cp -a` on one
+/// fails with `ENXIO` ("No such device or address") - which is exactly how the
+/// first import attempt aborted. What a fresh generation needs is the store's
+/// objects (hardlinks included) and the DB it was last used with; the DB is parked
+/// and then replaced by the image's own, exactly as a clone's is.
+fn import_cache(source: &Path, upper: &Path, ops: &impl SeedOps) -> Result<()> {
+    let store = source.join(STORE_DIR);
+    ops.copy_tree(&store, &upper.join(STORE_DIR))
+        .with_context(|| {
+            format!(
+                "failed to import the store of the host-seeded /nix upper '{}' into '{}'",
+                source.display(),
+                upper.display()
+            )
+        })?;
+    let db = source.join(LIVE_DB_RELATIVE);
+    if ops.is_dir(&db) {
+        // `cp -a <db> <upper>/var/nix/db` needs the parent to exist in a copy that
+        // was just created for the store.
+        if let Some(parent) = upper.join(LIVE_DB_RELATIVE).parent() {
+            ops.create_dir_all(parent)?;
+        }
+        ops.copy_tree(&db, &upper.join(LIVE_DB_RELATIVE))
+            .with_context(|| {
+                format!(
+                    "failed to import the Nix DB of the host-seeded /nix upper '{}' into '{}'",
+                    source.display(),
+                    upper.display()
+                )
+            })?;
+    }
+    Ok(())
 }
 
 /// The sibling generation this generation should be cloned from.
@@ -703,3 +776,58 @@ fn path_str(path: &Path) -> Result<&str> {
 #[cfg(test)]
 #[path = "block_upper_tests.rs"]
 mod tests;
+
+/// Delete the generations this workspace no longer needs.
+///
+/// The disk is shared with the workspace's build caches, so it keeps exactly what
+/// the seed can use: the generation that just booted, and the newest *other*
+/// completed generation - the one the next fresh generation clones from. Anything
+/// else that is completed goes. An incomplete generation is left alone: it is
+/// resumable, and half a copy is worth keeping until that digest is used again.
+fn prune_generations(generation: &Path, ops: &impl SeedOps) -> Result<()> {
+    let Some(parent) = generation.parent() else {
+        return Ok(());
+    };
+    let keep_newest = newest_sibling_generation(&generation.join(UPPER_DIR), ops)?;
+    for entry in ops.read_dir(parent)? {
+        if entry == generation || !ops.is_dir(&entry) {
+            continue;
+        }
+        let Some(name) = entry.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        // Only real generations, and only ones that finished seeding: a dot-name
+        // is staging, and a symlink could aim this delete at another tree.
+        if name.starts_with('.') || !ops.is_plain_dir(&entry) {
+            continue;
+        }
+        if !ops.is_file(&entry.join(UPPER_DIR).join(SEEDED_SENTINEL)) {
+            continue;
+        }
+        if keep_newest.as_deref() == Some(entry.as_path()) {
+            continue;
+        }
+        eprintln!(
+            "cang-guest-init: pruning the retired /nix generation '{}'",
+            entry.display()
+        );
+        // A generation is a subvolume when the filesystem offers them, and a plain
+        // directory when it does not; both are removed the way they were made.
+        if ops.is_subvolume(&entry) {
+            ops.remove_subvolume(&entry).with_context(|| {
+                format!(
+                    "failed to delete the retired /nix generation '{}'",
+                    entry.display()
+                )
+            })?;
+        } else {
+            ops.remove_dir_all(&entry).with_context(|| {
+                format!(
+                    "failed to remove the retired /nix generation '{}'",
+                    entry.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}

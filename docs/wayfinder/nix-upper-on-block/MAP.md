@@ -158,6 +158,12 @@ green.
     `state=ready` in `/run/cang/nix-prep.status`.
 
 ## Decisions so far
+- [How an existing host-directory upper becomes guest-side state](tickets/06-migrate-existing-uppers.md):
+  the first block boot imports the host share's cache **once** - `store` and
+  `var/nix/db` only, because a whole-tree `cp -a` aborts on the live
+  `var/nix/daemon-socket/socket` - and a sibling generation on the disk always wins
+  (a snapshot beats a copy). Retired generations are pruned at seed time: keep the
+  one that booted plus the newest other completed one.
 - [Seeding parity - does the guest reproduce the host per-generation seeding, or reconcile instead?](tickets/05-seeding-parity.md):
   **parity, done in the guest.** A fresh digest is a `btrfs subvolume snapshot`
   of the previous generation with its work dir emptied, the image's DB staged from
@@ -237,8 +243,6 @@ green.
   failed block-lower mount keeps the host overlay and reports Ready
   (`components/nix/root.rs:472-478`); with both axes block the fallback must be
   named, retried or refused instead of silently degraded.
-- Pruning a retired image generation: nothing deletes a digest's generation today,
-  so the build disk keeps one per image a workspace has ever run.
 
 ## Out of scope
 

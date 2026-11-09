@@ -95,7 +95,27 @@ impl Harness {
     }
 
     fn seed(&self) -> anyhow::Result<SeedOutcome> {
-        seed_block_upper_with(&self.upper, &self.work, &self.lower, &self.ops)
+        self.seed_with_import(None)
+    }
+
+    fn seed_with_import(&self, import: Option<&Path>) -> anyhow::Result<SeedOutcome> {
+        seed_block_upper_with(&self.upper, &self.work, &self.lower, import, &self.ops)
+    }
+
+    /// A host-seeded upper from before `/nix` moved onto the disk: a store with one
+    /// object in it, and the DB of the image it was last used with.
+    fn host_upper(&self) -> PathBuf {
+        let path = self._tempdir.path().join("share/nix-overlay/upper");
+        fs::create_dir_all(path.join("store/abc-cached")).expect("host upper store");
+        fs::write(
+            path.join("store/abc-cached/marker"),
+            "was on the host share\n",
+        )
+        .expect("host upper marker");
+        fs::create_dir_all(path.join("var/nix/db")).expect("host upper db dir");
+        fs::write(path.join("var/nix/db/db.sqlite"), "host-db").expect("host upper db");
+        fs::write(path.join(SEEDED_SENTINEL), "seeded\n").expect("host upper sentinel");
+        path
     }
 
     fn generation_is_subvolume(&self) -> bool {
@@ -679,8 +699,14 @@ fn a_work_dir_outside_the_generation_is_refused() {
     let harness = Harness::new();
     let elsewhere = harness.root.join("somewhere-else");
 
-    let err = seed_block_upper_with(&harness.upper, &elsewhere, &harness.lower, &harness.ops)
-        .expect_err("a work dir outside the generation must be refused");
+    let err = seed_block_upper_with(
+        &harness.upper,
+        &elsewhere,
+        &harness.lower,
+        None,
+        &harness.ops,
+    )
+    .expect_err("a work dir outside the generation must be refused");
 
     assert!(
         format!("{err:#}").contains("is not inside the generation directory"),
@@ -949,5 +975,190 @@ fn the_generation_is_never_its_own_clone_source() {
     assert_eq!(
         super::newest_sibling_generation(&own, &harness.ops).expect("the scan should succeed"),
         Some(harness.root.join("sha256-other"))
+    );
+}
+
+/// A workspace that ran with the host-seeded upper and only now moves `/nix` onto
+/// the disk keeps its cache: the fresh generation imports the host's upper once,
+/// and the object it held is there afterwards.
+#[test]
+fn a_fresh_generation_imports_the_host_seeded_upper_once() {
+    let harness = Harness::new();
+    let host = harness.host_upper();
+
+    let outcome = harness
+        .seed_with_import(Some(&host))
+        .expect("the seed should succeed");
+
+    assert_eq!(outcome, SeedOutcome::Imported(host.clone()));
+    assert!(
+        harness.upper.join("store/abc-cached/marker").is_file(),
+        "the cache the host held is imported"
+    );
+    // The imported upper is the *previous* image's, so its DB is parked for the
+    // merge and the image's own DB is staged - the same contract as a clone.
+    assert_eq!(
+        fs::read_to_string(harness.upper.join(PREVIOUS_DB_DIR).join("db.sqlite")).unwrap(),
+        "host-db"
+    );
+    assert_eq!(
+        fs::read_to_string(harness.upper.join(IMAGE_DB_DIR).join("db.sqlite")).unwrap(),
+        "image-db"
+    );
+    assert!(harness.upper.join(SEEDED_SENTINEL).is_file());
+    harness.assert_sentinel_written_last();
+
+    // Only once: the generation is now seeded, so a second boot imports nothing and
+    // the host copy is not consulted at all.
+    harness.clear_operations();
+    let again = harness
+        .seed_with_import(Some(&host))
+        .expect("the second seed should succeed");
+    assert_eq!(again, SeedOutcome::AlreadySeeded);
+    assert_eq!(
+        harness.operations(),
+        vec!["mounted".to_owned()],
+        "a seeded generation is only probed for its mount"
+    );
+}
+
+/// A sibling generation on the disk beats the host copy: it is a snapshot instead
+/// of a full copy over virtio-fs.
+#[test]
+fn a_sibling_generation_is_preferred_over_the_host_upper() {
+    let harness = Harness::new();
+    harness.sibling("sha256-older", 1_000, true);
+    let host = harness.host_upper();
+
+    let outcome = harness
+        .seed_with_import(Some(&host))
+        .expect("the seed should succeed");
+
+    assert!(
+        matches!(outcome, SeedOutcome::Cloned(_, _)),
+        "a sibling wins: {outcome:?}"
+    );
+    assert!(
+        !harness.upper.join("store/abc-cached").exists(),
+        "nothing is imported when the disk already has a cache"
+    );
+}
+
+/// An upper the host seeded for an image that never ran carries no store objects,
+/// so it is not worth a full copy.
+#[test]
+fn an_empty_host_upper_is_not_imported() {
+    let harness = Harness::new();
+    let host = harness._tempdir.path().join("share/nix-overlay/upper");
+    fs::create_dir_all(host.join("store")).expect("an empty store dir");
+    fs::write(host.join(SEEDED_SENTINEL), "seeded\n").expect("host sentinel");
+
+    let outcome = harness
+        .seed_with_import(Some(&host))
+        .expect("the seed should succeed");
+
+    assert_eq!(outcome, SeedOutcome::Fresh);
+}
+
+/// The disk is shared with the workspace's build caches, so a seed keeps only what
+/// it can use: the generation that just booted, and the newest other completed one
+/// (the clone source). Everything older goes, and an unfinished generation is left
+/// for the boot that resumes it.
+#[test]
+fn a_seed_prunes_retired_generations_and_keeps_the_clone_source() {
+    let harness = Harness::new();
+    let oldest = harness.sibling("sha256-oldest", 1_000, true);
+    let newest = harness.sibling("sha256-newest", 3_000, true);
+    let unfinished = harness.sibling("sha256-unfinished", 2_000, false);
+
+    harness.seed().expect("the seed should succeed");
+
+    assert!(
+        !oldest.exists(),
+        "the oldest completed generation is dead weight"
+    );
+    assert!(
+        newest.is_dir(),
+        "the newest completed one is the clone source"
+    );
+    assert!(
+        unfinished.is_dir(),
+        "an unfinished generation is resumable, not garbage"
+    );
+    assert!(
+        harness.generation.is_dir(),
+        "never the generation that booted"
+    );
+}
+
+/// Pruning never reaches outside the generations directory, and never deletes a
+/// generation by following a symlink or a dot-name.
+#[test]
+fn a_seed_prunes_nothing_that_is_not_a_generation() {
+    let harness = Harness::new();
+    let retired = harness.sibling("sha256-retired", 1_000, true);
+    // One newer completed generation, so `retired` is surplus rather than the
+    // clone source the seed keeps.
+    let _newest = harness.sibling("sha256-newer", 2_000, true);
+    let staging = harness.sibling(".staging", 500, true);
+    let empty = harness.root.join("sha256-never-seeded");
+    fs::create_dir_all(&empty).expect("an empty generation directory");
+
+    harness.seed().expect("the seed should succeed");
+
+    assert!(
+        !retired.exists(),
+        "a completed generation nobody can clone from goes"
+    );
+    assert!(staging.is_dir(), "a dot-name is not a generation");
+    assert!(
+        empty.is_dir(),
+        "a generation with no sentinel is not pruned"
+    );
+}
+
+/// The import copies the cache - the store and the DB - and not the rest of a
+/// `/nix` root that was live under the host overlay. A socket in
+/// `var/nix/daemon-socket` is what made the first `cp -a` of the whole upper abort
+/// with `ENXIO`, and it must never be part of the copy.
+#[test]
+fn an_import_copies_the_store_and_db_only() {
+    let harness = Harness::new();
+    let host = harness.host_upper();
+    // A live socket and its parent directory, exactly as the host overlay leaves
+    // them, plus a work-in-progress directory that is not a cache.
+    fs::create_dir_all(host.join("var/nix/daemon-socket")).expect("socket dir");
+    fs::write(
+        host.join("var/nix/daemon-socket/socket"),
+        "not a socket here",
+    )
+    .expect("socket file");
+    fs::create_dir_all(host.join("var/nix/temproots")).expect("temproots");
+
+    harness
+        .seed_with_import(Some(&host))
+        .expect("the seed should succeed");
+
+    let copies: Vec<String> = harness
+        .operations()
+        .into_iter()
+        .filter(|operation| operation.starts_with("copy:"))
+        .collect();
+    assert_eq!(
+        copies.len(),
+        2,
+        "only the store and the DB are imported: {copies:?}"
+    );
+    assert!(
+        copies[0].starts_with(&format!("copy:{}", host.join("store").display())),
+        "{copies:?}"
+    );
+    assert!(
+        copies[1].starts_with(&format!("copy:{}", host.join("var/nix/db").display())),
+        "{copies:?}"
+    );
+    assert!(
+        !harness.upper.join("var/nix/daemon-socket").exists(),
+        "a live socket is never copied"
     );
 }

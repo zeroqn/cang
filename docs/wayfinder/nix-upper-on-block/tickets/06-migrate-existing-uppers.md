@@ -1,9 +1,9 @@
 ---
 label: wayfinder:grilling
 title: How an existing host-directory upper becomes guest-side state
-status: open
+status: closed
 blocked_by: ["04-upper-home-and-auto-grow", "05-seeding-parity"]
-claimed_by: ""
+claimed_by: "pi (2026-11-09)"
 ---
 
 ## Question
@@ -44,3 +44,35 @@ deleted by `cang reset` only), and how the copy is reported to the user (a
 ## Resolution
 
 (to follow)
+
+## Resolution
+
+**The first-launch import**, no maintenance VM. The host share that already carries
+the overlay generation root (`cang-nix-overlay-src` at `/run/cang/nix-overlay`) is
+bound in block mode too, so the guest can read the host-seeded upper at
+`/run/cang/nix-overlay/upper`. A fresh generation with no sibling to clone from
+imports it, once, before the overlay is composed; a sibling generation on the disk
+always wins, because it is a snapshot rather than a copy over virtio-fs.
+
+**What is imported is the cache, not the directory**: `store` (hardlinks kept) and
+`var/nix/db`, and nothing else. The whole-tree `cp -a` failed live and named the
+reason - `cp: preserving permissions for '.../var/nix/daemon-socket/socket': No
+such device or address`, because a `/nix` root that ran under the host overlay
+carries a live daemon socket - and that failure was fatal, as it should be now that
+no host overlay exists underneath.
+
+Idempotence is the sentinel's, as everywhere else: an already-seeded generation is
+only probed for its mount, so the import happens exactly once per digest. An upper
+with no store objects in it is not worth a copy and is skipped.
+
+**Live**: `mig1` booted with `--nix=lower:virtiofs` wrote a marker into `/nix/store`
+(which lands in the host upper), then booted with no flag: `Imported("/run/cang/nix-overlay/upper")`,
+`state=ready`, the marker readable at `/nix/store/zz-migrated-marker`, and the same
+store entry count (683) as the host-share boot. Evidence:
+`/home/dev/disp/nixupper-smoke/{n1-host-share,n2-block-import}.ev/`.
+
+Generations are also pruned now, which this ticket's fog had only glimpsed: a seed
+keeps the generation that booted and the newest other completed one, deleting the
+rest. Live: a workspace on its third digest cloned from the second and pruned the
+first (`pruning the retired /nix generation sha256-99e4…`, `Delete subvolume 256`),
+leaving two subvolumes and `state=ready`.

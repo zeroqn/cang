@@ -252,6 +252,15 @@ impl NixLowerBlock {
                 "CANG_NIX_LOWER_WORKDIR".to_owned(),
                 self.guest_upper_dirs().1,
             ),
+            // Where a fresh generation on the build disk can find the cache this
+            // workspace accumulated while its `/nix` upper was the host's: the
+            // share beside the guest's upper dirs carries the host-seeded
+            // generation, and importing it once is what keeps a move to both-block
+            // layers from re-substituting everything.
+            (
+                "CANG_NIX_LOWER_IMPORT_UPPER".to_owned(),
+                GUEST_UPPER_DIR.to_owned(),
+            ),
         ]
     }
 

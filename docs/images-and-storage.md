@@ -157,6 +157,16 @@ Both layers moving is what keeps the pairing legal: a block upper must not write
 into a host-share upper (that mixed pair is refused, below), so `blk` on either
 axis means both.
 
+The first block boot of a workspace whose `/nix` upper was the host's does not
+start empty: the guest imports the store and Nix DB that the host share had
+accumulated, once, into the fresh generation. It imports those two subtrees rather
+than the whole upper because a `/nix` root that ran under the host overlay holds
+live artefacts - `var/nix/daemon-socket/socket` is a socket, and `cp -a` aborts on
+one. Subsequent image digests clone the previous generation instead, and retired
+generations are pruned: a seed keeps the generation that booted plus the newest
+other completed one (the generation the next digest clones from), and deletes the
+rest so the disk does not grow one generation per image forever.
+
 The upper shares the build disk's capacity, so it grows with it:
 `cang disk resize --build 100G` extends the image and the guest's btrfs in one
 maintenance VM (see [usage](usage.md)). A mid-run grow is not available - the

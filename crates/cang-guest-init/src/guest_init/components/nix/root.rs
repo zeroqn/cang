@@ -474,7 +474,12 @@ fn mount_block_lower(
     })?;
     if on_build_disk {
         let outcome = profiler.measure_result(PROFILE_SEED_BLOCK_UPPER, || {
-            block_upper::seed_block_upper(&contract.upperdir, &contract.workdir, mount)
+            block_upper::seed_block_upper(
+                &contract.upperdir,
+                &contract.workdir,
+                mount,
+                contract.import_upper.as_deref(),
+            )
         })?;
         eprintln!(
             "cang-guest-init: /nix upper '{}': {outcome:?}",
