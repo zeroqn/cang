@@ -53,3 +53,14 @@ error all read correctly.
 **Still open:** the live boot - a `--nix=lower:blk` launch and a
 `--nix=lower:virtiofs` launch through `tools/nix-lower-cang-smoke` - deferred
 because a sibling measurement owned the VM window. Run it before closing.
+
+**Amended 2026-11-10 (bob), commit 74702df.** The mixed pairing is refused while
+its bug is open: `upper:blk` and `lower:blk` both resolve to "both block" and are
+refused because no block upper exists yet, while `auto` and `upper:virtiofs`
+resolve to both virtio-fs. The consequence, recorded because it is large: a
+default launch composes both `/nix` layers on the host share again, so the block
+lower's faster store walks are unavailable until the upper disk lands. The
+refusal names the reason and `--nix=lower:virtiofs` as the way forward;
+`tools/nix-lower-cang-smoke` now reports `VERDICT: SKIPPED` (with the refusal it
+found) instead of failing, and skips the stale-guest-init arms that need a block
+launch.

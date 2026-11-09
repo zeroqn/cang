@@ -150,7 +150,10 @@ green.
   the grammar and pair-wide resolution are in (`blk` on either axis moves both,
   `virtiofs` on either keeps both on the host share, disagreeing is a named
   error), `--nix=upper:blk` is refused by name until the disk exists, and
-  `--nix-lower` is gone with no alias. Only the live smoke boot is outstanding.
+  `--nix-lower` is gone with no alias. **Amended 2026-11-10 (bob):** the two
+  layers must be one filesystem family, so a block lower beside a host-share upper
+  - today's default - is refused until the upper disk lands, and `auto` resolves to
+  both virtio-fs in the meantime (commit 74702df).
 
 - [What does the writable /nix upper cost today, and what would the block disk save?](tickets/01-upper-write-cost.md):
   the **write** question is **unanswered - blocked on a clean window**. Two
