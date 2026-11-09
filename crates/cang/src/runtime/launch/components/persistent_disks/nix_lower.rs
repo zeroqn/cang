@@ -196,6 +196,13 @@ pub(crate) struct NixLowerBlock {
     /// of the host-directory share. Set from the guest binary's capability: an
     /// image whose `cang-guest-init` predates the seeding step cannot serve it.
     upper_on_build_disk: bool,
+    /// The image generation's own name on the build disk.
+    ///
+    /// One block-disk upper per image digest, not one per workspace: the guest
+    /// seeds a fresh generation by cloning the previous one, and a constant name
+    /// would let the old generation's sentinel say "already seeded" so an image
+    /// move would silently keep the previous image's Nix DB.
+    generation: String,
     /// Kept for the whole launch: the image cannot be rebuilt underneath it.
     _lock: ImageLock,
 }
@@ -215,15 +222,6 @@ impl NixLowerBlock {
         BindMount::directory(self.generation_root.clone(), BIND_TAG, GUEST_OVERLAY_ROOT)
     }
 
-    /// The generation's directory name, which is how the block disk's
-    /// `nix-overlay/` parent keeps one cache per image generation.
-    fn generation_name(&self) -> String {
-        self.generation_root
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "default".to_owned())
-    }
-
     /// `(upperdir, workdir)` for the guest's overlay.
     ///
     /// Both are on one filesystem either way, which is overlayfs's rule; what
@@ -231,7 +229,7 @@ impl NixLowerBlock {
     /// subvolume inside the disk's image, beside `cargo/` and `target/`.
     pub(crate) fn guest_upper_dirs(&self) -> (String, String) {
         if self.upper_on_build_disk {
-            let root = format!("{BUILD_DISK_UPPER_ROOT}/{}", self.generation_name());
+            let root = format!("{BUILD_DISK_UPPER_ROOT}/{}", self.generation);
             (format!("{root}/upper"), format!("{root}/work"))
         } else {
             (GUEST_UPPER_DIR.to_owned(), GUEST_WORK_DIR.to_owned())
@@ -470,6 +468,31 @@ const UPPER_ON_BUILD_DISK: bool = true;
 /// error.
 /// Whether the `cang-guest-init` that will run in this launch seeds a fresh
 /// upper itself (see `GUEST_UPPER_MARKER`).
+/// The block disk's directory name for an image generation: its digest key.
+///
+/// `sha256-abc…` needs no escaping, but a digest key is host input, so anything
+/// that is not a plain name character becomes `-` and a leading dot is refused:
+/// the guest writes this directory, and a path segment it chose must not be able
+/// to reach outside the parent.
+fn generation_dir_name(digest_key: &str) -> String {
+    let sanitized: String = digest_key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let name = sanitized.trim_start_matches('-').to_owned();
+    if name.is_empty() || name.strip_prefix('.').is_some() {
+        "generation".to_owned()
+    } else {
+        name
+    }
+}
+
 pub(super) fn guest_init_seeds_upper(guest_init: &Path) -> bool {
     match fs::read(guest_init) {
         Ok(bytes) => contains(&bytes, GUEST_UPPER_MARKER),
@@ -610,6 +633,7 @@ pub(super) fn ensure_with_builder(
         disk,
         generation_root,
         upper_on_build_disk,
+        generation: generation_dir_name(&intent.digest_key),
         _lock: lock,
     }))
 }
@@ -1389,10 +1413,10 @@ mod tests {
         // Both layers of the pair are on the build disk, in the generation's own
         // directory: the share carries the host's own bookkeeping, not the
         // guest's upper.
-        let generation = generation_root
-            .file_name()
-            .expect("a generation name")
-            .to_string_lossy();
+        // The generation's name is the image digest, not the workspace's
+        // constant `nix-overlay` directory: two image generations must not share
+        // one upper, or a moved image keeps the previous image's Nix DB.
+        let generation = "sha256-feedface";
         assert_eq!(
             env["CANG_NIX_LOWER_UPPERDIR"],
             format!("{BUILD_DISK_UPPER_ROOT}/{generation}/upper")
@@ -1457,10 +1481,7 @@ mod tests {
             .expect("ensure")
             .expect("the block pair");
         let (upper, work) = block.guest_upper_dirs();
-        let generation = root
-            .file_name()
-            .expect("a generation name")
-            .to_string_lossy();
+        let generation = "sha256-feedface";
 
         assert_eq!(
             upper,
@@ -1477,6 +1498,55 @@ mod tests {
         let env: std::collections::HashMap<_, _> = block.env_pairs().into_iter().collect();
         assert_eq!(env["CANG_NIX_LOWER_UPPERDIR"], upper);
         assert_eq!(env["CANG_NIX_LOWER_WORKDIR"], work);
+    }
+
+    /// Two image generations get two uppers on the block disk. A constant name
+    /// here would be invisible in a single launch and wrong on the next image
+    /// move: the previous generation's sentinel would say "already seeded".
+    #[test]
+    fn each_image_generation_gets_its_own_upper_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nix_dir = cache_entry(&temp, &["aaaa-one"]);
+        let root = generation_root(&temp);
+        let mut first = intent(&nix_dir, &root);
+        let builder = FakeBuilder::default();
+
+        let one = ensure_with_builder(&first, &builder, true)
+            .expect("ensure")
+            .expect("the block pair")
+            .guest_upper_dirs()
+            .0;
+        first.digest_key = "sha256-otherimage".to_owned();
+        let two = ensure_with_builder(&first, &builder, true)
+            .expect("ensure")
+            .expect("the block pair")
+            .guest_upper_dirs()
+            .0;
+
+        assert_ne!(one, two, "one upper per image generation");
+        assert!(one.ends_with("/sha256-feedface/upper"), "{one}");
+        assert!(two.ends_with("/sha256-otherimage/upper"), "{two}");
+        assert!(
+            one.starts_with(BUILD_DISK_UPPER_ROOT),
+            "both live under the build disk's nix-overlay parent"
+        );
+    }
+
+    /// A digest key is host-controlled text used as a directory name the guest
+    /// writes into, so it is reduced to a plain single path segment.
+    #[test]
+    fn a_digest_key_cannot_escape_the_upper_parent() {
+        assert_eq!(generation_dir_name("sha256-abc"), "sha256-abc");
+        assert_eq!(generation_dir_name("../etc"), "etc");
+        assert_eq!(generation_dir_name(".hidden"), "hidden");
+        assert_eq!(generation_dir_name("/"), "generation");
+        assert_eq!(generation_dir_name(""), "generation");
+        for key in ["../../etc/passwd", "a/b", "..", "."] {
+            let name = generation_dir_name(key);
+            assert!(!name.contains('/'), "{key} -> {name}");
+            assert!(!name.starts_with('.'), "{key} -> {name}");
+            assert!(!name.is_empty());
+        }
     }
 
     /// Without the guest's seeding step the upper stays on the share, which is
