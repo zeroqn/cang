@@ -3,12 +3,18 @@ use std::cell::Cell;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::guest_init::components::nix::root::{
-    NixOperation, PreseedState, attempt_marker, classify_preseed_state, completion_sentinel,
-    ensure_host_overlay_nix_is_directory, overlay_options, planned_host_overlay_block_operations,
-    planned_host_overlay_block_profile_labels, planned_host_overlay_operations, planned_operations,
-    planned_profile_labels, preseed_upper_with, store_reconcile_args,
+use crate::guest_init::components::nix::block_upper::{
+    IMAGE_DB_DIR, PREVIOUS_DB_DIR, SEEDED_SENTINEL,
 };
+use crate::guest_init::components::nix::root::{
+    BlockLowerFailure, NO_HOST_OVERLAY_REASON, NixOperation, PARKED_DB_DIR, PreseedState,
+    STAGED_IMAGE_DB_DIR, attempt_marker, block_lower_failure_policy, classify_preseed_state,
+    completion_sentinel, ensure_host_overlay_nix_is_directory, overlay_options,
+    planned_host_overlay_block_operations, planned_host_overlay_block_profile_labels,
+    planned_host_overlay_operations, planned_operations, planned_profile_labels,
+    preseed_upper_with, store_reconcile_args,
+};
+use crate::guest_init::components::nix::status::{self, NixPrepState, NixPrepStatus};
 
 #[test]
 fn nix_prep_operation_order_marks_ready_without_socket_wait() {
@@ -395,6 +401,8 @@ fn block_lower_nix_prep_mounts_the_disk_and_composes_the_overlay_first() {
             NixOperation::WriteRunningStatus,
             NixOperation::FindLowerDisk,
             NixOperation::MountLowerDisk,
+            NixOperation::PrepareBlockDirs,
+            NixOperation::SeedBlockUpper,
             NixOperation::MountBlockOverlay,
             NixOperation::RepairStore,
             NixOperation::CreateSocketDir,
@@ -403,7 +411,17 @@ fn block_lower_nix_prep_mounts_the_disk_and_composes_the_overlay_first() {
         ]
     );
     assert!(pos(NixOperation::FindLowerDisk) < pos(NixOperation::MountLowerDisk));
+    assert!(pos(NixOperation::MountLowerDisk) < pos(NixOperation::PrepareBlockDirs));
+    assert!(
+        pos(NixOperation::PrepareBlockDirs) < pos(NixOperation::SeedBlockUpper),
+        "the block-disk upper is seeded before the overlay is composed over it"
+    );
+    assert!(pos(NixOperation::SeedBlockUpper) < pos(NixOperation::MountBlockOverlay));
     assert!(pos(NixOperation::MountLowerDisk) < pos(NixOperation::MountBlockOverlay));
+    assert!(
+        pos(NixOperation::MountLowerDisk) < pos(NixOperation::SeedBlockUpper),
+        "the seed installs the image DB, which lives in the read-only lower"
+    );
     assert!(
         pos(NixOperation::MountBlockOverlay) < pos(NixOperation::RepairStore),
         "the DB repair and the daemon must run on the composed /nix"
@@ -420,6 +438,8 @@ fn block_lower_prep_profiles_every_mount_step() {
             "nix-prep:prepare-run-dirs",
             "nix-prep:find-lower-disk",
             "nix-prep:mount-lower-disk",
+            "nix-prep:prepare-block-dirs",
+            "nix-prep:seed-block-upper",
             "nix-prep:mount-block-overlay",
             "nix-prep:repair-store",
             "nix-prep:create-socket-dir",
@@ -442,5 +462,64 @@ fn block_overlay_options_put_the_block_lower_first() {
     assert_eq!(
         options,
         "lowerdir=/run/cang/nix-lower,upperdir=/run/cang/nix-overlay/upper,workdir=/run/cang/nix-overlay/work-guest,userxattr"
+    );
+}
+
+/// The guest-composed overlay has no host overlay underneath only when the upper
+/// is the build disk's: that placement is what turns a mount failure from the
+/// historical swallow into a nix-prep failure.
+#[test]
+fn block_upper_failures_are_fatal_only_for_the_build_disk_upper() {
+    assert_eq!(
+        block_lower_failure_policy(
+            PathBuf::from("/home/dev/.cache/cang-build/nix-overlay/sha256-abc/upper").as_path()
+        ),
+        BlockLowerFailure::Fatal
+    );
+    assert_eq!(
+        block_lower_failure_policy(PathBuf::from("/run/cang/nix-overlay/upper").as_path()),
+        BlockLowerFailure::KeepHostOverlay,
+        "a host-share upper still has the host-composed overlay at /nix to keep"
+    );
+}
+
+/// The fatal path's reason is what `cang`'s diagnostics show, so it has to land in
+/// the status file the host reads - not only on the log.
+#[test]
+fn a_fatal_block_upper_failure_reaches_the_status_file_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir should be created");
+    let path = dir.path().join("nix-prep.status");
+    let pid = 4242;
+    status::write_status(
+        &path,
+        &NixPrepStatus::running(pid, dir.path().join("nix-prep.log")),
+    )
+    .expect("running status should be written");
+
+    let message = format!(
+        "{NO_HOST_OVERLAY_REASON} (upperdir '/home/dev/.cache/cang-build/nix-overlay/sha256-abc/upper', lowerdir '/run/cang/nix-lower')"
+    );
+    status::mark_failed_for_pid(&path, pid, message).expect("failure should be recorded");
+
+    let written = status::read_status(&path).expect("status should be readable");
+    assert_eq!(written.state, NixPrepState::Failed);
+    let error = written.error.expect("the failure carries a reason");
+    assert!(
+        error.contains("there is no host-composed /nix overlay to fall back to"),
+        "{error}"
+    );
+    assert!(error.contains("upperdir '"), "{error}");
+}
+
+/// The seed stages the DBs into upper-relative directories whose guest-visible
+/// twins are the ones `repair_store()` consumes, and its sentinel name is the
+/// literal the host probes the guest binary for.
+#[test]
+fn the_seed_stages_where_the_guest_consumes_and_names_the_host_marker() {
+    assert!(PARKED_DB_DIR.ends_with(PREVIOUS_DB_DIR));
+    assert!(STAGED_IMAGE_DB_DIR.ends_with(IMAGE_DB_DIR));
+    assert_eq!(
+        SEEDED_SENTINEL, ".cang-upper-seeded",
+        "the host's GUEST_UPPER_MARKER is this literal"
     );
 }

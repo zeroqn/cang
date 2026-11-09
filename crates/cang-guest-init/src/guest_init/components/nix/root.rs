@@ -10,6 +10,7 @@ use crate::guest_init::command;
 use crate::guest_init::components::env::{
     CangEnv, NIX_LOG_PATH, NIX_STATUS_PATH, NixLowerContract, RUN_DIR,
 };
+use crate::guest_init::components::nix::block_upper;
 use crate::guest_init::components::nix::status::{self, NixPrepState, NixPrepStatus};
 use crate::guest_init::profile::ProfileRecorder;
 use crate::guest_init::{fs, process};
@@ -26,6 +27,8 @@ const PROFILE_REPAIR_STORE: &str = "nix-prep:repair-store";
 /// Where the guest composes its own `/nix` overlay over a read-only block lower.
 const PROFILE_FIND_LOWER_DISK: &str = "nix-prep:find-lower-disk";
 const PROFILE_MOUNT_LOWER_DISK: &str = "nix-prep:mount-lower-disk";
+const PROFILE_PREPARE_BLOCK_DIRS: &str = "nix-prep:prepare-block-dirs";
+const PROFILE_SEED_BLOCK_UPPER: &str = "nix-prep:seed-block-upper";
 const PROFILE_MOUNT_BLOCK_OVERLAY: &str = "nix-prep:mount-block-overlay";
 /// The cang host parks the previous /nix overlay generation's Nix DB here when
 /// it seeds the upper for a new image generation (`PARKED_DB_DIR` on the host).
@@ -54,6 +57,8 @@ pub(in crate::guest_init) enum NixOperation {
     RepairStore,
     FindLowerDisk,
     MountLowerDisk,
+    PrepareBlockDirs,
+    SeedBlockUpper,
     MountBlockOverlay,
     CreateSocketDir,
     StartDaemon,
@@ -95,6 +100,8 @@ pub(in crate::guest_init) fn planned_host_overlay_block_operations() -> Vec<NixO
         NixOperation::WriteRunningStatus,
         NixOperation::FindLowerDisk,
         NixOperation::MountLowerDisk,
+        NixOperation::PrepareBlockDirs,
+        NixOperation::SeedBlockUpper,
         NixOperation::MountBlockOverlay,
         NixOperation::RepairStore,
         NixOperation::CreateSocketDir,
@@ -110,6 +117,8 @@ pub(in crate::guest_init) fn planned_host_overlay_block_profile_labels() -> Vec<
         PROFILE_PREPARE_RUN_DIRS,
         PROFILE_FIND_LOWER_DISK,
         PROFILE_MOUNT_LOWER_DISK,
+        PROFILE_PREPARE_BLOCK_DIRS,
+        PROFILE_SEED_BLOCK_UPPER,
         PROFILE_MOUNT_BLOCK_OVERLAY,
         PROFILE_REPAIR_STORE,
         PROFILE_CREATE_SOCKET_DIR,
@@ -317,7 +326,10 @@ fn install_staged_image_db() -> Result<()> {
             }
         }
     }
-    for staged in ["db.sqlite", "schema"] {
+    // The staged DB is a copy of a real `var/nix/db`, which may carry SQLite's
+    // write-ahead log beside the database: installing the DB without it would
+    // drop every transaction the log holds.
+    for staged in ["db.sqlite", "db.sqlite-wal", "db.sqlite-shm", "schema"] {
         let from = Path::new(STAGED_IMAGE_DB_DIR).join(staged);
         if from.is_file() {
             std::fs::copy(&from, live.join(staged)).with_context(|| {
@@ -387,10 +399,38 @@ fn store_reconcile_args(parked_db: bool) -> Vec<&'static str> {
     }
 }
 
-/// Mount the read-only lower disk and compose the `/nix` overlay over it.
+/// What a failure to compose the guest `/nix` overlay means for the boot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::guest_init) enum BlockLowerFailure {
+    /// The upper is the build disk's, so the host never seeded it and there is no
+    /// host-composed `/nix` overlay underneath: the failure must fail nix prep
+    /// rather than report success over a `/nix` that was never composed.
+    Fatal,
+    /// The upper is the host share. The host overlay is still mounted at `/nix`,
+    /// so a failed guest mount keeps it, which is what this path always did.
+    KeepHostOverlay,
+}
+
+/// Block mode has no fallback for the *upper*: the placement is read off the
+/// upperdir, because that is what tells the guest whether it is the one that has
+/// to seed it.
+pub(in crate::guest_init) fn block_lower_failure_policy(upperdir: &Path) -> BlockLowerFailure {
+    if block_upper::is_on_build_disk(upperdir) {
+        BlockLowerFailure::Fatal
+    } else {
+        BlockLowerFailure::KeepHostOverlay
+    }
+}
+
+/// The reason a block-disk `/nix` failure carries into the status file, so `cang`'s
+/// diagnostics name the layer that broke instead of an unmounted `/nix`.
+const NO_HOST_OVERLAY_REASON: &str = "the /nix upper is on the build disk, so there is no host-composed /nix overlay to fall back to";
+
+/// Mount the read-only lower disk, seed the upper when it is the guest's to seed,
+/// and compose the `/nix` overlay over both.
 ///
 /// Every step is a profile point so a guest profile shows what the block path
-/// cost; the caller keeps the host-composed overlay when any of them fails.
+/// cost; whether a failure is fatal is [`block_lower_failure_policy`]'s call.
 fn mount_block_lower(
     profiler: &mut impl ProfileRecorder,
     contract: &NixLowerContract,
@@ -419,9 +459,28 @@ fn mount_block_lower(
     // Overlayfs wants upper and work on one filesystem, empty, and not shared
     // with the host-composed overlay that already holds the same upper: the host
     // therefore writes a second work dir beside it for this mount.
+    //
+    // Both directories must exist before the mount, and for a block-disk upper
+    // neither does: the generation is a directory the host never touched.
+    let on_build_disk = block_upper::is_on_build_disk(&contract.upperdir);
+    profiler.measure_result(PROFILE_PREPARE_BLOCK_DIRS, || {
+        fs::create_dir_all(&contract.workdir)?;
+        if !on_build_disk {
+            fs::create_dir_all(&contract.upperdir)?;
+        }
+        Ok(())
+    })?;
+    if on_build_disk {
+        let outcome = profiler.measure_result(PROFILE_SEED_BLOCK_UPPER, || {
+            block_upper::seed_block_upper(&contract.upperdir, mount)
+        })?;
+        eprintln!(
+            "cang-guest-init: /nix upper '{}': {outcome:?}",
+            contract.upperdir.display()
+        );
+    }
     let options = overlay_options(mount, &contract.upperdir, &contract.workdir);
     profiler.measure_result(PROFILE_MOUNT_BLOCK_OVERLAY, || {
-        fs::create_dir_all(&contract.workdir)?;
         command::run(
             "mount",
             &["-t", "overlay", "overlay", "-o", &options, "/nix"],
@@ -466,15 +525,30 @@ fn run_host_overlay_prep(
     // The host composes the overlay for the image's lower, but when it could also
     // build a read-only block image of that lower it hands the guest the disk and
     // the two writable directories instead, and the guest composes the overlay
-    // itself. A failure here is deliberately not fatal: `/nix` is still the
-    // host-composed overlay, which is exactly what a launch without a block image
-    // gets.
+    // itself. With a host-share upper a failure here is not fatal: `/nix` is still
+    // the host-composed overlay, which is exactly what a launch without a block
+    // image gets. With a build-disk upper the host seeded nothing and there is no
+    // overlay underneath, so the failure has to fail nix prep by name - a success
+    // status over a `/nix` that was never composed is the one outcome a caller
+    // cannot see.
     if let Some(contract) = &env_contract.nix_lower {
         match mount_block_lower(profiler, contract) {
             Ok(()) => {}
-            Err(err) => eprintln!(
-                "cang-guest-init: read-only /nix lower unusable, keeping the host-composed overlay: {err:#}"
-            ),
+            Err(err) => match block_lower_failure_policy(&contract.upperdir) {
+                BlockLowerFailure::Fatal => {
+                    return Err(err).with_context(|| {
+                        format!(
+                            "{NO_HOST_OVERLAY_REASON} (upperdir '{}', lowerdir '{}')",
+                            contract.upperdir.display(),
+                            Path::new(crate::guest_init::components::disk::nix_lower::MOUNT_POINT)
+                                .display()
+                        )
+                    });
+                }
+                BlockLowerFailure::KeepHostOverlay => eprintln!(
+                    "cang-guest-init: read-only /nix lower unusable, keeping the host-composed overlay: {err:#}"
+                ),
+            },
         }
     }
     repair_store(profiler)?;
