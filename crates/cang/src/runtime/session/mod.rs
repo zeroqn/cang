@@ -366,6 +366,29 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                         launch_disks.push(block.attachment());
                         extra_env.extend(block.env_pairs());
                     }
+                    // `/nix` gets exactly one mount. When the guest composes the
+                    // overlay from the block pair, the host grafts nothing there:
+                    // its own overlay would sit underneath as a covered,
+                    // virtio-fs-backed `/nix` that no access can enter, and a
+                    // guest whose overlay failed would silently read it instead.
+                    // Without the graft the guest's overlay *is* `/nix`, so the
+                    // failure has to be loud - which the guest's own policy does
+                    // off the same fact (`CANG_NIX_HOST_OVERLAY`).
+                    let host_nix_overlay = (!nix_lower_block
+                        .as_ref()
+                        .is_some_and(|block| block.serves_guest_overlay()))
+                    .then(|| nix_overlay_lease.intent().clone());
+                    if host_nix_overlay.is_some() {
+                        extra_env.push(("CANG_NIX_HOST_OVERLAY".to_owned(), "1".to_owned()));
+                    }
+                    profiler.record_metadata(
+                        "nix_host_overlay",
+                        if host_nix_overlay.is_some() {
+                            "grafted-at-/nix"
+                        } else {
+                            "guest-composed"
+                        },
+                    );
                     match profiler.measure_result("launch_config_build", || {
                         LaunchConfig::build_for_task(LaunchSpec {
                             task_rootfs: lease.handle().rootfs_path(),
@@ -420,7 +443,7 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                 }
                                 env
                             },
-                            host_nix_overlay: Some(nix_overlay_lease.intent().clone()),
+                            host_nix_overlay,
                             pulse_bridge,
                             waypipe: waypipe.as_ref().map(|(socket, _)| WaypipeConfig {
                                 socket: socket.clone(),

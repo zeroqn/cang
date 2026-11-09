@@ -291,6 +291,7 @@ fn publish_image_workflows_publish_only_cang() {
             "--retry-times 5",
             "--dest-compress-format zstd",
             "--dest-compress-level 12",
+            "--dest-force-compress-format",
             r#"--dest-creds "${GHCR_USER}:${GHCR_TOKEN}""#,
             r#""docker-archive:${archive}" "docker://${GHCR_IMAGE}:${GHCR_TAG1}""#,
             r#""docker://${GHCR_IMAGE}:${GHCR_TAG1}" "docker://${GHCR_IMAGE}:${GHCR_TAG2}""#,

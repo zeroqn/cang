@@ -36,8 +36,9 @@ rootless Podman tooling for development.
   mixed pair is refused. With both block, the writable layer lives on the
   workspace's build disk (`cang-build.raw`, one generation directory per image
   digest, seeded by the guest on first use and cloned by btrfs snapshot on an
-  image move) and is grown with `cang disk resize --build SIZE` (see
-  [images and storage](docs/images-and-storage.md)).
+  image move) and is grown with `cang disk resize --build SIZE`; the guest's
+  overlay is then the *only* `/nix` mount, with no host-composed `/nix` grafted
+  at all (see [images and storage](docs/images-and-storage.md)).
 - `libkrun` at build time, not at runtime. `cang` links libkrun's Rust API
   (`crates/cang-libkrun`, compiled from the `libkrun-src` flake input grafted
   into `deps/libkrun` by cang's own toolchain), so libkrun is part of the binary

@@ -14,7 +14,8 @@ cache lookup, and `--image` uses exactly the supplied image reference with
 ### Published image compression
 
 `publish_image.yml` and `publish_dev_image.yml` push the image with skopeo
-(`--dest-compress-format zstd --dest-compress-level 12`), not with `docker push`.
+(`--dest-compress-format zstd --dest-compress-level 12
+--dest-force-compress-format`), not with `docker push`.
 The flake's `.#container` archive carries uncompressed layer tars, and Docker
 publishes those as they are - a pull of this image used to transfer all 8.4 GB of
 layers. Per-layer zstd brings the same ten layers to 2.5 GB (measured; per-layer
@@ -22,6 +23,13 @@ layers. Per-layer zstd brings the same ten layers to 2.5 GB (measured; per-layer
 `application/vnd.oci.image.layer.v1.tar+zstd` layers. Buildah - and so every cang
 pull path - reads that media type; Docker Engine's graphdriver does not, so
 `docker pull` is not a supported way to obtain the cang image.
+
+`--dest-force-compress-format` matters because GHCR still holds these layers as
+the uncompressed tars the pre-zstd pushes uploaded. Without it skopeo finds a blob
+by its uncompressed digest, reuses it, and records it under a `+gzip`/`+zstd`
+media type that its bytes do not have; buildah happens to sniff the real
+compression and pulls it anyway, but the manifest then lies about every one of
+those layers.
 
 Compressing layers does not by itself make a changed layer cheaper: a layer whose
 content changed is still re-downloaded in full. Only `zstd:chunked` layers
@@ -118,8 +126,11 @@ It is not a Nix database merge or repair step: persistent Nix profiles, gcroots,
 database rows, and whiteouts can still describe a mixed state and may require
 manual cleanup or a workspace overlay reset if they become inconsistent.
 
-- host-overlay `/nix` is signaled to the guest with `CANG_NIX_OVERLAY=1` and
-  `CANG_NIX_HOST_OVERLAY=1`; no `/nix` disk id/label is emitted in this mode.
+- `/nix` prep is signaled to the guest with `CANG_NIX_OVERLAY=1`, and
+  `CANG_NIX_HOST_OVERLAY=1` says a host-composed overlay was grafted at `/nix`
+  for it to keep; a launch that serves both layers from the block disk sends only
+  the first, because it grafts none (see the next section). No `/nix` disk
+  id/label is emitted in either mode.
 - host-overlay `/nix` requires `buildah` on `PATH`; permission-denied kernel
   overlay failures should be diagnosed from inside `buildah unshare`, because
   plain outer-namespace `mount -t overlay` does not have the required rootless
@@ -167,9 +178,18 @@ composes the overlay: a new digest is a `btrfs subvolume snapshot` of the previo
 generation (constant time, zero bytes) with its work dir emptied, and the image's
 own Nix DB is staged from the read-only lower, which *is* the image's `/nix`. A
 generation that already exists is left completely alone, so a second boot of the
-same image writes nothing. Because there is no host-composed overlay underneath
-it, a failure here fails `/nix` prep with a named reason instead of reporting
-success over an unmounted store.
+same image writes nothing.
+
+`/nix` then has exactly **one** mount. The host grafts nothing at `/nix` for this
+pairing - its own overlay would be a virtio-fs-backed `/nix` covered by the
+guest's, reachable by no access and read by a guest whose overlay had failed -
+so `CANG_NIX_HOST_OVERLAY` is not set, the mount point is a plain directory (the
+rootfs snapshot's), and the guest's `overlay /nix overlay
+lowerdir=/run/cang/nix-lower,upperdir=…` is the only `/nix` in `/proc/mounts`.
+Every path under `/nix` is therefore on the block devices; `--nix=lower:virtiofs`
+is the mode that keeps a host-composed overlay at `/nix` instead. Because there
+is no overlay underneath it, a failure here fails `/nix` prep with a named reason
+instead of reporting success over a store that was never composed.
 
 Both layers moving is what keeps the pairing legal: a block upper must not write
 into a host-share upper (that mixed pair is refused, below), so `blk` on either
@@ -251,11 +271,15 @@ location` and they share the image read-only instead.
   required, and across filesystems the tree's apparent size is. A filesystem
   that cannot hold it is refused up front rather than left to a multi-gigabyte
   `mkfs.btrfs` that fails late.
-- Every failure keeps the host-composed overlay and names itself on stderr
-  (`cang: /nix block lower unavailable, using the host-composed overlay: <err>`
-  on the host, `cang-guest-init: read-only /nix lower unusable, keeping the
-  host-composed overlay: <err>` in the guest). A launch never fails because of
-  this path.
+- Whether a failure keeps the launch depends on which `/nix` the launch has as a
+  pair. `--nix=lower:auto` (the default) keeps the host-composed overlay and says
+  so on stderr - `cang: /nix block lower unavailable, keeping the host-composed
+  overlay (--nix=lower:auto): <err>` - and `--nix=lower:blk` refuses the launch
+  with that reason instead. Once the block pair is served there is no overlay to
+  fall back to, so a guest-side mount failure fails `/nix` prep by name
+  (`cang-guest-init: … (upperdir '…', lowerdir '/run/cang/nix-lower')` in the
+  guest's status file and log) rather than reporting a `/nix` that was never
+  composed.
 
 ## Guest memory and zram swap
 

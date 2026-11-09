@@ -84,7 +84,7 @@ impl PersistentDisks {
     }
 
     pub(crate) fn env_pairs(&self) -> Vec<(String, String)> {
-        let mut env = nix::host_overlay_env_pairs().to_vec();
+        let mut env = nix::overlay_env_pairs().to_vec();
         env.extend(containers::raw_disk_env_pairs(&self.container_store));
         env.extend(build::env_pairs(&self.build_target));
         env
@@ -204,7 +204,6 @@ mod tests {
             env,
             vec![
                 ("CANG_NIX_OVERLAY".to_owned(), "1".to_owned()),
-                ("CANG_NIX_HOST_OVERLAY".to_owned(), "1".to_owned()),
                 ("CANG_CONTAINERS_STORAGE".to_owned(), "1".to_owned()),
                 ("CANG_CONTAINERS_STORE".to_owned(), "raw-disk".to_owned()),
                 (

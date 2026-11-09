@@ -10,7 +10,7 @@ use crate::guest_init::components::nix::root::{
     BlockLowerFailure, NO_HOST_OVERLAY_REASON, NixOperation, PARKED_DB_DIR, PreseedState,
     STAGED_IMAGE_DB_DIR, attempt_marker, block_lower_failure_policy, classify_preseed_state,
     completion_sentinel, ensure_host_overlay_nix_is_directory, overlay_options,
-    planned_host_overlay_block_operations, planned_host_overlay_block_profile_labels,
+    planned_block_lower_operations, planned_block_lower_profile_labels,
     planned_host_overlay_operations, planned_operations, planned_profile_labels,
     preseed_upper_with, store_reconcile_args,
 };
@@ -387,12 +387,12 @@ fn seeded_generation_imports_the_parked_db_and_never_fetches() {
     assert_eq!(store_reconcile_args(false), Vec::<&str>::new());
 }
 
-/// Block mode is the host-composed path with the guest's own mount in front of
-/// it: the lower disk and the overlay it composes come first, and everything the
-/// host-composed path does (DB repair, socket dir, daemon) still happens.
+/// A block contract composes the guest's own `/nix` first - lower disk, then the
+/// upper it seeds - and everything a host-composed `/nix` does (DB repair, socket
+/// dir, daemon) still happens on it.
 #[test]
 fn block_lower_nix_prep_mounts_the_disk_and_composes_the_overlay_first() {
-    let ops = planned_host_overlay_block_operations();
+    let ops = planned_block_lower_operations();
     let pos = |op| ops.iter().position(|candidate| candidate == &op).unwrap();
 
     assert_eq!(
@@ -432,7 +432,7 @@ fn block_lower_nix_prep_mounts_the_disk_and_composes_the_overlay_first() {
 #[test]
 fn block_lower_prep_profiles_every_mount_step() {
     assert_eq!(
-        planned_host_overlay_block_profile_labels(),
+        planned_block_lower_profile_labels(),
         vec![
             "nix-prep:require-tools",
             "nix-prep:prepare-run-dirs",
@@ -465,19 +465,28 @@ fn block_overlay_options_put_the_block_lower_first() {
     );
 }
 
-/// The guest-composed overlay has no host overlay underneath only when the upper
-/// is the build disk's: that placement is what turns a mount failure from the
-/// historical swallow into a nix-prep failure.
+/// A failed guest composition is fatal whenever nothing stands in for `/nix`:
+/// the host grafted no overlay for this launch (the both-block pairing), or the
+/// upper is the build disk's and the host therefore never seeded one. Only a
+/// host-share upper beside a grafted overlay may keep it.
 #[test]
-fn block_upper_failures_are_fatal_only_for_the_build_disk_upper() {
+fn block_upper_failures_are_fatal_without_a_host_overlay_or_a_host_share_upper() {
+    let build_disk_upper =
+        PathBuf::from("/home/dev/.cache/cang-build/nix-overlay/sha256-abc/upper");
+    let host_share_upper = PathBuf::from("/run/cang/nix-overlay/upper");
+
     assert_eq!(
-        block_lower_failure_policy(
-            PathBuf::from("/home/dev/.cache/cang-build/nix-overlay/sha256-abc/upper").as_path()
-        ),
-        BlockLowerFailure::Fatal
+        block_lower_failure_policy(build_disk_upper.as_path(), true),
+        BlockLowerFailure::Fatal,
+        "a build-disk upper has no host-seeded overlay underneath either"
     );
     assert_eq!(
-        block_lower_failure_policy(PathBuf::from("/run/cang/nix-overlay/upper").as_path()),
+        block_lower_failure_policy(host_share_upper.as_path(), false),
+        BlockLowerFailure::Fatal,
+        "with no host-composed overlay grafted there is nothing to keep"
+    );
+    assert_eq!(
+        block_lower_failure_policy(host_share_upper.as_path(), true),
         BlockLowerFailure::KeepHostOverlay,
         "a host-share upper still has the host-composed overlay at /nix to keep"
     );
@@ -505,7 +514,7 @@ fn a_fatal_block_upper_failure_reaches_the_status_file_by_name() {
     assert_eq!(written.state, NixPrepState::Failed);
     let error = written.error.expect("the failure carries a reason");
     assert!(
-        error.contains("there is no host-composed /nix overlay to fall back to"),
+        error.contains("grafts no host-composed /nix overlay"),
         "{error}"
     );
     assert!(error.contains("upperdir '"), "{error}");

@@ -203,11 +203,13 @@ impl PreparedRootCommands for HostPreparedRootCommands {
         // grafted at the store path the image itself ships, which is present
         // inside the prepared root and read-only (0555).
         //
-        // It must not be opened for writing. The prepared root's `/nix` is a
-        // bind of the host overlay, so `O_CREAT|O_WRONLY` on a file that lives in
-        // the overlay's lower layer asks overlayfs to copy it up into an upper on
-        // another filesystem, which fails with `EXDEV` — cang never boots with a
-        // `--guest-init` override whose store path the image already carries.
+        // It must not be opened for writing when it already exists. In a
+        // host-overlay launch the prepared root's `/nix` is a bind of the host
+        // overlay, so `O_CREAT|O_WRONLY` on a file in the overlay's lower layer
+        // asks overlayfs to copy it up into an upper on another filesystem, which
+        // fails with `EXDEV`; in a both-block launch the same file belongs to the
+        // image store the guest is about to cover with its own overlay, so a
+        // rewrite there would never be the override that runs.
         if path.is_file() {
             return Ok(());
         }

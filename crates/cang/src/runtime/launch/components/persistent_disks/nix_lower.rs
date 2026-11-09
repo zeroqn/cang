@@ -236,6 +236,17 @@ impl NixLowerBlock {
         }
     }
 
+    /// Whether the guest composes `/nix` itself from this pair, i.e. whether the
+    /// launch grafts no host-composed overlay at `/nix`.
+    ///
+    /// Both layers on the block disk is the pairing that leaves nothing for the
+    /// host overlay to be: the guest's overlay covers the whole path, so the host
+    /// skips the graft and the guest's failure policy stops treating the overlay
+    /// as a fallback.
+    pub(crate) fn serves_guest_overlay(&self) -> bool {
+        self.upper_on_build_disk
+    }
+
     pub(crate) fn env_pairs(&self) -> Vec<(String, String)> {
         vec![
             (BLOCK_MODE_ENV.to_owned(), "1".to_owned()),
@@ -1367,6 +1378,38 @@ mod tests {
 
         assert!(block.is_none());
         assert_eq!(builder.build_count(), 0);
+    }
+
+    /// A block pair is the guest's `/nix` and nothing else: the launch grafts no
+    /// host-composed overlay at `/nix`, which is what `serves_guest_overlay`
+    /// answers for a launch that gets one.
+    #[test]
+    fn the_build_disk_upper_is_what_makes_the_guest_compose_the_only_nix() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let lock_path = temp.path().join("nix-lower.raw.lock");
+        let block = |upper_on_build_disk: bool| NixLowerBlock {
+            disk: NixLowerDisk {
+                path: temp.path().join("image.raw"),
+                id: ID.to_owned(),
+                label: LABEL.to_owned(),
+                identity: "sha256-feedface".to_owned(),
+                store_paths: 1,
+                status: NixLowerDiskStatus::Reused,
+            },
+            generation_root: temp.path().join("nix-overlay"),
+            upper_on_build_disk,
+            generation: "sha256-feedface".to_owned(),
+            _lock: ImageLock::acquire(&lock_path, false).expect("shared lock"),
+        };
+
+        assert!(
+            block(true).serves_guest_overlay(),
+            "both layers on the build disk leave the host nothing to graft"
+        );
+        assert!(
+            !block(false).serves_guest_overlay(),
+            "a host-share upper keeps the host-composed overlay underneath the guest's"
+        );
     }
 
     #[test]

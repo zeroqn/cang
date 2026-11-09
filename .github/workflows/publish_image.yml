@@ -115,9 +115,14 @@ jobs:
             nix shell --inputs-from . nixpkgs#skopeo -c skopeo "$@"
           }
 
-          # GHCR's upload edge has answered a chunked layer PATCH with an HTML 400
-          # part way through a push. Blobs are content addressed, so a retry skips
-          # everything already accepted and re-sends only the layer that failed.
+          # The registry already holds these layers as uncompressed tars from the
+          # pushes that predate zstd. Reusing a blob by digest would record it
+          # under a compressed media type that its bytes do not have, so force the
+          # requested compression instead of reusing.
+          #
+          # GHCR's upload edge has also answered a chunked layer PATCH with an
+          # HTML 400 part way through a push. Blobs are content addressed, so a
+          # retry re-sends only the layer that failed.
           for attempt in 1 2 3; do
             if skopeo copy \
               --retry-times 5 \
@@ -125,6 +130,7 @@ jobs:
               --dest-creds "${GHCR_USER}:${GHCR_TOKEN}" \
               --dest-compress-format zstd \
               --dest-compress-level 12 \
+              --dest-force-compress-format \
               "docker-archive:${archive}" "docker://${GHCR_IMAGE}:${GHCR_TAG1}"; then
               break
             fi
@@ -132,7 +138,7 @@ jobs:
               echo "push to ${GHCR_IMAGE}:${GHCR_TAG1} failed 3 times" >&2
               exit 1
             fi
-            echo "push attempt ${attempt} failed; retrying with the uploaded blobs skipped" >&2
+            echo "push attempt ${attempt} failed; retrying" >&2
           done
           # The second tag is the same blobs; copy inside the registry so nothing
           # is recompressed or re-uploaded.
