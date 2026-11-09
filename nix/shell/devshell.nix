@@ -135,13 +135,14 @@ pkgs.mkShell {
     # but `nix develop path:$PWD`, `nix build path:$PWD#container` and
     # `--override-input ... path:$PWD/...` copy the whole tree, which turns a
     # multi-GiB `target/` into a fresh multi-GiB store path every time. One
-    # directory per checkout keeps two worktrees off one cargo lock.
+    # directory per checkout keeps two worktrees off one cargo lock. It lives on
+    # `$HOME/disp` (a btrfs volume), not under `$HOME/.cache`.
     if [ -z "''${CARGO_TARGET_DIR-}" ]; then
       cang_repo_root=""
       if command -v git >/dev/null 2>&1; then
         cang_repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
       fi
-      export CARGO_TARGET_DIR="$HOME/.cache/cang-build/target/$(basename "''${cang_repo_root:-$PWD}")"
+      export CARGO_TARGET_DIR="$HOME/disp/cang-build/target/$(basename "''${cang_repo_root:-$PWD}")"
       unset cang_repo_root
     fi
 

@@ -2347,7 +2347,7 @@ fn one_pinned_fenix_rust_toolchain_serves_builds_the_devshell_and_the_image() {
         // Cargo's output stays out of the checkout: `path:$PWD` builds copy the
         // whole tree into the store, so an in-tree `target/` would be copied too.
         "CARGO_TARGET_DIR",
-        "cang-build/target/",
+        "$HOME/disp/cang-build/target/",
         "git rev-parse --show-toplevel",
     ] {
         assert!(

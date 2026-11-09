@@ -67,10 +67,11 @@ toolchain's `rust-src`; `RUSTC_WRAPPER` (`sccache`) stays host-only on purpose.
 
 ### Cargo's output location
 
-The dev shell exports `CARGO_TARGET_DIR=$HOME/.cache/cang-build/target/<checkout>`
+The dev shell exports `CARGO_TARGET_DIR=$HOME/disp/cang-build/target/<checkout>`
 (one directory per checkout, named after the git root) unless the caller already
-set it. Two copies of the tree then never serialise on one cargo lock, and the
-checkout stays free of the multi-GiB `target/` that `nix develop path:$PWD` and
+set it. It sits on the `~/disp` btrfs volume, not under `~/.cache`. Two copies of
+the tree then never serialise on one cargo lock, and the checkout stays free of
+the multi-GiB `target/` that `nix develop path:$PWD` and
 `nix build path:$PWD#container` would otherwise copy into the store: the ordinary
 git flake copy skips `target/` because it is in `.gitignore`, but a `path:` input
 has no such filter. `cargo clean` in that directory is the lever when the build
