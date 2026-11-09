@@ -47,8 +47,12 @@ green.
   - **existing uppers are migrated once** into wherever the upper lands: the
     cached store objects (host: `harmony` 3.0 GB / 2501 store paths) are not
     thrown away.
-  - **share `cang-build.raw`** rather than add a disk, and **make it
-    auto-grow** - capped so the host's own btrfs always keeps headroom.
+  - **share `cang-build.raw`** rather than add a disk. **Amended 2026-11-10: no
+    auto-grow** - a mid-run grow is impossible while the guest runs (virtio-blk
+    takes the disk size at device creation and libkrun has no capacity-change
+    path), and growing is manual through the existing
+    `cang build-disk resize --size`, which grows the image and the guest btrfs
+    in one maintenance VM.
   - **a blk upper forces a blk lower** (bob, 2026-11-10): `upper:blk` with
     `lower:virtiofs` is refused by name instead of served - there is no third
     composition in which the guest overlays a virtio-fs lower, so a new
@@ -129,6 +133,12 @@ green.
     driver, not overlay (`components/podman/config.rs:41-47`).
 
 ## Decisions so far
+- [Where the upper lives on the shared build disk, and how that disk grows](tickets/04-upper-home-and-auto-grow.md):
+  one generation directory per **image digest** inside the build disk
+  (`nix-overlay/<digest-key>/{upper,work}`, `<gen>/upper` a subvolume the guest
+  creates and seeds), and **no auto-grow**: manual `cang build-disk resize
+  --size`, which already grows image + guest btrfs. A mid-run grow is impossible
+  (virtio-blk capacity is fixed at device creation).
 
 - [Does a btrfs upper meet every overlayfs requirement in the guest kernel we ship?](tickets/02-overlayfs-btrfs-upper.md):
   yes, unconditionally - the only fatal `upper fs missing required features`
