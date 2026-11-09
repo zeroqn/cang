@@ -84,6 +84,16 @@ pub(crate) const GUEST_OVERLAY_ROOT: &str = "/run/cang/nix-overlay";
 /// composes a second overlay over the same upper, and two overlay instances may
 /// not share one work directory, so the guest gets its own (empty) one.
 pub(crate) const GUEST_WORK_DIR_NAME: &str = "work-guest";
+/// Where the writable upper lives when it is on the workspace's block disk
+/// instead of the share: a sibling of `cargo/` and `target/` in the build disk's
+/// filesystem, one directory per image generation.
+///
+/// The path is under the build disk's guest mount point
+/// (`persistent_disks::build::GUEST_MOUNT_POINT`), so the guest has it as a
+/// local btrfs filesystem by the time nix-prep runs, and the overlay's upper and
+/// work are one mount, on a filesystem that is not the lower's - the placement
+/// rule overlayfs needs (notes 02 of the nix-upper-on-block map).
+pub(crate) const BUILD_DISK_UPPER_ROOT: &str = "/home/dev/.cache/cang-build/nix-overlay";
 pub(crate) const GUEST_UPPER_DIR: &str = "/run/cang/nix-overlay/upper";
 pub(crate) const GUEST_WORK_DIR: &str = "/run/cang/nix-overlay/work-guest";
 const BIND_TAG: &str = "cang-nix-overlay-src";
@@ -182,6 +192,10 @@ pub(crate) struct NixLowerDisk {
 pub(crate) struct NixLowerBlock {
     disk: NixLowerDisk,
     generation_root: PathBuf,
+    /// Whether the writable upper is the build disk's, beside the lower, instead
+    /// of the host-directory share. Set from the guest binary's capability: an
+    /// image whose `cang-guest-init` predates the seeding step cannot serve it.
+    upper_on_build_disk: bool,
     /// Kept for the whole launch: the image cannot be rebuilt underneath it.
     _lock: ImageLock,
 }
@@ -201,6 +215,29 @@ impl NixLowerBlock {
         BindMount::directory(self.generation_root.clone(), BIND_TAG, GUEST_OVERLAY_ROOT)
     }
 
+    /// The generation's directory name, which is how the block disk's
+    /// `nix-overlay/` parent keeps one cache per image generation.
+    fn generation_name(&self) -> String {
+        self.generation_root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "default".to_owned())
+    }
+
+    /// `(upperdir, workdir)` for the guest's overlay.
+    ///
+    /// Both are on one filesystem either way, which is overlayfs's rule; what
+    /// changes is *which* filesystem. On the build disk they are a btrfs
+    /// subvolume inside the disk's image, beside `cargo/` and `target/`.
+    pub(crate) fn guest_upper_dirs(&self) -> (String, String) {
+        if self.upper_on_build_disk {
+            let root = format!("{BUILD_DISK_UPPER_ROOT}/{}", self.generation_name());
+            (format!("{root}/upper"), format!("{root}/work"))
+        } else {
+            (GUEST_UPPER_DIR.to_owned(), GUEST_WORK_DIR.to_owned())
+        }
+    }
+
     pub(crate) fn env_pairs(&self) -> Vec<(String, String)> {
         vec![
             (BLOCK_MODE_ENV.to_owned(), "1".to_owned()),
@@ -211,11 +248,11 @@ impl NixLowerBlock {
             ),
             (
                 "CANG_NIX_LOWER_UPPERDIR".to_owned(),
-                GUEST_UPPER_DIR.to_owned(),
+                self.guest_upper_dirs().0,
             ),
             (
                 "CANG_NIX_LOWER_WORKDIR".to_owned(),
-                GUEST_WORK_DIR.to_owned(),
+                self.guest_upper_dirs().1,
             ),
         ]
     }
@@ -366,7 +403,19 @@ pub(crate) fn prepare_block(
         );
         return fallback_or_error(intent, reason, mode);
     }
-    match prepare_block_with(intent, &HostNixLowerImageBuilder) {
+    // The block lower is only half of the pairing: its upper is on the same disk,
+    // and a guest that cannot seed a fresh one would mount an overlay over a
+    // directory the host never prepared. That is the mixed pair the resolution
+    // refuses, so an image without the seeding step gets the host overlay for
+    // both layers - or, in `blk`, a refusal rather than a mount that fails.
+    if !guest_init_seeds_upper(guest_init) {
+        let reason = format!(
+            "the cang-guest-init this launch would run ('{}') predates the block-disk upper, so the writable /nix layer would stay on the host share and the two layers would not match",
+            guest_init.display()
+        );
+        return fallback_or_error(intent, reason, mode);
+    }
+    match prepare_block_with(intent, &HostNixLowerImageBuilder, UPPER_ON_BUILD_DISK) {
         Ok(block) => Ok(block),
         Err(err) => fallback_or_error(intent, format!("{err:#}"), mode),
     }
@@ -403,6 +452,12 @@ fn fallback_or_error(
 
 /// The guest half's switch, which is also the contract between the two halves.
 const GUEST_HALF_MARKER: &[u8] = b"CANG_NIX_LOWER_BLOCK";
+/// The sentinel the guest writes into an upper it seeded itself. Its presence in
+/// the binary is the second half of the contract: an image without it cannot put
+/// the writable layer on the block disk.
+const GUEST_UPPER_MARKER: &[u8] = b".cang-upper-seeded";
+/// Whether this build puts the upper on the block disk when the lower is there.
+const UPPER_ON_BUILD_DISK: bool = true;
 
 /// Whether the `cang-guest-init` that will run in this launch knows block mode.
 ///
@@ -413,6 +468,22 @@ const GUEST_HALF_MARKER: &[u8] = b"CANG_NIX_LOWER_BLOCK";
 /// A binary that cannot be read is not evidence of an old guest-init, so it keeps
 /// the legacy assumption (supported) rather than disabling block mode on an I/O
 /// error.
+/// Whether the `cang-guest-init` that will run in this launch seeds a fresh
+/// upper itself (see `GUEST_UPPER_MARKER`).
+pub(super) fn guest_init_seeds_upper(guest_init: &Path) -> bool {
+    match fs::read(guest_init) {
+        Ok(bytes) => contains(&bytes, GUEST_UPPER_MARKER),
+        Err(err) => {
+            tracing::debug!(
+                guest_init = %guest_init.display(),
+                error = %err,
+                "could not read cang-guest-init; assuming it seeds the upper"
+            );
+            true
+        }
+    }
+}
+
 pub(super) fn guest_init_mounts_block_lower(guest_init: &Path) -> bool {
     match fs::read(guest_init) {
         Ok(bytes) => contains(&bytes, GUEST_HALF_MARKER),
@@ -436,8 +507,9 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 fn prepare_block_with(
     intent: &HostNixOverlay,
     builder: &impl NixLowerImageBuilder,
+    upper_on_build_disk: bool,
 ) -> Result<Option<NixLowerBlock>> {
-    match ensure_with_builder(intent, builder) {
+    match ensure_with_builder(intent, builder, upper_on_build_disk) {
         Ok(block) => Ok(block),
         Err(err) => {
             tracing::warn!(
@@ -495,6 +567,7 @@ fn block_mode_requested(mode: Option<NixLowerMode>) -> bool {
 pub(super) fn ensure_with_builder(
     intent: &HostNixOverlay,
     builder: &impl NixLowerImageBuilder,
+    upper_on_build_disk: bool,
 ) -> Result<Option<NixLowerBlock>> {
     let store_dir = intent.lowerdir.join(STORE_DIR);
     if !store_dir.is_dir() {
@@ -536,6 +609,7 @@ pub(super) fn ensure_with_builder(
     Ok(Some(NixLowerBlock {
         disk,
         generation_root,
+        upper_on_build_disk,
         _lock: lock,
     }))
 }
@@ -1255,7 +1329,7 @@ mod tests {
         fs::remove_dir(nix_dir.join("store")).expect("remove store");
         let builder = FakeBuilder::default();
 
-        let block = ensure_with_builder(&intent(&nix_dir, &generation_root(&temp)), &builder)
+        let block = ensure_with_builder(&intent(&nix_dir, &generation_root(&temp)), &builder, true)
             .expect("no store is not fatal");
 
         assert!(block.is_none());
@@ -1268,7 +1342,7 @@ mod tests {
         let nix_dir = cache_entry(&temp, &["aaaa-one"]);
         let builder = FakeBuilder::failing();
 
-        let err = prepare_block_with(&intent(&nix_dir, &generation_root(&temp)), &builder)
+        let err = prepare_block_with(&intent(&nix_dir, &generation_root(&temp)), &builder, true)
             .expect_err("a failed build is reported, not swallowed");
         assert!(format!("{err:#}").contains("failed"), "{err:#}");
         assert_eq!(builder.build_count(), 1);
@@ -1293,7 +1367,7 @@ mod tests {
         let generation_root = generation_root(&temp);
         let overlay = intent(&nix_dir, &generation_root);
 
-        let block = prepare_block_with(&overlay, &builder)
+        let block = prepare_block_with(&overlay, &builder, true)
             .expect("block mode")
             .expect("an image is built");
 
@@ -1312,25 +1386,33 @@ mod tests {
         assert_eq!(env[BLOCK_MODE_ENV], "1");
         assert_eq!(env["CANG_NIX_LOWER_DISK_ID"], ID);
         assert_eq!(env["CANG_NIX_LOWER_DISK_LABEL"], LABEL);
-        assert_eq!(env["CANG_NIX_LOWER_UPPERDIR"], GUEST_UPPER_DIR);
-        assert_eq!(env["CANG_NIX_LOWER_WORKDIR"], GUEST_WORK_DIR);
+        // Both layers of the pair are on the build disk, in the generation's own
+        // directory: the share carries the host's own bookkeeping, not the
+        // guest's upper.
+        let generation = generation_root
+            .file_name()
+            .expect("a generation name")
+            .to_string_lossy();
         assert_eq!(
             env["CANG_NIX_LOWER_UPPERDIR"],
-            format!("{GUEST_OVERLAY_ROOT}/upper")
+            format!("{BUILD_DISK_UPPER_ROOT}/{generation}/upper")
         );
         assert_eq!(
             env["CANG_NIX_LOWER_WORKDIR"],
-            format!("{GUEST_OVERLAY_ROOT}/{GUEST_WORK_DIR_NAME}")
+            format!("{BUILD_DISK_UPPER_ROOT}/{generation}/work")
         );
-        // The guest's own work directory is created empty on the shared
-        // generation root, next to the host overlay's.
-        let guest_work = generation_root.join(GUEST_WORK_DIR_NAME);
-        assert!(guest_work.is_dir());
+        assert_eq!(block.guest_upper_dirs().0, env["CANG_NIX_LOWER_UPPERDIR"]);
+        // The host still prepares the generation's own work directory on the
+        // share: it is the host-composed overlay's, kept for a launch that cannot
+        // pair the block layers.
+        let host_work = generation_root.join(GUEST_WORK_DIR_NAME);
         assert!(
-            fs::read_dir(&guest_work)
-                .expect("work dir")
-                .next()
-                .is_none()
+            host_work.is_dir(),
+            "the host overlay keeps its own work dir"
+        );
+        assert!(
+            fs::read_dir(&host_work).expect("work dir").next().is_none(),
+            "and it stays empty while the guest's upper is on the block disk"
         );
     }
 
@@ -1359,6 +1441,76 @@ mod tests {
         );
 
         assert!(overlay.lowerdir.is_dir());
+    }
+
+    /// A launch that asks for the block lower gets the build disk's upper too:
+    /// both layers land on one filesystem, and the guest is told the paths.
+    #[test]
+    fn the_block_pair_puts_both_layers_on_the_build_disk() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nix_dir = cache_entry(&temp, &["aaaa-one"]);
+        let root = generation_root(&temp);
+        let overlay = intent(&nix_dir, &root);
+        let builder = FakeBuilder::default();
+
+        let block = ensure_with_builder(&overlay, &builder, true)
+            .expect("ensure")
+            .expect("the block pair");
+        let (upper, work) = block.guest_upper_dirs();
+        let generation = root
+            .file_name()
+            .expect("a generation name")
+            .to_string_lossy();
+
+        assert_eq!(
+            upper,
+            format!("{BUILD_DISK_UPPER_ROOT}/{generation}/upper"),
+            "the upper is the generation's own directory under the build disk"
+        );
+        assert_eq!(work, format!("{BUILD_DISK_UPPER_ROOT}/{generation}/work"));
+        assert!(
+            upper.starts_with("/home/dev/.cache/cang-build/"),
+            "the path is under the build disk's guest mount, which the guest has mounted before nix-prep"
+        );
+        assert!(!upper.starts_with(GUEST_OVERLAY_ROOT), "never the share");
+
+        let env: std::collections::HashMap<_, _> = block.env_pairs().into_iter().collect();
+        assert_eq!(env["CANG_NIX_LOWER_UPPERDIR"], upper);
+        assert_eq!(env["CANG_NIX_LOWER_WORKDIR"], work);
+    }
+
+    /// Without the guest's seeding step the upper stays on the share, which is
+    /// the mixed pair: the capability gate turns that into a named refusal in
+    /// `blk` and a host overlay in `auto`.
+    #[test]
+    fn a_guest_init_without_the_seeding_step_refuses_the_block_pair() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nix_dir = cache_entry(&temp, &["aaaa-one"]);
+        let overlay = intent(&nix_dir, &generation_root(&temp));
+        // Knows block mode, not the upper: the exact image generation this pair
+        // would be wrong against.
+        let guest_init = temp.path().join("cang-guest-init");
+        fs::write(&guest_init, b"\x7fELF CANG_NIX_LOWER_BLOCK only").expect("write");
+
+        let refused = prepare_block(&overlay, &guest_init, Some(NixLowerMode::Blk));
+        let allowed = prepare_block(&overlay, &guest_init, Some(NixLowerMode::Auto));
+
+        let message = format!(
+            "{:#}",
+            refused.expect_err("a stale upper refuses the launch")
+        );
+        assert!(
+            message.contains("predates the block-disk upper"),
+            "{message}"
+        );
+        assert!(
+            allowed.expect("auto keeps the launch").is_none(),
+            "with --nix=lower:auto the launch keeps the host-composed overlay for both layers"
+        );
+        assert!(
+            !temp.path().join("btrfs-snapshots").join(DIR_NAME).exists(),
+            "no lower image is built for a guest that cannot pair with it"
+        );
     }
 
     #[test]
