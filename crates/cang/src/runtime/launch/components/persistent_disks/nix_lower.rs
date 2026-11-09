@@ -88,8 +88,6 @@ pub(crate) const GUEST_UPPER_DIR: &str = "/run/cang/nix-overlay/upper";
 pub(crate) const GUEST_WORK_DIR: &str = "/run/cang/nix-overlay/work-guest";
 const BIND_TAG: &str = "cang-nix-overlay-src";
 const BLOCK_MODE_ENV: &str = "CANG_NIX_LOWER_BLOCK";
-/// The host-side switch: off unless `CANG_NIX_LOWER_BLOCK=1`.
-pub(crate) const HOST_BLOCK_MODE_ENV: &str = BLOCK_MODE_ENV;
 const STATE_LABEL_KEY: &str = "label";
 const STATE_IDENTITY_KEY: &str = "identity";
 const STATE_STORE_PATHS_KEY: &str = "store_paths";
@@ -337,9 +335,9 @@ fn judge_mkfs_output(program: &OsStr, output: &std::process::Output) -> Result<(
 /// Entry point for a launch's `/nix` lower.
 ///
 /// `Ok(None)` means the launch kept the host-composed overlay: it asked for it
-/// (`--nix-lower=virtiofs`, or `CANG_NIX_LOWER_BLOCK=0`), or the block lower could
-/// not be served and the mode allows the overlay (`--nix-lower=auto`, the
-/// default). `--nix-lower=blk` is the strict mode: it refuses the launch instead,
+/// (`--nix=lower:virtiofs`), or the block lower could
+/// not be served and the mode allows the overlay (`--nix=lower:auto`, the
+/// default). `--nix=lower:blk` is the strict mode: it refuses the launch instead,
 /// because a quiet fallback is five times slower on the store and nothing in the
 /// run says so.
 ///
@@ -391,15 +389,15 @@ fn fallback_or_error(
             "cang /nix lower: keeping the host-composed overlay"
         );
         eprintln!(
-            "cang: /nix block lower unavailable, keeping the host-composed overlay (--nix-lower={}): {reason}",
+            "cang: /nix block lower unavailable, keeping the host-composed overlay (--nix=lower:{}): {reason}",
             mode.map_or("auto", NixLowerMode::as_str)
         );
         return Ok(None);
     }
     bail!(
         "/nix block lower requested but unavailable: {reason}\n\
-         cang: pass --nix-lower=virtiofs to keep the host-composed /nix overlay instead (slower store walks), \
-         or --nix-lower=auto to keep it only when the block lower cannot be served"
+         cang: pass --nix=lower:virtiofs to keep the host-composed /nix overlay instead (slower store walks), \
+         or --nix=lower:auto to keep it only when the block lower cannot be served"
     )
 }
 
@@ -476,8 +474,10 @@ impl NixLowerMode {
     }
 }
 
-/// Block mode is on by default: `--nix-lower=virtiofs`, or the legacy
-/// `CANG_NIX_LOWER_BLOCK=0`, keeps the host-composed overlay.
+/// Block mode is on by default: `--nix=lower:virtiofs` keeps the
+/// host-composed overlay, and there is no environment variable of its own - the
+/// flag is the whole surface, and `CANG_NIX_LOWER_BLOCK` is only the contract
+/// this half sets for the guest.
 ///
 /// The configuration it enables is the fast one from note 57 - `find /nix/store`
 /// 206-215 ms against 864-2033 ms, `du -s` 267 ms against 9.2-10.4 s - and it
@@ -489,17 +489,7 @@ impl NixLowerMode {
 /// `blk` refuses a launch it cannot serve, so nobody who asked for the block lower
 /// silently gets the slower overlay; `auto` keeps the launch and names the reason.
 fn block_mode_requested(mode: Option<NixLowerMode>) -> bool {
-    match mode {
-        Some(NixLowerMode::Blk | NixLowerMode::Auto) => true,
-        Some(NixLowerMode::VirtioFs) => false,
-        // The environment variable predates the flag and stays an alias for it:
-        // `0` is `virtiofs`, `1` is `blk`, and unset is `auto`.
-        None => match std::env::var(HOST_BLOCK_MODE_ENV).as_deref() {
-            Ok("0") => false,
-            Ok("1") => true,
-            _ => true,
-        },
-    }
+    !matches!(mode, Some(NixLowerMode::VirtioFs))
 }
 
 pub(super) fn ensure_with_builder(
@@ -1236,33 +1226,20 @@ mod tests {
         let guest_init = temp.path().join("cang-guest-init");
         fs::write(&guest_init, b"\x7fELF an image built before the guest half")
             .expect("write the stale guest-init stand-in");
-        let before = std::env::var_os(HOST_BLOCK_MODE_ENV);
-
-        // The guest-init is only consulted when block mode is selected, so this
-        // test opts in first.
-        // SAFETY: a single-threaded assertion over one process env variable,
-        // serialized by ENV_LOCK.
-        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
-
         let refused = prepare_block(&overlay, &guest_init, Some(NixLowerMode::Blk));
         let allowed = prepare_block(&overlay, &guest_init, Some(NixLowerMode::Auto));
-
-        match before {
-            Some(value) => unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, value) },
-            None => unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) },
-        }
         let message = format!(
             "{:#}",
             refused.expect_err("a stale guest-init refuses the launch")
         );
         assert!(message.contains("predates block mode"), "{message}");
         assert!(
-            message.contains("--nix-lower=virtiofs"),
+            message.contains("--nix=lower:virtiofs"),
             "the refusal names the way out: {message}"
         );
         assert!(
             allowed.expect("auto keeps the launch").is_none(),
-            "with --nix-lower=auto the launch keeps the host-composed overlay"
+            "with --nix=lower:auto the launch keeps the host-composed overlay"
         );
         let dir = temp.path().join("btrfs-snapshots").join(DIR_NAME);
         assert!(
@@ -1357,51 +1334,30 @@ mod tests {
         );
     }
 
-    /// The flag decides, then the legacy environment variable, then the default.
+    /// `blk` and `auto` both request the block lower; only `virtiofs` keeps the
+    /// host overlay. There is no environment variable left to override either:
+    /// the flag is the whole surface.
     #[test]
-    fn the_flag_beats_the_environment_variable_and_blk_is_the_default() {
+    fn blk_and_auto_request_the_block_lower_and_only_virtiofs_turns_it_off() {
         let _guard = ENV_LOCK.lock().expect("env test lock");
         let temp = tempfile::tempdir().expect("tempdir");
         let nix_dir = cache_entry(&temp, &["aaaa-one"]);
         let overlay = intent(&nix_dir, &generation_root(&temp));
-        let before = std::env::var_os(HOST_BLOCK_MODE_ENV);
 
-        // SAFETY: a single-threaded assertion over one process env variable,
-        // serialized by ENV_LOCK.
-        unsafe { std::env::remove_var(HOST_BLOCK_MODE_ENV) };
         assert!(block_mode_requested(None), "the block lower is the default");
-
-        // SAFETY: as above.
-        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "0") };
-        assert!(!block_mode_requested(None), "0 keeps the host overlay");
-
-        // SAFETY: as above.
-        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
-        assert!(block_mode_requested(None), "1 requests the block lower");
-
-        // The flag wins over the environment in both directions, so a stale
-        // exported variable cannot override an explicit choice.
-        // SAFETY: as above.
-        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "0") };
+        assert!(
+            block_mode_requested(Some(NixLowerMode::Auto)),
+            "auto asks for it too, and keeps the launch when it cannot be served"
+        );
         assert!(
             block_mode_requested(Some(NixLowerMode::Blk)),
-            "--nix-lower=blk beats CANG_NIX_LOWER_BLOCK=0"
+            "blk asks for it and refuses a launch that cannot have it"
         );
-
-        // SAFETY: as above.
-        unsafe { std::env::set_var(HOST_BLOCK_MODE_ENV, "1") };
         assert!(
             !block_mode_requested(Some(NixLowerMode::VirtioFs)),
-            "--nix-lower=virtiofs beats CANG_NIX_LOWER_BLOCK=1"
+            "--nix=lower:virtiofs keeps the host overlay"
         );
 
-        // SAFETY: restore whatever the harness had.
-        unsafe {
-            match before {
-                Some(value) => std::env::set_var(HOST_BLOCK_MODE_ENV, value),
-                None => std::env::remove_var(HOST_BLOCK_MODE_ENV),
-            }
-        }
         assert!(overlay.lowerdir.is_dir());
     }
 

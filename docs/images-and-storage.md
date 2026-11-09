@@ -126,14 +126,22 @@ reads, and reading it off a block device is what pays: `find /nix/store`
 206-215 ms against 864-2033 ms and `du -s` 267 ms against 9.2-10.4 s with the
 same tree over virtio-fs.
 
-`--nix-lower=auto` (the default) serves it whenever it can and otherwise keeps the
-host-composed overlay above, naming the reason on stderr; `--nix-lower=blk` is the
+`--nix=lower:auto` (the default) serves it whenever it can and otherwise keeps the
+host-composed overlay above, naming the reason on stderr; `--nix=lower:blk` is the
 same thing with no fallback - the launch is refused instead of quietly getting a
-store that is up to five times slower; `--nix-lower=virtiofs` never builds or
-attaches an image. `CANG_NIX_LOWER_BLOCK=0` is the older spelling of `virtiofs`
-and `=1` of `blk`. A launch cannot be served the block lower when the image cannot
+store that is up to five times slower; `--nix=lower:virtiofs` never builds or
+attaches an image. A launch cannot be served the block lower when the image cannot
 be built or is locked by another launch, or when the image's `cang-guest-init`
 predates the guest half.
+
+`--nix` names both layers and they resolve as one decision: `blk` on either axis
+moves both (a block upper forces a block lower, because the guest composes the
+overlay), `virtiofs` on either keeps both on the host share, and naming them
+differently is an error. `upper:blk` - the writable layer on the workspace block
+disk - is not available yet and is refused by name; the writable layer is the
+host-directory share above. The older `--nix-lower` flag and its
+`CANG_NIX_LOWER_BLOCK` environment spelling are gone: the guest-side
+`CANG_NIX_LOWER_*` variables remain, as the contract between the two halves.
 
 An ordinary cold 7.x-kernel read of the store used to intermittently return
 stale contents for a 40 KiB window: the guest's btrfs logged `csum failed` (the

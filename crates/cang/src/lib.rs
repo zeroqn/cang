@@ -46,7 +46,14 @@ pub fn entrypoint() -> ExitCode {
         };
     }
 
-    match Cli::parse().into_action() {
+    let action = match Cli::parse().try_into_action() {
+        Ok(action) => action,
+        Err(err) => {
+            eprintln!("cang: {err:#}");
+            return ExitCode::from(2);
+        }
+    };
+    match action {
         CliAction::Run(options) => run_with_logging(
             *options,
             runtime::RuntimeProfileScope::from_started_at(host_session_started_at),

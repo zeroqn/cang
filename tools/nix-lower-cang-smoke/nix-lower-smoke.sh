@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live smoke for the /nix block lower: that a launch serves /nix from the
 # read-only btrfs image on virtio-blk (with the guest's block lower in
-# force) and loses no pages, and that CANG_NIX_LOWER_BLOCK=0 still keeps the
+# force) and loses no pages, and that --nix=lower:virtiofs still keeps the
 # host-composed overlay. Two cold boots, scored on engagement, the cap, lost
 # pages and the speed the feature exists for.
 #
@@ -21,7 +21,6 @@ out_dir=""
 mem_gib=4
 timeout_seconds=600
 skip_opt_out=0
-block_env="CANG_NIX_LOWER_BLOCK"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 say() { echo "== $*"; }
@@ -30,7 +29,7 @@ usage() {
   cat <<'USAGE'
 Usage: nix-lower-smoke.sh [OPTIONS]
 
-Boots one guest with the /nix block lower and one with CANG_NIX_LOWER_BLOCK=0,
+Boots one guest with the /nix block lower and one with --nix=lower:virtiofs,
 and scores engagement, lost pages and the speed
 difference between the two.
 
@@ -44,7 +43,7 @@ Options:
                         Must be on btrfs.
   --mem <gib>           guest memory (default: 4)
   --timeout <secs>      per-VM timeout (default: 600)
-  --no-opt-out          skip the CANG_NIX_LOWER_BLOCK=0 boot
+  --no-opt-out          skip the --nix=lower:virtiofs boot
   -h, --help            show this help
 
 Prerequisites: /dev/kvm, podman/buildah, script (util-linux), nix, and a btrfs
@@ -177,7 +176,7 @@ run_boot() {
 
 run_boot "block"
 if [ "$skip_opt_out" -eq 0 ]; then
-  run_boot "opt-out" "$block_env=0"
+  run_boot "opt-out" "" "" "--nix=lower:virtiofs"
 fi
 
 # A guest-init that predates block mode must be refused, not quietly served the
@@ -197,8 +196,8 @@ fi
 if [ -n "$stale_init" ] && ! grep -qa 'CANG_NIX_LOWER_BLOCK' "$stale_init"; then
   # Strict mode refuses; auto keeps the launch and names why. Same binary,
   # so the mode is the only difference.
-  run_boot "refuse-stale" "" "$stale_init" "--nix-lower=blk"
-  run_boot "auto-fallback" "" "$stale_init" "--nix-lower=auto"
+  run_boot "refuse-stale" "" "$stale_init" "--nix=lower:blk"
+  run_boot "auto-fallback" "" "$stale_init" "--nix=lower:auto"
 else
   say "no readable guest-init to derive a stale one from; skipping the refusal arm"
 fi
@@ -276,7 +275,7 @@ if [ "$skip_opt_out" -eq 0 ]; then
   read_opt="$(value "$optout_ev/read-ms.txt")"
   require opt-out-keeps-host-overlay \
     "$(grep -q 'virtiofs /nix\| /nix virtiofs' "$optout_ev/mounts.txt" 2>/dev/null && echo 0 || echo 1)" \
-    "CANG_NIX_LOWER_BLOCK=0 keeps the host-composed overlay" "$(value "$optout_ev/mounts.txt")"
+    "--nix=lower:virtiofs keeps the host-composed overlay" "$(value "$optout_ev/mounts.txt")"
   # A regression that silently turns the block lower off would look "clean"; the
   # speed difference is what distinguishes the two paths. The bar is 1.3x, not the
   # 4-10x a cold read can show: a busy host or a warm page cache shrinks the gap,
@@ -301,15 +300,15 @@ if [ -s "$out_dir/logs/refuse-stale.rc" ]; then
   refuse_msg="$(sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$out_dir/logs/cang-refuse-stale.console" 2>/dev/null | tr -d '\r')"
   require refuses-a-stale-guest "$([ "$refuse_rc" != 0 ] && echo 0 || echo 1)" \
     "a guest-init without block mode refuses the launch instead of falling back (exit $refuse_rc)" \
-    "$(printf '%s' "$refuse_msg" | grep -m2 'block lower\|nix-lower=virtiofs')"
+    "$(printf '%s' "$refuse_msg" | grep -m2 'block lower\|nix=lower:virtiofs')"
   require refusal-names-the-way-out \
-    "$(printf '%s' "$refuse_msg" | grep -q 'nix-lower=virtiofs' && echo 0 || echo 1)" \
-    "the refusal names --nix-lower=virtiofs"
+    "$(printf '%s' "$refuse_msg" | grep -q 'nix=lower:virtiofs' && echo 0 || echo 1)" \
+    "the refusal names --nix=lower:virtiofs"
   auto_rc="$(value "$out_dir/logs/auto-fallback.rc" 2>/dev/null)"
   auto_msg="$(sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$out_dir/logs/cang-auto-fallback.console" 2>/dev/null | tr -d '\r')"
   require auto-keeps-the-launch "$([ "$auto_rc" = 0 ] && echo 0 || echo 1)" \
-    "--nix-lower=auto keeps the host-composed overlay and the launch runs (exit ${auto_rc:-?})" \
-    "$(printf '%s' "$auto_msg" | grep -m2 'block lower unavailable\|--nix-lower=auto')"
+    "--nix=lower:auto keeps the host-composed overlay and the launch runs (exit ${auto_rc:-?})" \
+    "$(printf '%s' "$auto_msg" | grep -m2 'block lower unavailable\|--nix=lower:auto')"
 fi
 
 echo

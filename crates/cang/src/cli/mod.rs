@@ -234,13 +234,13 @@ pub(crate) struct Cli {
     preserve_debug: bool,
 
     #[arg(
-        long = "nix-lower",
-        value_name = "MODE",
-        value_parser = parse_nix_lower_arg,
-        help = "How /nix is served: auto, blk, or virtiofs",
-        long_help = "How /nix is served. blk serves the store from a read-only btrfs image on virtio-blk, which the guest composes its overlay from, and refuses the launch when that image cannot be served (it cannot be built or is locked by another launch, or the image's cang-guest-init predates the guest half) - say virtiofs if you would rather have a launch than a reason. auto (the default) does the same but keeps the host-composed overlay and names the reason when the block lower is unavailable. virtiofs never builds or attaches an image and keeps the host-composed overlay. CANG_NIX_LOWER_BLOCK=0 is the older spelling of virtiofs, and =1 of blk."
+        long = "nix",
+        value_name = "KEY:VALUE",
+        value_parser = parse_nix_arg,
+        help = "How /nix's layers are served: lower:MODE, upper:MODE",
+        long_help = "How /nix's two overlay layers are served, as KEY:VALUE; repeat for more than one.\n\n  lower:auto|blk|virtiofs\n    `blk` serves the store from a read-only btrfs image on virtio-blk, which the guest composes its overlay from, and refuses the launch when that image cannot be served (it cannot be built or is locked by another launch, or the image's cang-guest-init predates the guest half) - say virtiofs if you would rather have a launch than a reason. `auto` (the default) does the same but keeps the host-composed overlay and names the reason when the block lower is unavailable. `virtiofs` never builds or attaches an image and keeps the host-composed overlay: find on the store takes 864-2033 ms instead of 206-215 ms.\n\n  upper:auto|virtiofs\n    Where the writable layer of /nix lives. Today it is the host-directory share, which is what both values mean; `upper:blk` (the upper on the workspace block disk) is not available yet and is refused by name.\n\nThe two layers are one decision: `blk` on either axis moves both, `virtiofs` on either keeps both on the host share, and naming the two differently is an error - a block upper forces a block lower. Renamed from `--nix-lower`, whose CANG_NIX_LOWER_BLOCK spelling is gone."
     )]
-    nix_lower: Option<String>,
+    nix: Vec<(NixLayer, NixLayerMode)>,
 
     #[arg(
         long = "mem",
@@ -570,9 +570,9 @@ pub(crate) enum CliAction {
 }
 
 impl Cli {
-    pub(crate) fn into_action(self) -> CliAction {
+    pub(crate) fn try_into_action(self) -> anyhow::Result<CliAction> {
         if let Some(command) = self.command.clone() {
-            match command {
+            Ok(match command {
                 CliCommand::ContainerStore { command } => CliAction::ContainerStore {
                     command,
                     options: self.disk_maintenance_options(),
@@ -611,9 +611,9 @@ impl Cli {
                     command,
                     log_settings: LogSettings::from_process_env(self.log_level, self.debug),
                 },
-            }
+            })
         } else {
-            CliAction::Run(Box::new(self.into_runtime_options()))
+            Ok(CliAction::Run(Box::new(self.try_into_runtime_options()?)))
         }
     }
 
@@ -627,9 +627,10 @@ impl Cli {
         }
     }
 
-    pub(crate) fn into_runtime_options(self) -> RuntimeOptions {
+    pub(crate) fn try_into_runtime_options(self) -> anyhow::Result<RuntimeOptions> {
+        let layers = resolve_nix_layers(&self.nix)?;
         let log_settings = LogSettings::from_process_env(self.log_level, self.debug);
-        RuntimeOptions {
+        Ok(RuntimeOptions {
             image: self.image,
             pull_latest: self.pull_latest,
             debug: self.debug,
@@ -646,10 +647,10 @@ impl Cli {
             container_store_backend: self.container_store_backend,
             guest_init: self.guest_init,
             preserve_debug: self.preserve_debug,
-            nix_lower: self.nix_lower.as_deref().map(|mode| match mode {
-                "virtiofs" => NixLowerMode::VirtioFs,
-                "blk" => NixLowerMode::Blk,
-                _ => NixLowerMode::Auto,
+            nix_lower: Some(match layers.lower {
+                NixLayerMode::VirtioFs => NixLowerMode::VirtioFs,
+                NixLayerMode::Blk => NixLowerMode::Blk,
+                NixLayerMode::Auto => NixLowerMode::Auto,
             }),
             mem_gib: self.mem_gib,
             network_mode: if self.tsi {
@@ -675,7 +676,7 @@ impl Cli {
             publish: self.publish,
             volumes: self.volumes,
             guest_command: self.guest_command,
-        }
+        })
     }
 }
 
@@ -1126,17 +1127,72 @@ mod tests {
     }
 
     #[test]
-    fn parses_nix_lower_modes_and_rejects_anything_else() {
-        use crate::cli::parse_nix_lower_arg;
+    fn parses_nix_layer_modes_and_rejects_anything_else() {
+        use crate::cli::{NixLayer, NixLayerMode, parse_nix_arg};
 
-        assert_eq!(parse_nix_lower_arg("blk").expect("blk"), "blk");
         assert_eq!(
-            parse_nix_lower_arg("virtiofs").expect("virtiofs"),
-            "virtiofs"
+            parse_nix_arg("lower:blk").expect("lower:blk"),
+            (NixLayer::Lower, NixLayerMode::Blk)
         );
-        let err = parse_nix_lower_arg("block").expect_err("an unknown mode is refused");
+        assert_eq!(
+            parse_nix_arg("upper:virtiofs").expect("upper:virtiofs"),
+            (NixLayer::Upper, NixLayerMode::VirtioFs)
+        );
+        assert_eq!(
+            parse_nix_arg("lower:auto").expect("lower:auto"),
+            (NixLayer::Lower, NixLayerMode::Auto)
+        );
+
+        let err = parse_nix_arg("lower:block").expect_err("an unknown mode is refused");
         assert!(err.contains("blk"), "{err}");
         assert!(err.contains("virtiofs"), "{err}");
+        let err = parse_nix_arg("middle:blk").expect_err("an unknown layer is refused");
+        assert!(err.contains("lower") && err.contains("upper"), "{err}");
+        let err = parse_nix_arg("blk").expect_err("a bare mode names no axis");
+        assert!(err.contains("lower") && err.contains("upper"), "{err}");
+    }
+
+    /// The two `/nix` layers are one decision: `blk` on either moves both,
+    /// `virtiofs` on either keeps both on the host share, and naming them
+    /// differently is an error rather than a guess.
+    #[test]
+    fn resolve_nix_layers_is_pair_wide_and_refuses_a_contradiction() {
+        use crate::cli::{NixLayer, NixLayerMode, resolve_nix_layers};
+
+        let both_auto = resolve_nix_layers(&[]).expect("the default");
+        assert_eq!(both_auto.lower, NixLayerMode::Auto);
+        assert_eq!(both_auto.upper, NixLayerMode::Auto);
+
+        let lower_blk = resolve_nix_layers(&[(NixLayer::Lower, NixLayerMode::Blk)]).expect("blk");
+        assert_eq!(lower_blk.lower, NixLayerMode::Blk);
+        assert_eq!(lower_blk.upper, NixLayerMode::Blk);
+
+        let lower_virtiofs =
+            resolve_nix_layers(&[(NixLayer::Lower, NixLayerMode::VirtioFs)]).expect("virtiofs");
+        assert_eq!(lower_virtiofs.lower, NixLayerMode::VirtioFs);
+        assert_eq!(lower_virtiofs.upper, NixLayerMode::VirtioFs);
+
+        // A later occurrence of the same key wins, as with `--virtiofs`.
+        let last_wins = resolve_nix_layers(&[
+            (NixLayer::Lower, NixLayerMode::VirtioFs),
+            (NixLayer::Lower, NixLayerMode::Auto),
+        ])
+        .expect("the last lower wins");
+        assert_eq!(last_wins.lower, NixLayerMode::Auto);
+
+        let err = resolve_nix_layers(&[
+            (NixLayer::Lower, NixLayerMode::VirtioFs),
+            (NixLayer::Upper, NixLayerMode::Blk),
+        ])
+        .expect_err("a block upper cannot pair with a virtiofs lower");
+        let err = format!("{err:#}");
+        assert!(err.contains("disagree"), "{err}");
+
+        let err = resolve_nix_layers(&[(NixLayer::Upper, NixLayerMode::Blk)])
+            .expect_err("the block upper does not exist yet");
+        let err = format!("{err:#}");
+        assert!(err.contains("not available yet"), "{err}");
+        assert!(err.contains("--nix=lower:blk"), "{err}");
     }
 
     #[test]
@@ -1168,7 +1224,7 @@ mod tests {
     fn gpu_arg_parses_through_cli_and_reaches_runtime_options() {
         let cli =
             Cli::try_parse_from(["cang", "--gpu=drm:shm=1G"]).expect("drm with shm should parse");
-        let options = cli.into_runtime_options();
+        let options = cli.try_into_runtime_options().expect("valid options");
         assert_eq!(options.gpu_mode, crate::runtime::vm::gpu::GpuMode::Drm);
         assert_eq!(options.gpu_shm_bytes, Some(1024 * 1024 * 1024));
     }
@@ -1189,7 +1245,7 @@ mod tests {
             "--debug",
         ])
         .expect("single runtime options should parse");
-        let options = cli.into_runtime_options();
+        let options = cli.try_into_runtime_options().expect("valid options");
 
         assert_eq!(options.rootfs_backend, Some(TaskRootfsBackend::FuseOverlay));
         assert_eq!(options.container_store_backend, None);
@@ -1224,11 +1280,11 @@ mod tests {
             Cli::try_parse_from(["cang", "a", "workspace-123"]).expect("a alias should parse");
 
         assert!(matches!(
-            cli.into_action(),
+            cli.try_into_action().expect("valid action"),
             crate::cli::CliAction::Attach { task_id, .. } if task_id == "workspace-123"
         ));
         assert!(matches!(
-            alias.into_action(),
+            alias.try_into_action().expect("valid action"),
             crate::cli::CliAction::Attach { task_id, .. } if task_id == "workspace-123"
         ));
     }
@@ -1241,7 +1297,7 @@ mod tests {
             .expect("a --force should parse");
 
         assert!(matches!(
-            cli.into_action(),
+            cli.try_into_action().expect("valid action"),
             crate::cli::CliAction::Attach {
                 task_id,
                 force: true,
@@ -1249,7 +1305,7 @@ mod tests {
             } if task_id == "workspace-123"
         ));
         assert!(matches!(
-            alias.into_action(),
+            alias.try_into_action().expect("valid action"),
             crate::cli::CliAction::Attach {
                 task_id,
                 force: true,
@@ -1283,7 +1339,7 @@ mod tests {
         .expect("exec should parse");
 
         assert!(matches!(
-            cli.into_action(),
+            cli.try_into_action().expect("valid action"),
             crate::cli::CliAction::Exec { task_id, command, .. }
                 if task_id == "task-a"
                     && command == ["printf", "--format=%s", "hello world"]
@@ -1294,7 +1350,8 @@ mod tests {
     fn doctor_subcommand_parses() {
         let action = Cli::try_parse_from(["cang", "doctor"])
             .expect("doctor should parse")
-            .into_action();
+            .try_into_action()
+            .expect("valid action");
 
         assert!(matches!(action, crate::cli::CliAction::Doctor { .. }));
     }
@@ -1303,7 +1360,8 @@ mod tests {
     fn waypipe_capability_without_initial_target_parses() {
         let options = Cli::try_parse_from(["cang", "--waypipe"])
             .expect("valueless Waypipe capability should parse")
-            .into_runtime_options();
+            .try_into_runtime_options()
+            .expect("valid options");
 
         assert_eq!(options.waypipe, Some(None));
     }
@@ -1321,7 +1379,7 @@ mod tests {
         .expect("valueless Waypipe exec should parse");
 
         assert!(matches!(
-            cli.into_action(),
+            cli.try_into_action().expect("valid action"),
             crate::cli::CliAction::Exec { task_id, command, waypipe, .. }
                 if task_id == "task-a"
                     && command == ["gui-application"]
@@ -1342,7 +1400,7 @@ mod tests {
         .expect("valued Waypipe exec should parse");
 
         assert!(matches!(
-            cli.into_action(),
+            cli.try_into_action().expect("valid action"),
             crate::cli::CliAction::Exec { task_id, command, waypipe, .. }
                 if task_id == "task-a"
                     && command == ["gui-application"]
@@ -1353,7 +1411,7 @@ mod tests {
     fn parses_daemon_runtime_option() {
         let cli =
             Cli::try_parse_from(["cang", "--daemon"]).expect("daemon runtime option should parse");
-        let options = cli.into_runtime_options();
+        let options = cli.try_into_runtime_options().expect("valid options");
 
         assert!(options.daemon);
     }
@@ -1481,7 +1539,8 @@ mod tests {
         ] {
             let options = Cli::try_parse_from(["cang", "--pty", arg])
                 .expect("pty mode should parse")
-                .into_runtime_options();
+                .try_into_runtime_options()
+                .expect("valid options");
 
             assert_eq!(options.pty, expected);
         }
@@ -1527,7 +1586,7 @@ mod tests {
             .expect("pty option stays parse-compatible for attach");
 
         assert!(matches!(
-            cli.into_action(),
+            cli.try_into_action().expect("valid action"),
             crate::cli::CliAction::Attach { task_id, .. } if task_id == "workspace-123"
         ));
     }
@@ -1538,7 +1597,7 @@ mod tests {
             .expect("daemon stays parse-compatible for management commands");
 
         assert!(matches!(
-            cli.into_action(),
+            cli.try_into_action().expect("valid action"),
             crate::cli::CliAction::Ps { .. }
         ));
     }
@@ -1553,7 +1612,8 @@ mod tests {
         ] {
             let actual = Cli::try_parse_from(["cang", "--landlock", value])
                 .expect("landlock mode should parse")
-                .into_runtime_options()
+                .try_into_runtime_options()
+                .expect("valid options")
                 .landlock;
             assert_eq!(actual, Some(expected));
         }
@@ -1575,7 +1635,8 @@ mod tests {
     fn parses_seccomp_runtime_modes() {
         let audit = Cli::try_parse_from(["cang", "--seccomp", "audit:/tmp/trace.jsonl"])
             .expect("audit seccomp should parse")
-            .into_runtime_options()
+            .try_into_runtime_options()
+            .expect("valid options")
             .seccomp;
         assert_eq!(
             audit,
@@ -1586,7 +1647,8 @@ mod tests {
 
         let trace_alias = Cli::try_parse_from(["cang", "--seccomp", "trace:/tmp/trace.jsonl"])
             .expect("trace alias should parse")
-            .into_runtime_options()
+            .try_into_runtime_options()
+            .expect("valid options")
             .seccomp;
         assert_eq!(
             trace_alias,
@@ -1601,7 +1663,8 @@ mod tests {
             "audit:/tmp/baseline.json:/tmp/denied.jsonl",
         ])
         .expect("gap audit seccomp should parse")
-        .into_runtime_options()
+        .try_into_runtime_options()
+        .expect("valid options")
         .seccomp;
         assert_eq!(
             gap_audit,
@@ -1617,7 +1680,8 @@ mod tests {
             "trace:/tmp/baseline.json:/tmp/denied.jsonl",
         ])
         .expect("trace gap alias should parse")
-        .into_runtime_options()
+        .try_into_runtime_options()
+        .expect("valid options")
         .seccomp;
         assert_eq!(
             trace_gap_alias,
@@ -1630,7 +1694,8 @@ mod tests {
         let default_gap_audit =
             Cli::try_parse_from(["cang", "--seccomp", "audit-default:/tmp/denied.jsonl"])
                 .expect("default gap audit seccomp should parse")
-                .into_runtime_options()
+                .try_into_runtime_options()
+                .expect("valid options")
                 .seccomp;
         assert_eq!(
             default_gap_audit,
@@ -1642,7 +1707,8 @@ mod tests {
         let default_trace_alias =
             Cli::try_parse_from(["cang", "--seccomp", "trace-default:/tmp/denied.jsonl"])
                 .expect("default trace alias should parse")
-                .into_runtime_options()
+                .try_into_runtime_options()
+                .expect("valid options")
                 .seccomp;
         assert_eq!(
             default_trace_alias,
@@ -1653,7 +1719,8 @@ mod tests {
 
         let enforce = Cli::try_parse_from(["cang", "--seccomp", "enforce:/tmp/policy.json"])
             .expect("enforce seccomp should parse")
-            .into_runtime_options()
+            .try_into_runtime_options()
+            .expect("valid options")
             .seccomp;
         assert_eq!(
             enforce,
@@ -1698,7 +1765,7 @@ mod tests {
         .expect("seccomp synthesize command should parse");
 
         assert!(matches!(
-            cli.into_action(),
+            cli.try_into_action().expect("valid action"),
             crate::cli::CliAction::Seccomp { .. }
         ));
     }
@@ -1718,7 +1785,7 @@ mod tests {
         ])
         .expect("seccomp extend command should parse");
 
-        match cli.into_action() {
+        match cli.try_into_action().expect("valid action") {
             crate::cli::CliAction::Seccomp {
                 command:
                     SeccompCommand::Extend {
@@ -1752,7 +1819,7 @@ mod tests {
         ])
         .expect("seccomp extend default policy command should parse");
 
-        match cli.into_action() {
+        match cli.try_into_action().expect("valid action") {
             crate::cli::CliAction::Seccomp {
                 command:
                     SeccompCommand::Extend {
@@ -1808,7 +1875,7 @@ mod tests {
     #[test]
     fn tsi_flag_selects_tsi_network_mode() {
         let cli = Cli::try_parse_from(["cang", "--tsi"]).expect("tsi flag should parse");
-        let options = cli.into_runtime_options();
+        let options = cli.try_into_runtime_options().expect("valid options");
 
         assert_eq!(options.network_mode, NetworkMode::Tsi);
     }
@@ -1817,10 +1884,12 @@ mod tests {
     fn pulse_server_accepts_ip_socket_addresses_and_canonicalizes_them() {
         let ipv4 = Cli::try_parse_from(["cang", "--pulse=tcp:192.0.2.10:4713"])
             .expect("IPv4 Pulse endpoint should parse")
-            .into_runtime_options();
+            .try_into_runtime_options()
+            .expect("valid options");
         let ipv6 = Cli::try_parse_from(["cang", "--pulse=tcp:[2001:db8::10]:4713"])
             .expect("IPv6 Pulse endpoint should parse")
-            .into_runtime_options();
+            .try_into_runtime_options()
+            .expect("valid options");
 
         assert_eq!(
             ipv4.pulse
@@ -1843,7 +1912,8 @@ mod tests {
         for value in ["tcp:localhost:4714", "tcp:127.0.0.1:4714"] {
             let options = Cli::try_parse_from(["cang", &format!("--pulse={value}")])
                 .expect("host-loopback Pulse endpoint should parse")
-                .into_runtime_options();
+                .try_into_runtime_options()
+                .expect("valid options");
             assert_eq!(
                 options
                     .pulse
@@ -1858,7 +1928,8 @@ mod tests {
     fn pulse_server_coexists_with_tsi() {
         let options = Cli::try_parse_from(["cang", "--tsi", "--pulse=tcp:127.0.0.1:4713"])
             .expect("Pulse endpoint should coexist with TSI")
-            .into_runtime_options();
+            .try_into_runtime_options()
+            .expect("valid options");
 
         assert_eq!(options.network_mode, NetworkMode::Tsi);
         assert_eq!(
@@ -1902,7 +1973,7 @@ mod tests {
             "--new-perms=perf,bpf,sys-admin,io-uring,net-admin,net-raw,bpf,sys-admin",
         ])
         .expect("new permissions should parse");
-        let options = cli.into_runtime_options();
+        let options = cli.try_into_runtime_options().expect("valid options");
 
         assert_eq!(
             options.new_perms.to_string(),
@@ -1948,7 +2019,7 @@ mod tests {
             "gui-application",
         ])
         .expect("workspace and waypipe flags should parse");
-        let options = cli.into_runtime_options();
+        let options = cli.try_into_runtime_options().expect("valid options");
 
         assert_eq!(options.workspace, Some(PathBuf::from("/home/dev/foo")));
         assert_eq!(
@@ -1962,7 +2033,7 @@ mod tests {
     fn workspace_flag_is_independent_of_waypipe() {
         let cli = Cli::try_parse_from(["cang", "--workspace=/home/dev/foo"])
             .expect("workspace flag should parse without waypipe");
-        let options = cli.into_runtime_options();
+        let options = cli.try_into_runtime_options().expect("valid options");
 
         assert_eq!(options.workspace, Some(PathBuf::from("/home/dev/foo")));
         assert_eq!(options.waypipe, None);
@@ -1991,7 +2062,7 @@ fn waypipe_flag_conflicts_with_local_wayland_but_accepts_drm() {
 
     let cli = Cli::try_parse_from(["cang", "--waypipe=/tmp/waypipe.sock", "--gpu=drm"])
         .expect("waypipe and DRM should parse");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(options.gpu_mode, GpuMode::Drm);
     assert_eq!(
@@ -2004,7 +2075,7 @@ fn waypipe_flag_conflicts_with_local_wayland_but_accepts_drm() {
 fn publish_flag_is_repeatable() {
     let cli = Cli::try_parse_from(["cang", "-p", "8080:80", "--publish", "8443:443"])
         .expect("publish flags should parse");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(options.publish, ["8080:80", "8443:443"]);
 }
@@ -2021,7 +2092,7 @@ fn volume_flag_is_repeatable_and_parses_access_modes() {
         "/host/cache:/home/dev/cache:rw",
     ])
     .expect("volume flags should parse");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(
         options.volumes,
@@ -2084,7 +2155,12 @@ fn parses_allocator_modes() {
         let cli =
             Cli::try_parse_from(["cang", "--alloc", value]).expect("allocator mode should parse");
 
-        assert_eq!(cli.into_runtime_options().allocator, expected);
+        assert_eq!(
+            cli.try_into_runtime_options()
+                .expect("valid options")
+                .allocator,
+            expected
+        );
     }
 }
 
@@ -2092,7 +2168,8 @@ fn parses_allocator_modes() {
 fn allocator_defaults_to_mimalloc() {
     let options = Cli::try_parse_from(["cang"])
         .expect("default CLI should parse")
-        .into_runtime_options();
+        .try_into_runtime_options()
+        .expect("valid options");
 
     assert_eq!(options.allocator, AllocatorMode::Mimalloc);
 }
@@ -2110,7 +2187,7 @@ fn allocator_is_inert_for_management_subcommands() {
     let cli = Cli::try_parse_from(["cang", "--alloc", "glibc", "images", "list"])
         .expect("allocator stays parse-compatible for management commands");
 
-    match cli.into_action() {
+    match cli.try_into_action().expect("valid action") {
         crate::cli::CliAction::Images { command, .. } => {
             assert_eq!(command, crate::cli::ImagesCommand::List)
         }
@@ -2122,7 +2199,7 @@ fn allocator_is_inert_for_management_subcommands() {
 fn parses_explicit_guest_command_after_delimiter() {
     let cli = Cli::try_parse_from(["cang", "--", "bash", "-lc", "echo ok"])
         .expect("guest command should parse after delimiter");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(options.guest_command, ["bash", "-lc", "echo ok"]);
 }
@@ -2131,7 +2208,7 @@ fn parses_explicit_guest_command_after_delimiter() {
 fn publish_preserves_guest_command() {
     let cli = Cli::try_parse_from(["cang", "-p", "8080:80", "--", "bash", "-lc", "echo ok"])
         .expect("publish and command should parse");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(options.publish, ["8080:80"]);
     assert!(options.volumes.is_empty());
@@ -2152,7 +2229,7 @@ fn parses_explicit_guest_command_after_options_and_delimiter() {
         "/workspace/probe.sh",
     ])
     .expect("guest command should parse after options and delimiter");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(
         options.guest_init.as_deref(),
@@ -2169,7 +2246,7 @@ fn parses_decode_launch_conf_subcommand() {
         .expect("decode subcommand should parse");
 
     assert_eq!(
-        cli.into_action(),
+        cli.try_into_action().expect("valid action"),
         crate::cli::CliAction::DecodeLaunchConf {
             path: "/tmp/launch.conf".into(),
         }
@@ -2180,7 +2257,7 @@ fn parses_decode_launch_conf_subcommand() {
 fn decode_launch_conf_is_not_confused_with_guest_command() {
     let cli = Cli::try_parse_from(["cang", "--", "decode-launch-conf", "/tmp/launch.conf"])
         .expect("delimited words should remain a guest command");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(
         options.guest_command,
@@ -2200,7 +2277,7 @@ fn bare_words_are_not_guest_commands() {
 fn image_env_uses_cang_prefix() {
     let cli =
         Cli::try_parse_from(["cang", "--image", "example/cang:dev"]).expect("image should parse");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(options.image.as_deref(), Some("example/cang:dev"));
 }
@@ -2208,7 +2285,7 @@ fn image_env_uses_cang_prefix() {
 #[test]
 fn pull_latest_records_canonical_refresh_intent() {
     let cli = Cli::try_parse_from(["cang", "--pull-latest"]).expect("pull flag should parse");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert!(options.pull_latest);
     assert_eq!(options.image, None);
@@ -2237,7 +2314,8 @@ fn rootfs_backend_rejects_removed_values() {
 fn container_store_backend_accepts_raw_disk_only() {
     let raw = Cli::try_parse_from(["cang", "--container-store", "raw-disk"])
         .expect("raw disk container store should parse")
-        .into_runtime_options();
+        .try_into_runtime_options()
+        .expect("valid options");
 
     assert_eq!(
         raw.container_store_backend,
@@ -2268,7 +2346,7 @@ fn legacy_storage_flag_is_not_accepted() {
 fn parses_explicit_log_level() {
     let cli =
         Cli::try_parse_from(["cang", "--log-level", "trace"]).expect("log level should parse");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(options.log_settings.level, LogLevel::Trace);
 }
@@ -2285,7 +2363,7 @@ fn rejects_invalid_log_level() {
 fn explicit_log_level_overrides_debug_compatibility() {
     let cli = Cli::try_parse_from(["cang", "--debug", "--log-level", "info"])
         .expect("log level should parse");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert!(options.debug);
     assert_eq!(options.log_settings.level, LogLevel::Info);
@@ -2302,7 +2380,7 @@ fn parses_images_sync_subcommand() {
     let cli = Cli::try_parse_from(["cang", "images", "sync", "ghcr.io/example/cang:dev"])
         .expect("images sync should parse");
 
-    match cli.into_action() {
+    match cli.try_into_action().expect("valid action") {
         crate::cli::CliAction::Images { command, .. } => assert_eq!(
             command,
             crate::cli::ImagesCommand::Sync {
@@ -2321,13 +2399,13 @@ fn parses_images_list_and_remove_subcommands() {
     let dry_run = Cli::try_parse_from(["cang", "images", "remove", "--dry-run", "sha256-feedface"])
         .expect("images remove dry-run should parse");
 
-    match list.into_action() {
+    match list.try_into_action().expect("valid action") {
         crate::cli::CliAction::Images { command, .. } => {
             assert_eq!(command, crate::cli::ImagesCommand::List);
         }
         other => panic!("expected images list action, got {other:?}"),
     }
-    match remove.into_action() {
+    match remove.try_into_action().expect("valid action") {
         crate::cli::CliAction::Images { command, .. } => assert_eq!(
             command,
             crate::cli::ImagesCommand::Remove {
@@ -2337,7 +2415,7 @@ fn parses_images_list_and_remove_subcommands() {
         ),
         other => panic!("expected images remove action, got {other:?}"),
     }
-    match dry_run.into_action() {
+    match dry_run.try_into_action().expect("valid action") {
         crate::cli::CliAction::Images { command, .. } => assert_eq!(
             command,
             crate::cli::ImagesCommand::Remove {
@@ -2365,11 +2443,11 @@ fn parses_task_control_ps_and_kill_subcommands() {
     let ps = Cli::try_parse_from(["cang", "ps"]).expect("ps should parse");
     let kill = Cli::try_parse_from(["cang", "kill", "workspace-1-42"]).expect("kill should parse");
 
-    match ps.into_action() {
+    match ps.try_into_action().expect("valid action") {
         crate::cli::CliAction::Ps { .. } => {}
         other => panic!("expected ps action, got {other:?}"),
     }
-    match kill.into_action() {
+    match kill.try_into_action().expect("valid action") {
         crate::cli::CliAction::Kill { task_id, .. } => {
             assert_eq!(task_id, "workspace-1-42");
         }
@@ -2384,7 +2462,7 @@ fn parses_container_store_resize_and_reset_subcommands() {
     let reset = Cli::try_parse_from(["cang", "container-store", "reset", "--force"])
         .expect("container-store reset should parse");
 
-    match resize.into_action() {
+    match resize.try_into_action().expect("valid action") {
         crate::cli::CliAction::ContainerStore { command, .. } => assert_eq!(
             command,
             crate::cli::ContainerStoreCommand::Resize {
@@ -2393,7 +2471,7 @@ fn parses_container_store_resize_and_reset_subcommands() {
         ),
         other => panic!("expected container-store resize action, got {other:?}"),
     }
-    match reset.into_action() {
+    match reset.try_into_action().expect("valid action") {
         crate::cli::CliAction::ContainerStore { command, .. } => assert_eq!(
             command,
             crate::cli::ContainerStoreCommand::Reset { force: true }
@@ -2407,7 +2485,7 @@ fn container_store_reset_accepts_missing_force_for_runtime_error() {
     let reset = Cli::try_parse_from(["cang", "container-store", "reset"])
         .expect("runtime should produce force-specific error");
 
-    match reset.into_action() {
+    match reset.try_into_action().expect("valid action") {
         crate::cli::CliAction::ContainerStore { command, .. } => assert_eq!(
             command,
             crate::cli::ContainerStoreCommand::Reset { force: false }
@@ -2421,7 +2499,7 @@ fn parses_build_disk_resize_and_requires_a_size() {
     let resize = Cli::try_parse_from(["cang", "build-disk", "resize", "--size", "100G"])
         .expect("build-disk resize should parse");
 
-    match resize.into_action() {
+    match resize.try_into_action().expect("valid action") {
         crate::cli::CliAction::BuildDisk { command, .. } => assert_eq!(
             command,
             crate::cli::BuildDiskCommand::Resize {
@@ -2440,7 +2518,7 @@ fn parses_build_disk_resize_and_requires_a_size() {
 fn images_words_after_delimiter_remain_guest_command() {
     let cli = Cli::try_parse_from(["cang", "--", "images", "list"])
         .expect("delimited images words should parse as guest command");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
 
     assert_eq!(options.guest_command, ["images", "list"]);
 }
@@ -2450,18 +2528,27 @@ fn virtiofs_zero_message_open_option_is_parsed_and_overrides() {
     let cli = Cli::try_parse_from(["cang", "--virtiofs=zero-message-open:off", "--", "true"])
         .expect("--virtiofs=zero-message-open:off should parse");
     assert_eq!(
-        cli.into_runtime_options().zero_message_open,
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .zero_message_open,
         Some(false),
         "an explicit off reaches the launcher as a choice, not as a default"
     );
 
     let cli = Cli::try_parse_from(["cang", "--virtiofs=zero-message-open:on", "--", "true"])
         .expect("--virtiofs=zero-message-open:on should parse");
-    assert_eq!(cli.into_runtime_options().zero_message_open, Some(true));
+    assert_eq!(
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .zero_message_open,
+        Some(true)
+    );
 
     let cli = Cli::try_parse_from(["cang", "--", "true"]).expect("plain launch should parse");
     assert_eq!(
-        cli.into_runtime_options().zero_message_open,
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .zero_message_open,
         None,
         "no option means cang's default, with the environment able to override it"
     );
@@ -2471,16 +2558,28 @@ fn virtiofs_zero_message_open_option_is_parsed_and_overrides() {
 fn virtiofs_no_flush_and_negative_entry_options_are_parsed_and_overridden() {
     let cli = Cli::try_parse_from(["cang", "--virtiofs=no-flush:off", "--", "true"])
         .expect("--virtiofs=no-flush:off should parse");
-    assert_eq!(cli.into_runtime_options().no_flush, Some(false));
+    assert_eq!(
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .no_flush,
+        Some(false)
+    );
 
     let cli = Cli::try_parse_from(["cang", "--virtiofs=negative-entry:1000", "--", "true"])
         .expect("--virtiofs=negative-entry:1000 should parse");
-    assert_eq!(cli.into_runtime_options().negative_entry_millis, Some(1000));
+    assert_eq!(
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .negative_entry_millis,
+        Some(1000)
+    );
 
     let cli = Cli::try_parse_from(["cang", "--virtiofs=negative-entry:off", "--", "true"])
         .expect("--virtiofs=negative-entry:off should parse");
     assert_eq!(
-        cli.into_runtime_options().negative_entry_millis,
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .negative_entry_millis,
         Some(0),
         "off reaches the launcher as 0, which is the disabled lifetime"
     );
@@ -2488,13 +2587,15 @@ fn virtiofs_no_flush_and_negative_entry_options_are_parsed_and_overridden() {
     let cli = Cli::try_parse_from(["cang", "--virtiofs=negative-entry:on", "--", "true"])
         .expect("--virtiofs=negative-entry:on should parse");
     assert_eq!(
-        cli.into_runtime_options().negative_entry_millis,
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .negative_entry_millis,
         Some(cang_libkrun::CANG_VIRTIOFS_NEGATIVE_ENTRY_TIMEOUT_MILLIS),
         "on means cang's default lifetime, not every launch spelling its own number"
     );
 
     let cli = Cli::try_parse_from(["cang", "--", "true"]).expect("plain launch should parse");
-    let options = cli.into_runtime_options();
+    let options = cli.try_into_runtime_options().expect("valid options");
     assert_eq!(options.no_flush, None);
     assert_eq!(options.negative_entry_millis, None);
 
@@ -2508,22 +2609,39 @@ fn virtiofs_no_flush_and_negative_entry_options_are_parsed_and_overridden() {
         "true",
     ])
     .expect("repeated --virtiofs keys should parse");
-    assert_eq!(cli.into_runtime_options().no_flush, Some(false));
+    assert_eq!(
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .no_flush,
+        Some(false)
+    );
 }
 
 #[test]
 fn virtiofs_cache_symlinks_option_is_parsed_and_overridden() {
     let cli = Cli::try_parse_from(["cang", "--virtiofs=cache-symlinks:off", "--", "true"])
         .expect("--virtiofs=cache-symlinks:off should parse");
-    assert_eq!(cli.into_runtime_options().cache_symlinks, Some(false));
+    assert_eq!(
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .cache_symlinks,
+        Some(false)
+    );
 
     let cli = Cli::try_parse_from(["cang", "--virtiofs=cache-symlinks:on", "--", "true"])
         .expect("--virtiofs=cache-symlinks:on should parse");
-    assert_eq!(cli.into_runtime_options().cache_symlinks, Some(true));
+    assert_eq!(
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .cache_symlinks,
+        Some(true)
+    );
 
     let cli = Cli::try_parse_from(["cang", "--", "true"]).expect("plain launch should parse");
     assert_eq!(
-        cli.into_runtime_options().cache_symlinks,
+        cli.try_into_runtime_options()
+            .expect("valid options")
+            .cache_symlinks,
         None,
         "no option means cang's default, with the environment able to override it"
     );
@@ -2543,12 +2661,114 @@ fn virtiofs_option_rejects_unknown_keys_and_values() {
     assert!(Cli::try_parse_from(["cang", "--virtiofs=negative-entry:soon", "--", "true"]).is_err());
 }
 
-/// `--nix-lower` takes exactly three words; anything else is a mistake worth naming.
-fn parse_nix_lower_arg(value: &str) -> Result<String, String> {
-    match value {
-        "auto" | "blk" | "virtiofs" => Ok(value.to_owned()),
-        other => Err(format!(
-            "unknown /nix lower mode '{other}': use auto (the block lower when it can be served, the host overlay otherwise - the default), blk (the block lower or no launch) or virtiofs (the host-composed overlay)"
-        )),
+/// One layer of the `/nix` overlay that `--nix=KEY:VALUE` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NixLayer {
+    /// The read-only store the image ships, served from a btrfs image on
+    /// virtio-blk (or through a host-composed overlay on virtio-fs).
+    Lower,
+    /// The writable layer a build writes into.
+    Upper,
+}
+
+/// How one `/nix` layer is served.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NixLayerMode {
+    /// The fast layer when it can be served, the host share otherwise.
+    Auto,
+    /// An image on the workspace block disk, or no launch.
+    Blk,
+    /// The host share, through virtio-fs.
+    VirtioFs,
+}
+
+impl NixLayerMode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Blk => "blk",
+            Self::VirtioFs => "virtiofs",
+        }
     }
+}
+
+/// The two `/nix` layers after every `--nix=KEY:VALUE` is resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NixLayers {
+    pub(crate) lower: NixLayerMode,
+    pub(crate) upper: NixLayerMode,
+}
+
+/// Parse one `--nix=KEY:VALUE`; KEY is `lower` or `upper`, VALUE one of the
+/// three modes.
+fn parse_nix_arg(value: &str) -> Result<(NixLayer, NixLayerMode), String> {
+    let Some((key, mode)) = value.split_once(':') else {
+        return Err(format!(
+            "{value}: expected KEY:VALUE, where KEY is lower or upper and VALUE is auto, blk or virtiofs (for example --nix=lower:blk)"
+        ));
+    };
+    let layer = match key {
+        "lower" => NixLayer::Lower,
+        "upper" => NixLayer::Upper,
+        other => {
+            return Err(format!(
+                "unknown /nix layer '{other}': use lower (the read-only store the image ships) or upper (the writable layer a build writes into)"
+            ));
+        }
+    };
+    let mode = match mode {
+        "auto" => NixLayerMode::Auto,
+        "blk" => NixLayerMode::Blk,
+        "virtiofs" => NixLayerMode::VirtioFs,
+        other => {
+            return Err(format!(
+                "unknown /nix mode '{other}' for {key}: use auto (the fast layer when it can be served, the host share otherwise), blk (the block disk or no launch) or virtiofs (the host share)"
+            ));
+        }
+    };
+    Ok((layer, mode))
+}
+
+/// Resolve every `--nix=KEY:VALUE` into the pair-wide decision.
+///
+/// The layers are one decision, so the axes are not independent: `blk` on
+/// either moves both (a block upper forces a block lower, because the guest
+/// composes the overlay and needs a lower it can mount), `virtiofs` on either
+/// keeps both on the host share, and naming them differently is an error. A
+/// later occurrence of the same key wins, as with `--virtiofs`.
+fn resolve_nix_layers(values: &[(NixLayer, NixLayerMode)]) -> anyhow::Result<NixLayers> {
+    let mut lower = NixLayerMode::Auto;
+    let mut upper = NixLayerMode::Auto;
+    for (layer, mode) in values {
+        match layer {
+            NixLayer::Lower => lower = *mode,
+            NixLayer::Upper => upper = *mode,
+        }
+    }
+    if matches!(
+        (lower, upper),
+        (NixLayerMode::Blk, NixLayerMode::VirtioFs) | (NixLayerMode::VirtioFs, NixLayerMode::Blk)
+    ) {
+        anyhow::bail!(
+            "/nix layers disagree (lower:{}, upper:{}): a block upper forces a block lower, and neither pairs with virtiofs - name one of them and let it decide both",
+            lower.as_str(),
+            upper.as_str()
+        );
+    }
+    if upper == NixLayerMode::Blk {
+        anyhow::bail!(
+            "--nix=upper:blk is not available yet: the writable /nix upper is still the host share, which is what --nix=upper:virtiofs (or the default) means - --nix=lower:blk already serves the read-only store from the block image"
+        );
+    }
+    let pair = if lower == NixLayerMode::Blk || upper == NixLayerMode::Blk {
+        NixLayerMode::Blk
+    } else if lower == NixLayerMode::VirtioFs || upper == NixLayerMode::VirtioFs {
+        NixLayerMode::VirtioFs
+    } else {
+        NixLayerMode::Auto
+    };
+    Ok(NixLayers {
+        lower: pair,
+        upper: pair,
+    })
 }
