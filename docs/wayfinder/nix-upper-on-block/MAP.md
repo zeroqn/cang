@@ -138,6 +138,14 @@ green.
   not the lower's, with the store tree inside one subvolume - because the
   `257`/`257` inode-identity bug is the *same-superblock* case (two subvolumes of
   one btrfs), where overlayfs trusts inode uniqueness and ignores `xino`.
+- [One flag per subsystem - the `--nix=lower:...,upper:...` grammar and the `--fs=` rename](tickets/03-flag-surface.md):
+  `--nix=KEY:VALUE` repeatable, keys `lower`/`upper`, values
+  `auto|blk|virtiofs`; contradictions rejected at clap parse time and unservable
+  block layers at launch with a named reason; the axes resolve **pair-wide**
+  (`blk` anywhere means both block, `virtiofs` anywhere means both virtio-fs) and
+  `auto` walks both-block -> today's `lower:blk` + host upper (for images that
+  predate the upper contract) -> both virtio-fs. `--nix-lower`, `--fs=` and the
+  `CANG_FS_*` env vars are removed outright, no aliases.
 
 ## Not yet specified
 
@@ -148,7 +156,7 @@ green.
   shape it implements.
 - Whether the host overlay and its workspace lease are skipped entirely once both
   axes are block - a large host-side simplification that rides on the
-  seeding-parity ticket.
+  seeding-parity ticket (the implementation ticket assumes they are).
 - Failure semantics when there is no host overlay left to fall back to: today a
   failed block-lower mount keeps the host overlay and reports Ready
   (`components/nix/root.rs:472-478`); with both axes block the fallback must be
