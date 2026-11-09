@@ -35,4 +35,36 @@ unknown-argument error rather than being accepted.
 
 ## Resolution
 
-(to follow)
+Implemented in commit 4624b72 (claimed 2026-11-10).
+
+**What moved.** `--fs=KEY:VALUE` → `--virtiofs=KEY:VALUE` (same grammar, keys and
+defaults: `zero-message-open`, `no-flush`, `negative-entry`, `cache-symlinks`),
+with the field (`fs` → `virtiofs`), the `value_parser`
+(`parse_fs_option` → `parse_virtiofs_option`) and the four resolution helpers
+(`fs_*_option` → `virtiofs_*`) renamed after it. The five user-facing environment
+variables became `CANG_VIRTIOFS_ZERO_MESSAGE_OPEN`, `_NO_FLUSH`, `_CACHE_SYMLINKS`,
+`_NEGATIVE_ENTRY_TIMEOUT`, `_STATS` (constant names included, so a constant and
+its environment string cannot drift apart), and their doc comments in
+`crates/cang-libkrun/src/lib.rs` name the new spellings.
+
+**What deliberately did not move**, decided per constant rather than by sweep:
+`CANG_FS_ROOT_TAG` (the tag the guest kernel resolves as its root filesystem -
+not a share option, and renaming it would imply a different concept) and
+`CANG_FS_WORKER_THREADS` (a device default with neither a flag nor an
+environment override, documented as "no CLI flag: cang sets it, a user has no
+reason to"). The `FsOption` type keeps its name: it is one share option, not the
+flag.
+
+**No aliases.** `--fs=...` now fails as an unexpected argument (exit 2) and the
+old environment variables are simply not read, with the long help saying what
+the flag replaced.
+
+**Verification.** `cargo fmt --check`, `cargo clippy --all-targets
+--all-features -- -D warnings`, `cargo test --workspace` (all green, including
+the parser tests now named `virtiofs_option_*`); `--help` shows `--virtiofs` and
+the rename note; `--virtiofs=no-such-thing:on` still lists the supported keys.
+
+**Still open:** the live boot that proves the renamed *environment* variable
+reaches the share - `CANG_VIRTIOFS_STATS=1` on a real launch, checking the
+opcode-mix log at VM stop. It was deferred because a sibling measurement owned
+the only VM window on this host; run it before calling the ticket closed.
