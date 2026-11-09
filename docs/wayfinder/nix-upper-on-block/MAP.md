@@ -95,6 +95,34 @@ green.
     workspace under 3 MB.
   - `--fs=` appears in 39 places across `README.md`, `cli/mod.rs`,
     `runtime/vm/libkrun/launcher.rs`, docs and repository tests.
+  - Both overlays pass `userxattr` and nothing else
+    (`components/nix/root.rs:440-447`, `session/nix_overlay.rs:890`). In the
+    guest the recorded reason is the *upper being a virtio-fs share* - "with
+    userxattr (the upper is a virtio-fs share, so overlayfs cannot use trusted
+    xattrs there)", `components/nix/root_tests.rs:431-433` - so a btrfs upper
+    makes `trusted.overlay.*` available for the first time; no `data=`, `xino`,
+    `index` or `metacopy` option is passed anywhere, and the mount is an exec of
+    `mount -t overlay overlay -o ... /nix` (`root.rs:422-437`), not a syscall.
+  - Today a failed block-lower mount is **swallowed**: the guest logs
+    "read-only /nix lower unusable, keeping the host-composed overlay"
+    (`root.rs:472-478`) and prep still reports Ready. That fallback exists
+    because the host overlay is still there; with the upper on the disk it is
+    not, so the failure has to become loud or recoverable.
+  - No candidate upper filesystem is mounted `nodev` (build disk mounted with no
+    options, `components/disk/build.rs:159-161`; containers disk only
+    `user_subvol_rm_allowed`, `disk/containers.rs:7`), so a store path holding a
+    device node can still be copied up. The build disk is mounted by
+    `runtime/cang.rs:200-219` before the nix-prep worker starts (`:291-293`), and
+    that mount is a tolerated *attempt* (`cang.rs:210-218`).
+  - The pairing is not unprecedented in this tree: the legacy
+    `CANG_NIX_OVERLAY=1` path mounts a guest btrfs disk at `/run/cang/nix-disk`
+    and overlays `/nix` over it with the same option string
+    (`components/nix/root.rs:225-264`). It is dead on a normal launch, but it is
+    working code of an overlay with a btrfs-in-raw-image upper.
+  - Every *live* overlay upper in the repo today is a host btrfs
+    directory/subvolume, and the task rootfs is a btrfs snapshot rather than an
+    overlay (`runtime/session/mod.rs:529-531`). Guest Podman storage is the btrfs
+    driver, not overlay (`components/podman/config.rs:41-47`).
 
 ## Decisions so far
 
@@ -116,6 +144,14 @@ green.
   seeding-parity ticket.
 - ENOSPC behaviour on the upper: what the guest actually sees when the btrfs
   filesystem inside an auto-grown image fills, and what it should say.
+- Whether the guest should switch the overlay to `trusted.overlay.*` once the
+  upper is btrfs (its `userxattr` today is a workaround for the virtio-fs
+  share), and what that means for an upper migrated from a directory whose
+  whiteouts and `origin` xattrs are in the `user.` namespace.
+- Failure semantics when there is no host overlay left to fall back to: today a
+  failed block-lower mount keeps the host overlay and reports Ready
+  (`components/nix/root.rs:472-478`); with both axes block the fallback must be
+  named, retried or refused instead of silently degraded.
 - Whether `find /nix/store` keeps its 206-215 ms once the upper is btrfs rather
   than FUSE - the merged walk is the number the lower decision turned on.
 
