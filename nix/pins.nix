@@ -261,17 +261,19 @@ in
   libkrunfwRelease = {
     owner = "zeroqn";
     repo = "libkrunfw";
-    tag = "v5.6.2-cang-lts.2";
+    tag = "v5.6.2-cang.5";
     systems = {
       x86_64-linux = {
         asset = "libkrunfw-x86_64-kvm-lto.tgz";
-        hash = "sha256-sYP/dsOwC6wd7HZjnJoBsKJR42gCQPTFDWp0vK0bh/0=";
+        hash = "sha256-EdEU4SKaTQhX74TPOfSiKC4DUFY1x7AZthqwnEB34sA=";
       };
       aarch64-linux = {
+        tag = "v5.6.2-cang-lts.2";
         asset = "libkrunfw-aarch64.tgz";
         hash = "sha256-h3hUVLwxFaD7Iw26Bjva0cKLtCj4bVjEUjRrOwv2SQw=";
       };
       riscv64-linux = {
+        tag = "v5.6.2-cang-lts.2";
         asset = "libkrunfw-riscv64.tgz";
         hash = "sha256-CGiyU7TIXEfvCc3s2mpp9n+HwiX0Vgq771Dxpq73iL0=";
       };

@@ -699,13 +699,13 @@ either target at fork work in the checkout with
 `libkrunfw-src`, or `rutabaga-gfx-src`). The fork keeps one kernel line per
 branch: `cang` is the newest kernel (linux-7.3.1 + linux-hardened), which
 `libkrunfw-src`, `deps/libkrunfw` and therefore `nix build .#cang-dev` follow,
-and `cang-lts` is the LTS kernel (linux-6.12.115 + linux-hardened), which is what
-every launch actually runs. Each line publishes its own permanent release
-(`v5.6.2-cang.<n>` and `v<version>-cang-lts.<n>`), and `nix/pins.nix` pins the
-LTS line for every architecture. The shipped line is the LTS one because the 7.x
-guest kernel intermittently loses a page of a `/nix` read (see
-[the `/nix` block lower](docs/images-and-storage.md#the-nix-block-lower)); the
-newest line stays available as a development lane - see `docs/maintenance.md`. In-tree `cargo` builds still read the `deps/libkrun`,
+and `cang-lts` is the LTS kernel (linux-6.12.115 + linux-hardened), which the
+other architectures run. Each line publishes its own permanent release
+(`v5.6.2-cang.<n>` and `v<version>-cang-lts.<n>`). `nix/pins.nix` pins the newest
+line for x86_64, which is what a launch on this platform runs, and the LTS line
+for the other architectures - see [the `/nix` block
+lower](docs/images-and-storage.md#the-nix-block-lower) and
+`docs/maintenance.md`. In-tree `cargo` builds still read the `deps/libkrun`,
 `deps/libkrunfw` and `deps/rutabaga_gfx` submodules, so clone with
 `git submodule update --init --recursive` for those.
 

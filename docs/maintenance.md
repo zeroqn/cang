@@ -406,14 +406,16 @@ them.
 has to drag a second line along:
 
 - **`cang`** is the newest kernel line (linux-7.3.1 + linux-hardened
-  v7.3.1-hardened1). It is the development lane: cang's `libkrunfw-src` input and
-  the `deps/libkrunfw` submodule follow it, which is what `nix build .#cang-dev`
-  compiles. Nothing shipped loads it, because the 7.x guest kernel intermittently
-  loses a page of a `/nix` read (see
+  v7.3.1-hardened1). cang's `libkrunfw-src` input and the `deps/libkrunfw`
+  submodule follow it, which is what `nix build .#cang-dev` compiles, and the
+  `libkrunfwRelease` pin installs it for x86_64 - the line a launch on that
+  architecture runs. The `/nix` block lower is safe on it: the lost pages that
+  once kept this line out of the pin were libkrun rejecting a descriptor buffer
+  that spanned two guest-memory regions, not a guest-kernel defect (see
   [the `/nix` block lower](images-and-storage.md#the-nix-block-lower)).
 - **`cang-lts`** is the LTS line (linux-6.12.115 + v6.12.115-hardened1, rebased
   onto upstream `libkrunfw` main). It also carries the fork's arm64 patches, and
-  it is what the `libkrunfwRelease` pin installs for every architecture.
+  it is what the pin installs for aarch64 and riscv64.
 
 `release-arches` in the fork tree names the architectures a line's release
 carries, and the publish workflow builds and asserts exactly those: a line whose
@@ -425,7 +427,7 @@ for `cang-lts`.
 Pin a permanent libkrunfw release, and use it for any tagged cang release:
 
 ```bash
-nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang-lts.2
+nix develop --command ./scripts/update-libkrunfw.sh --system x86_64-linux --tag v5.6.2-cang.5
 nix develop --command ./scripts/update-libkrunfw.sh --system aarch64-linux --tag v5.6.2-cang-lts.2
 nix develop --command ./scripts/update-libkrunfw.sh --system riscv64-linux --tag v5.6.2-cang-lts.2
 ```
@@ -474,9 +476,10 @@ move in the `/nix` block-lower surface (`crates/cang-guest-init`, the
 driver *run* `tools/nix-lower-cang-smoke` itself, while a move in
 `deps/libkrun`/`deps/libkrunfw` requires `CANG_RELEASE_SMOKE_OK=1` after the three
 GPU smokes (chromium, virglrenderer, zg-vulkan). The block-lower smoke runs with
-`CANG_LENIENT_NIX_LOWER_LOSS=1` so the still-open 7.x guest-kernel read-merge bug is
-recorded as `KNOWN` rather than blocking a release; every other check in it is
-cang's own and fails the release. Its output root must be on btrfs (cang's only
+`CANG_LENIENT_NIX_LOWER_LOSS=1` so a lost page is recorded as `KNOWN` rather than
+blocking a release (the region-spanning descriptor fault that caused it is fixed
+in `deps/libkrun`, and the flag can be dropped once a run is clean without it);
+every other check in it is cang's own and fails the release. Its output root must be on btrfs (cang's only
 task-rootfs backend snapshots the graphroot), so point
 `CANG_RELEASE_SMOKE_DIR` at one when the checkout itself is not:
 `CANG_RELEASE_SMOKE_DIR=/home/dev/disp/release-smoke just release 0.19.2`.
