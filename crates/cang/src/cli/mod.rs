@@ -1159,13 +1159,19 @@ mod tests {
     fn resolve_nix_layers_is_pair_wide_and_refuses_a_contradiction() {
         use crate::cli::{NixLayer, NixLayerMode, resolve_nix_layers};
 
+        // While a block upper does not exist, `auto` has exactly one fixed point:
+        // both layers on the host share.
         let both_auto = resolve_nix_layers(&[]).expect("the default");
-        assert_eq!(both_auto.lower, NixLayerMode::Auto);
-        assert_eq!(both_auto.upper, NixLayerMode::Auto);
+        assert_eq!(both_auto.lower, NixLayerMode::VirtioFs);
+        assert_eq!(both_auto.upper, NixLayerMode::VirtioFs);
 
-        let lower_blk = resolve_nix_layers(&[(NixLayer::Lower, NixLayerMode::Blk)]).expect("blk");
-        assert_eq!(lower_blk.lower, NixLayerMode::Blk);
-        assert_eq!(lower_blk.upper, NixLayerMode::Blk);
+        // A block lower needs a block upper, so it is refused rather than mixed
+        // with the host-share upper that is the only upper there is.
+        let err = resolve_nix_layers(&[(NixLayer::Lower, NixLayerMode::Blk)])
+            .expect_err("a block lower cannot pair with a host-share upper");
+        let err = format!("{err:#}");
+        assert!(err.contains("mixed pair"), "{err}");
+        assert!(err.contains("--nix=lower:virtiofs"), "{err}");
 
         let lower_virtiofs =
             resolve_nix_layers(&[(NixLayer::Lower, NixLayerMode::VirtioFs)]).expect("virtiofs");
@@ -1174,11 +1180,16 @@ mod tests {
 
         // A later occurrence of the same key wins, as with `--virtiofs`.
         let last_wins = resolve_nix_layers(&[
-            (NixLayer::Lower, NixLayerMode::VirtioFs),
-            (NixLayer::Lower, NixLayerMode::Auto),
+            (NixLayer::Upper, NixLayerMode::Auto),
+            (NixLayer::Upper, NixLayerMode::VirtioFs),
         ])
-        .expect("the last lower wins");
-        assert_eq!(last_wins.lower, NixLayerMode::Auto);
+        .expect("the last upper wins");
+        assert_eq!(last_wins.lower, NixLayerMode::VirtioFs);
+
+        // Naming the upper's only mode moves the lower with it.
+        let upper_names_virtiofs =
+            resolve_nix_layers(&[(NixLayer::Upper, NixLayerMode::VirtioFs)]).expect("virtiofs");
+        assert_eq!(upper_names_virtiofs.lower, NixLayerMode::VirtioFs);
 
         let err = resolve_nix_layers(&[
             (NixLayer::Lower, NixLayerMode::VirtioFs),
@@ -1191,8 +1202,8 @@ mod tests {
         let err = resolve_nix_layers(&[(NixLayer::Upper, NixLayerMode::Blk)])
             .expect_err("the block upper does not exist yet");
         let err = format!("{err:#}");
-        assert!(err.contains("not available yet"), "{err}");
-        assert!(err.contains("--nix=lower:blk"), "{err}");
+        assert!(err.contains("not available"), "{err}");
+        assert!(err.contains("mixed pair"), "{err}");
     }
 
     #[test]
@@ -2750,23 +2761,26 @@ fn resolve_nix_layers(values: &[(NixLayer, NixLayerMode)]) -> anyhow::Result<Nix
         (NixLayerMode::Blk, NixLayerMode::VirtioFs) | (NixLayerMode::VirtioFs, NixLayerMode::Blk)
     ) {
         anyhow::bail!(
-            "/nix layers disagree (lower:{}, upper:{}): a block upper forces a block lower, and neither pairs with virtiofs - name one of them and let it decide both",
+            "/nix layers disagree (lower:{}, upper:{}): the layers are one filesystem family and a mixed pair is refused - name one of them and let it decide both",
             lower.as_str(),
             upper.as_str()
         );
     }
-    if upper == NixLayerMode::Blk {
-        anyhow::bail!(
-            "--nix=upper:blk is not available yet: the writable /nix upper is still the host share, which is what --nix=upper:virtiofs (or the default) means - --nix=lower:blk already serves the read-only store from the block image"
-        );
-    }
+    // A block upper is not available yet, so the block lower cannot be paired
+    // with a matching upper: `upper:blk` is refused, and a block lower beside a
+    // host-share upper is the mixed pair this resolution exists to prevent. The
+    // one fixed point for `auto` is therefore both virtio-fs, until the upper
+    // disk lands and `auto` can mean both block again.
     let pair = if lower == NixLayerMode::Blk || upper == NixLayerMode::Blk {
         NixLayerMode::Blk
-    } else if lower == NixLayerMode::VirtioFs || upper == NixLayerMode::VirtioFs {
-        NixLayerMode::VirtioFs
     } else {
-        NixLayerMode::Auto
+        NixLayerMode::VirtioFs
     };
+    if pair == NixLayerMode::Blk {
+        anyhow::bail!(
+            "--nix=lower:blk cannot run yet: it needs the writable upper on the same block disk, and that upper is not available - with the upper still on the host share the two would be the mixed pair (a block lower writing into a virtio-fs upper) that is refused while its bug is open. Pass --nix=lower:virtiofs, or no --nix flag at all"
+        );
+    }
     Ok(NixLayers {
         lower: pair,
         upper: pair,

@@ -126,22 +126,24 @@ reads, and reading it off a block device is what pays: `find /nix/store`
 206-215 ms against 864-2033 ms and `du -s` 267 ms against 9.2-10.4 s with the
 same tree over virtio-fs.
 
-`--nix=lower:auto` (the default) serves it whenever it can and otherwise keeps the
-host-composed overlay above, naming the reason on stderr; `--nix=lower:blk` is the
-same thing with no fallback - the launch is refused instead of quietly getting a
-store that is up to five times slower; `--nix=lower:virtiofs` never builds or
-attaches an image. A launch cannot be served the block lower when the image cannot
-be built or is locked by another launch, or when the image's `cang-guest-init`
-predates the guest half.
-
 `--nix` names both layers and they resolve as one decision: `blk` on either axis
 moves both (a block upper forces a block lower, because the guest composes the
 overlay), `virtiofs` on either keeps both on the host share, and naming them
-differently is an error. `upper:blk` - the writable layer on the workspace block
-disk - is not available yet and is refused by name; the writable layer is the
-host-directory share above. The older `--nix-lower` flag and its
+differently is a named error. The older `--nix-lower` flag and its
 `CANG_NIX_LOWER_BLOCK` environment spelling are gone: the guest-side
 `CANG_NIX_LOWER_*` variables remain, as the contract between the two halves.
+
+**Current state: both layers are on the host share, and `--nix=lower:blk` is
+refused.** `upper:blk` - the writable layer on the workspace block disk - is not
+implemented yet, so the only upper that exists is the host-directory share over
+virtio-fs; a block lower writing into it is exactly the mixed pairing whose bug
+is still open, so the resolution refuses it by name and `auto` resolves to both
+virtio-fs. The block-lower numbers above therefore describe what the disk gives
+when it is reachable, not what a default launch does today. When the upper disk
+lands, `auto` returns to both block and the block lower is served again; a
+`--nix=lower:virtiofs` launch is the untouched host-composed path either way.
+`tools/nix-lower-cang-smoke` reports `VERDICT: SKIPPED` while this holds, naming
+the refusal it found.
 
 An ordinary cold 7.x-kernel read of the store used to intermittently return
 stale contents for a 40 KiB window: the guest's btrfs logged `csum failed` (the
