@@ -130,7 +130,14 @@ green.
 
 ## Decisions so far
 
-<!-- one line per closed ticket: the gist, then the link for the detail -->
+- [Does a btrfs upper meet every overlayfs requirement in the guest kernel we ship?](tickets/02-overlayfs-btrfs-upper.md):
+  yes, unconditionally - the only fatal `upper fs missing required features`
+  branch is gated on the upper being *remote*, so a local btrfs upper is checked
+  as warnings only, and no new mount options are needed. The real constraint is
+  **placement**: the upper and work must sit on one mount, on a filesystem that is
+  not the lower's, with the store tree inside one subvolume - because the
+  `257`/`257` inode-identity bug is the *same-superblock* case (two subvolumes of
+  one btrfs), where overlayfs trusts inode uniqueness and ignores `xino`.
 
 ## Not yet specified
 
@@ -142,12 +149,6 @@ green.
 - Whether the host overlay and its workspace lease are skipped entirely once both
   axes are block - a large host-side simplification that rides on the
   seeding-parity ticket.
-- ENOSPC behaviour on the upper: what the guest actually sees when the btrfs
-  filesystem inside an auto-grown image fills, and what it should say.
-- Whether the guest should switch the overlay to `trusted.overlay.*` once the
-  upper is btrfs (its `userxattr` today is a workaround for the virtio-fs
-  share), and what that means for an upper migrated from a directory whose
-  whiteouts and `origin` xattrs are in the `user.` namespace.
 - Failure semantics when there is no host overlay left to fall back to: today a
   failed block-lower mount keeps the host overlay and reports Ready
   (`components/nix/root.rs:472-478`); with both axes block the fallback must be

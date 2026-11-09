@@ -17,6 +17,23 @@ grown to the device size only when the guest mounts it
 `cang build-disk resize --size` as the only grow path (`cli/mod.rs:366`) and no
 lock of its own.
 
+Settled constraints from the overlayfs fact-find
+([note 02](../notes/02-overlayfs-on-btrfs-upper.md)) that the layout must satisfy:
+
+- the upper and `work` go on **one mount**, on a filesystem that is **not the
+  lower's**, with **the store tree inside one subvolume** - two subvolumes of one
+  btrfs are one superblock to overlayfs, which then trusts inode uniqueness and
+  ignores `xino`, which is exactly the `257`/`257` wrong-object bug
+  `tools/nix-generation-smoke`'s README records;
+- `userxattr` stays (no flag change), and no `nodatacow`, no bare `space_cache`,
+  no `compress` and no `acl` are wanted on the upper;
+- copy-up cannot reflink across two btrfs filesystems (`-EXDEV`), so the upper
+  holds **real data**, not shared extents - the disk size must be budgeted as
+  such;
+- a full raw host file surfaces as `-EIO`, not `-ENOSPC`; btrfs itself returns
+  `-ENOSPC` at write and can flip read-only when metadata overcommits, and
+  overlayfs translates neither.
+
 1. **Layout inside the filesystem.** `cang-build.raw` currently holds `target/`
    and `cargo/` at its root. Where do the upper generation, its `work`, and the
    parked/staged DB directories go - a dedicated parent subvolume (e.g.

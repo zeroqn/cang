@@ -26,12 +26,15 @@ rather than write a new harness, and add the arms only the new shape needs:
    of `/nix`, the upper's `st_dev` against the build disk's, and a write whose
    bytes land on `/dev/vdX` (a `strace`/`/proc/diskstats` delta, or the absence
    of FUSE traffic in the guest's request counters).
-3. **The inode-identity hazard.** The tool's README names a wrong-object lookup
-   when two layers number inodes from 257 under one synthesized `st_dev`, which
-   is exactly the new pairing (two independent btrfs filesystems). Assert the
-   store's verification catches it, and that the chosen xino mode (the overlayfs-on-btrfs-upper ticket)
-   keeps it away - including a lookup of a path that exists only in the lower and
-   one that exists only in the upper.
+3. **The inode-identity hazard.** Note 02 places this precisely: the wrong-object
+   lookup happens when the two layers are two **subvolumes of one btrfs** (one
+   superblock, so overlayfs trusts inode uniqueness and ignores `xino`), not when
+   they are two independent filesystems. Assert the *placement*, not a mount
+   option: the upper's filesystem is not the lower's, `st_dev` differs between a
+   lower-only path and an upper-only path, and the upper and `work` are on one
+   mount with the store tree inside a single subvolume. Then assert the store's
+   verification (`verify_bad=0`) and a lookup of a path that exists only in the
+   lower and one that exists only in the upper.
 4. **The metadata number.** `find /nix/store` and `du -s` of the merged `/nix`
    with the upper on the disk, against the map's recorded 206-215 ms / 267 ms -
    the merged walk must not regress the lower's win.
