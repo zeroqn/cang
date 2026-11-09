@@ -49,6 +49,10 @@ green.
     thrown away.
   - **share `cang-build.raw`** rather than add a disk, and **make it
     auto-grow** - capped so the host's own btrfs always keeps headroom.
+  - **a blk upper forces a blk lower** (bob, 2026-11-10): `upper:blk` with
+    `lower:virtiofs` is refused by name instead of served - there is no third
+    composition in which the guest overlays a virtio-fs lower, so a new
+    read-only virtio-fs bind of `<rootfs>/nix` is not built at all.
 
 - **Starting facts (verified 2026-11-10, this checkout + host):**
   - The guest already composes `/nix` with kernel overlayfs whenever the lower
@@ -135,10 +139,6 @@ green.
   path, docs/README, patch and release. Each can be sliced only once the
   flag-surface, upper-home, seeding-parity and migration tickets have settled the
   shape it implements.
-- What `lower:virtiofs` means once the guest composes: today that combination
-  cannot exist, because a guest-composed overlay needs a guest-visible lower and
-  the only one is the block image (a virtio-fs lower would be a *new* read-only
-  bind of `<rootfs>/nix`).
 - Whether the host overlay and its workspace lease are skipped entirely once both
   axes are block - a large host-side simplification that rides on the
   seeding-parity ticket.

@@ -17,13 +17,21 @@ Bob has settled the *principle* (2026-11-10): one flag surface per subsystem -
    `cli/mod.rs:284`)? What does a bare `--nix=blk` mean, if anything? Is `auto`
    per axis, or one `auto` that implies the other axis (`lower:auto` +
    `upper:auto` = today's default; what is `lower:blk` alone)?
-2. **Who composes the overlay.** An axis pair decides it: both virtio-fs = the
-   host composes (today's path, `runtime/session/nix_overlay.rs`), any block =
-   the guest composes (`components/nix/root.rs:mount_block_lower`). Then
-   `lower:virtiofs,upper:blk` needs a guest-visible lower that is not a block
-   image - a *new* read-only virtio-fs bind of `<rootfs>/nix`. Support that
-   combination, or refuse it by name (it is the slowest possible pairing and
-   exists only to A/B the upper)?
+2. **Who composes the overlay, and the refusals.** Settled (bob, 2026-11-10): a
+   blk upper **forces** a blk lower - `upper:blk` with `lower:virtiofs` is
+   refused by name, not served, so no read-only virtio-fs bind of
+   `<rootfs>/nix` is ever built. Both virtio-fs = the host composes (today's
+   path, `runtime/session/nix_overlay.rs`); both block = the guest composes
+   (`components/nix/root.rs:mount_block_lower`). What is left to settle:
+   - where the refusal lands - clap parse time, launch planning, or after the
+     block lower's capability/lock checks (the lower already has an
+     `auto`-vs-`blk` distinction that names the reason it cannot serve:
+     `nix_lower.rs` `ImageLock`, and the guest-init marker gate);
+   - what `lower:auto` resolves to when `upper:blk` is given - does `auto`
+     become `blk` (and refuse if the image cannot be served), or does it refuse
+     the pair because `auto` could mean virtiofs?;
+   - whether `upper:auto` follows the lower (`lower:blk` implies `upper:blk`
+     and vice versa) or defaults independently.
 3. **Retirement.** `--nix-lower` and `CANG_NIX_LOWER_BLOCK` (host side) /
    `CANG_NIX_LOWER_*` (guest contract, `components/env.rs:29-35`) - hard break in
    one release, or one release of aliases plus a warning naming the replacement?
