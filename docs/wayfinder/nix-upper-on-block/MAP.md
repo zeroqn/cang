@@ -146,7 +146,23 @@ green.
   `auto` walks both-block -> today's `lower:blk` + host upper (for images that
   predate the upper contract) -> both virtio-fs. `--nix-lower`, `--fs=` and the
   `CANG_FS_*` env vars are removed outright, no aliases.
+- [Implement the `--nix=` axis and retire `--nix-lower`](tickets/10-nix-axis-and-retire-nix-lower.md):
+  the grammar and pair-wide resolution are in (`blk` on either axis moves both,
+  `virtiofs` on either keeps both on the host share, disagreeing is a named
+  error), `--nix=upper:blk` is refused by name until the disk exists, and
+  `--nix-lower` is gone with no alias. Only the live smoke boot is outstanding.
 
+- [What does the writable /nix upper cost today, and what would the block disk save?](tickets/01-upper-write-cost.md):
+  the **write** question is **unanswered - blocked on a clean window**. Two
+  six-arm sets (685 paths / 7.84 GiB `nix copy` through overlayfs, virtio-fs
+  upper vs btrfs upper) gave write ratios of **+24.7 % (B slower)** and
+  **-6.5 % (B faster)** with a 50 % spread on B, so the `>= 20 %` threshold is
+  not evaluated and neither direction may be quoted; both sets also ran with a
+  sibling campaign's VM live (run 2 passed the gate and was taken 96 s in). What
+  *is* established in 12 of 12 arms and never reverses: metadata walk 6.1-6.7x,
+  `du` 15.0-16.1x, delete 14.7-17.2x and cold re-read 24.6-38.9 % cheaper on the
+  block disk, so a substitution-plus-GC cycle is 13.4 % cheaper even where its
+  write lost - the metadata premise holds, the write half does not.
 ## Not yet specified
 
 - The implementation slices themselves - host disk preparation and the

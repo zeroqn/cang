@@ -1,6 +1,6 @@
 ---
 label: wayfinder:task
-title: Implement `--nix=lower:,upper:` and the guest upper disk
+title: Implement the guest upper disk behind `--nix=upper:blk`
 status: open
 blocked_by: ["01-upper-write-cost", "04-upper-home-and-auto-grow", "05-seeding-parity", "06-migrate-existing-uppers"]
 claimed_by: ""
@@ -10,11 +10,11 @@ claimed_by: ""
 
 Build the feature, to the contract the closed tickets fixed:
 
-- **flag** (the flag-surface ticket): `--nix=KEY:VALUE` repeatable, keys
-  `lower`/`upper`, values `auto`/`blk`/`virtiofs`, `--nix-lower` and
-  `CANG_NIX_LOWER_BLOCK` gone, contradictions rejected at parse time, unservable
-  block layers rejected at launch with a named reason, pair-wide resolution and
-  the three-step `auto` ladder;
+- **flag**: the grammar, pair-wide resolution and retirement already shipped
+  ([Implement the `--nix=` axis and retire `--nix-lower`](10-nix-axis-and-retire-nix-lower.md));
+  what is left here is to turn the `upper:blk` refusal into the real thing, and to
+  refuse an unservable *upper* at launch with a named reason the way the lower is
+  refused today;
 - **host**: attach the upper's filesystem from `cang-build.raw` (layout, grow
   rule and removal semantics from the upper-home ticket), keep the lower's
   `ImageLock` discipline, and skip the host-composed overlay and its workspace
