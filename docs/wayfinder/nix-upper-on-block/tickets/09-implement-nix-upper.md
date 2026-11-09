@@ -36,3 +36,27 @@ build on a number that did not clear it is exactly what "measure first" rules ou
 ## Resolution
 
 (to follow)
+
+## Resolution
+
+Shipped: both `/nix` layers on the build disk, composed by the guest, and it is
+what a default launch does (no `--nix` flag: `lowerdir=/run/cang/nix-lower`,
+`upperdir=<build-disk>/nix-overlay/<digest>/upper`). The pieces, in commits:
+
+- 67a6ea8 - the host side: the generation directory, `upper_on_build_disk`, and
+  the guest env carrying the two paths inside the build disk;
+- 6f27d85 - one generation **per image digest**, not per workspace (a constant
+  name let an image move find the previous generation's sentinel and silently
+  keep the old Nix DB);
+- 1f92913 + f8e40fa - the guest seed, in the shape that actually works: the
+  **generation** is the btrfs subvolume, `upper`/`work` are plain dirs (a
+  subvolume root is not a legal upperdir - `EXDEV` on every write);
+- 213a617 - the fault, its A/B and the harness gap written down; the smoke now
+  requires `state=ready` from nix-prep instead of reading the mount table alone.
+
+Growing is manual by decision (the upper-home ticket): `cang disk resize --build`.
+
+What is left for a follow-up, none of it needed for the shipped path: migrating
+an existing host-directory upper (the migration ticket), and pruning old
+generations - nothing deletes a retired digest's generation today, so the build
+disk keeps one per image the workspace has ever run.

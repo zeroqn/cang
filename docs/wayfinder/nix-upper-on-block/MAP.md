@@ -158,6 +158,23 @@ green.
     `state=ready` in `/run/cang/nix-prep.status`.
 
 ## Decisions so far
+- [Seeding parity - does the guest reproduce the host per-generation seeding, or reconcile instead?](tickets/05-seeding-parity.md):
+  **parity, done in the guest.** A fresh digest is a `btrfs subvolume snapshot`
+  of the previous generation with its work dir emptied, the image's DB staged from
+  the read-only lower and the clone's parked for the existing post-mount merge;
+  a seeded generation touches nothing. Proven live for fresh, image move
+  (`Cloned(…, Snapshot)`), returning to an older digest, and repairing a
+  generation the earlier subvolume-root build had made unusable.
+- [Implement the guest upper disk behind `--nix=upper:blk`](tickets/09-implement-nix-upper.md):
+  shipped and default - a launch with no `--nix` flag composes `/nix` as
+  `lowerdir=/run/cang/nix-lower,upperdir=<build-disk>/nix-overlay/<digest>/upper`.
+  Left for later: migrating an existing host-directory upper, and pruning retired
+  generations.
+- [The acceptance arms - prove upper:blk end to end in live guests](tickets/07-acceptance-arms.md):
+  five of six arms green on live guests (generation contract, write path on the
+  disk, no inode collision, metadata numbers, failure paths); the migration arm was
+  not run because the migration is not implemented. Cost: cold data reads 8932 ms
+  on the disk against 5894 ms over virtio-fs.
 - [Where the upper lives on the shared build disk, and how that disk grows](tickets/04-upper-home-and-auto-grow.md):
   one generation directory per **image digest** inside the build disk
   (`nix-overlay/<digest-key>/{upper,work}`, with the **generation** directory the
@@ -220,8 +237,8 @@ green.
   failed block-lower mount keeps the host overlay and reports Ready
   (`components/nix/root.rs:472-478`); with both axes block the fallback must be
   named, retried or refused instead of silently degraded.
-- Whether `find /nix/store` keeps its 206-215 ms once the upper is btrfs rather
-  than FUSE - the merged walk is the number the lower decision turned on.
+- Pruning a retired image generation: nothing deletes a digest's generation today,
+  so the build disk keeps one per image a workspace has ever run.
 
 ## Out of scope
 

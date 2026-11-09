@@ -1,9 +1,9 @@
 ---
 label: wayfinder:task
 title: The acceptance arms - prove upper:blk end to end in live guests
-status: open
+status: closed
 blocked_by: ["01-upper-write-cost", "02-overlayfs-btrfs-upper", "05-seeding-parity"]
-claimed_by: ""
+claimed_by: "pi (2026-11-09)"
 ---
 
 ## Question
@@ -55,3 +55,36 @@ evidence under `/workspace/evidence` and the run report to
 ## Resolution
 
 (to follow)
+
+## Resolution
+
+Run against a nix-built `.#cang` and `.#cang-musl` at HEAD, one guest at a time,
+with the loaded image (`localhost/cang:latest`, digest `sha256:99e4729a…`) plus a
+`podman commit`-tagged variant (`sha256:e701772d…`) to force a second image
+generation. Evidence: `/home/dev/disp/nixupper-smoke/{d1-fresh,d2-clone,d3-back,
+d4-second,default}.ev/`, `smoke1/`.
+
+1. **Generation contract on the disk** - `btrfs subvolume list` shows one
+   subvolume per digest (`256 .../sha256-99e4729a…`, `257 .../sha256-e701772d…`);
+   the image move merges the parked DB (`685 -> 685 registered path(s)`);
+   `cang-nix-store-repair` reports no drift; a second boot of either generation is
+   `AlreadySeeded`.
+2. **The write path is the disk** - `st_dev` of `<gen>`/`<gen>/upper` is the build
+   mount's (35), `/nix` is 43 and the lower 40; the overlay line names the upper
+   inside `/home/dev/.cache/cang-build`; a write into `/nix/store` succeeds
+   (`write_rc=0`).
+3. **The inode-identity hazard** - no wrong-object lookup: the store verifying
+   clean on all four arms, and ticket 02's placement rule is what keeps it away
+   (two independent btrfs filesystems, never two subvolumes of one).
+4. **The metadata number** - `find /nix/store` 2422 ms and `du -s` 2833 ms with
+   both layers block, against 8508 ms and 11228 ms over virtio-fs in the same run.
+5. **The migration, once** - **not run**: the migration is not implemented (the
+   migration ticket stays open). A block launch starts empty and the old
+   host-directory upper is left untouched.
+6. **Failure paths** - the mount-point refusal, the unusable-generation repair,
+   the stale-guest refusal and the `auto` fallback all proven; `state=failed` is
+   now a smoke failure instead of a pass.
+
+Cost carried forward: a cold read of the store's 20 largest files is **8932 ms**
+on the disk against **5894 ms** over virtio-fs in the same run - the host's page
+cache wins cold data reads, the disk wins metadata.

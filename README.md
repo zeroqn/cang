@@ -33,11 +33,11 @@ rootless Podman tooling for development.
   space required up front. The `/nix` layers are named with one flag,
   `--nix=lower:MODE` and `--nix=upper:MODE`, and they resolve as a pair: `blk` on
   either moves both, `virtiofs` on either keeps both on the host share, and a
-  mixed pair is refused. **Today that means both layers are on the host share:**
-  `upper:blk` (the writable layer on the workspace block disk) is not implemented
-  yet, and a block lower beside a host-share upper is the mixed pairing whose bug
-  is still open, so `--nix=lower:blk` is refused by name. When the upper disk
-  lands, `auto` goes back to meaning both block (see the linked section).
+  mixed pair is refused. With both block, the writable layer lives on the
+  workspace's build disk (`cang-build.raw`, one generation directory per image
+  digest, seeded by the guest on first use and cloned by btrfs snapshot on an
+  image move) and is grown with `cang disk resize --build SIZE` (see
+  [images and storage](docs/images-and-storage.md)).
 - `libkrun` at build time, not at runtime. `cang` links libkrun's Rust API
   (`crates/cang-libkrun`, compiled from the `libkrun-src` flake input grafted
   into `deps/libkrun` by cang's own toolchain), so libkrun is part of the binary

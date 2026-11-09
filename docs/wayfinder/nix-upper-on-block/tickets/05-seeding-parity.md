@@ -1,9 +1,9 @@
 ---
 label: wayfinder:grilling
 title: Seeding parity - does the guest reproduce the host's per-generation seeding, or reconcile instead?
-status: open
+status: closed
 blocked_by: ["01-upper-write-cost", "02-overlayfs-btrfs-upper"]
-claimed_by: ""
+claimed_by: "pi (2026-11-09)"
 ---
 
 ## Question
@@ -43,3 +43,34 @@ launch, or stay for parity?
 ## Resolution
 
 (to follow)
+
+## Resolution
+
+**Parity, done in the guest** (commit 1f92913, corrected by f8e40fa). The guest
+seeds a generation on its first boot, as root, immediately before composing the
+overlay, and reaches every assertion `tools/nix-generation-smoke` makes for the
+host-seeded path:
+
+- a new digest clones the previous generation with `btrfs subvolume snapshot`
+  (constant time, zero bytes) and empties the clone's work dir;
+- the image's own Nix DB is staged from the read-only lower - which *is* the
+  image's `/nix` - at `upper/.cang-image-db`, and the clone's DB is parked at
+  `upper/.cang-previous-db`, so the existing post-mount `repair_store()` consumes
+  both unchanged (`merged previous generation DB: 685 -> 685 registered path(s)`);
+- `.cang-upper-seeded` is written last, and an already-seeded generation touches
+  nothing (a second boot creates no directory, copies no byte);
+- `cang-nix-store-repair` reports `registered-but-absent=0
+  present-but-unregistered=0` on every arm.
+
+**Live proof** (four arms, one image plus one commit-tagged variant of it for a
+second digest, `state=ready` on all four): fresh `Fresh`; an image move
+`Cloned(<older digest>, Snapshot)` with the DB merge above; back to the older
+digest `AlreadySeeded`; the newer digest again `AlreadySeeded`. Worse case - a
+generation the earlier subvolume-root build had made unusable - is repaired on
+the next boot: `Delete subvolume .../upper` -> `Create subvolume .../<digest>` ->
+`Fresh` -> `state=ready`.
+
+**Not done, and still open on the migration ticket**: an existing *host-directory*
+upper is not migrated into the block disk. A block launch starts its generation
+empty and the old directory tree stays where it was, unused. That is a stated gap,
+not a silent one.

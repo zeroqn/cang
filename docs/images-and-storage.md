@@ -115,35 +115,60 @@ manual cleanup or a workspace overlay reset if they become inconsistent.
   `--container-store bind` is not supported, and cang does not migrate old
   host-directory container stores.
 
-### Read-only `/nix` lower on a block device
+### Both `/nix` layers on block devices
 
-The host overlay above is the fallback. When cang can build one, `/nix` is
-instead served from a read-only btrfs image attached as a virtio-blk disk, and
-the *guest* composes the overlay: `/nix` = overlayfs with the block image
-(attached read-only, mounted at `/run/cang/nix-lower`) as `lowerdir` and the
-workspace's `nix-overlay/upper` as `upperdir`. The lower is what every command
-reads, and reading it off a block device is what pays: `find /nix/store`
-206-215 ms against 864-2033 ms and `du -s` 267 ms against 9.2-10.4 s with the
-same tree over virtio-fs.
+The host overlay above is the fallback. When cang can serve it, `/nix` is instead
+built entirely from virtio-blk disks, and the *guest* composes the overlay: the
+read-only btrfs image of the image's store (mounted at `/run/cang/nix-lower`) is
+`lowerdir`, and the writable layer lives on the workspace's build disk. Reading
+the store off a block device is what pays: `find /nix/store` 206-215 ms against
+864-2033 ms and `du -s` 267 ms against 9.2-10.4 s with the same tree over
+virtio-fs, before the upper moved as well.
 
 `--nix` names both layers and they resolve as one decision: `blk` on either axis
-moves both (a block upper forces a block lower, because the guest composes the
-overlay), `virtiofs` on either keeps both on the host share, and naming them
-differently is a named error. The older `--nix-lower` flag and its
+moves both (the guest composes the overlay out of two disks), `virtiofs` on
+either keeps both on the host share, and naming them differently is a named
+error. The older `--nix-lower` flag and its
 `CANG_NIX_LOWER_BLOCK` environment spelling are gone: the guest-side
 `CANG_NIX_LOWER_*` variables remain, as the contract between the two halves.
 
-**Current state: both layers are on the host share, and `--nix=lower:blk` is
-refused.** `upper:blk` - the writable layer on the workspace block disk - is not
-implemented yet, so the only upper that exists is the host-directory share over
-virtio-fs; a block lower writing into it is exactly the mixed pairing whose bug
-is still open, so the resolution refuses it by name and `auto` resolves to both
-virtio-fs. The block-lower numbers above therefore describe what the disk gives
-when it is reachable, not what a default launch does today. When the upper disk
-lands, `auto` returns to both block and the block lower is served again; a
-`--nix=lower:virtiofs` launch is the untouched host-composed path either way.
-`tools/nix-lower-cang-smoke` reports `VERDICT: SKIPPED` while this holds, naming
-the refusal it found.
+The writable upper follows the same axis. With both layers block, the guest owns
+the whole verdict: the read-only image is `lowerdir` and the upper and work dirs
+live on the workspace's *build disk* (`cang-build.raw`, mount
+`/home/dev/.cache/cang-build`), one generation directory per image digest:
+
+    /home/dev/.cache/cang-build/nix-overlay/<digest-key>/          btrfs subvolume
+    /home/dev/.cache/cang-build/nix-overlay/<digest-key>/upper     overlayfs upperdir
+    /home/dev/.cache/cang-build/nix-overlay/<digest-key>/work      overlayfs workdir
+
+The *generation* directory is the subvolume, not the upper: a btrfs subvolume root
+cannot be an overlayfs upperdir (every write returns `EXDEV`, with nothing in
+`dmesg`). The host cannot prepare any of this - a raw image is not mountable
+rootless - so the guest seeds the generation itself, as root, right before it
+composes the overlay: a new digest is a `btrfs subvolume snapshot` of the previous
+generation (constant time, zero bytes) with its work dir emptied, and the image's
+own Nix DB is staged from the read-only lower, which *is* the image's `/nix`. A
+generation that already exists is left completely alone, so a second boot of the
+same image writes nothing. Because there is no host-composed overlay underneath
+it, a failure here fails `/nix` prep with a named reason instead of reporting
+success over an unmounted store.
+
+Both layers moving is what keeps the pairing legal: a block upper must not write
+into a host-share upper (that mixed pair is refused, below), so `blk` on either
+axis means both.
+
+The upper shares the build disk's capacity, so it grows with it:
+`cang disk resize --build 100G` extends the image and the guest's btrfs in one
+maintenance VM (see [usage](usage.md)). A mid-run grow is not available - the
+virtio-blk device's capacity is fixed when the device is created - so the disk is
+sized at launch and grown only between launches.
+
+Measured with both layers block, against `--nix=lower:virtiofs` (the host-composed
+overlay over virtio-fs) in the same run, same image, `tools/nix-lower-cang-smoke`:
+`find /nix/store` 2422 ms against 8508 ms, `du -s /nix/store` 2833 ms against
+11228 ms, and a cold read of the store's 20 largest files 8932 ms against 5894 ms
+- metadata work is what the disk wins, cold data reads are what the host's page
+cache wins.
 
 An ordinary cold 7.x-kernel read of the store used to intermittently return
 stale contents for a 40 KiB window: the guest's btrfs logged `csum failed` (the
