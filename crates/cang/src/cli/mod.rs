@@ -94,9 +94,9 @@ impl PtyOptions {
   cang images remove --dry-run feedfacecafe
   cang images remove feedfacecafe
   cang images remove ghcr.io/example/cang:d
-  cang container-store resize --size 128G
-  cang container-store reset --force
-  cang build-disk resize --size 100G
+  cang disk resize --build 100G
+  cang disk resize --build 100G --containers 128G
+  cang disk reset --containers --force
   cang ps
   cang attach <task-id-or-handle-selector>
   cang attach --force <task-id-or-handle-selector>
@@ -353,22 +353,10 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
 pub(crate) enum CliCommand {
-    #[command(
-        name = "container-store",
-        about = "Maintain cang's workspace-scoped raw container-store disk"
-    )]
-    ContainerStore {
+    #[command(name = "disk", about = "Maintain cang's workspace-scoped raw disks")]
+    Disk {
         #[command(subcommand)]
-        command: ContainerStoreCommand,
-    },
-
-    #[command(
-        name = "build-disk",
-        about = "Maintain cang's workspace-scoped raw build disk"
-    )]
-    BuildDisk {
-        #[command(subcommand)]
-        command: BuildDiskCommand,
+        command: DiskCommand,
     },
 
     #[command(
@@ -446,44 +434,57 @@ pub(crate) enum CliCommand {
     },
 }
 
-#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
-pub(crate) enum ContainerStoreCommand {
-    #[command(
-        name = "resize",
-        about = "Grow the raw container-store disk and guest btrfs filesystem"
-    )]
-    Resize {
-        #[arg(
-            long = "size",
-            value_name = "SIZE",
-            help = "New grow-only container-store disk size, for example 128G"
-        )]
-        size: String,
-    },
-
-    #[command(
-        name = "reset",
-        about = "Delete and recreate the raw container-store disk"
-    )]
-    Reset {
-        #[arg(long = "force", action = ArgAction::SetTrue, help = "Confirm destructive container-store disk reset")]
-        force: bool,
-    },
+impl DiskCommand {
+    /// A resize must name at least one disk, and a reset must name the one disk
+    /// that has a recreate path. Both are user errors with a message rather than
+    /// a launch that silently does nothing.
+    fn validate(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Resize {
+                build: None,
+                containers: None,
+            } => anyhow::bail!("cang disk resize needs --build SIZE, --containers SIZE, or both"),
+            Self::Reset {
+                containers: false, ..
+            } => anyhow::bail!(
+                "cang disk reset needs --containers: it is the only disk with a recreate path"
+            ),
+            _ => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
-pub(crate) enum BuildDiskCommand {
+pub(crate) enum DiskCommand {
     #[command(
         name = "resize",
-        about = "Grow the raw build disk and guest btrfs filesystem"
+        about = "Grow a raw disk and its guest btrfs filesystem"
     )]
     Resize {
         #[arg(
-            long = "size",
+            long = "build",
             value_name = "SIZE",
-            help = "New grow-only build disk size, for example 100G"
+            help = "New grow-only size for the build disk (cargo cache and /nix upper), for example 100G"
         )]
-        size: String,
+        build: Option<String>,
+        #[arg(
+            long = "containers",
+            value_name = "SIZE",
+            help = "New grow-only size for the container-store disk, for example 128G"
+        )]
+        containers: Option<String>,
+    },
+
+    #[command(name = "reset", about = "Delete and recreate a raw disk")]
+    Reset {
+        #[arg(
+            long = "containers",
+            action = ArgAction::SetTrue,
+            help = "Reset the container-store disk, the only one with a recreate path"
+        )]
+        containers: bool,
+        #[arg(long = "force", action = ArgAction::SetTrue, help = "Confirm destructive disk reset")]
+        force: bool,
     },
 }
 
@@ -530,12 +531,8 @@ pub(crate) enum CliAction {
     DecodeLaunchConf {
         path: PathBuf,
     },
-    ContainerStore {
-        command: ContainerStoreCommand,
-        options: DiskMaintenanceOptions,
-    },
-    BuildDisk {
-        command: BuildDiskCommand,
+    Disk {
+        command: DiskCommand,
         options: DiskMaintenanceOptions,
     },
     Images {
@@ -573,14 +570,13 @@ impl Cli {
     pub(crate) fn try_into_action(self) -> anyhow::Result<CliAction> {
         if let Some(command) = self.command.clone() {
             Ok(match command {
-                CliCommand::ContainerStore { command } => CliAction::ContainerStore {
-                    command,
-                    options: self.disk_maintenance_options(),
-                },
-                CliCommand::BuildDisk { command } => CliAction::BuildDisk {
-                    command,
-                    options: self.disk_maintenance_options(),
-                },
+                CliCommand::Disk { command } => {
+                    command.validate()?;
+                    CliAction::Disk {
+                        command,
+                        options: self.disk_maintenance_options(),
+                    }
+                }
                 CliCommand::DecodeLaunchConf { path } => CliAction::DecodeLaunchConf { path },
                 CliCommand::Images { command } => CliAction::Images {
                     command,
@@ -2464,62 +2460,87 @@ fn parses_task_control_ps_and_kill_subcommands() {
 }
 
 #[test]
-fn parses_container_store_resize_and_reset_subcommands() {
-    let resize = Cli::try_parse_from(["cang", "container-store", "resize", "--size", "128G"])
-        .expect("container-store resize should parse");
-    let reset = Cli::try_parse_from(["cang", "container-store", "reset", "--force"])
-        .expect("container-store reset should parse");
+fn parses_the_disk_resize_and_reset_subcommands() {
+    let build = Cli::try_parse_from(["cang", "disk", "resize", "--build", "100G"])
+        .expect("disk resize --build should parse");
+    let both = Cli::try_parse_from([
+        "cang",
+        "disk",
+        "resize",
+        "--build",
+        "100G",
+        "--containers",
+        "128G",
+    ])
+    .expect("both disks in one invocation should parse");
+    let reset = Cli::try_parse_from(["cang", "disk", "reset", "--containers", "--force"])
+        .expect("disk reset --containers should parse");
 
-    match resize.try_into_action().expect("valid action") {
-        crate::cli::CliAction::ContainerStore { command, .. } => assert_eq!(
+    match build.try_into_action().expect("valid action") {
+        crate::cli::CliAction::Disk { command, .. } => assert_eq!(
             command,
-            crate::cli::ContainerStoreCommand::Resize {
-                size: "128G".to_owned()
+            crate::cli::DiskCommand::Resize {
+                build: Some("100G".to_owned()),
+                containers: None,
             }
         ),
-        other => panic!("expected container-store resize action, got {other:?}"),
+        other => panic!("expected disk resize action, got {other:?}"),
+    }
+    match both.try_into_action().expect("valid action") {
+        crate::cli::CliAction::Disk { command, .. } => assert_eq!(
+            command,
+            crate::cli::DiskCommand::Resize {
+                build: Some("100G".to_owned()),
+                containers: Some("128G".to_owned()),
+            }
+        ),
+        other => panic!("expected disk resize action, got {other:?}"),
     }
     match reset.try_into_action().expect("valid action") {
-        crate::cli::CliAction::ContainerStore { command, .. } => assert_eq!(
+        crate::cli::CliAction::Disk { command, .. } => assert_eq!(
             command,
-            crate::cli::ContainerStoreCommand::Reset { force: true }
+            crate::cli::DiskCommand::Reset {
+                containers: true,
+                force: true,
+            }
         ),
-        other => panic!("expected container-store reset action, got {other:?}"),
+        other => panic!("expected disk reset action, got {other:?}"),
     }
 }
 
 #[test]
-fn container_store_reset_accepts_missing_force_for_runtime_error() {
-    let reset = Cli::try_parse_from(["cang", "container-store", "reset"])
-        .expect("runtime should produce force-specific error");
+fn a_disk_resize_names_at_least_one_disk() {
+    let options = Cli::try_parse_from(["cang", "disk", "resize"]).expect("parse");
+    let err = options
+        .try_into_action()
+        .expect_err("a resize that names no disk is refused");
+    assert!(format!("{err:#}").contains("--build"), "{err:#}");
 
-    match reset.try_into_action().expect("valid action") {
-        crate::cli::CliAction::ContainerStore { command, .. } => assert_eq!(
-            command,
-            crate::cli::ContainerStoreCommand::Reset { force: false }
-        ),
-        other => panic!("expected container-store reset action, got {other:?}"),
-    }
+    let err = Cli::try_parse_from(["cang", "disk", "resize", "--size", "100G"])
+        .expect_err("the old per-disk --size spelling is gone");
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
 }
 
 #[test]
-fn parses_build_disk_resize_and_requires_a_size() {
-    let resize = Cli::try_parse_from(["cang", "build-disk", "resize", "--size", "100G"])
-        .expect("build-disk resize should parse");
+fn disk_reset_requires_the_containers_flag_and_reports_a_missing_force() {
+    let err = Cli::try_parse_from(["cang", "disk", "reset"])
+        .expect("parses")
+        .try_into_action()
+        .expect_err("reset names no disk");
+    assert!(format!("{err:#}").contains("--containers"), "{err:#}");
 
-    match resize.try_into_action().expect("valid action") {
-        crate::cli::CliAction::BuildDisk { command, .. } => assert_eq!(
+    let reset = Cli::try_parse_from(["cang", "disk", "reset", "--containers"])
+        .expect("runtime should produce the force-specific error");
+    match reset.try_into_action().expect("valid action") {
+        crate::cli::CliAction::Disk { command, .. } => assert_eq!(
             command,
-            crate::cli::BuildDiskCommand::Resize {
-                size: "100G".to_owned()
+            crate::cli::DiskCommand::Reset {
+                containers: true,
+                force: false,
             }
         ),
-        other => panic!("expected build-disk resize action, got {other:?}"),
+        other => panic!("expected disk reset action, got {other:?}"),
     }
-    assert!(
-        Cli::try_parse_from(["cang", "build-disk", "resize"]).is_err(),
-        "a build-disk resize without --size must not parse"
-    );
 }
 
 #[test]

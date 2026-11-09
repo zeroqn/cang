@@ -58,28 +58,12 @@ pub fn entrypoint() -> ExitCode {
             *options,
             runtime::RuntimeProfileScope::from_started_at(host_session_started_at),
         ),
-        CliAction::ContainerStore { command, options } => {
+        CliAction::Disk { command, options } => {
             if let Err(err) = logging::init_tracing(&options.log_settings) {
                 eprintln!("cang: {err:#}");
                 return ExitCode::from(1);
             }
-            match runtime::run_container_store_command(command, options) {
-                Ok(output) => {
-                    print!("{output}");
-                    ExitCode::SUCCESS
-                }
-                Err(err) => {
-                    eprintln!("cang: {err:#}");
-                    ExitCode::from(1)
-                }
-            }
-        }
-        CliAction::BuildDisk { command, options } => {
-            if let Err(err) = logging::init_tracing(&options.log_settings) {
-                eprintln!("cang: {err:#}");
-                return ExitCode::from(1);
-            }
-            match runtime::run_build_disk_command(command, options) {
+            match runtime::run_disk_command(command, options) {
                 Ok(output) => {
                     print!("{output}");
                     ExitCode::SUCCESS

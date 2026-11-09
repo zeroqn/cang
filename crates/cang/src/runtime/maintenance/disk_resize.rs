@@ -1,6 +1,6 @@
 //! Grow-only resize for the workspace's raw persistent disks.
 //!
-//! `container-store resize` and `build-disk resize` do the same two things: grow
+//! `disk resize --containers` and `disk resize --build` do the same two things: grow
 //! the host sparse image, then boot one narrow maintenance VM that mounts the
 //! image and has the guest expand its btrfs filesystem. Only the disk, the
 //! guest-side resize target and the report label differ, so they differ here as
@@ -106,8 +106,8 @@ impl DiskKind {
     /// failed - rerunnable, because both disks accept the already-reached size.
     fn rerun_command(self, size: &str) -> String {
         match self {
-            Self::ContainerStore => format!("cang container-store resize --size {size}"),
-            Self::BuildDisk => format!("cang build-disk resize --size {size}"),
+            Self::ContainerStore => format!("cang disk resize --containers {size}"),
+            Self::BuildDisk => format!("cang disk resize --build {size}"),
         }
     }
 }
@@ -343,7 +343,7 @@ fn wait_for_guest_exit(pid: libc::pid_t) -> Result<i32> {
 pub(super) fn current_state_layout() -> Result<StateLayout> {
     let cwd = env::current_dir()?
         .canonicalize()
-        .context("failed to canonicalize current directory for cang container-store maintenance")?;
+        .context("failed to canonicalize current directory for cang disk maintenance")?;
     let xdg_state_home = env::var_os("XDG_STATE_HOME").map(PathBuf::from);
     let xdg_config_home = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
     let home_dir = env::var_os("HOME").map(PathBuf::from);
@@ -588,11 +588,11 @@ mod tests {
     fn rerun_command_matches_each_disk_subcommand() {
         assert_eq!(
             DiskKind::ContainerStore.rerun_command("128G"),
-            "cang container-store resize --size 128G"
+            "cang disk resize --containers 128G"
         );
         assert_eq!(
             DiskKind::BuildDisk.rerun_command("100G"),
-            "cang build-disk resize --size 100G"
+            "cang disk resize --build 100G"
         );
     }
 

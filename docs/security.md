@@ -62,7 +62,7 @@ Host-side sandboxing (Landlock, seccomp) and guest capability grants.
   architecture, the launch fails before the VM worker enters libkrun.
 - `--seccomp=off` is the explicit no-filter spelling and opt-out for a normal
   task launch. Maintenance/internal one-shot VMs such as
-  `cang container-store resize/reset` remain default-off for this milestone.
+  `cang disk resize --containers` and `cang disk reset --containers` remain default-off for this milestone.
 - `--seccomp=audit:<trace>` (also accepted as `--seccomp=trace:<trace>`) runs
   the libkrun VM-worker entrypoint under `strace -f`, writes a tracer-owned raw
   log, and converts it to the requested JSONL trace when the helper observes

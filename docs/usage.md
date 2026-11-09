@@ -178,36 +178,42 @@ and cannot be used by `dev` to regain root.
 ## Container-store maintenance
 
 ```bash
-./result/bin/cang container-store resize --size 128G
-./result/bin/cang container-store reset --force
+./result/bin/cang disk resize --containers 128G
+./result/bin/cang disk reset --containers --force
 ```
 
 These commands manage only the current workspace's `cang-containers.raw` disk
 used by the raw-disk container store. They do not inspect or migrate any legacy
 host-directory container store and do not resize or reset cang's host `/nix`
 overlay state.
-`resize` is grow-only: `--size` accepts bytes or binary suffixes such as `K`,
-`M`, `G`, `T`, `KiB`, `MiB`, `GiB`, and `TiB`, and the requested size must be
-larger than the current raw file. It grows the host sparse file first, then
+`resize` is grow-only: `--containers SIZE` (and `--build SIZE`, below) accepts
+bytes or binary suffixes such as `K`, `M`, `G`, `T`, `KiB`, `MiB`, `GiB`, and
+`TiB`, and the requested size must be larger than the current raw file. It grows the host sparse file first, then
 starts a narrow one-shot direct-libkrun maintenance VM that runs
 `cang-guest-init internal resize containers` to expand the guest btrfs
 filesystem. If that guest resize fails after the host file has grown, cang does
 not shrink or roll back the file; fix the reported VM/guest problem and rerun
 the same resize command.
 
-`reset` is destructive and requires `--force`. It refuses to run while the
+`reset --containers` is destructive and requires `--force`. It refuses to run while the
 current workspace has running, pid-reused, unreadable, or unscannable task
 records, deletes an existing regular `cang-containers.raw`, and recreates the
 default 64 GiB sparse btrfs image without launching a VM. Stale-only task
 records are reported as cleanup information and do not block either command.
 For a manual smoke test on a host with Buildah, btrfs-progs, and libkrun
 available, run `cang --container-store raw-disk` once, then run the `resize`
-and `reset --force` commands above.
+and `reset --containers --force` commands above.
 
 ## Build-disk maintenance
 
 ```bash
-./result/bin/cang build-disk resize --size 100G
+./result/bin/cang disk resize --build 100G
+```
+
+Both disks are grown by the same command, so one invocation can name both:
+
+```bash
+./result/bin/cang disk resize --build 100G --containers 128G
 ```
 
 The build disk is the workspace's `cang-build.raw` btrfs image, created by the
@@ -235,7 +241,7 @@ error names the rerun command.
 Like the container-store command, `resize` prepares the maintenance VM's root on
 the host, and that step bind-mounts and so needs `CAP_SYS_ADMIN`: run it as root
 or inside a rootless user namespace, for example
-`podman unshare -- cang build-disk resize --size 100G`.
+`podman unshare -- cang disk resize --build 100G`.
 
 ## Guest-init override
 
