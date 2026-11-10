@@ -269,3 +269,39 @@ kernel's own page allocation and copy inside its page-cache fill.
 **Both halves of the hypothesis are now closed by measurement:** populating guest RAM
 at launch (this section) and pre-touching it from the guest (above) change nothing,
 because the time is spent inside the guest kernel, not in the host's fault path.
+
+## Guest queue-knob sweep: nothing, and the noise is the finding
+
+Last cheap lever: the guest's own block-queue tuning, with the host dropping the
+image's page cache before **every** arm (a first attempt without that control was
+invalid - it produced a monotone 9.9 -> 0.3 s decay that was pure host-cache
+warming, and three of its knobs did not even stick: `nr_requests` 1024 caps at 128,
+`io_poll` stays 0, `wbt_lat_usec` is absent).
+
+Boot 35, one 639 MB file, a baseline arm interleaved between every knob, device
+counters per arm:
+
+| arm | ms | knob state verified |
+|---|---|---|
+| base-a | 3105 | nomerges=0, nr_requests=128, rq_affinity=1, scheduler=none |
+| direct-a | 504 | — |
+| nomerges=1 | 3971 | nomerges=1 |
+| base-b | 3544 | — |
+| nomerges=2 | 1525 | nomerges=2 |
+| base-c | 1571 | — |
+| rq_affinity=2 | 3335 | rq_affinity=2 |
+| base-d | 4842 | — |
+| nr_requests=32 | 3196 | nr_requests=32 |
+| base-e | 3533 | — |
+| direct-b | 807 | — |
+
+**Every knob lands inside the baseline's own spread (1571-4842 ms, 3x), and the
+`O_DIRECT` arms are the only stable measurement in the table (504 / 807 ms).** That
+is the finding worth keeping: the buffered path's cost is *variable* - it depends on
+host state at that instant - while the direct path is stable, which is why thirteen
+boots produced thirteen different "cold read" numbers for the same code and the same
+flags. No guest-side queue knob moves it, and this measurement cannot resolve an
+effect smaller than ~3x.
+
+That closes the guest-side surface. Remaining owner of the number: the guest kernel's
+buffered readahead itself.
