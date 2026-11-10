@@ -180,7 +180,10 @@ green.
   five of six arms green on live guests (generation contract, write path on the
   disk, no inode collision, metadata numbers, failure paths); the migration arm was
   not run because the migration is not implemented. Cost: cold data reads 8932 ms
-  on the disk against 5894 ms over virtio-fs.
+  on the disk against 5894 ms over virtio-fs - **re-attributed by
+  [note 04](notes/04-cold-read-attribution.md)**: that pair came from a metric
+  with an uncontrolled host page cache; measured properly the two arms coincide
+  cold and the block lower wins warm.
 - [Where the upper lives on the shared build disk, and how that disk grows](tickets/04-upper-home-and-auto-grow.md):
   one generation directory per **image digest** inside the build disk
   (`nix-overlay/<digest-key>/{upper,work}`, with the **generation** directory the
@@ -226,11 +229,50 @@ green.
   this image (685 store paths; any closed 3 GB subset expands back to 684 paths).
   **Overridden by bob (2026-11-10): the write+delete cycle is the metric, not the
   bare write** - 37.9 % cheaper on the block upper - so the route continues and the
-  design tickets are unblocked. The 12.5 % cold-re-read regression is carried
-  forward as a cost.
+  design tickets are unblocked. The 12.5 % cold-re-read regression is **withdrawn**:
+  [note 04](notes/04-cold-read-attribution.md) measured both arms at 70-165 MB/s
+  cold (one wall: the host's storage), the block arm ahead on warm reads
+  (921 vs 583 MB/s) and 6-9x ahead on metadata, with no guest-side knob moving a
+  cold read.
 
 ## Not yet specified
 
+- **The cold-read wall's mechanism** - *not* found, 2026-11-10,
+  [note 07](notes/07-guest-o-direct.md). Solid facts: a guest `O_DIRECT` read of the
+  lower is 8-20x faster than a buffered one at every block size, on both kernel
+  lines, with the host cache verifiably cold and identical device bytes; host
+  `O_DIRECT` (`BlockDevice::set_direct_io`, wired behind `CANG_BLOCK_DIRECT_IO`) makes
+  no difference; buffered arms correlate with host anonymous allocation and
+  compaction but pre-filling the guest's own memory (1 GiB, held by the host) does
+  not speed the read, so that causal story is retracted. Remaining candidates: the
+  guest's readahead request shape (2.6 MiB at 34 ms each vs 0.5 MiB at 0.4 ms), and
+  the fork's multi-region descriptor split. **Then answered** (same note, per-request
+  instrumentation in the fork's block worker): the stable cost is guest-side - 5.4-6.9 s
+  of every buffered arm against 0.24 s of every `O_DIRECT` arm - with the host's own
+  read+copy at 0.9-4.9 s of a 6-10 s arm. The wall is the guest kernel's buffered
+  readahead path for this device, so no cang launch setting closes it. No product
+  change is justified.
+- **The 29 ms-per-request cold-read wall itself** - attacked 2026-11-10 with two
+  hypotheses and a third finding, [note 06](notes/06-read-wall-attribution.md):
+  `max_sectors_kb` 512/128 makes it worse (48.9 / 51.5 s against 39.5 s at 4096),
+  image fragmentation is refuted (the same fragmented image streams at 1.4 GB/s
+  `O_DIRECT`, 3.4 GB/s with 8 readers, from inside the guest), and a 22x
+  buffered-vs-`O_DIRECT` gap measured in one boot did not reproduce in another
+  (ext4 arm: 32 buffered / 58 direct / 85 nocache). Open only because the host
+  page cache cannot be dropped from this account; the settling measurement is
+  host-side `diskstats`/PSI sampled per arm.
+- **A packed (erofs) lower instead of the btrfs `.raw`** - prototyped and then
+  settled 2026-11-10, [note 05](notes/05-erofs-packed-lower-prototype.md):
+  `mkfs.erofs` from the image's own store packs 7.69 GiB into 4.57 GB (lz4 4 KiB),
+  4.20 GB (lz4 64 KiB chunks) or 3.22 GB (zstd), loses no pages, and mounts
+  read-only on the shipped kernel for lz4. It is still the wrong trade: on the
+  shipped firmware 13 % slower cold than the btrfs lower, and with
+  `CONFIG_EROFS_FS_ZIP_ZSTD` + `CONFIG_EROFS_FS_PCPU_KTHREAD` rebuilt into a
+  substituted firmware (`bed03226…`, which does mount zstd and does print
+  `initialized per-cpu workers successfully`) **1.7-2.2x slower** — zstd 50-69 s
+  against the lower's 25-36 s on the same 2.56 GB manifest, with 46 % fewer device
+  bytes. Decompression is the limit (~95 MB/s per core), not bandwidth. Not a
+  candidate unless the read set stops being a handful of multi-gigabyte files.
 - The implementation slices themselves - host disk preparation and the
   `--nix=`/`--virtiofs=` wiring, the guest-side seeding step, the migration
   path, docs/README, patch and release. Each can be sliced only once the

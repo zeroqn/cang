@@ -87,4 +87,9 @@ d4-second,default}.ev/`, `smoke1/`.
 
 Cost carried forward: a cold read of the store's 20 largest files is **8932 ms**
 on the disk against **5894 ms** over virtio-fs in the same run - the host's page
-cache wins cold data reads, the disk wins metadata.
+cache wins cold data reads, the disk wins metadata. **Re-attributed 2026-11-10 by
+[note 04](../notes/04-cold-read-attribution.md)**: that pair is a host-page-cache
+artifact (the metric leaves the host cache uncontrolled); on two live guests both
+arms sit at 70-165 MB/s cold, the block lower reads 921 MB/s warm against 583 MB/s,
+and no guest-side knob (readahead, `max_sectors_kb`, 4/8 parallel readers) moves a
+cold read.
