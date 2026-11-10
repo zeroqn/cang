@@ -195,3 +195,39 @@ it is `/nix/store/hnxld8bbw47f38nk2mdc93hwspk7lhd8-cang-0.21.0` via
 `nix build .#cang --override-input libkrun-src path:$PWD/deps/libkrun` - the flake
 otherwise builds libkrun from its pinned input, so a fork edit is invisible to
 `nix build .#cang` without that override.
+
+## The multi-queue test: also refuted
+
+The last mechanical suspect was submission width: the fork advertised **one** virtqueue
+(`NUM_QUEUES = 1`), and the guest confirmed one mq directory. Widened to four -
+`NUM_QUEUES = 4`, `QUEUE_CONFIG` repeated, one `BlockWorker` per queue, and the
+`VIRTIO_BLK_F_MQ` feature bit plus `num_queues = 4` in the device config, without
+which a guest ignores the extra virtqueues entirely.
+
+**The arm was verified, not assumed** (`probe24.sh` records it): boot 31's guest shows
+`mq_dirs=4`, `nr_tags=128` per queue, cpu_list `0-6 / 7-13 / 14-19 / 20-25`. And the
+result is no change:
+
+| arm (4 queues, boot 31) | n | MB | avg KiB | sum pread | sum copy | host | wall | guest-side |
+|---|---|---|---|---|---|---|---|---|
+| buffered-1 | 661 | 720 | 1063 | 3.01 | 1.87 | 4.88 | 10.12 | **5.24** |
+| buffered-2 | 315 | 648 | 2010 | 0.32 | 2.57 | 2.89 | 8.75 | **5.85** |
+| buffered-3 | 294 | 648 | 2152 | 0.53 | 0.84 | 1.36 | 6.49 | **5.12** |
+| direct-1 | 1359 | 649 | 466 | 0.11 | 0.05 | 0.16 | 0.42 | 0.26 |
+| direct-2 | 1359 | 649 | 466 | 0.21 | 0.05 | 0.26 | 0.51 | 0.25 |
+
+Guest-side time stays at 5.1-5.9 s against `O_DIRECT`'s 0.25 s, and the request shape
+does not change (fewer, larger requests, not overlapped). A wider device only helps a
+guest that wants to overlap; this read path does not. The change was reverted - four
+workers each with their own IO pool would cost threads for nothing - and the fork's
+diff is back to the trace instrumentation alone.
+
+**So the stack of eliminations is complete.** Host storage, host page cache, image
+fragmentation, filesystem (btrfs vs ext4), packing (erofs), request size
+(`max_sectors_kb`), readahead (`read_ahead_kb`), queue count, host `O_DIRECT`, and
+guest RAM pre-faulting are each measured and each removed. What is left in the number
+is the guest kernel's own buffered readahead for a virtio-blk device - a guest-kernel
+question (bio/plug/readahead scheduling), not a cang launch setting and not a fork
+device bug that these arms expose. The practical answer stands: a payload that issues
+its own I/O with `O_DIRECT` is 8-20x ahead of the same payload reading buffered, and
+nothing cang sets at launch changes that.

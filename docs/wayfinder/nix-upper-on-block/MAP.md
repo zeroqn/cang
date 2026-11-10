@@ -250,8 +250,11 @@ green.
   instrumentation in the fork's block worker): the stable cost is guest-side - 5.4-6.9 s
   of every buffered arm against 0.24 s of every `O_DIRECT` arm - with the host's own
   read+copy at 0.9-4.9 s of a 6-10 s arm. The wall is the guest kernel's buffered
-  readahead path for this device, so no cang launch setting closes it. No product
-  change is justified.
+  readahead path for this device, so no cang launch setting closes it. The last
+  mechanical suspect - a single virtqueue (`NUM_QUEUES = 1`) serialising submission -
+  was then tested with a four-queue device plus `VIRTIO_BLK_F_MQ` (guest verified
+  `mq_dirs=4`, 128 tags each): no change, 5.1-5.9 s guest-side against `O_DIRECT`'s
+  0.25 s, and the change was reverted. No product change is justified.
 - **The 29 ms-per-request cold-read wall itself** - attacked 2026-11-10 with two
   hypotheses and a third finding, [note 06](notes/06-read-wall-attribution.md):
   `max_sectors_kb` 512/128 makes it worse (48.9 / 51.5 s against 39.5 s at 4096),
