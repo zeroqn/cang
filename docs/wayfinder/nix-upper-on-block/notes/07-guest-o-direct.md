@@ -231,3 +231,41 @@ question (bio/plug/readahead scheduling), not a cang launch setting and not a fo
 device bug that these arms expose. The practical answer stands: a payload that issues
 its own I/O with `O_DIRECT` is 8-20x ahead of the same payload reading buffered, and
 nothing cang sets at launch changes that.
+
+## `MADV_POPULATE_WRITE` on guest RAM: tested, no effect
+
+The earlier retraction used the wrong mechanism: a guest that allocates and frees
+1 GiB touches its own pages, which the host may reclaim again. The launch-time
+mechanism is `madvise(MADV_POPULATE_WRITE)` over each guest memory region, which
+faults the whole `--mem` in once and keeps it - added next to the fork's existing
+`advise_hugepages_for_guest_memory()` and gated on `CANG_GUEST_RAM_POPULATE=1`.
+
+**The arm is proven, not assumed** (worker RSS sampled by the host at 2 s intervals,
+same `--mem 4`, payload sleeping):
+
+| boot | t=4 s | t=6 s | t=8 s | steady |
+|---|---|---|---|---|
+| `CANG_GUEST_RAM_POPULATE=1` | 1.68 GiB | 3.21 GiB | **4.01 GiB** | — |
+| control | 0.41 GiB | 0.73 GiB | 0.84 GiB | 0.74 GiB |
+
+So the whole guest RAM is resident from boot in the populate arm, exactly as
+`MAP_POPULATE` would give.
+
+**Result: no change.** Boot 32, same five arms, host cache dropped per arm:
+
+| arm | reqs | MB | Σ pread | Σ copy | host | wall | guest-side |
+|---|---|---|---|---|---|---|---|
+| buffered-1 | 284 | 646 | 0.49 | 4.59 | 5.08 | 11.56 | **6.47** |
+| buffered-2 | 295 | 648 | 0.13 | 1.89 | 2.03 | 9.84 | **7.81** |
+| buffered-3 | 370 | 653 | 0.22 | 1.16 | 1.39 | 5.39 | **4.00** |
+| direct-1 | 1361 | 649 | 0.14 | 0.06 | 0.19 | 0.48 | 0.29 |
+| direct-2 | 1375 | 649 | 0.14 | 0.03 | 0.17 | 0.41 | 0.25 |
+
+The copy-into-guest-memory cost does not fall either (1.16-4.59 s against 0.79-2.57 s
+before), which corrects the reading of that number: it is not host page-fault cost on
+guest RAM - that would have vanished with the RAM pre-populated - but the guest
+kernel's own page allocation and copy inside its page-cache fill.
+
+**Both halves of the hypothesis are now closed by measurement:** populating guest RAM
+at launch (this section) and pre-touching it from the guest (above) change nothing,
+because the time is spent inside the guest kernel, not in the host's fault path.

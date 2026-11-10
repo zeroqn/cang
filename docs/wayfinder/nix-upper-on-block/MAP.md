@@ -254,7 +254,11 @@ green.
   mechanical suspect - a single virtqueue (`NUM_QUEUES = 1`) serialising submission -
   was then tested with a four-queue device plus `VIRTIO_BLK_F_MQ` (guest verified
   `mq_dirs=4`, 128 tags each): no change, 5.1-5.9 s guest-side against `O_DIRECT`'s
-  0.25 s, and the change was reverted. No product change is justified.
+  0.25 s, and the change was reverted. `MADV_POPULATE_WRITE` on the guest RAM regions
+  was the last hypothesis tested (arm proven by worker RSS reaching 4.01 GiB at t=8 s
+  against 0.84 GiB lazily): no change either, and the copy-into-guest-memory cost
+  survives it, so that cost is the guest's own page allocation, not host faults. No
+  product change is justified.
 - **The 29 ms-per-request cold-read wall itself** - attacked 2026-11-10 with two
   hypotheses and a third finding, [note 06](notes/06-read-wall-attribution.md):
   `max_sectors_kb` 512/128 makes it worse (48.9 / 51.5 s against 39.5 s at 4096),
