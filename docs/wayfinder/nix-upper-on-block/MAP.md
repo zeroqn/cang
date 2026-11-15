@@ -237,6 +237,19 @@ green.
 
 ## Not yet specified
 
+- **(#2) The per-read cost is the state root's `compress=zstd:1`, not the guest** - measured
+  2026-11-15, [note 17](notes/17-per-read-cost-is-fs-compression.md): same disk, same
+  subvolume, same 2 GiB of bytes, cold each time - compressed (`encoded` extents, 5802 of
+  them) p50 240/215 us per 16 KiB read against uncompressed 116/78 us, with `nodatacow`
+  adding nothing. That plausibly accounts for half to two thirds of the 316 ms cold
+  metadata penalty (941 reads). The lever is image creation: write the `nix-lower` image
+  with `compression=none` or in a subvolume whose property is `none`, and decide per path
+  - the measured slice did not compress at all (2.0 GB either way) while the whole image
+  saves ~34 %, so every small read currently pays decompression for a partial benefit.
+- **Prior art exists for (#1)** - `blkread/erofs/{lz4,zstd}.log` and `fsimg/` from
+  2026-11-10 built erofs images of the same store with mkfs.erofs 1.9 (plain/lz4/zstd,
+  lz4c64/c256); their payloads were removed for disk space, the logs kept.
+
 - **The queue knobs do not touch cold metadata; host service per read does** - measured
   2026-11-15, [note 16](notes/16-queue-knobs-do-not-move-metadata.md): eight cold `find`
   arms swept `read_ahead_kb` (128-4096) and `max_sectors_kb` (512-4096) and every arm did
