@@ -237,6 +237,16 @@ green.
 
 ## Not yet specified
 
+- **No mount option and no guest-local copy moves the cold walk; the lever left is cache
+  lifetime** - measured 2026-11-15, [note 23](notes/23-no-mount-option-and-no-locality-gain.md):
+  `noatime` is a no-op on a read-only mount (941 device reads, 451-528 ms either way), a
+  guest-local `cp -a` of the 8 GB store walks **1 583-1 769 ms** against the image's
+  494-528 ms, and bulk reads are device-bound (639 MB at 444 MB/s with service overlapping
+  wall), so libkrun's staging copy is not the lever on a healthy host either. The row of
+  refuted candidates is now complete (mount options, uncompressed image, erofs, local copy,
+  direct-to-guest, vhost-user, DAX); the only measured win is a **warm cache at 75-101 ms**,
+  which makes cache lifetime - not transport - the thing to optimise.
+
 - **Tried the erofs lower end to end: it is 2x the requests and 3-4x slower. Reverted** -
   measured 2026-11-15, [note 22](notes/22-erofs-lower-is-slower.md): a full implementation
   (host `mkfs.erofs -T 0`, `CANG_NIX_LOWER_FSTYPE`, `mount -t erofs`, a labelless-disk
