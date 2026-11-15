@@ -237,6 +237,16 @@ green.
 
 ## Not yet specified
 
+- **The btrfs lower is compressed (71.8 % of extents `encoded`, 12.4 GB -> 7.9 GB), and
+  keeping btrfs is compatible with fixing it** - measured 2026-11-15,
+  [note 19](notes/19-btrfs-lower-is-compressed.md): compression is a per-file/subvolume
+  property, so an uncompressed btrfs image needs no format change, and the same-filesystem
+  A/B (note 17) already shows 2.0-2.8x per small cold read. But the disk ranking inverts
+  the usual argument - btrfs wins on space only while compressed (7.9 GB) and uncompressed
+  btrfs is the largest option (12.4 GB, +4.5 GB per image, three identities), while
+  uncompressed erofs is smaller (8.4 GB) *and* 1.5-1.8x faster than compressed btrfs. So
+  reflink/snapshot semantics are the real argument for btrfs, not space.
+
 - **(#1) An erofs lower is 1.5-1.8x cheaper than btrfs for the cold metadata walk, and
   lz4 gives it back** - measured 2026-11-15, [note 18](notes/18-erofs-lower-metadata.md):
   four repeats of the same 3897-file cold `find` gave btrfs 362-447 ms, uncompressed
