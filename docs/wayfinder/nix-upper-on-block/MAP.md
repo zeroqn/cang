@@ -237,6 +237,19 @@ green.
 
 ## Not yet specified
 
+- **The queue knobs do not touch cold metadata; host service per read does** - measured
+  2026-11-15, [note 16](notes/16-queue-knobs-do-not-move-metadata.md): eight cold `find`
+  arms swept `read_ahead_kb` (128-4096) and `max_sectors_kb` (512-4096) and every arm did
+  exactly **941 read I/Os and 30 112 sectors**, so neither knob merges or removes a
+  metadata read. What moved instead is host service time for that identical work:
+  186-498 ms (2.7x) within one boot, 197-529 us per read, wall tracking it
+  (`wall = device read_ms + 187-390 ms`). Consequence: the remaining levers are on the
+  image/host side - fewer metadata blocks (denser index stream, e.g. erofs/squashfs) or
+  cheaper per-read service (the `.raw` sat on a 93 %-full btrfs, and the 2.7x spread
+  makes any guest-side number here unstable to ~2x). Recorded defect: the `base*` arms
+  set read-ahead 128 while the stock value is 8192, so the baseline label is wrong even
+  though the invariance result stands.
+
 - **(a) The cold metadata penalty is 941 serialized device reads (~336 us each), not CPU** -
   measured 2026-11-15, [note 15](notes/15-cold-metadata-is-device-reads.md): a cold
   `find` of 3897 files costs 341-370 ms and moves only ~482 KB in 941 read I/Os, warm is
