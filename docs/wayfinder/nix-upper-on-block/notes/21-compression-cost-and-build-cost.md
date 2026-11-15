@@ -27,6 +27,24 @@ ended with `ERROR: unable to traverse directory … Operation not permitted` bec
 as an unprivileged user outside cang's storage namespace; the full 13 GB image was written
 before that, so the comparison stands, and cang's own build runs privileged.)
 
+## 1b. An erofs lower builds *faster* than the btrfs one, not slower
+
+The assumption worth checking, since erofs is the option on the table: `mkfs.erofs 1.9`
+against the same store (73 789 entries, 14 513 directories, 7.7 GB), timed on this host:
+
+| build | wall | image on disk |
+|---|---|---|
+| `mkfs.btrfs --rootdir --reflink --shrink` | **37.3 s** | 7.8 GB (13 GB apparent) |
+| `mkfs.erofs -T 0` (uncompressed) | **5.9 s** | 7.8 GB |
+| `mkfs.erofs -zlz4 -C 65536 -T 0` | **16.1 s** | **4.0 GB** |
+| `mkfs.btrfs --rootdir --shrink` (copy, no reflink) | 40.0 s | 7.8 GB |
+
+So an uncompressed erofs lower is **6x cheaper to build** than the btrfs one and the same
+size on disk, and the lz4 erofs is still 2.3x cheaper while being **half the size** of
+either - it just reads metadata slower in the guest (note
+[18](18-erofs-lower-metadata.md): 416-440 ms against plain erofs's 240-250 ms and btrfs's
+362-447 ms). Nothing about the erofs option is expensive at build time.
+
 ## 2. What the compression costs the guest: 30 % of host device time, ~0 end to end
 
 Dense-region A/B, which is what the earlier image comparison lacked: one 610 MB lower file,
