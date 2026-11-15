@@ -59,6 +59,25 @@ What that leaves untested, and it is a harness question rather than a cang one: 
 guest-disk upper costs. Both need a boot whose `/nix` really is an overlay mount - check
 `findmnt /nix` first and refuse the arms otherwise.
 
+## 4. One inconsistency left open, deliberately
+
+In `run-nixwhat-20261115T233220Z` the *same* probe reports two things that do not reconcile:
+
+- `/proc/mounts` (copied at the start) lists **nine virtiofs mounts and no btrfs at all** - the
+  guest root is `/dev/root / virtiofs`, and `/run/cang/nix-lower` is not in the table;
+- `stat -f /run/cang/nix-lower` (moments later) reports **fstype=btrfs, dev=39**, and its
+  `store` lists 686 entries.
+
+So either the lower was mounted between the two readings (guest-init still finishing while the
+probe ran), or the mount lives in a namespace `/proc/mounts` here does not show. Either way
+**`/nix` is `fuse` in both readings**, so the conclusion above stands for `/nix`; what is
+unsettled is only how the lower is attached. Settling it needs one probe that prints
+`findmnt -R /nix`, `findmnt /run/cang/nix-lower`, `readlink /proc/self/ns/mnt`, the guest-init
+status file and `/proc/self/mountinfo` for both paths in a single pass, and refuses to run the
+walk arms unless `findmnt /nix` shows an `overlay`. Recording it here rather than guessing,
+because every claim in this map about "the guest-composed overlay" depends on that mount
+existing.
+
 ## Evidence
 
 `run-upper-20261115T233711Z` (the valid warm/cold pairs, `results.txt` + `proof.log`),
