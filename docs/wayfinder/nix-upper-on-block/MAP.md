@@ -237,6 +237,18 @@ green.
 
 ## Not yet specified
 
+- **The depth ceiling is the guest's buffered read path** - measured 2026-11-15 with a
+  per-reader instrument and a mincore-verified host drop,
+  [note 11](notes/11-guest-read-path-ceiling.md): buffered reads cap at ~200 MB/s and
+  do not scale (tmpfs 209 MB/s at one reader, 207 aggregate at four; the block lower
+  144 -> 62 MB/s at seven readers with 2.9 -> 65 ms of guest device time per MB),
+  while the same bytes under `O_DIRECT` run 426 MB/s at one reader and 3029 MB/s
+  aggregate. So the transport is fast and the guest page-cache fill is the wall - which
+  is why removing libkrun's staging copy helped one reader and not eight, and why a
+  vhost-user backend cannot fix it. Open: the host served up to 3 GB/s while `mincore`
+  reported 0 resident pages of every `nix-lower` image and the state device moved
+  <50 MB, so host coldness is not yet provable from these arms.
+
 - **Direct-to-guest reads on the device thread** - measured 2026-11-15,
   [note 09](notes/09-direct-to-guest-reads.md): with the pooled staging copy removed
   (reads served on the block worker thread, engagement proved by the read-completion
