@@ -237,6 +237,18 @@ green.
 
 ## Not yet specified
 
+- **CORRECTION: the ~200 MB/s "wall" was host memory pressure** - measured
+  2026-11-15, [note 13](notes/13-host-pressure-artifact.md): with the host at 10.9 GB
+  free instead of 1.6-2.7 GB, the same cold 128 MiB read takes 38-70 ms (1.8-3.4 GB/s)
+  and a four-reader 512 MiB arm 148 ms (3.45 GB/s), with guest device time the same
+  order as the wall, and a RAM pre-touch no longer changing anything. Notes 11 and 12
+  therefore describe a pressured host, not cang's block lower. The profile taken at
+  device speed is dominated by `_copy_to_iter` (21 % at one reader, 45 % at four) with
+  btrfs checksum `memcmp` and page allocation behind it - which is both the one item
+  DAX would remove and an artefact of the pread instrument, since exec/build mmap and
+  fault instead. Rule: every arm records host `MemFree`/`AnonPages` and an arm taken
+  under host pressure is invalid, not noisy.
+
 - **The buffered read wall is guest page allocation, not the host** - measured
   2026-11-15, [note 12](notes/12-read-wall-is-page-allocation.md): the backing serves
   130 MB in 210-286 ms (~500 MB/s) while the host state device moves <1 MB and
