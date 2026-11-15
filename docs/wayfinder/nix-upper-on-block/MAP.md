@@ -237,6 +237,19 @@ green.
 
 ## Not yet specified
 
+- **Direct-to-guest reads on the device thread** - measured 2026-11-15,
+  [note 09](notes/09-direct-to-guest-reads.md): with the pooled staging copy removed
+  (reads served on the block worker thread, engagement proved by the read-completion
+  trace going to **0** lines per arm), one reader improves 5.1-11.1 s to 3.9-4.2 s
+  for 610 MB, and eight concurrent readers do **not** improve (37.7-46.9 s against
+  22.3-50.8 s) because one thread then issues every pread - 235-241 s of accumulated
+  device service against a 37-46 s wall. The collapse therefore needs *both* no
+  staging copy and parallel preads: pool workers writing guest memory directly
+  (needs a non-overlap proof) or a vhost-user-blk backend that preads into the
+  guest's descriptors. Also recorded: cang forces
+  `set_parallel_reads(true)` in `crates/cang-libkrun/src/linked.rs`, so a fork-side
+  constructor default is dead code on cang's path.
+
 - **The block lower against virtio-fs for the same cold bytes** - re-tested 2026-11-15
   with the host cache control *verified* rather than assumed,
   [note 08](notes/08-cold-read-route-and-concurrency.md): the block lower delivers
