@@ -237,6 +237,17 @@ green.
 
 ## Not yet specified
 
+- **An uncompressed btrfs lower does not speed up the metadata walk; reverted** - measured
+  2026-11-15, [note 20](notes/20-uncompressed-lower-no-gain.md): the image was rebuilt
+  genuinely uncompressed (303 extents, 0 `encoded`, needs `compression=none` *and* no
+  `--reflink`, because a reflink clones the snapshot's compressed extents) and the cold
+  `find` came out 411-455 ms against the compressed image's 362-500 ms, with host-side
+  16 KiB random reads identical too (mean 388/257 vs 510/288 us). So note 17's 2.0-2.8x
+  per-read penalty does not transfer to the real image and must not be quoted for it.
+  Dropping `--reflink` also ends extent sharing with the snapshot (~8 GB of its own disk
+  per image), so the edit was reverted. What remains unexplained, and the only lead left
+  for the metadata cost, is erofs's *layout* (fewer read requests), not compression.
+
 - **The btrfs lower is compressed (71.8 % of extents `encoded`, 12.4 GB -> 7.9 GB), and
   keeping btrfs is compatible with fixing it** - measured 2026-11-15,
   [note 19](notes/19-btrfs-lower-is-compressed.md): compression is a per-file/subvolume
