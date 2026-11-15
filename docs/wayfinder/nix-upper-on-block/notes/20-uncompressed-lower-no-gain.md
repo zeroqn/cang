@@ -29,14 +29,20 @@ With both, cang built `ec5b74e0….raw` at **303 extents, 0 `encoded`**, 12.4 GB
 Same probe, same 3 897-file cold `find`, five arms per image (guest `drop_caches` before
 every cold arm):
 
-| lower | cold arms (ms) | warm (ms) |
-|---|---|---|
-| compressed (zstd, 88 170 extents, 62 961 encoded) | 362, 371, 420, 438, 447, 455, 458, 461, 474, 484, 497, 500 | 75, 86, 88, 101 |
-| uncompressed (303 extents, 0 encoded) | 411, 437, 438, 455 | 75, 81 |
+The controlled pair is two boots with the **same binary** (md5 `880f5d7c…`), the first
+reusing the compressed image and the second rebuilding it uncompressed:
 
-Overlapping distributions; if anything the uncompressed image is *not* faster. The same
-conclusion from the host side, on the two artifacts directly, cold before each run,
-16 KiB random reads over the first 2 GiB:
+| boot | image the launch attached | cold arms (ms) | mean | warm (ms) |
+|---|---|---|---|---|
+| `run-find-…T144322Z` | compressed reused (`ec5b74e0…`, 88 170 extents, 62 961 encoded) | 420, 461, 474, 500 | 464 | 88, 88 |
+| `run-find-…T144803Z` | uncompressed rebuilt (303 extents, 0 encoded) | 411, 437, 438, 455 | 435 | 75, 81 |
+
+So the uncompressed lower is **~6 % faster on the mean, inside this host's run-to-run
+spread** (the same compressed image has measured 362-500 ms across the session), and warm
+arms are unchanged at 75-88 ms. Earlier, less controlled pairs from other boots
+(362-447 compressed against 411-455 uncompressed) pointed the other way; the honest
+statement across all of them is **no reliable difference**. The host side agrees, on the
+two artifacts directly, cold before each run, 16 KiB random reads over the first 2 GiB:
 
 | image | mean µs | p50 µs |
 |---|---|---|
@@ -86,8 +92,9 @@ deliverable.
 
 ## Evidence
 
-`run-find-20261115T142654Z` (reused the compressed image - a control that shows the probe
-is stable), `run-find-20261115T144743Z` (the uncompressed image, `meta.txt` + `setup.txt`),
+`run-find-20261115T144322Z` (compressed, reused) and `run-find-20261115T144803Z` (the
+uncompressed rebuild) - the controlled pair, both on binary `880f5d7c…`; also
+`run-find-20261115T142654Z`/`T143511Z` for the earlier less controlled pairs,
 `randlat` A/B against `compressed-live.raw` and the uncompressed `ec5b74e0….raw` (both
 kept in `<state>/cang/microvm/images/btrfs-snapshots/nix-lower/`), `mkerofs3.sh`-era
 artifacts for note 18. Probe `probe-find.sh`, runner `run-find.sh`, control `control11.sh`.
