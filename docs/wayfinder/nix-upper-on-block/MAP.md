@@ -237,6 +237,20 @@ green.
 
 ## Not yet specified
 
+- **(a) The cold metadata penalty is 941 serialized device reads (~336 us each), not CPU** -
+  measured 2026-11-15, [note 15](notes/15-cold-metadata-is-device-reads.md): a cold
+  `find` of 3897 files costs 341-370 ms and moves only ~482 KB in 941 read I/Os, warm is
+  54 ms with 0 reads, and forcing a stat of every file adds nothing - so the cost is
+  read count and latency, not kernel work (the cold arm spends 8-9 ms of CPU). `perf` at
+  999 Hz costs 900-1900 ms on the same arm, which is why the counter comparison, not the
+  profile, is the result. Candidate levers in order of cheapness: `read_ahead_kb` on the
+  block device (default 128 KB), `max_sectors_kb` for metadata (never swept), or an image
+  layout with fewer metadata blocks.
+- **(b) DAX is not a lever here** - same note: the binary has no DAX surface at all, and
+  the arithmetic is against it - block mode already spends only 8-9 ms of CPU in a
+  46-51 ms 128 MiB read with device service as the floor, while DAX is a virtiofs feature
+  and that path is 2.1-3.0x slower than block to begin with.
+
 - **Real workload, clean host: the block lower beats virtiofs 2-3x on cold mmap reads** -
   measured 2026-11-15, [note 14](notes/14-block-vs-virtiofs-real.md): identical bytes
   through mmap page faults (the shape exec and nix build use), identical checksums,
