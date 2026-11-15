@@ -237,6 +237,16 @@ green.
 
 ## Not yet specified
 
+- **(#1) An erofs lower is 1.5-1.8x cheaper than btrfs for the cold metadata walk, and
+  lz4 gives it back** - measured 2026-11-15, [note 18](notes/18-erofs-lower-metadata.md):
+  four repeats of the same 3897-file cold `find` gave btrfs 362-447 ms, uncompressed
+  erofs 240-250 ms, lz4 erofs 416-440 ms - reproducing note 17's compression penalty
+  inside a read-only image format. The erofs arms were *penalised* (loop device over a
+  file on the host-compressed state root), so 240 ms is a lower bound on the gain.
+  Banking it needs a cang change: build the lower with `mkfs.erofs -T 0` and mount it
+  read-only in the guest half where the btrfs lower is composed today. Run limitation:
+  root-device parsing gave `root`, so this boot has no per-arm device counters.
+
 - **(#2) The per-read cost is the state root's `compress=zstd:1`, not the guest** - measured
   2026-11-15, [note 17](notes/17-per-read-cost-is-fs-compression.md): same disk, same
   subvolume, same 2 GiB of bytes, cold each time - compressed (`encoded` extents, 5802 of
