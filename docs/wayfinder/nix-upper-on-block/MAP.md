@@ -237,6 +237,17 @@ green.
 
 ## Not yet specified
 
+- **Removing the image's compression costs 2.7 s of build and no disk, and buys ~30 % of
+  host device service but ~0 end to end** - measured 2026-11-15,
+  [note 21](notes/21-compression-cost-and-build-cost.md): the real store builds in 37.3 s
+  reflinked (62 898 `encoded` extents) against 40.0 s copied (0 encoded), both 7.8 GB on
+  disk - so the earlier "+4.5 GB" here was wrong. In the guest, dense random 16 KiB reads
+  drop the host's device service from 84-162 ms to 60-68 ms per 300 reads, while
+  end-to-end p50 stays 278-626 us either way: at this read size the round trip through
+  virtio-blk and the guest's btrfs path dominates. That is why the metadata walk showed no
+  gain, and it leaves **request count** as the only remaining lever (what note 18's
+  erofs-plain result looks like).
+
 - **An uncompressed btrfs lower does not speed up the metadata walk; reverted** - measured
   2026-11-15, [note 20](notes/20-uncompressed-lower-no-gain.md): the image was rebuilt
   genuinely uncompressed (303 extents, 0 `encoded`, needs `compression=none` *and* no
