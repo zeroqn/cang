@@ -237,6 +237,19 @@ green.
 
 ## Not yet specified
 
+- **The block lower against virtio-fs for the same cold bytes** - re-tested 2026-11-15
+  with the host cache control *verified* rather than assumed,
+  [note 08](notes/08-cold-read-route-and-concurrency.md): the block lower delivers
+  109-115 MB/s where virtio-fs delivers 176-194 MB/s for the same 610 MB in one boot
+  (both host-cache-hot), eight concurrent readers *lower* the block path to 58-74 MB/s
+  aggregate with 217-332 % device busy and 24-30 s guest iowait, and the guest is never
+  CPU-saturated (5-22 % of 26 vCPUs, `pgsteal` 0). The guest's warm ceiling is 8.7 GB/s,
+  so the loss is in delivery, not guest copy - which is also why a vhost-user prototype
+  was declined (four virtqueues already measured no better; the transport is a few
+  percent of the arm against a 25-37 % spread). Open: *where* in delivery, which needs
+  the per-request trace of a HEAD build (`CANG_BLK_TRACE`), absent from the prebuilt
+  used for these arms.
+
 - **The cold-read wall's mechanism** - *not* found, 2026-11-10,
   [note 07](notes/07-guest-o-direct.md). Solid facts: a guest `O_DIRECT` read of the
   lower is 8-20x faster than a buffered one at every block size, on both kernel
