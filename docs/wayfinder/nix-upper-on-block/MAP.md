@@ -237,6 +237,15 @@ green.
 
 ## Not yet specified
 
+- **Real workload, clean host: the block lower beats virtiofs 2-3x on cold mmap reads** -
+  measured 2026-11-15, [note 14](notes/14-block-vs-virtiofs-real.md): identical bytes
+  through mmap page faults (the shape exec and nix build use), identical checksums,
+  block 46-51 ms per 128 MiB single-reader (2.5-2.8 GB/s) and 190-216 ms for 768 MiB at
+  six readers against virtiofs 102-144 ms and 367-758 ms; metadata sweep 309 ms cold vs
+  54 ms warm on the block lower. Host gated at 12 GB MemFree with no live VM, and every
+  cold arm records its own device reads. This settles the mode question for /nix on a
+  clean host (keep block) and leaves the metadata cold penalty as a separate question.
+
 - **CORRECTION: the ~200 MB/s "wall" was host memory pressure** - measured
   2026-11-15, [note 13](notes/13-host-pressure-artifact.md): with the host at 10.9 GB
   free instead of 1.6-2.7 GB, the same cold 128 MiB read takes 38-70 ms (1.8-3.4 GB/s)
