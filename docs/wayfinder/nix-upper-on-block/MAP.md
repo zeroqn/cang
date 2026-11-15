@@ -237,6 +237,18 @@ green.
 
 ## Not yet specified
 
+- **The buffered read wall is guest page allocation, not the host** - measured
+  2026-11-15, [note 12](notes/12-read-wall-is-page-allocation.md): the backing serves
+  130 MB in 210-286 ms (~500 MB/s) while the host state device moves <1 MB and
+  `mincore` on the image reads 0 resident pages before and after every arm; cached
+  re-reads do zero device reads and are CPU-bound copies at 221-867 MB/s; and writing
+  and freeing 3 GiB of guest RAM first (so its pages are already faulted on the host)
+  cuts the cold arm 1053 -> 690 -> 494 ms with device service unchanged. Device
+  efficiency is thus a ~210-290 ms term of a ~1 s cold read, which is why the
+  candidates for this cost are guest-RAM pre-fault (the held `CANG_GUEST_RAM_POPULATE`
+  prototype) and /nix DAX, not a different block backend. `O_DIRECT` arms are a
+  transport ceiling only: cang cannot impose the guest application's open flags.
+
 - **The depth ceiling is the guest's buffered read path** - measured 2026-11-15 with a
   per-reader instrument and a mincore-verified host drop,
   [note 11](notes/11-guest-read-path-ceiling.md): buffered reads cap at ~200 MB/s and
