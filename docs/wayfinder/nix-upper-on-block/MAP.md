@@ -237,6 +237,18 @@ green.
 
 ## Not yet specified
 
+- **Tried the erofs lower end to end: it is 2x the requests and 3-4x slower. Reverted** -
+  measured 2026-11-15, [note 22](notes/22-erofs-lower-is-slower.md): a full implementation
+  (host `mkfs.erofs -T 0`, `CANG_NIX_LOWER_FSTYPE`, `mount -t erofs`, a labelless-disk
+  lookup because an erofs image carries no label, `erofs-utils` in the helper dir) mounted
+  and worked, and cost **1 940 device reads / 1 355-2 389 ms** for the 3 897-file cold walk
+  against btrfs's **941 reads / 362-500 ms** - erofs metadata blocks are 4 KiB where btrfs
+  packs 16 KiB nodes, and per-request round trips are the whole cost here. This **retracts
+  note 18's 1.5-1.8x erofs win**, whose erofs arms were reading a loop-mounted copy that
+  the cache control never dropped. btrfs stays; the patch is kept at
+  `blkread/erofs-lower-switch.patch`; every future lower comparison must record
+  reads-per-walk, the column that would have caught both mistakes.
+
 - **Removing the image's compression costs 2.7 s of build and no disk, and buys ~30 % of
   host device service but ~0 end to end** - measured 2026-11-15,
   [note 21](notes/21-compression-cost-and-build-cost.md): the real store builds in 37.3 s
