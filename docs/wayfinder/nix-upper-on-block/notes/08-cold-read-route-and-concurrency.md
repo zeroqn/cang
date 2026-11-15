@@ -128,3 +128,49 @@ arms with CPU/PSI/vmstat), `run-depth-20261115T022347Z` (§3),
 and `control5.sh`/`control6.sh`; analyzer `analyze_attr.py`. Instruments:
 `posix_fadvise` drop validated by re-read timing, `sda` `diskstats` per arm,
 guess-free image resolution from the live worker's open fds.
+
+## 6. Per-request attribution (added same session, HEAD build with `CANG_BLK_TRACE`)
+
+The prebuilt has no per-request trace, so this ran on a HEAD build with the
+campaign's own instrumentation applied to a pristine `deps/libkrun` HEAD
+(`v2.0.0-cang.21`, `9ff213f1`) as one commit, overridden with
+`nix build .#cang --override-input libkrun-src git+file://…/fork-trace
+--no-write-lock-file` (out path `zdsl6iqg…-cang-0.21.0`; no pin moved). Each
+completion logs `len`, `pread_us` and `copy_us`; `logs/host.log` brackets every
+arm with the trace's line count so lines can be sliced per arm.
+
+| arm | readers | traced bytes | wall ms | pread s | copy s | pread % | copy % | copy MB/s | device busy ms |
+|---|---|---|---|---|---|---|---|---|---|
+| `one-a` | 1 | 626 MB | 5721 | 0.15 | 1.97 | 3 % | 34 % | 310 | 2280 |
+| `one-b` | 1 | 610 MB | 9331 | 0.22 | 4.68 | 2 % | 50 % | 130 | 5063 |
+| `eight-a` | 8 | 2106 MB | 44716 | 1.95 | 37.4 | 4 % | 84 % | 56 | 266917 |
+| `eight-b` | 8 | 2078 MB | 34450 | 0.68 | 26.5 | 2 % | 77 % | 78 | 150475 |
+
+`pread` is 2-4 % of every arm - the host side of the read is free, which is what
+"host cache hot" predicts. **The staging copy into guest memory is 34-50 % of a
+single-reader arm and 77-84 % of an eight-reader arm, and its throughput falls
+from 130-310 MB/s to 56-78 MB/s as readers are added.** Request lengths are
+mostly 4 MiB and 16 KiB (502 and 406 of the 1080 completions in `eight-a`).
+
+That is what the concurrency collapse in §3 is made of, and it re-orders the
+levers. A device that preads **straight into the guest's descriptor buffers**
+does not do this copy at all: it replaces [pread -> host staging buffer] followed
+by [staging buffer -> guest memory] with one pread into guest memory. The
+in-fork version of the same idea is direct-to-guest reads, which the worker's own
+correctness rule currently forbids for possibly-overlapping buffers (one
+completion thread must write them, `cang-block-read-completion-serialization`).
+So the honest recommendation is: **direct-to-guest reads with a proven
+non-overlap test first, vhost-user-blk only as the fallback** - both buy the same
+copy, and the fork is the cheaper place to prove it.
+
+## 7. What this changes about the vhost-user question
+
+The earlier "decline" was arithmetic on the campaign's attribution, which put the
+cost guest-side. This trace puts 77-84 % of an eight-reader arm in the host's
+**staging copy into guest memory**, which is exactly the work a backend that reads
+into guest buffers removes. So the question is no longer "can a backend help" but
+"which is cheaper: a fork-side direct-to-guest read with a non-overlap proof, or a
+whole vhost-user backend". The fork side is one code path and keeps cang's single
+`FsDevice`/`BlockDevice` topology, so it is where to measure first; a vhost-user
+prototype would need a backend on this host (none built: only `qemu-ga` is
+realised) plus the memfd-RAM flip, and would confound the RAM-backing axis.
