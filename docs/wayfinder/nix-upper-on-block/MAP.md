@@ -237,6 +237,17 @@ green.
 
 ## Not yet specified
 
+- **A warm host saves 15-20 % of the walk; `/nix` in the harness boots is virtiofs, not the
+  guest's overlay** - measured 2026-11-15,
+  [note 24](notes/24-warm-host-cache-and-nix-is-virtiofs.md): with the guest's page cache
+  dropped every arm, a warm *host* image cache costs 375-380 ms against 450-500 ms cold
+  (~98 ms, matching the ~100 us of host service per read) while the guest still issues all
+  941 requests - so a second launch gains a fifth, not a different league. The same boot
+  exposed a control defect (control11 dropped for every arm, so the first attempt's "warm"
+  arms were cold - the proof line `@@ w1 warm_no_drop` must be asserted) and that `/nix` is a
+  fuse mount in these boots (`stat -f /nix` = fuse, no `/nix` mount point), so neither the
+  guest-composed overlay nor `--nix=upper:blk` has actually been exercised yet.
+
 - **No mount option and no guest-local copy moves the cold walk; the lever left is cache
   lifetime** - measured 2026-11-15, [note 23](notes/23-no-mount-option-and-no-locality-gain.md):
   `noatime` is a no-op on a read-only mount (941 device reads, 451-528 ms either way), a
