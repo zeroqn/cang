@@ -66,6 +66,34 @@ never from a filtered excerpt.
   and what the docs already claim ("the guest's overlay is the only /nix mount, so every /nix
   access is on the block devices instead of a covered virtio-fs path").
 
+## 5. Is there another Nix way to union stores? No
+
+`nix help-stores` on the host's Nix **2.34.9** lists exactly ten store types:
+
+```
+Dummy Store | Experimental Local Overlay Store | Experimental SSH Store |
+Experimental SSH Store with filesystem mounted | HTTP Binary Cache Store |
+Local Binary Cache Store | Local Daemon Store | Local Store | S3 Binary Cache Store | SSH Store
+```
+
+The only union among them is the local overlay store, which is overlayfs. The rest are single
+stores: `local`, `daemon`, `ssh`, and the caches. A **chroot store** (`--store /path`, or the
+`local?root=` setting the `auto` heuristic falls back to as `~/.local/share/nix/root`) is a
+*separate* local store with its own database and its own physical contents - populating it means
+`nix copy`/substitution, i.e. a full copy, with no copy-on-write and no union. Hardlink dedupe
+and `auto-optimise-store` share inodes *within* one store on one filesystem; they do not merge
+two stores either.
+
+The structural reason: a store path resolves to exactly one store instance, and Nix has no way
+to present two store *directories* as one namespace. `--substituters` gets you fetching, not
+unioning. So "let Nix do the union" can only mean its overlay store, which still requires the
+kernel overlayfs mount - and that mount measured free here, so there is nothing to save by
+moving the union into Nix.
+
+For cang the only open transport question is therefore which side carries the lower:
+block (432-479 ms) or virtiofs (913-1 199 ms), which is what `--nix=lower:blk` +
+`--nix=upper:blk` decides.
+
 ## Evidence
 
 `run-ab-virtiofs-20261116T132010Z` (1 199/940/926/913, `/nix` = virtiofs),
