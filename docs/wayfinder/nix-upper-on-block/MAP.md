@@ -237,6 +237,17 @@ green.
 
 ## Not yet specified
 
+- **Controlled A/B of `/nix`: block-overlay 432-479 ms against virtiofs 913-1 199 ms (2.1-2.8x);
+  Nix's own overlay store is overlayfs and cannot remove the union** - measured 2026-11-16,
+  [note 27](notes/27-nix-ab-controlled-comparison.md): same probe, same binary, one boot per
+  mode, four cold arms each. Nix's `local-overlay` store "is designed to leverage Linux's
+  Overlay Filesystem" and "you will first need to configure an OverlayFS mountpoint
+  appropriately as Nix will not do this for you", so it moves management, not the kernel layer -
+  which measures at zero anyway. The mount identity flaps between boots with identical flags
+  (overlayfs in two boots, fuse in one, same timings), so the mechanism claim holds only where
+  the mount table says so; that flapping is an open question, as is the full 2.1-2.8x being
+  transport rather than overlay.
+
 - **Rebuilding the corrupt build disk fixed `/nix`: the guest now composes the overlay over
   the block lower and walks 2.6-2.9x faster** - measured 2026-11-16,
   [note 26](notes/26-rebuilding-the-build-disk-fixed-nix.md): after deleting the EUCLEAN
