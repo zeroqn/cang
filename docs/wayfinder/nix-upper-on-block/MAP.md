@@ -237,6 +237,20 @@ green.
 
 ## Not yet specified
 
+- **Overlayfs is free; `/nix` is 2.4x slower because it is virtiofs, and the guest cannot
+  compose an overlay because the build disk is corrupt** - measured 2026-11-16,
+  [note 25](notes/25-overlay-is-free-nix-is-virtiofs-because-vdb-is-corrupt.md): an overlay
+  over the block lower with a tmpfs upper walks the same 3 897 files in 442-472 ms against
+  the raw lower's 422-559, and issues the same 941 device reads, so the union layer costs
+  nothing; `/nix` meanwhile walks in **1 239 ms** because `stat -f /nix` is `fuse` and there
+  is no `/nix` mount at all. The guest never composed the overlay because `/dev/vdb`
+  (`LABEL=CANG_BUILD`) refuses to mount - `fsconfig() failed: Structure needs cleaning`
+  (EUCLEAN, very likely from this session's repeated `kill -9` of microVMs) - so every
+  candidate upper was a fuse path, and overlayfs refuses a fuse upper (EINVAL). Nix's own
+  `local-overlay` store is overlayfs too and has the same upper requirement, so it cannot
+  remove a cost that is already zero. Rebuilding the build disk is the next step and needs an
+  explicit go-ahead.
+
 - **A warm host saves 15-20 % of the walk; `/nix` in the harness boots is virtiofs, not the
   guest's overlay** - measured 2026-11-15,
   [note 24](notes/24-warm-host-cache-and-nix-is-virtiofs.md): with the guest's page cache
