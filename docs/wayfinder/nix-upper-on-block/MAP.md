@@ -237,6 +237,17 @@ green.
 
 ## Not yet specified
 
+- **Rebuilding the corrupt build disk fixed `/nix`: the guest now composes the overlay over
+  the block lower and walks 2.6-2.9x faster** - measured 2026-11-16,
+  [note 26](notes/26-rebuilding-the-build-disk-fixed-nix.md): after deleting the EUCLEAN
+  `cang-build.raw` (540 KB of content), `findmnt /nix` reports `overlay` with
+  `lowerdir=/run/cang/nix-lower, upperdir=<build disk>/nix-overlay/<identity>/upper`, and the
+  same 3 897-file cold walk runs **422-478 ms** against **1 239 ms** on the virtiofs path, and
+  404-461 ms for the raw lower - i.e. at block speed, with the union still free. Notes 24-25's
+  `/nix` numbers were a broken-disk artefact, not cang behaviour. Left as a cang follow-up,
+  not a map decision: `raw_btrfs` validates the image with `blkid` TYPE only, so a
+  broken-but-btrfs superblock passes and the guest fails at mount instead of repairing.
+
 - **Overlayfs is free; `/nix` is 2.4x slower because it is virtiofs, and the guest cannot
   compose an overlay because the build disk is corrupt** - measured 2026-11-16,
   [note 25](notes/25-overlay-is-free-nix-is-virtiofs-because-vdb-is-corrupt.md): an overlay
