@@ -77,6 +77,29 @@ rustc window.
 
 Retracted: the p50 column of the first table in this note.
 
+## Severity under pure memory churn: 68 ms idle -> 11 s p50, with calls dying at the timeout
+
+A dedicated window (13 tmpfs churners writing/freeing 200 MB + 13 `dd oflag=direct` writers on
+the build disk, no rustc) makes the exec round trip far worse than the rustc storm, and produces
+outright timeouts:
+
+| window | n | outcome | total p50 | max |
+|---|---|---|---|---|
+| idle (10 s) | 29 | all rc=0 | **68 ms** | 171 ms |
+| memory churn (60 s) | 9 | rc=0 | **11 292 ms** | 67 463 ms |
+| memory churn | 2 | **rc=124** (killed by the 120 s client timeout) | 123.7 s / 168.4 s | - |
+
+So under memory pressure `cang exec` does not merely slow down: two of eleven attempts ran past
+two minutes and were killed. The stderr of those calls is empty, so this note cannot name the
+failing stage beyond "before the command's output, after the request left the host" - the guest
+command never printed anything in those attempts.
+
+**And an unexplained cluster in the earlier clean boot**: of the 3 102 `mix` samples in
+`run-vsock8`, 3 014 returned in 38-74 ms with *no guest output at all* while 88 succeeded with a
+602 ms p50. Fast returns with no output are a different failure mode from the timeouts above, and
+because that runner sent stderr to /dev/null the cause is unknown. It is the one hole in this
+note; the fix is the same runner with stderr captured (as in `run-vsock9`), which now exists.
+
 ## Separating the remaining two halves
 
 `other` = (spawn: send + fork/exec + handshake) + (return: reply + host wakeup). To split it, the
