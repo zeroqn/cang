@@ -100,6 +100,46 @@ command never printed anything in those attempts.
 because that runner sent stderr to /dev/null the cause is unknown. It is the one hole in this
 note; the fix is the same runner with stderr captured (as in `run-vsock9`), which now exists.
 
+## Second correction: the memory-churn arms measured a dying guest, not a slow transport
+
+`run-vsock9` (the stderr-capturing rerun) settled what the churn window actually was. Of its 1 826
+exec attempts, **1 786 returned rc=1 in 45 ms p50** and every one of those carries the same
+message on stderr:
+
+```
+cang: no active cang task with id, handle, or handle prefix, and no matching handle selector
+```
+
+The task no longer existed. The guest-init's own log in the same run shows why:
+
+```
+cang-guest-init: exec request failed: failed to write cang exec protocol frame tag: Broken pipe (os error 32)
+[ERROR init_or_kernel] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[ERROR init_or_kernel] rcu:  18-...!: (1 GPs behind) ... (detected by 18, t=40290 jiffies, ncpus=26)
+[ERROR init_or_kernel] rcu: INFO: Stall ended during stack backtracing.
+[ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+```
+
+So under 13 tmpfs churners (200 MB each, repeatedly) plus 13 `dd oflag=direct` writers in an 8 GiB
+guest, the **guest kernel wedged with RCU stalls of ~40 000 jiffies**, the guest agent could no
+longer write its reply frames (EPIPE), and the VM died. The "11.3 s p50 / two calls past 120 s"
+reported above are therefore samples of a *dying* guest, not of a slow transport - and the 3 014
+fast "no guest output" samples in `run-vsock8` are the same phenomenon (the task was already gone).
+
+Retracted: the churn row of both tables in this note, as a measurement of exec or transport
+latency. What survives:
+
+- **idle 62-68 ms** (many samples, two boots, both clean);
+- **rustc storm 397 ms p50 / 13.2 s p95 / 66 s max** with the guest healthy throughout (every
+  sample carried guest timestamps, so the guest was alive and answering);
+- the observation that CPU saturation (62 ms) and fork/exec churn (82 ms) are cheap;
+- a new, separate finding: **guest memory exhaustion wedges the guest kernel (RCU stalls) and
+  breaks the exec channel** (EPIPE from the guest agent, then "no active task"), which is a
+  robustness property of an over-committed guest rather than a latency property of vsock. An 8 GiB
+  guest with 26 concurrent rustc processes plus tmpfs churn is beyond what that guest can hold;
+  the earlier `-p sandsea-collector` build survived on 8 GiB, so the threshold sits between those
+  two workloads.
+
 ## Separating the remaining two halves
 
 `other` = (spawn: send + fork/exec + handshake) + (return: reply + host wakeup). To split it, the
