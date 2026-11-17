@@ -411,10 +411,17 @@ impl LibkrunApi for LinkedLibkrunApi {
     fn block_device_new(&mut self, id: &str, path: &Path, read_only: bool) -> Result<Handle> {
         let path = path_str(path, "disk image path")?;
         let mut device = BlockDevice::new(id, path, DiskFormat::Raw)?;
-        // The fork defaults reads to its thread pool, but set it explicitly so
-        // the behaviour survives a fork re-base that drops that default: a
-        // guest's parallel block I/O otherwise stalls on one device thread.
-        device.set_parallel_reads(true);
+        // Reads are served on the device thread rather than through the fork's
+        // IO pool: a pooled read stages the data in a zeroed per-request buffer
+        // and copies it into guest memory, and that copy is what the pool costs
+        // (measured 1.7-2.8x on cold `find /nix/store` and 128 MiB reads, and
+        // recycling the staging buffers instead of allocating them changed
+        // nothing). Serving the read on the device thread preads straight into
+        // the guest's descriptors, so there is no staging buffer and no copy.
+        // Pool threads may not write guest memory directly while guest read
+        // buffers can overlap, which is why this stays serialised until that is
+        // proven safe per request.
+        device.set_parallel_reads(false);
         device.set_read_only(read_only);
         Ok(self.push(Slot::BlockDevice(device)))
     }
