@@ -48,6 +48,35 @@ Attempting to measure the PTY directly failed: driving `cang attach` from a scri
 EIO), so the attach path refuses a non-interactive client and needs a real terminal. That is a
 harness limitation, not a result, and it is why this note reports no PTY number.
 
+## Correction (same day, clean rerun): the p50s above were inflated ~10x by a parallel VM
+
+The `run-vsock7` numbers in the table were taken while **two other `run-vsock7` instances and a
+`run-vsock6` were still alive** - 25 and 19 minutes old, each with its own 8 GiB guest and its own
+`dd`/tmpfs load loops. `ps` shows it plainly; the host was at 13 GB available instead of 14.7, and
+the same boot type re-measured with a gate that refuses to start while any other
+`libkrun-vm-worker-enter` exists gives:
+
+| window (one VM, nothing else alive) | n | total p50 | p95 | max | command's own run p50 |
+|---|---|---|---|---|---|
+| idle | 50 | **62 ms** | 83 ms | 92 ms | 8 ms |
+| 26 concurrent `rustc -O` | 43 | **397 ms** | 13.2 s | 66.2 s | 35 ms |
+| 13 `dd oflag=direct` + 13 tmpfs churners | 83 | **602 ms** | 22.8 s | 65.0 s | 53 ms |
+
+So the shape of the conclusion survives - memory-allocating loads degrade the exec round trip by
+6-10x at the median and by two orders of magnitude at p95, while the executed command still runs
+in 8-53 ms - but the medians I first reported (2.0-4.0 s) were host-pressure artefacts, the exact
+confound note 13 documents. The load taxonomy (CPU 62 ms, fork/exec churn 82 ms, both under
+160 ms max) is from the `run-vsock4`/`5` boots, which overlapped each other too; those two
+windows are cheap enough that the ordering is unlikely to flip, but they have not been re-run
+clean and should be treated as indicative.
+
+Also fixed in this rerun: each run now gets its own workspace and evidence directory. The shared
+`vsockws/evidence/phase` file meant a leftover host sampler could label its samples with a *later*
+run's phase - which is why `run-vsock5`'s file contained "rustc" samples from a probe that has no
+rustc window.
+
+Retracted: the p50 column of the first table in this note.
+
 ## Separating the remaining two halves
 
 `other` = (spawn: send + fork/exec + handshake) + (return: reply + host wakeup). To split it, the
