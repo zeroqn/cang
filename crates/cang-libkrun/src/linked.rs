@@ -411,17 +411,17 @@ impl LibkrunApi for LinkedLibkrunApi {
     fn block_device_new(&mut self, id: &str, path: &Path, read_only: bool) -> Result<Handle> {
         let path = path_str(path, "disk image path")?;
         let mut device = BlockDevice::new(id, path, DiskFormat::Raw)?;
-        // Reads are served on the device thread rather than through the fork's
-        // IO pool: a pooled read stages the data in a zeroed per-request buffer
-        // and copies it into guest memory, and that copy is what the pool costs
-        // (measured 1.7-2.8x on cold `find /nix/store` and 128 MiB reads, and
-        // recycling the staging buffers instead of allocating them changed
-        // nothing). Serving the read on the device thread preads straight into
-        // the guest's descriptors, so there is no staging buffer and no copy.
-        // Pool threads may not write guest memory directly while guest read
-        // buffers can overlap, which is why this stays serialised until that is
-        // proven safe per request.
-        device.set_parallel_reads(false);
+        // Pooled reads, with the fork's direct-to-guest path: a pool worker preads
+        // straight into the guest's descriptor buffers, so there is no staging buffer
+        // and no copy, and the dispatcher admits a read only when its guest ranges are
+        // disjoint from every read already in flight (that is what makes writing guest
+        // memory from a pool thread safe). Measured against the serial path on an idle
+        // guest with a warm backing: indistinguishable. Under 26 spinning vCPUs plus 8
+        // direct writers: `find /nix/store` 5.6-5.9 s against 6.6-67 s, and a cold
+        // 128 MiB read 692-721 ms against 2 810-3 608 ms. Pooled also keeps the
+        // parallelism a loaded guest needs, which is why the earlier staging pool -
+        // serialised by its bounce buffer - lost there.
+        device.set_parallel_reads(true);
         device.set_read_only(read_only);
         Ok(self.push(Slot::BlockDevice(device)))
     }
