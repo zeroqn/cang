@@ -58,6 +58,20 @@ stay at 0, and the child resets itself, so the blast radius is the plumbing only
 - This does not make a *command* start faster under load - only the handshake around it. A guest
   that is memory-starved still wedges (note 32's retracted churn arms).
 
+## The memory-churn window in the same boot died again - which is note 32's point, not this fix's
+
+The after-fix boot also ran the memory-churn window last (13 tmpfs churners + 13 `dd oflag=direct`
+writers, the arm note 32 retracted). It behaved exactly as recorded there: 1 353 of its 1 439
+samples returned **without any guest timestamp** - i.e. the task was gone and `cang exec` answered
+instantly with nothing - while the 86 that carry guest timestamps came back normally. The guest
+wedges under that churn regardless of thread priority, so the priority change neither fixes nor
+worsens it, and the idle/rustc windows ahead of it are unaffected (every sample in both carries
+guest timestamps, which is why those numbers stand).
+
+That corroborates note 32 with a second binary and re-confirms the ordering: interactive *latency*
+is a scheduling problem (fixed here), guest *memory exhaustion* is a different failure that needs a
+budget, not a nice level.
+
 ## Disk pressure (reported, not hidden)
 
 The arm could not run at first: `/home/dev/disp` hit **100 %** and cang failed with
