@@ -25,6 +25,7 @@ const PREPARED_ROOT_TARGETS: &[&str] = &[
     "/home/dev/.codex",
     "/home/dev/.omp",
     "/home/dev/.pi",
+    "/home/dev/.zvec-grep",
     "/home/dev/.local/share/cortexkit",
     "/home/dev/.cargo",
     "/home/dev/.cache/sccache",

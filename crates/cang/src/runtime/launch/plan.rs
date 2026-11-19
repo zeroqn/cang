@@ -602,11 +602,15 @@ mod tests {
                 .find(|mount| mount.target == target)
                 .expect("mount should exist")
         };
-        assert_eq!(plan.bind_mounts.len(), 10);
+        assert_eq!(plan.bind_mounts.len(), 11);
         assert_eq!(mount("/workspace").source, workspace);
         assert_eq!(mount("/home/dev/.codex").source, home.join(".codex"));
         assert_eq!(mount("/home/dev/.omp").source, home.join(".omp"));
         assert_eq!(mount("/home/dev/.pi").source, home.join(".pi"));
+        assert_eq!(
+            mount("/home/dev/.zvec-grep").source,
+            home.join(".zvec-grep")
+        );
         assert_eq!(
             mount("/home/dev/.local/share/cortexkit").source,
             home.join(".local/share/cortexkit")
@@ -631,6 +635,7 @@ mod tests {
         assert!(home.join(".codex").is_dir());
         assert!(home.join(".omp").is_dir());
         assert!(home.join(".pi").is_dir());
+        assert!(home.join(".zvec-grep").is_dir());
         assert!(home.join(".local/share/cortexkit").is_dir());
         assert!(home.join(".config/dirge").is_dir());
         assert!(home.join(".local/share/dirge").is_dir());
@@ -947,7 +952,7 @@ mod tests {
             .find(|mount| mount.target == "/guest/dir")
             .expect("dir volume mount");
         assert_eq!(dir_mount.source, source_dir);
-        assert_eq!(dir_mount.tag, "cang-user-volume-10");
+        assert_eq!(dir_mount.tag, "cang-user-volume-11");
         assert_eq!(dir_mount.source_kind, BindMountSourceKind::Directory);
         assert!(!dir_mount.read_only);
 
@@ -957,7 +962,7 @@ mod tests {
             .find(|mount| mount.target == "/guest/file")
             .expect("file volume mount");
         assert_eq!(file_mount.source, source_file);
-        assert_eq!(file_mount.tag, "cang-user-volume-11");
+        assert_eq!(file_mount.tag, "cang-user-volume-12");
         assert_eq!(file_mount.source_kind, BindMountSourceKind::File);
         assert!(file_mount.read_only);
     }

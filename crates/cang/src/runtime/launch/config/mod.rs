@@ -16,7 +16,7 @@ pub(crate) use model::{
     GuestPermissions, HostNixOverlay, LaunchConfig, LaunchSpec, MANAGED_GUEST_KERNEL_CONSOLE_LOG,
     ManagedSessionConfig, NIX_TARGET, NetworkMode, OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET,
     PulseBridgeConfig, PulseServer, SCCACHE_TAG, SCCACHE_TARGET, WORKSPACE_TAG, WORKSPACE_TARGET,
-    WaypipeConfig, canonical_mount_target,
+    WaypipeConfig, ZVEC_GREP_TAG, ZVEC_GREP_TARGET, canonical_mount_target,
 };
 
 #[cfg(test)]
