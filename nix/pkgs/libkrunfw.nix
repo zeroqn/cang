@@ -83,17 +83,17 @@ let
     };
   };
 
-  kernelVersion = "linux-7.3.1";
-  kernelHardenedVersion = "v7.3.1-hardened1";
+  kernelVersion = "linux-7.3.5";
+  kernelHardenedVersion = "v7.3.5-hardened1";
 
   kernelTarball = fetchurl {
     url = "https://cdn.kernel.org/pub/linux/kernel/v7.x/${kernelVersion}.tar.xz";
-    hash = "sha256:+llarZNzT4KcljwqkO98NnMiT9f9rntJQG45fN4t4jE=";
+    hash = "sha256:jyk/g9VPC3ub5Whj68Xk6nnXPlMLSuVcVyvpfvOfCZA=";
   };
 
   kernelHardenedPatch = fetchurl {
     url = "https://github.com/anthraxx/linux-hardened/releases/download/${kernelHardenedVersion}/linux-hardened-${kernelHardenedVersion}.patch";
-    hash = "sha256:x5yDZN/T5qQmjx38bpsiDJR3bWqs4KbWHc4TXcv66tg=";
+    hash = "sha256:Qrc+WrTRBvr/Z0M5rJSmhBcmVueA2e+DFf6qO9cm0nE=";
   };
 
   python = python3.withPackages (pythonPackages: [

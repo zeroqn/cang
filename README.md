@@ -703,7 +703,7 @@ same host package built against a locally compiled libkrunfw kernel; point
 either target at fork work in the checkout with
 `--override-input libkrun-src "git+file://$PWD/deps/libkrun"` (or
 `libkrunfw-src`, or `rutabaga-gfx-src`). The fork keeps one kernel line per
-branch: `cang` is the newest kernel (linux-7.3.1 + linux-hardened), which
+branch: `cang` is the newest kernel (linux-7.3.5 + linux-hardened), which
 `libkrunfw-src`, `deps/libkrunfw` and therefore `nix build .#cang-dev` follow,
 and `cang-lts` is the LTS kernel (linux-6.12.115 + linux-hardened), which the
 other architectures run. Each line publishes its own permanent release

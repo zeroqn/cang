@@ -405,8 +405,8 @@ them.
 `zeroqn/libkrunfw` keeps one kernel line per branch, so a kernel re-base never
 has to drag a second line along:
 
-- **`cang`** is the newest kernel line (linux-7.3.1 + linux-hardened
-  v7.3.1-hardened1). cang's `libkrunfw-src` input and the `deps/libkrunfw`
+- **`cang`** is the newest kernel line (linux-7.3.5 + linux-hardened
+  v7.3.5-hardened1). cang's `libkrunfw-src` input and the `deps/libkrunfw`
   submodule follow it, which is what `nix build .#cang-dev` compiles, and the
   `libkrunfwRelease` pin installs it for x86_64 - the line a launch on that
   architecture runs. The `/nix` block lower is safe on it: the lost pages that
