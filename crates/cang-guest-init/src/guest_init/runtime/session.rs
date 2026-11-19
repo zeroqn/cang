@@ -836,34 +836,6 @@ where
     }
 }
 
-/// Give the terminal's own threads a scheduling edge over whatever the guest is
-/// compiling.
-///
-/// A busy guest runs dozens of compiler threads; a keystroke is handled by this
-/// session thread (pty -> frame) and the client input thread (frame -> pty), and
-/// when every vCPU is oversubscribed those two wait their turn behind the build.
-/// Measured on a guest running 13 concurrent `rustc`s: p50 round trip 3.1 ms but a
-/// tail to 1.4 s, and 9 s with more load, while guest memory stayed above 6.5 GiB
-/// (so it is scheduling, not reclaim). Raising the nice level of just these two
-/// threads costs the build nothing measurable and keeps typing responsive.
-///
-/// Best effort: a guest that cannot raise its own priority still has a working
-/// terminal, only a slower one.
-fn prioritise_terminal_thread(thread_name: &str) {
-    const TERMINAL_NICE: libc::c_int = -20;
-    let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, TERMINAL_NICE) };
-    if result != 0 {
-        let err = std::io::Error::last_os_error();
-        managed_debug(&format!(
-            "could not raise priority of {thread_name}: {err}; it will compete for CPU normally"
-        ));
-    } else {
-        managed_debug(&format!(
-            "{thread_name} prioritised to nice {TERMINAL_NICE}"
-        ));
-    }
-}
-
 fn serve_attached_client(
     master: &File,
     child: libc::pid_t,
@@ -873,7 +845,10 @@ fn serve_attached_client(
     attach_profile: bool,
     pty_forwarding_mode: PtyForwardingMode,
 ) -> Result<ClientResult> {
-    prioritise_terminal_thread("session-pty-pump");
+    crate::guest_init::runtime::priority::prioritise_current_thread(
+        "session-pty-pump",
+        crate::guest_init::runtime::priority::INTERACTIVE_NICE,
+    );
     let mut profiler = GuestAttachProfiler::new(attach_profile);
     let active = Arc::new(AtomicBool::new(true));
     let reader_active = active.clone();
@@ -881,7 +856,10 @@ fn serve_attached_client(
     let mut client_reader = client.try_clone()?;
     let mut pty_writer = duplicate_file(master)?;
     let input_thread = thread::spawn(move || -> Result<()> {
-        prioritise_terminal_thread("session-pty-input");
+        crate::guest_init::runtime::priority::prioritise_current_thread(
+            "session-pty-input",
+            crate::guest_init::runtime::priority::INTERACTIVE_NICE,
+        );
         while reader_active.load(Ordering::SeqCst) {
             match read_frame(&mut client_reader)? {
                 Some(Frame::Data(data)) => {

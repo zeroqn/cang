@@ -38,6 +38,12 @@ pub(in crate::guest_init) fn start(
     }
     let listener = VsockListener::bind(config.port)?;
     Ok(thread::spawn(move || {
+        // The listener only accepts and hands off; it never forks, so raising its
+        // priority cannot leak into a user command.
+        super::priority::prioritise_current_thread(
+            "exec-listener",
+            super::priority::INTERACTIVE_NICE,
+        );
         loop {
             let client = match listener.accept() {
                 Ok(client) => client,
@@ -49,6 +55,10 @@ pub(in crate::guest_init) fn start(
             let identity = identity.clone();
             let waypipe = waypipe.clone();
             thread::spawn(move || {
+                super::priority::prioritise_current_thread(
+                    "exec-client",
+                    super::priority::INTERACTIVE_NICE,
+                );
                 if let Err(err) = handle_client(
                     client,
                     &identity,
@@ -141,6 +151,11 @@ fn handle_client(
     unsafe {
         command.pre_exec(move || {
             if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // The client thread runs at the interactive nice level; the command it
+            // starts is ordinary work and must not outrank the guest's own build.
+            if libc::setpriority(libc::PRIO_PROCESS, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             if process::is_root() {
