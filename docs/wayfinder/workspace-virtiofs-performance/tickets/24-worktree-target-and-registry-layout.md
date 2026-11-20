@@ -38,6 +38,38 @@ claimed_by: "pi + bob (2026-11-20)"
   and the third is being retired by ticket 26, which is what makes the placement
   question sharp now.
 
+## Round answers (2026-11-20, bob)
+
+- **Q1 - `target/` sharing: (b), "inside the tree", and cang must not implement
+  sharing at all.** Verbatim: *"kache can handle this, so don't do this at cang
+  level. Just set up cargo is enough. bind mount cargo to ~/.cargo in the guest"*.
+  Consequences: (1) `target/` is cargo's default `./target` inside the workspace
+  image - cang stops exporting `CARGO_TARGET_DIR`
+  (`launch/.../persistent_disks/build.rs:42`), so a worktree gets its own target
+  by construction and cross-worktree target sharing is *someone else's* job
+  (kache, sccache, whatever the user runs); (2) the cargo home is a directory on
+  the image, bind-mounted at **`/home/dev/.cargo`** in the guest, so the
+  conventional path is the real registry path instead of
+  `/home/dev/.cache/cang-build/cargo` (`build.rs:44`,
+  `guest_init/components/disk/build.rs:28-33`, including the seed-from-image step
+  at `:98-100` which this replaces).
+- **Q2 - worktree creation: (a) leave it to `git`.** `git worktree add` inside the
+  guest just makes a directory on btrfs; no cang command, no new concept.
+- **Q3 - image keying: deferred, bob asked for the purpose in plain words** -
+  answered below; with Q1=(b) the *sharing* reason for repo-root keying
+  disappeared, so the default is to keep the cwd slug
+  (`state/mod.rs:48`) unless bob says otherwise.
+- **Q4 - creation size and growth: (a) agreed.** Create at 64 GiB,
+  auto-grow at launch while free space inside would fall under ~10 % and the host
+  keeps >= 2x headroom, `--workspace-size=N` as the override, a named warning
+  when the cap or headroom refuses, and the existing manual `cang disk resize`
+  as the escape. The mechanism is already there (`build.rs:66-78`).
+
+**What this settles for other tickets:** ticket 18 builds no target-sharing
+machinery - only source, registry and target *locations*; ticket 26's retirement
+of the build disk now also removes `CARGO_TARGET_DIR`, not just the `/nix` upper;
+the word "worktree" stays out of `crates/` entirely.
+
 ## Question
 
 The point of putting `/workspace` on btrfs is cheap copies: `btrfs subvolume
