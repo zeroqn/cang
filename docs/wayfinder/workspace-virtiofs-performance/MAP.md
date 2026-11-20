@@ -568,6 +568,20 @@ of every request to zero.
   corrected shape** (the block lower becomes automatic, its upper moving into the
   tree). Not yet: the reverse share (the launch directory still
   shows its own contents), seeding a populated host tree (ticket 25), the cold
+- [What does the host's view of its workspace promise](tickets/23-reverse-share-contract.md):
+  **served continuously, stale-tolerant, read-only under a task, `EIO` on death.**
+  The launch directory is the mount point; a **long-lived workspace server VM** owns
+  the image whenever no task VM runs, and a task VM takes it over rather than both
+  mounting it ([ticket 29](tickets/29-workspace-server-vm.md)). Written promise: a
+  host reader may see a stale file until it reopens, and **no host `inotify` fires
+  for a guest-side write** (FUSE can invalidate cache but cannot synthesise an event;
+  [ticket 30](tickets/30-guest-side-invalidation-watcher.md) prices the invalidation).
+  Concurrent writes to one file are **forbidden**: the host mount is read-only while
+  a task VM holds the image. A dead serving guest makes host syscalls return **`EIO`**
+  with a named `cang` error, never a silent revert. Evidence: the measured host op
+  set (`git status` 6 037 syscalls, `newfstatat` 2 459; a `vim` save is in-place with
+  no rename; `mv` tries `renameat2(RENAME_NOREPLACE)` first).
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)
@@ -789,4 +803,8 @@ hold the code-level plan if that work is ever scheduled.
   path, `/nix` on a separate device).~~ **Still out**, with one exception ruled in
   by the redraw: `/nix` leaves the block-disks entirely
   ([ticket 26](tickets/26-retire-nix-block-disks.md)) rather than gaining a share.
+- **A CRDT or any concurrent-write reconciler for the workspace.** bob named it as
+  the future direction when settling ticket 23 (2026-11-20); v1 forbids concurrent
+  writes instead (the host mount is read-only under a task VM), so this is past this
+  map's destination and returns only if the destination is redrawn.
 

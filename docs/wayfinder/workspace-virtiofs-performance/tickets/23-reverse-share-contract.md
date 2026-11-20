@@ -1,7 +1,7 @@
 ---
 label: wayfinder:grilling
 title: What does the host's view of its workspace promise - mount point, authority, staleness, failure?
-status: open
+status: closed
 blocked_by: [22]
 claimed_by: "pi (2026-11-20)"
 ---
@@ -104,6 +104,48 @@ serves the host's view when no task VM is running.**
    line from `cang`**, because (b) silently changes what the path means and (c)
    invents a durability guarantee cang does not have.
 
+## Round answers (2026-11-20, bob)
+
+Verbatim: *"Q1: (b) Q2: agree (a) first (b) as a follow-up ticket Q3: (c) agree for v1,
+CRDT in the future Q4: (a)"*.
+
+- **1 (b)** - a **long-lived workspace server VM** owns the image whenever no task
+  VM is running, and a task VM takes the image over rather than both mounting it.
+  New ticket: [29](29-workspace-server-vm.md).
+- **2 (a)** - the written promise is: **a host reader may see a stale file until it
+  reopens, and no host `inotify` fires for guest-side writes.** (b) becomes
+  [30](30-guest-side-invalidation-watcher.md), a follow-up.
+- **3 (c)** - **while a task VM runs, the host mount is read-only**: the contract
+  forbids concurrent writes to one file. A CRDT is named as the future direction and
+  is **out of scope for this map** (see the map's Out of scope).
+- **4 (a)** - if the serving guest dies, host syscalls get **`EIO`** and the stale
+  mount stays, plus a named error line from `cang`; the launch directory never
+  silently reverts to the host tree.
+
 ## Resolution
 
-(to follow)
+The contract, settled 2026-11-20 (bob):
+
+1. **The host sees the workspace at the launch directory**, and it is served
+   *continuously*: by the task VM while one runs, and by a **workspace server VM**
+   (`cang workspace serve`) in between - one kernel touches the btrfs image at a
+   time, and the image never goes unwatched by the host.
+2. **Authority is the image; the host's view may be stale.** The promise is written
+   down: a host reader can see an older version of a file until it reopens it, and
+   **no host `inotify` event is generated for a guest-side write** (the FUSE
+   protocol can invalidate cache, `FUSE_NOTIFY_INVAL_INODE`/`INVAL_ENTRY`, but it
+   cannot synthesise an `inotify` event). Host-issued writes are coherent because
+   they arrive through the mount.
+3. **Concurrency is forbidden, not arbitrated**: while a task VM runs, the host
+   mount is mounted **read-only**. A future CRDT is named as the direction and is
+   out of scope here.
+4. **Failure is `EIO`**: the servicing guest dying makes host syscalls fail with
+   `EIO`, the stale mount stays until unmounted, and `cang` prints a named error.
+   No queueing, no silent revert to the host tree.
+5. **Acceptance** for the implementation: a host-side edit visible in the guest and
+   a guest-side write visible on the host after reopen, with real tools (`git`
+   status/add, an editor save, pi's file tools), plus the read-only refusal while a
+   task VM holds the image, plus the `EIO` arm. Measured, not asserted.
+
+Carried: ticket 29 (the server VM), ticket 30 (the invalidation watcher), and the
+measured op set above is what the relay must serve.
