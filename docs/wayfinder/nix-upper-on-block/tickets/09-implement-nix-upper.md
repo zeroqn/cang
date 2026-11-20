@@ -1,7 +1,7 @@
 ---
 label: wayfinder:task
 title: Implement the guest upper disk behind `--nix=upper:blk`
-status: open
+status: closed
 blocked_by: ["01-upper-write-cost", "04-upper-home-and-auto-grow", "05-seeding-parity", "06-migrate-existing-uppers"]
 claimed_by: ""
 ---
@@ -60,3 +60,12 @@ What is left for a follow-up, none of it needed for the shipped path: migrating
 an existing host-directory upper (the migration ticket), and pruning old
 generations - nothing deletes a retired digest's generation today, so the build
 disk keeps one per image the workspace has ever run.
+
+## Resolution
+
+**Cancelled 2026-11-20 (bob).** Not implemented, and not to be implemented: `/nix`
+block lower and upper support is being **removed** rather than extended, because
+"manually grow disk is painful, fewer blk is better". The `/nix` upper stays on
+the host composed overlay over the single virtio-fs connection. The removal is
+owned by `docs/wayfinder/workspace-virtiofs-performance/tickets/26-retire-nix-block-disks.md`;
+this ticket's research stands as the record of what the disk shape would have cost.

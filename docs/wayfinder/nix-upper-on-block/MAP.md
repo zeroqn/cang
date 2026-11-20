@@ -22,6 +22,20 @@ measurement says it pays**. The map ends at one of two places:
 "Reached" means the numbers come from live guests, not from a compile or a CI
 green.
 
+**Withdrawn in part (bob, 2026-11-20).** The upper (and with it the block lower)
+leaves the disk: `/nix` block **lower and upper support is removed** - "manually
+grow disk is painful, fewer blk is better" (`docs/wayfinder/workspace-virtiofs-performance/MAP.md`,
+redraw of the same date, ticket `26-retire-nix-block-disks`). What that cancels
+here: [ticket 09](tickets/09-implement-nix-upper.md) (implement `--nix=upper:blk`)
+is **cancelled**, and the `upper:` half of the `--nix=` axis goes with it;
+[ticket 10](tickets/10-nix-axis-and-retire-nix-lower.md) survives only as
+"retire the `blk` values" and is now owned by the other map's ticket 26. The
+`--fs=` -> `--virtiofs=` rename ([ticket 08](tickets/08-rename-virtiofs.md)) is
+untouched and stays open here. The acceptance arms in
+[note-shaped evidence](notes/) remain the record of what `upper:blk` cost, and
+that is what a later reader should read before proposing it again.
+
+
 ## Notes
 
 - **This map carries execution** (bob, 2026-11-10): measurement, implementation,

@@ -23,7 +23,94 @@ cache flag (and per-inode DAX, if possible) ship on fork tags pinned into cang;
 and the before/after numbers come from live guests, not from a compile or a CI
 green.
 
+**Redrawn (bob, 2026-11-20): `/workspace` moves off virtio-fs and onto a block
+device.** The workspace tree itself becomes a **btrfs filesystem on a raw image
+(or a host block device) that the guest mounts at `/workspace`**, authoritative
+as a tree: sources, `target/`, the cargo registry and cheap btrfs-subvolume
+worktrees all live on it, so what a build writes never crosses FUSE. The host is
+no longer the owner of that tree, so the map also owes the host what the share
+gave it for free - a **reverse share**: a live read/write mount of the guest's
+filesystem on the host, good enough for an editor, `git` and the agent harness
+itself (workloads that demand far less than a compile). The 2026-10-25 objection
+that parked this shape - "the host stops seeing guest writes until a sync, which
+is strictly worse" ([ticket 18](tickets/18-workspace-target-on-block.md)) - is
+exactly what the reverse share answers, which is why that exclusion is lifted by
+this redraw.
+
+"Reached" for the redrawn half means: a launch that puts `/workspace` on the
+image with worktrees, `target/` and the registry living on it; the host still
+editing those same files through the reverse share; and live arms that say what
+each cost, measured against the recorded virtio-fs numbers above (the 45 s
+cold-build penalty at `v2.0.0-cang.13`, the 8.2 s compile-test iteration).
+
+**And fewer block devices, not more (bob, 2026-11-20).** With the workspace on a
+disk, the `/nix` block lower and the block upper are **retired**: `/nix` goes
+back to the host-composed overlay over the one virtio-fs connection, and the
+build disk stops accumulating tenants that have to be grown by hand.
+
 ## Notes
+
+- **Destination decisions (bob, 2026-11-20 - a redraw of the 2026-10-25
+  "tuning + baseline" shape):**
+  - **Ownership - (A) the btrfs image is authoritative.** The host operates the
+    guest's files through the reverse share; the earlier "sync a copy back to the
+    host tree" shape (ticket 18's alternative) stays rejected for the same
+    coherence reason ticket 03 gave.
+  - **Reverse share v1 - (i) a live read/write mount of the guest's filesystem on
+    the host**, every operation served by the guest; not read-only published
+    snapshots, not "edit inside the guest". The decisive reason is that the host
+    tools which must keep working include the **agent harness itself** (pi runs on
+    the host and writes the workspace).
+  - **Backing device - raw image file first, host block device second.** Same
+    `DiskAttachment`; a real `/dev/sdX` is a later ticket, not v1.
+  - **Placement - `target/` and `CARGO_HOME` move into the workspace image**, the
+    `/nix` upper does not (a store upper has to outlive workspace images).
+  - **Fewer block devices - the `/nix` block lower and block upper are removed**,
+    not kept. `--nix=lower:blk` and `--nix=upper:...` go away, `/nix` returns to
+    the host-composed overlay, and "grow the disk by hand" shrinks instead of
+    growing another disk. The `nix-upper-on-block` map is withdrawn in part by
+    this (`docs/wayfinder/nix-upper-on-block/MAP.md`).
+- **Reading of those decisions** (the narrowings and the freedoms, so a later
+  session does not re-ask them):
+  - "Fewer blk" is a **rule**, not a one-off: a new block disk must displace work
+    from an existing one, and a blk lever that only saves a comma is out.
+  - The reverse share is a **product surface, not a diagnostic**: the
+    workspace-on-image mode ships with it or does not ship.
+  - **Which side is authoritative is settled (the guest image)**, so no ticket may
+    quietly reintroduce a sync-back; a host operation the share cannot serve is a
+    refusal that a ticket must state, not a fallback to the old host tree.
+  - The **read-only-of-the-image** fallback (a userspace btrfs reader, or root
+    mounting the image) is *not* the plan - it may appear as a diagnostic arm only.
+- **Starting facts (verified 2026-11-20, this checkout):**
+  - one virtio-fs device serves the root, and `/workspace` is a bind graft inside
+    it - `crates/cang/src/runtime/vm/libkrun/launcher.rs:450`
+    `fs_device_new(CANG_FS_ROOT_TAG, &config.task_rootfs, false)`;
+  - block attachments already exist and are read-only-capable -
+    `launcher.rs:526` `block_device_new(&disk.id, &disk.path, disk.read_only)`;
+  - raw btrfs image machinery is generic - `raw_btrfs.rs:102`
+    `prepare_with_runner`, `:115` `grow_existing_with_runner`, `:197`
+    `recreate_with_runner`, with `mkfs.btrfs`/`blkid` behind `RuntimeTool`
+    (`raw_btrfs.rs:44`, `:71`);
+  - the guest finds and mounts its disk itself, by btrfs label -
+    `crates/cang-guest-init/src/guest_init/components/disk/build.rs:37`
+    `find_labeled_disk_with_preferred`;
+  - **no guest->host filesystem transport exists in the fork**: device kinds are
+    balloon/block/console/fs/gpu/input/net/rng/rtc/vhost_user/vsock
+    (`deps/libkrun/src/devices/src/virtio/`), so no 9p and no FUSE client; vsock
+    is the only bidirectional transport cang already drives, and
+    `cang exec <task> -- cmd` (`crates/cang/src/cli/mod.rs:631`) plus
+    `cang attach` are the only host-side file operations today;
+  - an unprivileged host cannot loop-mount a raw image, so "mount the image on
+    the host" means a proxy (ticket 22) or a userspace btrfs reader;
+  - the build disk carries three tenants today - `target/`, `CARGO_HOME` and the
+    `/nix` upper - `nix_lower.rs:88` ("a sibling of `cargo/` and `target/` in the
+    build disk's ...");
+  - the guest image ships `btrfs-progs` (`nix/image/layers.nix:424`), so
+    `btrfs subvolume snapshot` for worktrees needs no new package;
+  - the `--nix=` surface to retire: grammar `lower|upper: auto|blk|virtiofs`
+    (`cli/mod.rs:2770`), the `lower:blk` parse test (`cli/mod.rs:1171`),
+    `nix_lower.rs:409` (strict `blk` refusal) and the guest-side
+    `CANG_NIX_LOWER_BLOCK` contract.
 
 - **Where this effort lives.** In the repo, on `main`: the map, its tickets, its
   notes and `tools/rust-compile-bench` all landed there on 2026-10-27, and the
@@ -45,6 +132,18 @@ green.
   `nix/pkgs/libkrun-source.nix` (`krunInitCargoDeps`) - two `fetchCargoVendor`
   hashes that must be harvested with **distinct** placeholders (rule #134);
   `tools/` for the harness.
+- Domain for the redrawn half (workspace image + reverse share): the state root
+  and its cwd-derived slug (`crates/cang/src/state/mod.rs:37`), raw btrfs images
+  (`crates/cang/src/runtime/launch/components/persistent_disks/raw_btrfs.rs`,
+  `nix_lower.rs` for the shape that is being retired),
+  `crates/cang/src/runtime/maintenance/disk_resize.rs` (the grow path a workspace
+  image may inherit), the guest disk components
+  (`crates/cang-guest-init/src/guest_init/components/disk/`), vsock wiring on both
+  sides (`deps/libkrun/src/devices/src/virtio/vsock/`,
+  `crates/cang/src/runtime/vm/libkrun/launcher.rs`) if a proxy is built, the render
+  server's seccomp assets (`crates/cang/assets/seccomp/`) for any new guest helper,
+  and `tools/rust-compile-bench` for the arms.
+
 - Skills every session on this map should consult:
   `cang-workspace-io-device-attribution` (the workspace share is virtio-fs, not
   virtio-blk: a blk-side change cannot help it), `cang-libkrun-fork-maintenance`
@@ -506,10 +605,11 @@ hold the code-level plan if that work is ever scheduled.
   primitive, so this graduates only from a protocol-level idea (batching a
   directory's worth of lookups into one reply, or a prefetch hint the server can
   answer in bulk), which nobody has proposed yet.
-- **Whether 8.2 s is the accepted cost of a compile-test iteration on a live host
-  tree** (against 1.45 s on the host and 1.3-2.1 s on guest tmpfs). If yes, this
-  effort's metadata thread is done; if no, the next artifact is a decision on
-  [ticket 18](tickets/18-workspace-target-on-block.md), not a FUSE change.
+- ~~**Whether 8.2 s is the accepted cost of a compile-test iteration on a live host
+  tree** (against 1.45 s on the host and 1.3-2.1 s on guest tmpfs).~~ **Answered
+  2026-11-20: not accepted** - bob redrew the destination around the block-device
+  workspace, so the metadata thread continues through
+  [ticket 18](tickets/18-workspace-target-on-block.md) rather than ending here.
 - **Whether `--fs=negative-entry:30000` should be the documented setting for
   compile-test loops, or the default.** It buys 33 % of an iteration on the
   2401-crate tree (11.8 s -> 7.9 s, [note 45](notes/45-compile-iteration-lookup-diagnosis.md) §5)
@@ -517,13 +617,37 @@ hold the code-level plan if that work is ever scheduled.
   250 ms. Shipping it as the default would weaken ticket 03's coherence contract;
   shipping it as documentation needs one line in `docs/usage.md` and a decision
   from bob.
-- **Whether the remaining gap should be attacked at all.** The share now costs
-  ~1 % of a cold 2401-crate build (116.3 s vs 115 s host) while the VM as a whole
-  costs 1.35x the host - so anything left here serves metadata-heavy workloads
-  (`git checkout`/`status`, package installs, target-dir churn), not compiles. If
-  bob wants *those* fixed rather than explained, the candidates are outside this
-  map's scope: `/workspace` on a block device, a share split so `target/` can be
-  cached and sources cannot.
+- ~~**Whether the remaining gap should be attacked at all.**~~ **Answered
+  2026-11-20: the candidates named here moved in scope** (`/workspace` on a block
+  device, `target/`+registry off the share) - see the redraw in `## Destination`.
+- **Whether the reverse share can serve the syscalls host tools actually issue.**
+  Not askable until [ticket 22](tickets/22-reverse-share-transport.md)'s transport
+  says what it can carry: `mmap` (rust-analyzer, editors, `git`'s pack access),
+  `rename`/`renameat2` pairs, `fsync`/`fdatasync`, `inotify`, hardlinks, xattrs and
+  `O_TMPFILE`. Any one of those missing turns a "live mount" into "an editor that
+  silently writes through a path that behaves differently", which is a ticket
+  nobody has written yet because the answer is not visible from here.
+- **Whether "the image is authoritative" survives the agent's own edit loop.** pi
+  runs on the host and writes the workspace with its own tools; if the proxy cannot
+  serve their exact semantics, some policy has to be stated (degraded writes with
+  a warning, a refusal, or edits routed into the guest). Only visible once the
+  transport exists.
+- **What the workspace image is keyed on.** Today's state root derives a slug from
+  the *cwd*; a btrfs tree with worktree subvolumes is nearer a *repository* than a
+  directory, so "which image does this launch use, and what happens when two
+  checkouts of one repo launch" is decided by
+  [ticket 24](tickets/24-worktree-target-and-registry-layout.md)'s layout, not before.
+- **Whether "fewer manual grows" is actually achieved.** `target/` and the registry
+  on the workspace image make that image the one that grows fastest; whether
+  subvolume delete/`balance`/quota keeps it self-managing, or the map has simply
+  moved the manual-grow problem one disk over, is a measurement behind
+  [ticket 24](tickets/24-worktree-target-and-registry-layout.md).
+- **Whether removing the `/nix` block disks leaves `/nix` fast enough.** The store
+  read storm was the case block-lower was built for; if a store-heavy guest gets
+  measurably slower once `/nix` is back on the host overlay, that returns to this
+  map as a *share* question (a second export), not as a disk one -
+  [ticket 26](tickets/26-retire-nix-block-disks.md) has to record the number that
+  decides it.
 - **Whether the VM penalty itself is worth attacking** (2.2x the host, i.e. the
   larger half): CPU model, `vdso`/`virtio` interrupt affinity, vCPU count vs
   `JOBS`, transparent hugepages (the concurrent THP effort), sccache inside the
@@ -566,14 +690,28 @@ hold the code-level plan if that work is ever scheduled.
 
 ## Out of scope
 
-- **`/workspace` as a virtio-blk filesystem image** (ext4/btrfs/erofs plus a
+- **Ruled in by the 2026-11-20 redraw, kept here for the history:** the three
+  exclusions below were bob's 2026-10-25 choices for the *tuning* destination, and
+  the redraw above lifts them - `/workspace` on a block device is now
+  [ticket 18](tickets/18-workspace-target-on-block.md),
+  `target/`+registry on the workspace image is
+  [ticket 24](tickets/24-worktree-target-and-registry-layout.md), and the mount-layout
+  rework narrowed to "retire the `/nix` block disks" is
+  [ticket 26](tickets/26-retire-nix-block-disks.md). Nothing here is reopened
+  beyond that.
+
+- ~~**`/workspace` as a virtio-blk filesystem image** (ext4/btrfs/erofs plus a
   sync policy to the host tree). A real option with parallel reads already
   enabled on the block path, but bob did not select it as a lever on 2026-10-25;
-  it returns only if this destination is redrawn.
-- **Moving hot IO off virtiofs as a shipped change** (target dir, sccache or the
+  it returns only if this destination is redrawn.~~ **Redrawn 2026-11-20.**
+- ~~**Moving hot IO off virtiofs as a shipped change** (target dir, sccache or the
   cargo registry on a guest-local disk). Bob chose "tuning + baseline" over
   "fast builds any way", so guest-local disk appears **only** as a benchmark
-  control, never as a product default.
-- **Reworking cang's mount layout for its own sake** (one share per grafted
-  path, `/nix` on a separate device). Not selected as a lever; see the reading
-  under Notes for the narrow exception that stays allowed.
+  control, never as a product default.~~ **Redrawn 2026-11-20** for `target/` and
+  the registry specifically; sccache's placement is
+  [ticket 24](tickets/24-worktree-target-and-registry-layout.md)'s to decide.
+- ~~**Reworking cang's mount layout for its own sake** (one share per grafted
+  path, `/nix` on a separate device).~~ **Still out**, with one exception ruled in
+  by the redraw: `/nix` leaves the block-disks entirely
+  ([ticket 26](tickets/26-retire-nix-block-disks.md)) rather than gaining a share.
+
