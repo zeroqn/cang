@@ -494,6 +494,24 @@ of every request to zero.
   ([ticket 21](tickets/21-multiqueue-request-queues.md)); and the pool, once
   shipped, measured flat from 4 to 16 threads - it was the right first move, not a
   scaling knob.
+- [How can the host get a live read/write mount of the guest's btrfs workspace
+  over the only transport cang has?](tickets/22-reverse-share-transport.md):
+  **only FUSE can be a mount here, the transport for it already exists, and the
+  price is ~2x the forward share's per request.** NFS/9p/SMB are unreachable
+  rather than slow (unregistered in the running host kernel, unloadable
+  unprivileged, and only FUSE carries `FS_USERNS_MOUNT`); an unprivileged
+  `fusermount3` mount was proven live. libkrun's unix-port channel with
+  `listen = true` is already a host->guest connection primitive
+  (`launcher.rs:838`), so no new device and no fork change - next free vsock port
+  50 430. A 64-byte vsock ping-pong measures ~224 us against ~120 us per forward
+  request, pricing a host `git status` at 0.4-0.9 s and an editor save under
+  1 ms; builds stay in the guest. Design: a FUSE relay - guest half on
+  `fuse-backend-rs`, host half a thin `/dev/fuse`<->vsock frame pump (the host
+  daemon cannot live inside the VM worker: no `mount` in its seccomp policy, no
+  `/dev/fuse` in its Landlock set, and `no_new_privs` rules out setuid
+  `fusermount3`). **Spike gate: if one relayed op exceeds ~250 us the product
+  surface does not work, and the numbers come back to bob.**
+  [note 58](notes/58-reverse-share-transport.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)
 

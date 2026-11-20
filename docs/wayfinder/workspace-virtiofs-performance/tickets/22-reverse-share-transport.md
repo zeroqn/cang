@@ -1,7 +1,7 @@
 ---
 label: wayfinder:research
 title: How can the host get a live read/write mount of the guest's btrfs workspace over the only transport cang has?
-status: open
+status: closed
 blocked_by: []
 claimed_by: "pi research child-58 (2026-11-20)"
 ---
@@ -50,6 +50,47 @@ Deliverable: a note under `notes/` (e.g. `58-reverse-share-transport.md`) with t
 candidate table, the price table, and the recommendation; link it here. Do **not**
 boot a VM and do not modify code.
 
-## Resolution
+## Resolution (2026-11-20, pi research child-58)
 
-(to follow)
+**Only FUSE can be a mount on this host, the transport for it already exists, and
+the price is ~2x the forward share's per request - so the design is a FUSE relay,
+gated on one measured round trip.**
+[note 58](../notes/58-reverse-share-transport.md).
+
+- **NFS/9p/SMB are unreachable, not merely slow**: none is registered in the
+  running host kernel, the client modules cannot be loaded unprivileged, and only
+  FUSE carries `FS_USERNS_MOUNT` in `fs/fuse/inode.c` (NFS has
+  `FS_USERNS_DELEGATABLE`, 9p no userns flag at all). A live unprivileged FUSE
+  mount was verified (`fusermount3`, uid 1000, no root, no userns). The userspace
+  btrfs reader is read-only and subvolume-blind; `cang exec` copy is not a mount.
+- **The transport needs no new device and no fork change**: libkrun's unix-port
+  channel with `listen = true` is a host-initiated connection into a guest
+  listener - exactly the primitive `cang exec` uses (`launcher.rs:838`,
+  `unix_proxy/unix.rs:435-459`). Next free vsock port: 50 430.
+- **Prior art**: nothing serves a guest's filesystem to a host mount over vsock.
+  Closest are `vspfs` (same shape, halves swapped), sshfs `-o vsock=CID:PORT`
+  straight to a guest `sftp-server` (right transport, wrong op set: no
+  `RENAME_EXCHANGE`/`WHITEOUT`, no xattr, no fsync op), and 9p `trans=vsock`
+  (merged in mainline, but client-only, no `AF_VSOCK` 9p server exists, and 9p
+  cannot be mounted unprivileged). Reusable: `fuse-backend-rs`
+  (Apache-2.0 AND BSD-3-Clause) for the guest server, `fuser` (MIT) for a host
+  server if a translated RPC is preferred.
+- **Price floor**: a 64-byte vsock ping-pong measures **~224 µs** (vhost-vsock,
+  LWN) against the share's ~120 µs/request, i.e. ~4.4 k ops/s per in-flight
+  stream; measured VFS counts put a host `git status` at 0.4-0.9 s, an editor save
+  or `pi` read under 1 ms, and a host-side build at ~100-140 s of transport - so
+  builders stay in the guest, as the destination already says.
+- **Where the guest side lives**: new cang code in the image (no fuse3/libfuse/
+  nfs-utils/samba/sshfs/openssh package exists there), listening on a vsock port
+  as `cang exec`'s listener does, running unconfined as guest root (the guest
+  applies no seccomp/Landlock at all). The host daemon must not be the VM worker:
+  its default seccomp policy has no `mount`, its Landlock ruleset has no
+  `/dev/fuse`, and `no_new_privs` kills the setuid `fusermount3` route - the
+  render-server precedent (own process, own policy, `/dev` + `/tmp` already
+  granted) is the shape, and its missing-`fallocate` SIGSYS is the landmine to
+  audit against.
+- **Smallest spike**: port 50 430 with an echo protocol, RTT at 1 and 8 clients
+  (gate: >250 µs single-op means the product surface cannot exist - stop and ask
+  bob), then one real mount serving LOOKUP/GETATTR/OPEN/READ/WRITE with a host
+  `cat` and a guest `cat` crossing in both directions, then `git status` and one
+  editor save measured against the recorded 52 ms native `git status`.
