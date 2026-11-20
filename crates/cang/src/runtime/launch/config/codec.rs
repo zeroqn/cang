@@ -501,6 +501,18 @@ impl LaunchConfig {
             )
             .map_err(anyhow::Error::msg)?;
         let mounts = parse_mounts(&fields, mounts)?;
+        let disks = disks
+            .into_iter()
+            .map(|(index, disk)| disk.finish(index))
+            .collect::<Result<Vec<_>>>()?;
+        // A launch that mounts its `/workspace` from its own disk has no
+        // `/workspace` bind mount; anything else must still name one.
+        if !disks
+            .iter()
+            .any(|disk| disk.id == super::model::WORKSPACE_DISK_ID)
+        {
+            mounts::require_workspace_mount(&mounts)?;
+        }
         let guest_init_override =
             parse_guest_init_override_mount(&fields, required("exec_path")?.as_str())?;
         let host_nix_overlay = parse_host_nix_overlay(&fields)?;
@@ -526,10 +538,7 @@ impl LaunchConfig {
             mounts,
             host_nix_overlay,
             guest_init_override,
-            disks: disks
-                .into_iter()
-                .map(|(index, disk)| disk.finish(index))
-                .collect::<Result<Vec<_>>>()?,
+            disks,
             ram_mib,
             vcpus,
             log_level,

@@ -468,7 +468,12 @@ pub(super) fn render_report(
 }
 
 fn parse_size_bytes(value: &str, kind: DiskKind) -> Result<u64> {
-    let label = kind.size_label();
+    parse_size_bytes_for_label(value, kind.size_label())
+}
+
+/// The same `<digits>[K|M|G|T|KiB|MiB|GiB|TiB]` grammar, labelled by the caller,
+/// so `--workspace-size` refuses what `cang disk resize` refuses.
+pub(crate) fn parse_size_bytes_for_label(value: &str, label: &str) -> Result<u64> {
     let value = value.trim();
     if value.is_empty() {
         bail!("{label} must not be empty");

@@ -12,6 +12,10 @@ use crate::runtime::vm::gpu::GpuMode;
 pub(crate) const DEFAULT_PULSE_BRIDGE_PORT: u32 = 50_429;
 pub(crate) const DEFAULT_WAYPIPE_PORT: u32 = 50_427;
 pub(crate) const WORKSPACE_TAG: &str = "cang-workspace";
+/// The disk id that makes a launch's `/workspace` a btrfs tree of its own
+/// (`--workspace-disk`): with it the launch contributes no `/workspace` bind
+/// mount, because the guest mounts that disk instead.
+pub const WORKSPACE_DISK_ID: &str = "cang-workspace";
 pub(crate) const WORKSPACE_TARGET: &str = "/workspace";
 pub const CODEX_TAG: &str = "cang-codex";
 pub const CODEX_TARGET: &str = "/home/dev/.codex";

@@ -224,6 +224,21 @@ pub(crate) struct Cli {
     container_store_backend: Option<ContainerStoreBackend>,
 
     #[arg(
+        long = "workspace-disk",
+        value_name = "PATH",
+        help = "Serve /workspace from a btrfs disk image or block device instead of the host directory",
+        long_help = "Serve /workspace from a btrfs disk image (created on first use at --workspace-size) or a block device, instead of the host directory over virtio-fs.\n\nThe guest mounts it at /workspace and everything a build writes stays on it: sources, cargo's own ./target and the cargo home (a directory inside the tree, bind mounted at ~/.cargo in the guest). The host-directory /workspace bind mount and the ~/.cargo bind mount are dropped for such a launch, as is the build disk - nothing is left for it to hold.\n\nA path holding a filesystem other than btrfs is refused rather than reformatted, and so is one smaller than the requested size. The host's view of the guest tree (the reverse share) is not built yet: for now the launch directory keeps showing the host copy, so this is a measurement surface, not a coherent one."
+    )]
+    workspace_disk: Option<PathBuf>,
+
+    #[arg(
+        long = "workspace-size",
+        value_name = "SIZE",
+        help = "Creation size for a new --workspace-disk image, for example 64G (default 64G)"
+    )]
+    workspace_size: Option<String>,
+
+    #[arg(
         long = "guest-init",
         value_name = "PATH",
         help = "Override cang-guest-init in the microvm image"
@@ -683,6 +698,8 @@ impl Cli {
             container_store_backend: self.container_store_backend,
             guest_init: self.guest_init,
             preserve_debug: self.preserve_debug,
+            workspace_disk: self.workspace_disk,
+            workspace_size: self.workspace_size,
             nix_lower: Some(match layer {
                 NixLayerMode::VirtioFs => NixLowerMode::VirtioFs,
                 NixLayerMode::Blk => NixLowerMode::Blk,
@@ -746,6 +763,8 @@ pub(crate) struct RuntimeOptions {
     pub(crate) container_store_backend: Option<ContainerStoreBackend>,
     pub(crate) guest_init: Option<PathBuf>,
     pub(crate) preserve_debug: bool,
+    pub(crate) workspace_disk: Option<PathBuf>,
+    pub(crate) workspace_size: Option<String>,
     pub(crate) nix_lower: Option<NixLowerMode>,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,

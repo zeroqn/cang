@@ -126,7 +126,7 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     debug_breadcrumb("read-env complete");
     debug_breadcrumb("validate-prepared-root starting");
     profiler.measure_result("validate-prepared-root", || {
-        validate_prepared_root_paths(&prepared_root_targets())
+        validate_prepared_root_paths(&prepared_root_targets(&env_contract))
     })?;
     debug_breadcrumb("validate-prepared-root complete");
     profiler.measure_result("ensure-tmp-tmpfs", ensure_tmp_tmpfs_mounted)?;
@@ -243,6 +243,16 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     })?;
     profiler.measure_result("materialize-home", || {
         crate::guest_init::components::home::root::materialize(&identity)
+    })?;
+    profiler.measure_result("mount-workspace-disk", || {
+        // `--workspace-disk` launches carry no `/workspace` bind mount, so the
+        // tree the command runs in does not exist until this mounts it. Fatal
+        // rather than degraded: an empty `/workspace` is not a smaller workspace,
+        // it is a different measurement.
+        if let Some(contract) = env_contract.cang.workspace_disk.as_ref() {
+            crate::guest_init::components::disk::workspace::ensure_ready(contract, &identity)?;
+        }
+        Ok(())
     })?;
     profiler.measure_result("seed-zg-models", || {
         crate::guest_init::components::zg::seed_models(process::is_root(), &identity)
@@ -476,6 +486,9 @@ fn cang_env_from(env: &impl EnvSource) -> Result<CangEnv> {
         nix_disk_label: env
             .var("CANG_NIX_DISK_LABEL")
             .unwrap_or_else(|| crate::guest_init::components::env::RAW_NIX_DISK_LABEL.to_owned()),
+        workspace_disk: crate::guest_init::components::env::WorkspaceDiskContract::from_lookup(
+            |name| env.var(name).filter(|value| !value.is_empty()),
+        )?,
         containers_disk_id: env.var("CANG_CONTAINERS_DISK_ID").unwrap_or_else(|| {
             crate::guest_init::components::env::RAW_CONTAINER_DISK_ID.to_owned()
         }),
@@ -494,8 +507,19 @@ fn cang_env_from(env: &impl EnvSource) -> Result<CangEnv> {
     })
 }
 
-fn prepared_root_targets() -> Vec<&'static str> {
-    PREPARED_ROOT_TARGETS.to_vec()
+/// The host-grafted paths this launch must already see. A `--workspace-disk`
+/// launch is grafted `~/.cargo` by neither side: the guest binds the tree's own
+/// `cargo/` there after it mounts the disk, so the path is absent at validation
+/// time by design.
+fn prepared_root_targets(env_contract: &EnterEnv) -> Vec<&'static str> {
+    PREPARED_ROOT_TARGETS
+        .iter()
+        .copied()
+        .filter(|path| {
+            !(env_contract.cang.workspace_disk.is_some()
+                && *path == crate::guest_init::components::disk::workspace::CARGO_HOME_TARGET)
+        })
+        .collect()
 }
 
 fn env_flag(env: &impl EnvSource, name: &str) -> bool {
@@ -923,8 +947,39 @@ mod tests {
         .expect("raw env should parse");
 
         assert!(
-            !prepared_root_targets()
+            !prepared_root_targets(&_raw)
                 .contains(&crate::guest_init::components::disk::containers::MOUNT_POINT)
+        );
+    }
+
+    #[test]
+    fn a_workspace_disk_launch_does_not_expect_grafted_paths_it_owns() {
+        let plain = EnterEnv::from_env(&env(&[])).expect("env should parse");
+        assert!(
+            prepared_root_targets(&plain)
+                .contains(&crate::guest_init::components::disk::workspace::CARGO_HOME_TARGET)
+        );
+
+        let disk = EnterEnv::from_env(&env(&[
+            ("CANG_WORKSPACE_DISK_ID", "cang-workspace"),
+            ("CANG_WORKSPACE_DISK_LABEL", "CANG_WORKSPACE"),
+        ]))
+        .expect("workspace disk env should parse");
+        assert!(disk.cang.workspace_disk.is_some());
+        assert!(
+            !prepared_root_targets(&disk)
+                .contains(&crate::guest_init::components::disk::workspace::CARGO_HOME_TARGET)
+        );
+        assert!(prepared_root_targets(&disk).contains(&"/workspace"));
+    }
+
+    #[test]
+    fn a_half_set_workspace_disk_contract_is_an_error() {
+        let err = EnterEnv::from_env(&env(&[("CANG_WORKSPACE_DISK_ID", "cang-workspace")]))
+            .expect_err("half contract should fail");
+        assert!(
+            err.to_string().contains("CANG_WORKSPACE_DISK_LABEL"),
+            "{err}"
         );
     }
 

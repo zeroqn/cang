@@ -1,9 +1,9 @@
 ---
 label: wayfinder:prototype
 title: Put the whole /workspace on a raw btrfs image - smallest cang change, and does it close the gap?
-status: open
+status: closed
 blocked_by: []
-claimed_by: ""
+claimed_by: "pi (2026-11-20)"
 ---
 
 ## Question
@@ -56,4 +56,34 @@ against the recorded virtio-fs arm, in a note under `notes/`.
 
 ## Resolution
 
-(to follow)
+**Built and live-verified 2026-11-20.** `--workspace-disk PATH` (+
+`--workspace-size`, default 64G) makes `/workspace` a btrfs filesystem on a raw
+image (or a block device) the guest mounts itself: sources, cargo's own
+`./target` and the cargo home (`cargo/` in the tree, bound at `~/.cargo`) all
+live inside it. The `/workspace` virtio-fs bind mount and the
+`~/.cargo` mount are dropped for that mode; the build disk is neither created
+nor attached; `/nix` stays on the host-composed overlay and `--nix=lower:blk`
+is refused rather than silently attaching a second block disk.
+
+Live evidence: `/workspace /dev/vdb btrfs`, `/home/dev/.cargo /dev/vdb[/cargo]
+btrfs`, `/dev/vda`+`/dev/vdb` only, `findmnt /home/dev/.cache/cang-build` empty,
+a write through `~/.cargo` visible at `/workspace/cargo/probe-file`, and
+`cargo build --offline` inside the tree finishing in 4.35 s with `target/` on
+btrfs. Refusals: a non-btrfs image, an image smaller than the request, and
+`--nix=lower:blk` all refuse host-side without booting a VM.
+
+**First numbers** (same 342 MB / 2136-entry archive extracted twice into the
+same `/workspace`): **496 ms warm on the block workspace** against **14 290 ms
+over the share** (~29x). The cold 2401-crate build arm stays open - it needs a
+warm registry in the image and host headroom this host did not have
+(`/home/dev/disp` was 98% full during the arms).
+
+Details, verbatim lines, and the three things the arms exposed and fixed (the
+bind-when-already-mounted bug, `~/.cargo` in the prepared-root expectation, the
+seed source being the launch's registry mount rather than the image) are in
+[note 59](../notes/59-workspace-on-block-verification.md).
+
+What is explicitly **not** done here: the reverse share (ticket 23), so the
+launch directory still shows its own contents; seeding a populated host tree
+into a fresh image (ticket 25); and retiring the `/nix` block disks (ticket 26,
+which this flag already sidesteps by keeping `/nix` on the overlay).

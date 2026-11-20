@@ -67,6 +67,13 @@ pub fn validate_mounts(mounts: &[BindMount]) -> Result<()> {
             anyhow::bail!("cang bind mount target '{}' is duplicated", mount.target);
         }
     }
-    workspace_mount(mounts)?;
     Ok(())
+}
+
+/// The `/workspace` bind mount every host-directory launch contributes. A launch
+/// that serves `/workspace` from its own disk has none, which is why the
+/// requirement is stated where the disks are known rather than inside
+/// [`validate_mounts`].
+pub(crate) fn require_workspace_mount(mounts: &[BindMount]) -> Result<()> {
+    workspace_mount(mounts).map(|_| ())
 }

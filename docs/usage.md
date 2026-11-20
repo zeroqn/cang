@@ -139,6 +139,32 @@ subsequent `ps` output. If cleanup fails after the VM process is gone, `cang
 kill` returns a visible error and leaves or restores the active record so rerun
 `cang kill <task-id-or-handle-selector>` can retry the same cleanup.
 
+## A workspace on its own disk
+
+`--workspace-disk PATH` serve `/workspace` from a btrfs filesystem on a raw image
+or a block device instead of the host directory over virtio-fs. `PATH` is
+created on first use (`--workspace-size`, default `64G`) and validated on reuse:
+a file holding anything other than btrfs, a symlink, or a directory is refused
+rather than reformatted, and so is an image smaller than the requested size.
+
+```bash
+./result/bin/cang --workspace-disk ./work.raw --workspace-size 32G -- bash -lc 'findmnt /workspace'
+```
+
+The guest mounts the disk at `/workspace`, and everything a build writes stays
+there: sources, cargo's own `./target`, and the cargo home, which lives in the
+tree as `cargo/` and is bound at `~/.cargo` (seeded once from the registry the
+launch mounted there, then kept on the disk). Three consequences:
+
+- the host-directory `/workspace` bind mount and the `~/.cargo` mount are dropped
+  for such a launch, so the guest's tree is the only copy - the reverse share
+  that would show it back on the host is not built yet, and the launch directory
+  keeps showing its own contents;
+- the build disk is neither created nor attached: with `target/` and the registry
+  inside the tree it has nothing left to hold;
+- `/nix` stays on the host-composed overlay. `--nix=lower:blk` is refused with
+  this flag, because it would attach a second block disk for one launch.
+
 ## Volumes
 
 Use repeatable `-v, --volume SOURCE:TARGET[:ro|:rw]` to add host bind mounts

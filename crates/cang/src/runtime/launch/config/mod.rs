@@ -15,8 +15,8 @@ pub(crate) use model::{
     DIRGE_HOME_TAG, DIRGE_HOME_TARGET, DiskAttachment, ExecConfig, GuestInitOverrideMount,
     GuestPermissions, HostNixOverlay, LaunchConfig, LaunchSpec, MANAGED_GUEST_KERNEL_CONSOLE_LOG,
     ManagedSessionConfig, NIX_TARGET, NetworkMode, OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET,
-    PulseBridgeConfig, PulseServer, SCCACHE_TAG, SCCACHE_TARGET, WORKSPACE_TAG, WORKSPACE_TARGET,
-    WaypipeConfig, ZVEC_GREP_TAG, ZVEC_GREP_TARGET, canonical_mount_target,
+    PulseBridgeConfig, PulseServer, SCCACHE_TAG, SCCACHE_TARGET, WORKSPACE_DISK_ID, WORKSPACE_TAG,
+    WORKSPACE_TARGET, WaypipeConfig, ZVEC_GREP_TAG, ZVEC_GREP_TARGET, canonical_mount_target,
 };
 
 #[cfg(test)]
@@ -32,6 +32,15 @@ impl LaunchConfig {
             spec.mounts,
             spec.host_nix_overlay.as_ref(),
         )?;
+        // A launch whose `/workspace` comes from its own disk contributes no
+        // `/workspace` bind mount; every other launch must still have one.
+        if !spec
+            .disks
+            .iter()
+            .any(|disk| disk.id == model::WORKSPACE_DISK_ID)
+        {
+            components::mounts::require_workspace_mount(&mounts)?;
+        }
         if let Some(mount) = &spec.guest_init_override {
             components::guest_init::validate_guest_init_override_mount(
                 mount,

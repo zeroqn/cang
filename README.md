@@ -457,6 +457,21 @@ Each run ensures these host-backed paths and grafts them into the prepared root:
 This keeps tool config/state and compiler-cache state outside the repo while
 matching the task-volume contract.
 
+### A workspace on its own disk
+
+`--workspace-disk PATH` takes `/workspace` off the share: the tree becomes a
+btrfs filesystem on a raw image (created on first use at `--workspace-size`,
+default `64G`) or a block device, which the guest mounts itself. Sources,
+cargo's own `./target` and the cargo home all live inside it, the build disk is
+not attached at all, `/nix` stays on the host-composed overlay, and `--nix=lower:blk`
+is refused with it so the launch attaches one block disk rather than two.
+
+Writing a 342 MB / 2136-entry source tree into the same `/workspace` took
+**0.50 s** on the disk against **14.3 s** over the share (warm, same archive,
+measured 2026-11-20). The host's view of that tree (a reverse share) is not
+built yet, so the launch directory still shows its own contents rather than the
+guest's; `docs/usage.md` states what that means.
+
 ### Host write visibility from inside the guest
 
 The guest reaches these host paths through one virtio-fs share, and cang asks the

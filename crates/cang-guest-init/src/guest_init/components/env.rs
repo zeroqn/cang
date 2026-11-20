@@ -29,6 +29,9 @@ pub(in crate::guest_init) const RAW_CONTAINER_DISK_LABEL: &str = "CANG_CONTAINER
 pub(in crate::guest_init) const RAW_NIX_LOWER_DISK_ID: &str = "cang-nix-lower";
 pub(in crate::guest_init) const RAW_NIX_LOWER_DISK_LABEL: &str = "CANG_NIX_LOWER";
 pub(in crate::guest_init) const NIX_LOWER_BLOCK_ENV: &str = "CANG_NIX_LOWER_BLOCK";
+/// The `--workspace-disk` contract: which disk to mount at `/workspace`.
+pub(in crate::guest_init) const WORKSPACE_DISK_ID_ENV: &str = "CANG_WORKSPACE_DISK_ID";
+pub(in crate::guest_init) const WORKSPACE_DISK_LABEL_ENV: &str = "CANG_WORKSPACE_DISK_LABEL";
 pub(in crate::guest_init) const NIX_LOWER_DISK_ID_ENV: &str = "CANG_NIX_LOWER_DISK_ID";
 pub(in crate::guest_init) const NIX_LOWER_DISK_LABEL_ENV: &str = "CANG_NIX_LOWER_DISK_LABEL";
 pub(in crate::guest_init) const NIX_LOWER_UPPERDIR_ENV: &str = "CANG_NIX_LOWER_UPPERDIR";
@@ -171,9 +174,49 @@ pub(in crate::guest_init) struct CangEnv {
     pub(in crate::guest_init) containers_disk_label: String,
     pub(in crate::guest_init) build_disk_id: String,
     pub(in crate::guest_init) build_disk_label: String,
+    /// `Some` only for a `--workspace-disk` launch: the guest mounts that btrfs
+    /// tree at `/workspace` itself and binds its cargo home onto `~/.cargo`.
+    pub(in crate::guest_init) workspace_disk: Option<WorkspaceDiskContract>,
     /// `Some` only when the host attached a read-only `/nix` lower disk and the
     /// guest is therefore the one composing the `/nix` overlay.
     pub(in crate::guest_init) nix_lower: Option<NixLowerContract>,
+}
+
+/// What a `--workspace-disk` launch needs from the host: which disk to mount at
+/// `/workspace`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::guest_init) struct WorkspaceDiskContract {
+    pub(in crate::guest_init) disk_id: String,
+    pub(in crate::guest_init) disk_label: String,
+}
+
+impl WorkspaceDiskContract {
+    /// Both halves are required when either is set: a guest that mounted an
+    /// empty rootfs directory as `/workspace` would run the command against
+    /// nothing, so a half-set contract is an error rather than a fallback.
+    pub(in crate::guest_init) fn from_lookup(
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<Option<Self>> {
+        let id = lookup(WORKSPACE_DISK_ID_ENV);
+        let label = lookup(WORKSPACE_DISK_LABEL_ENV);
+        match (id, label) {
+            (None, None) => Ok(None),
+            (Some(disk_id), Some(disk_label)) => Ok(Some(Self {
+                disk_id,
+                disk_label,
+            })),
+            (Some(_), None) => {
+                anyhow::bail!(
+                    "{WORKSPACE_DISK_ID_ENV} is set but {WORKSPACE_DISK_LABEL_ENV} is not"
+                )
+            }
+            (None, Some(_)) => {
+                anyhow::bail!(
+                    "{WORKSPACE_DISK_LABEL_ENV} is set but {WORKSPACE_DISK_ID_ENV} is not"
+                )
+            }
+        }
+    }
 }
 
 /// What a guest-composed `/nix` overlay needs from the host.
@@ -256,6 +299,9 @@ impl CangEnv {
                 .unwrap_or_else(|_| RAW_BUILD_DISK_ID.to_owned()),
             build_disk_label: env::var("CANG_BUILD_DISK_LABEL")
                 .unwrap_or_else(|_| RAW_BUILD_DISK_LABEL.to_owned()),
+            workspace_disk: WorkspaceDiskContract::from_lookup(|name| {
+                env::var(name).ok().filter(|value| !value.is_empty())
+            })?,
             nix_lower: NixLowerContract::from_lookup(|name| {
                 env::var(name).ok().filter(|value| !value.is_empty())
             })?,

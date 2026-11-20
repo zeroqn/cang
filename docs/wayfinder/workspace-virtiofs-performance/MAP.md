@@ -515,7 +515,7 @@ of every request to zero.
   daemon cannot live inside the VM worker: no `mount` in its seccomp policy, no
   `/dev/fuse` in its Landlock set, and `no_new_privs` rules out setuid
   `fusermount3`). **Spike gate: if one relayed op exceeds ~250 us the product
-  surface does not work, and the numbers come back to bob.**
+  surface does not work, and the numbers come back to bob.** [note 58](notes/58-reverse-share-transport.md).
 - [Worktrees, target/ and the registry inside the image - and what the image is
   keyed on](tickets/24-worktree-target-and-registry-layout.md): **cargo's own
   layout, no sharing implemented in cang.** `target/` is `./target` inside the
@@ -526,7 +526,16 @@ of every request to zero.
   manual command as overrides). **The image's identity is the named raw disk**;
   the launch directory is the reverse view of its content.
 
-  [note 58](notes/58-reverse-share-transport.md).
+- [Put the whole /workspace on a raw btrfs image](tickets/18-workspace-target-on-block.md):
+  **built and live-verified: `--workspace-disk PATH` (+ `--workspace-size`) puts
+  `/workspace` on btrfs over virtio-blk, the guest mounts it, cargo's own
+  `./target` and a `cargo/` home bound at `~/.cargo` live in the tree, and the
+  build disk is neither created nor attached.** Same 342 MB / 2136-entry archive
+  into the same `/workspace`: **496 ms** on the block workspace vs **14 290 ms**
+  over the share (~29x). `/nix` stays on the overlay and `--nix=lower:blk` is
+  refused with the flag. Not yet: the reverse share (the launch directory still
+  shows its own contents), seeding a populated host tree (ticket 25), the cold
+  build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)
 

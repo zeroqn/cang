@@ -4,3 +4,4 @@ pub(in crate::guest_init) mod containers;
 pub(in crate::guest_init) mod nix;
 pub(in crate::guest_init) mod nix_lower;
 pub(in crate::guest_init) mod resize;
+pub(in crate::guest_init) mod workspace;

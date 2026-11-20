@@ -434,6 +434,7 @@ pub(crate) mod test_support {
     pub(crate) struct FakeRunner {
         pub(crate) mkfs_calls: RefCell<Vec<(PathBuf, String, &'static str)>>,
         probe_results: RefCell<VecDeque<Result<String, String>>>,
+        mkfs_error: RefCell<Option<String>>,
     }
 
     impl FakeRunner {
@@ -467,6 +468,10 @@ pub(crate) mod test_support {
                 .borrow_mut()
                 .push_back(Err(message.to_owned()));
         }
+
+        pub(crate) fn push_mkfs_error(&self, message: &str) {
+            self.mkfs_error.borrow_mut().replace(message.to_owned());
+        }
     }
 
     impl RawImageCommandRunner for FakeRunner {
@@ -476,7 +481,10 @@ pub(crate) mod test_support {
                 label.to_owned(),
                 spec.diagnostic_name,
             ));
-            Ok(())
+            match self.mkfs_error.borrow_mut().take() {
+                Some(message) => Err(anyhow!(message)),
+                None => Ok(()),
+            }
         }
 
         fn probe_fs_type(&self, _path: &Path, _spec: &RawDiskSpec) -> Result<String> {

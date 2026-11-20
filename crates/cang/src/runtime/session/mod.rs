@@ -27,6 +27,9 @@ mod terminal_env;
 mod waypipe_broker;
 
 use crate::runtime::RuntimeProfileScope;
+use crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode;
+use crate::runtime::launch::components::persistent_disks::raw_btrfs::HostRawImageCommandRunner;
+use crate::runtime::launch::components::persistent_disks::workspace;
 use crate::runtime::launch::config::{
     self, DEFAULT_PULSE_BRIDGE_PORT, DEFAULT_WAYPIPE_PORT, ExecConfig, LaunchConfig, LaunchSpec,
     ManagedSessionConfig, PulseBridgeConfig, WaypipeConfig,
@@ -257,15 +260,51 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                     mount.source.as_path()
                 });
 
+            // `/workspace` as a btrfs tree of its own: created at the requested
+            // size on first use, validated on reuse. Everything the guest does
+            // then stays on this disk instead of crossing the share.
+            let workspace_disk = profiler
+                .measure_result("workspace_disk_preparation", || {
+                    plan.workspace_disk.as_ref().map_or(Ok(None), |path| {
+                        workspace::prepare_with_runner(
+                            path,
+                            plan.workspace_disk_size_bytes,
+                            &HostRawImageCommandRunner,
+                        )
+                        .map(Some)
+                    })
+                })
+                .context("failed to prepare the cang workspace disk")?;
+            match &workspace_disk {
+                Some(disk) => profiler.record_metadata(
+                    "workspace_disk_status",
+                    match disk.status {
+                        workspace::WorkspaceDiskStatus::Created => "created",
+                        workspace::WorkspaceDiskStatus::Reused => "reused",
+                    },
+                ),
+                None => profiler.record_metadata("workspace_disk_status", "disabled"),
+            }
+            if let Some(disk) = &workspace_disk {
+                profiler.record_metadata("workspace_disk_path", disk.path.display().to_string());
+            }
+
             // The guest's /nix lower on a read-only btrfs block file, built from
             // this image's store content. `None` means the launch asked for the
             // host-composed overlay; an unavailable lower is an error unless the
             // user allowed the fallback, so a slow `/nix` is never silent.
+            // A workspace-disk launch keeps `/nix` on the host-composed overlay:
+            // the block lower/upper pair is being retired, and a launch that
+            // already owns a workspace disk must not also grow a store disk.
+            let nix_lower_mode = match (&workspace_disk, plan.nix_lower) {
+                (Some(_), _) => Some(NixLowerMode::VirtioFs),
+                (None, mode) => mode,
+            };
             let nix_lower_block = profiler.measure_result("nix_lower_block_preparation", || {
                 prepare_nix_lower_block(
                     nix_overlay_lease.intent(),
                     guest_init_binary,
-                    plan.nix_lower,
+                    nix_lower_mode,
                 )
             })?;
             match &nix_lower_block {
@@ -289,7 +328,8 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
 
             let host_run_result = match profiler
                 .measure_result("persistent_disk_preparation", || {
-                    HostPersistentDiskPreparer.prepare(plan.state_layout.root_dir())
+                    HostPersistentDiskPreparer
+                        .prepare(plan.state_layout.root_dir(), plan.workspace_disk.is_none())
                 })
                 .context("failed to prepare cang persistent dev cache disks")
             {
@@ -361,6 +401,10 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                     let mut launch_mounts = plan.bind_mounts.clone();
                     let mut launch_disks = disks.attachments();
                     let mut extra_env = disks.env_pairs();
+                    if let Some(disk) = &workspace_disk {
+                        launch_disks.push(workspace::attachment(disk));
+                        extra_env.extend(workspace::env_pairs(disk));
+                    }
                     if let Some(block) = &nix_lower_block {
                         launch_mounts.push(block.bind_mount());
                         launch_disks.push(block.attachment());
@@ -681,6 +725,8 @@ mod tests {
             container_store_backend: None,
             guest_init: None,
             preserve_debug: false,
+            workspace_disk: None,
+            workspace_size: None,
             nix_lower: None,
             mem_gib: None,
             network_mode: config::NetworkMode::Tsi,

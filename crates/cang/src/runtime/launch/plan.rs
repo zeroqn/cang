@@ -38,6 +38,10 @@ pub(crate) struct LaunchPlan {
     pub(crate) task_rootfs_backend: TaskRootfsBackend,
     pub(crate) container_store_backend: ContainerStoreBackend,
     pub(crate) guest_init: Option<PathBuf>,
+    /// The `/workspace` disk this launch serves, already resolved to an absolute
+    /// path, and the size a missing image is created at.
+    pub(crate) workspace_disk: Option<PathBuf>,
+    pub(crate) workspace_disk_size_bytes: u64,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
@@ -109,7 +113,18 @@ impl LaunchPlan {
         let container_store_backend = options
             .container_store_backend
             .unwrap_or(ContainerStoreBackend::DEFAULT);
-        let mut bind_mounts = mounts::prepare_dev_mounts(&workspace_dir, home_dir, &state_layout)?;
+        let workspace_disk = resolve_workspace_disk(
+            options.workspace_disk.as_deref(),
+            options.workspace_size.as_deref(),
+            &workspace_dir,
+            options.nix_lower,
+        )?;
+        let mut bind_mounts = mounts::prepare_dev_mounts(
+            &workspace_dir,
+            home_dir,
+            &state_layout,
+            workspace_disk.is_none(),
+        )?;
         bind_mounts.extend(prepare_user_volume_mounts(
             &options.volumes,
             &workspace_dir,
@@ -143,6 +158,8 @@ impl LaunchPlan {
             task_rootfs_backend,
             container_store_backend,
             guest_init: options.guest_init,
+            workspace_disk: workspace_disk.as_ref().map(|(path, _)| path.clone()),
+            workspace_disk_size_bytes: workspace_disk.map_or(0, |(_, size)| size),
             mem_gib: options.mem_gib,
             network_mode: options.network_mode,
             pulse: options.pulse,
@@ -176,6 +193,53 @@ impl LaunchPlan {
         })
     }
 }
+/// Resolve `--workspace-disk` against the launch directory and pick the size a
+/// missing image is created at.
+///
+/// A relative path is taken relative to the workspace: `cang work.raw` from
+/// `/foo/bar` means `/foo/bar/work.raw`, so the disk sits beside the tree it
+/// replaces in the reduce-and-run sense the flag documents.
+fn resolve_workspace_disk(
+    path: Option<&Path>,
+    size: Option<&str>,
+    workspace_dir: &Path,
+    nix_lower: Option<
+        crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode,
+    >,
+) -> Result<Option<(PathBuf, u64)>> {
+    let Some(path) = path else {
+        if size.is_some() {
+            anyhow::bail!(
+                "--workspace-size needs --workspace-disk: it sizes the image that flag names"
+            );
+        }
+        return Ok(None);
+    };
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace_dir.join(path)
+    };
+    if matches!(
+        nix_lower,
+        Some(crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode::Blk)
+    ) {
+        anyhow::bail!(
+            "--workspace-disk cannot be combined with --nix=lower:blk: a workspace-disk launch \
+             keeps /nix on the host-composed overlay so it attaches one block disk, not two; \
+             drop the nix flag or the workspace disk"
+        );
+    }
+    let size_bytes = match size {
+        Some(value) => crate::runtime::maintenance::disk_resize::parse_size_bytes_for_label(
+            value,
+            "cang workspace disk size",
+        )?,
+        None => crate::runtime::launch::components::persistent_disks::workspace::DEFAULT_SIZE_BYTES,
+    };
+    Ok(Some((path, size_bytes)))
+}
+
 fn resolve_waypipe(options: &RuntimeOptions) -> Result<Option<PathBuf>> {
     let Some(Some(socket)) = &options.waypipe else {
         return Ok(None);
@@ -372,6 +436,8 @@ mod tests {
             container_store_backend: None,
             guest_init: None,
             preserve_debug: false,
+            workspace_disk: None,
+            workspace_size: None,
             nix_lower: None,
             mem_gib: None,
             network_mode: NetworkMode::Tsi,
@@ -390,6 +456,69 @@ mod tests {
             volumes: Vec::new(),
             guest_command: Vec::new(),
         }
+    }
+
+    fn plan_with(options: RuntimeOptions) -> LaunchPlan {
+        let dir = tempfile::tempdir().expect("tempdir should exist");
+        LaunchPlan::from_env_values(
+            options,
+            PathBuf::from("/tmp/example-project"),
+            Some(dir.path().join("state").as_path()),
+            Some(dir.path().join("config").as_path()),
+            Some(dir.path().join("home").as_path()),
+        )
+        .expect("plan should build")
+    }
+
+    #[test]
+    fn a_relative_workspace_disk_resolves_against_the_launch_directory() {
+        let mut options = runtime_options();
+        options.workspace_disk = Some(PathBuf::from("work.raw"));
+        options.workspace_size = Some("8G".to_owned());
+
+        let plan = plan_with(options);
+
+        assert_eq!(
+            plan.workspace_disk,
+            Some(PathBuf::from("/tmp/example-project/work.raw"))
+        );
+        assert_eq!(plan.workspace_disk_size_bytes, 8 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn a_workspace_disk_defaults_to_the_64gib_creation_size() {
+        let mut options = runtime_options();
+        options.workspace_disk = Some(PathBuf::from("/tmp/work.raw"));
+
+        let plan = plan_with(options);
+
+        assert_eq!(
+            plan.workspace_disk_size_bytes,
+            crate::runtime::launch::components::persistent_disks::workspace::DEFAULT_SIZE_BYTES
+        );
+    }
+
+    #[test]
+    fn a_workspace_disk_launch_refuses_the_nix_block_lower() {
+        let dir = tempfile::tempdir().expect("tempdir should exist");
+        let mut options = runtime_options();
+        options.workspace_disk = Some(PathBuf::from("/tmp/work.raw"));
+        options.nix_lower = Some(
+            crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode::Blk,
+        );
+
+        let err = LaunchPlan::from_env_values(
+            options,
+            PathBuf::from("/tmp/example-project"),
+            Some(dir.path().join("state").as_path()),
+            Some(dir.path().join("config").as_path()),
+            Some(dir.path().join("home").as_path()),
+        )
+        .expect_err("the combination must be refused");
+
+        let message = format!("{err:#}");
+        assert!(message.contains("--nix=lower:blk"), "{message}");
+        assert!(message.contains("--workspace-disk"), "{message}");
     }
 
     #[test]

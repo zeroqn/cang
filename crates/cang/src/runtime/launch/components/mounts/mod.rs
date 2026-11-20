@@ -20,20 +20,31 @@ mod sccache;
 mod workspace;
 mod zvec_grep;
 
+/// `include_workspace_mounts` is false for a launch that serves `/workspace` from
+/// its own disk: the guest mounts that disk itself, and the cargo home it binds
+/// comes from inside the tree, so the host contributes neither the `/workspace`
+/// share nor a `~/.cargo` directory.
 pub(crate) fn prepare_dev_mounts(
     workspace_dir: &Path,
     home_dir: &Path,
     state_layout: &StateLayout,
+    include_workspace_mounts: bool,
 ) -> Result<Vec<BindMount>> {
-    let mut mounts = vec![
-        workspace::bind_mount(workspace_dir),
+    let mut mounts = Vec::new();
+    if include_workspace_mounts {
+        mounts.push(workspace::bind_mount(workspace_dir));
+    }
+    mounts.extend([
         codex::prepare(home_dir)?,
         omp::prepare(home_dir)?,
         pi::prepare(home_dir)?,
         zvec_grep::prepare(home_dir)?,
         cortexkit::prepare(home_dir)?,
-    ];
+    ]);
     mounts.extend(dirge::prepare(home_dir)?);
+    // Even a workspace-disk launch keeps this mount: at boot it is the registry
+    // the guest seeds the tree's cargo home from, and only then does the guest
+    // bind the tree's own `cargo/` over it.
     mounts.push(cargo::prepare(state_layout)?);
     mounts.push(sccache::prepare(state_layout)?);
     validate_mounts(&mounts)?;
@@ -77,8 +88,8 @@ mod tests {
         )
         .expect("state layout should resolve");
 
-        let mounts =
-            prepare_dev_mounts(&workspace, &home, &state_layout).expect("mounts should prepare");
+        let mounts = prepare_dev_mounts(&workspace, &home, &state_layout, true)
+            .expect("mounts should prepare");
 
         assert_eq!(mounts.len(), 11);
         assert_mount(&mounts[0], &workspace, WORKSPACE_TAG, WORKSPACE_TARGET);

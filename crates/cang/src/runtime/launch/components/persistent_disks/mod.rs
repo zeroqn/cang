@@ -15,6 +15,7 @@ mod containers;
 mod nix;
 pub(crate) mod nix_lower;
 pub(crate) mod raw_btrfs;
+pub(crate) mod workspace;
 
 pub(crate) fn grow_container_store(
     state_root: &Path,
@@ -72,44 +73,55 @@ pub(crate) fn prepare_nix_lower_block(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PersistentDisks {
     container_store: RawBtrfsDisk,
-    build_target: RawBtrfsDisk,
+    /// Absent when the launch serves `/workspace` from its own disk: nothing is
+    /// left for the build disk to hold, so it is neither created nor attached.
+    build_target: Option<RawBtrfsDisk>,
 }
 
 impl PersistentDisks {
     pub(crate) fn attachments(&self) -> Vec<DiskAttachment> {
-        vec![
-            containers::attachment(&self.container_store),
-            build::attachment(&self.build_target),
-        ]
+        let mut attachments = vec![containers::attachment(&self.container_store)];
+        if let Some(build_target) = &self.build_target {
+            attachments.push(build::attachment(build_target));
+        }
+        attachments
     }
 
     pub(crate) fn env_pairs(&self) -> Vec<(String, String)> {
         let mut env = nix::overlay_env_pairs().to_vec();
         env.extend(containers::raw_disk_env_pairs(&self.container_store));
-        env.extend(build::env_pairs(&self.build_target));
+        if let Some(build_target) = &self.build_target {
+            env.extend(build::env_pairs(build_target));
+        }
         env
     }
 }
 
 pub(crate) trait PersistentDiskPreparer {
-    fn prepare(&self, state_root: &Path) -> Result<PersistentDisks>;
+    /// `include_build_disk` is false when the launch serves `/workspace` from its
+    /// own disk: cargo's `target/` and home are inside that tree, so the build
+    /// disk has no tenant left.
+    fn prepare(&self, state_root: &Path, include_build_disk: bool) -> Result<PersistentDisks>;
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HostPersistentDiskPreparer;
 
 impl PersistentDiskPreparer for HostPersistentDiskPreparer {
-    fn prepare(&self, state_root: &Path) -> Result<PersistentDisks> {
-        prepare_with_runner(state_root, &HostRawImageCommandRunner)
+    fn prepare(&self, state_root: &Path, include_build_disk: bool) -> Result<PersistentDisks> {
+        prepare_with_runner(state_root, include_build_disk, &HostRawImageCommandRunner)
     }
 }
 
 fn prepare_with_runner(
     state_root: &Path,
+    include_build_disk: bool,
     runner: &impl raw_btrfs::RawImageCommandRunner,
 ) -> Result<PersistentDisks> {
     let container_store = containers::prepare_with_runner(state_root, runner)?;
-    let build_target = build::prepare_with_runner(state_root, runner)?;
+    let build_target = include_build_disk
+        .then(|| build::prepare_with_runner(state_root, runner))
+        .transpose()?;
     Ok(PersistentDisks {
         container_store,
         build_target,
@@ -127,14 +139,14 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let runner = FakeRunner::default();
 
-        let disks = prepare_with_runner(temp.path(), &runner).expect("disks should prepare");
+        let disks = prepare_with_runner(temp.path(), true, &runner).expect("disks should prepare");
 
         assert!(!temp.path().join(nix::FILE_NAME).exists());
         let container_disk = disks.container_store;
         assert_eq!(container_disk.path, temp.path().join(containers::FILE_NAME));
         assert_eq!(container_disk.id, containers::ID);
         assert_eq!(container_disk.label, containers::LABEL);
-        let target_disk = disks.build_target;
+        let target_disk = disks.build_target.expect("build disk should prepare");
         assert_eq!(target_disk.path, temp.path().join(build::FILE_NAME));
         assert_eq!(target_disk.id, build::ID);
         assert_eq!(target_disk.label, build::LABEL);
@@ -154,10 +166,13 @@ mod tests {
         }
         let runner = FakeRunner::with_probes(&["btrfs", "btrfs"]);
 
-        let disks = prepare_with_runner(temp.path(), &runner).expect("disks should prepare");
+        let disks = prepare_with_runner(temp.path(), true, &runner).expect("disks should prepare");
 
         assert_eq!(disks.container_store.status, RawBtrfsDiskStatus::Reused);
-        assert_eq!(disks.build_target.status, RawBtrfsDiskStatus::Reused);
+        assert_eq!(
+            disks.build_target.expect("build disk").status,
+            RawBtrfsDiskStatus::Reused
+        );
         assert_eq!(runner.mkfs_call_count(), 0);
     }
 
@@ -169,17 +184,40 @@ mod tests {
         let runner = FakeRunner::default();
         runner.push_probe_error("blkid exploded");
 
-        let err = prepare_with_runner(temp.path(), &runner).expect_err("disk prep should fail");
+        let err =
+            prepare_with_runner(temp.path(), true, &runner).expect_err("disk prep should fail");
 
         assert!(format!("{err:#}").contains("failed to prepare cang persistent container-store"));
         assert!(format!("{err:#}").contains("blkid exploded"));
     }
 
     #[test]
+    fn a_workspace_disk_launch_prepares_no_build_disk() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let runner = FakeRunner::default();
+
+        let disks = prepare_with_runner(temp.path(), false, &runner).expect("disks should prepare");
+
+        assert!(!temp.path().join(build::FILE_NAME).exists());
+        let attachments = disks.attachments();
+        let attachment_ids: Vec<&str> = attachments
+            .iter()
+            .map(|attachment| attachment.id.as_str())
+            .collect();
+        assert_eq!(attachment_ids, vec![containers::ID]);
+        let env = disks.env_pairs();
+        assert!(
+            !env.iter()
+                .any(|(key, _)| key == build::CARGO_TARGET_DIR_ENV)
+        );
+        assert_eq!(runner.mkfs_call_count(), 1);
+    }
+
+    #[test]
     fn persistent_disk_owners_preserve_attachments() {
         let temp = tempfile::tempdir().expect("tempdir");
         let runner = FakeRunner::default();
-        let disks = prepare_with_runner(temp.path(), &runner).expect("disks should prepare");
+        let disks = prepare_with_runner(temp.path(), true, &runner).expect("disks should prepare");
 
         let attachments = disks.attachments();
 
@@ -196,7 +234,7 @@ mod tests {
     fn persistent_disk_owners_preserve_guest_env() {
         let temp = tempfile::tempdir().expect("tempdir");
         let runner = FakeRunner::default();
-        let disks = prepare_with_runner(temp.path(), &runner).expect("disks should prepare");
+        let disks = prepare_with_runner(temp.path(), true, &runner).expect("disks should prepare");
 
         let env = disks.env_pairs();
 
