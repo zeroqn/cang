@@ -122,6 +122,27 @@ CRDT in the future Q4: (a)"*.
   mount stays, plus a named error line from `cang`; the launch directory never
   silently reverts to the host tree.
 
+
+## Acceptance arms, measured (2026-11-20, [note 62](../notes/62-fuse-relay-spike.md))
+
+A real relay exists and was measured against decision 5, so each of these is evidence
+rather than intent:
+
+| arm | result |
+|---|---|
+| a file only the guest ever wrote, read on the host | ✔ (`GUEST_NONCE 12c3cadcf0307c5f`, matched to this boot's console line) |
+| a guest write, read back on the host | ✔ |
+| a host write through the mount, read back inside the guest | ✔ (guest `cat` + `ls -l` in the guest's own shell) |
+| decision 4(a): `kill -9` the guest, then host `ls`/`cat`/`stat`/`mkdir`/`rm`/`dd` | ✔ **`EIO` every time**, stale mount stays, one named pump line |
+| cost of the same work on both sides (`git status` over 764 files) | **0.211 s through the relay vs 0.040 s native** (5.3x warm, 41x cold when the index stat cache is re-hashed) |
+| **decision 4(a) for an `mmap`ed file** | ✘ **not `EIO`**: a fault on an already-mapped page spins forever (`-EIO`-answering pump: 1.67 M replies in 15 s, no `SIGBUS`; `close(/dev/fuse)`: ~1 core of kernel spin, still no `SIGBUS`). `git` mmaps its index, `rustc`/`rust-analyzer` map everything - so 4(a) needs an amendment (ticket 31), not a code tweak |
+
+Two more measured facts that constrain the implementation: writes are capped at
+**4 KiB per frame** (`max_write=4096`, 4 MiB in 998 frames = 12.8 MB/s) because the
+guest server's INIT reply advertises neither `FUSE_BIG_WRITES` nor `FUSE_MAX_PAGES`;
+and **one `println!` per relayed request costs ~90 µs per frame**, so any later
+measurement must say whether the measured path logged.
+
 ## Resolution
 
 The contract, settled 2026-11-20 (bob):

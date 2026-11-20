@@ -581,6 +581,13 @@ of every request to zero.
   with a named `cang` error, never a silent revert. Evidence: the measured host op
   set (`git status` 6 037 syscalls, `newfstatat` 2 459; a `vim` save is in-place with
   no rename; `mv` tries `renameat2(RENAME_NOREPLACE)` first).
+  **And the acceptance arms were measured on a real relay** ([note 62](notes/62-fuse-relay-spike.md)):
+  a mount exists, guest-only files read back on the host and host writes read back in
+  the guest, `EIO` for every syscall after the guest is killed, host `git status`
+  0.211 s against 0.040 s native (5.3x warm), 236 µs median per FUSE frame - but
+  **an `mmap`ed file's fault livelocks on death instead of raising `SIGBUS`**, so
+  decision 4(a) is amended by [ticket 31](tickets/31-relay-death-and-write-frames.md)
+  together with the 4 KiB write cap.
 
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 

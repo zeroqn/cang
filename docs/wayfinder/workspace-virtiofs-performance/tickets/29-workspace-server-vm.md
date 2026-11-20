@@ -6,6 +6,16 @@ blocked_by: []
 claimed_by: ""
 ---
 
+## Measured baseline this builds on (2026-11-20, [note 62](../notes/62-fuse-relay-spike.md))
+
+A real mount already exists in the spike harness: `fusermount3` unprivileged, the
+guest serving its own btrfs image through a `/dev/fuse`<->vsock pump, **236 µs median
+per FUSE frame**, 2.9-3.6 k frames/s serial, host `git status` **0.211 s** against
+0.040 s native. So this ticket is lifecycle and plumbing, not feasibility - except
+for the two items ticket 31 owns (death semantics for `mmap`, and the 4 KiB write
+cap). The pump reconnects after a restart (unmount + restart re-connects to the same
+guest), which is what makes a *server VM* lifetime independent of a mount's.
+
 ## Question
 
 Ticket 23 settled the contract: the host always sees the workspace image, served by
