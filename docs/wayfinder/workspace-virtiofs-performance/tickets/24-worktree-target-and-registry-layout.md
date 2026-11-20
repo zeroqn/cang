@@ -3,8 +3,40 @@ label: wayfinder:grilling
 title: Worktrees, target/ and the registry inside the image - and what the image is keyed on
 status: open
 blocked_by: []
-claimed_by: ""
+claimed_by: "pi + bob (2026-11-20)"
 ---
+
+## Facts first (verified 2026-11-20, this checkout - so the round is not guesswork)
+
+- **`target/` is not `/workspace/target` today.** cang redirects cargo onto the
+  build disk by env: `CARGO_TARGET_DIR=/home/dev/.cache/cang-build/target` and
+  `CARGO_HOME=/home/dev/.cache/cang-build/cargo`
+  (`crates/cang/src/runtime/launch/components/persistent_disks/build.rs:42`,
+  `:44`, exported at `:90-97`), with the same two paths asserted guest-side
+  (`crates/cang-guest-init/src/guest_init/components/disk/build.rs:28-29`). So
+  every launch of a state root already shares **one** target dir and **one**
+  registry, whatever directory it was launched from.
+- **The build disk is created at 96 GiB** (`build.rs:47`, `SIZE_BYTES`), and its
+  btrfs is expanded by the guest on mount when the host image grew
+  (`build.rs:66-78`, `grow_with_runner` -> `raw_btrfs::grow_existing_at_least_with_runner`).
+  In other words **the auto-grow machinery bob wants already exists host-side**;
+  what is missing is a rule for *when* to grow and out of whose headroom, not a
+  mechanism.
+- **The state root is keyed on the cwd**, not the repository:
+  `crates/cang/src/state/mod.rs:48` `app_dir.join(derive_workspace_slug(cwd))`,
+  slug from `crates/cang/src/naming/workspace.rs:6`; the slug also names the
+  guest hostname (`runtime/launch/plan.rs:102-103`).
+- **A `git worktree` inside the guest is just a directory today**, on the same
+  virtio-fs share as everything else; nothing in cang knows what a worktree is
+  (`grep -F worktree crates/` = 0 hits), so this ticket is the first place the
+  concept enters the codebase.
+- **The guest image ships `btrfs-progs`** (`nix/image/layers.nix:424`), so
+  subvolume snapshot/delete needs no new package; `mkfs.btrfs`/`blkid` already
+  come from `RuntimeTool` on the host (`raw_btrfs.rs:44`, `:71`).
+- The three tenants the build disk carries today - `target/`, `CARGO_HOME` and
+  the `/nix` upper - are documented at `crates/cang/src/runtime/maintenance/disk.rs:7`,
+  and the third is being retired by ticket 26, which is what makes the placement
+  question sharp now.
 
 ## Question
 
