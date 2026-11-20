@@ -27,7 +27,6 @@ mod terminal_env;
 mod waypipe_broker;
 
 use crate::runtime::RuntimeProfileScope;
-use crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode;
 use crate::runtime::launch::components::persistent_disks::raw_btrfs::HostRawImageCommandRunner;
 use crate::runtime::launch::components::persistent_disks::workspace;
 use crate::runtime::launch::config::{
@@ -293,18 +292,12 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
             // this image's store content. `None` means the launch asked for the
             // host-composed overlay; an unavailable lower is an error unless the
             // user allowed the fallback, so a slow `/nix` is never silent.
-            // A workspace-disk launch keeps `/nix` on the host-composed overlay:
-            // the block lower/upper pair is being retired, and a launch that
-            // already owns a workspace disk must not also grow a store disk.
-            let nix_lower_mode = match (&workspace_disk, plan.nix_lower) {
-                (Some(_), _) => Some(NixLowerMode::VirtioFs),
-                (None, mode) => mode,
-            };
+            // `/nix` follows the workspace disk: no flag decides this, the plan does.
             let nix_lower_block = profiler.measure_result("nix_lower_block_preparation", || {
                 prepare_nix_lower_block(
                     nix_overlay_lease.intent(),
                     guest_init_binary,
-                    nix_lower_mode,
+                    plan.nix_block_lower,
                 )
             })?;
             match &nix_lower_block {
@@ -394,11 +387,11 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                             .task_dir()
                             .join(crate::runtime::launch::config::MANAGED_GUEST_KERNEL_CONSOLE_LOG),
                     };
-                    // A block-mode launch adds two contributions: the
-                    // read-only lower disk, and one writable share carrying the
-                    // generation's `upper` and the guest's work dir so the
-                    // guest can compose the overlay itself.
-                    let mut launch_mounts = plan.bind_mounts.clone();
+                    // A block-mode launch adds the read-only lower disk; the writable
+                    // layer is a directory inside the workspace tree, which the guest
+                    // creates after it mounts that disk, so the host contributes no
+                    // share for it.
+                    let launch_mounts = plan.bind_mounts.clone();
                     let mut launch_disks = disks.attachments();
                     let mut extra_env = disks.env_pairs();
                     if let Some(disk) = &workspace_disk {
@@ -406,7 +399,6 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                         extra_env.extend(workspace::env_pairs(disk));
                     }
                     if let Some(block) = &nix_lower_block {
-                        launch_mounts.push(block.bind_mount());
                         launch_disks.push(block.attachment());
                         extra_env.extend(block.env_pairs());
                     }
@@ -727,7 +719,6 @@ mod tests {
             preserve_debug: false,
             workspace_disk: None,
             workspace_size: None,
-            nix_lower: None,
             mem_gib: None,
             network_mode: config::NetworkMode::Tsi,
             pulse: None,

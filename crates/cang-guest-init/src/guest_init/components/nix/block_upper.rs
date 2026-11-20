@@ -83,15 +83,24 @@ const LIVE_DB_RELATIVE: &str = "var/nix/db";
 /// have left beside it, and the schema the database was created with.
 const DB_FILES: [&str; 4] = ["db.sqlite", "db.sqlite-wal", "db.sqlite-shm", "schema"];
 
-/// Whether this upper is on the block disk rather than the host's share.
+/// Whether this upper is on a filesystem the guest mounted itself rather than
+/// the host's share.
 ///
 /// The host names the path, not the placement, so the placement is read off the
-/// path: everything under the build disk's mount point is a filesystem the guest
-/// has to prepare itself, and everything else is a directory the host already
-/// seeded. That is what decides both whether the guest seeds and whether a
-/// failure is fatal ([`crate::guest_init::components::nix::root`]).
+/// path: everything under a guest-mounted disk (the build disk, or the workspace
+/// disk whose tree holds the upper for a `--workspace-disk` launch) is a
+/// filesystem the guest prepared and has to seed itself; everything else is a
+/// directory the host already seeded. That is what decides both whether the guest
+/// seeds and whether a failure is fatal
+/// ([`crate::guest_init::components::nix::root`]).
 pub(in crate::guest_init) fn is_on_build_disk(upperdir: &Path) -> bool {
+    // A guest-prepared filesystem, either way: the build disk of a launch that has
+    // one, or the workspace disk, whose tree holds the upper for a
+    // `--workspace-disk` launch. Both are mounted before nix-prep runs.
     upperdir.starts_with(Path::new(build::MOUNT_POINT))
+        || upperdir.starts_with(Path::new(
+            crate::guest_init::components::disk::workspace::MOUNT_POINT,
+        ))
 }
 
 /// What one seed did, for the profile log and the tests.

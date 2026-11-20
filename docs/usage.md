@@ -153,6 +153,12 @@ explicitly. `--workspace-size` is a *creation* size: an image first made at
 ./result/bin/cang --workspace-disk ./work.raw --workspace-size 32G -- bash -lc 'findmnt /workspace'
 ```
 
+Cang never deletes or grows that image for you: it is a path you named, not cang
+state, so no `cang disk` subcommand can reach it (`cang disk reset` still only
+offers `--containers`). `--workspace-size` sizes it at creation; to make an
+existing image bigger, grow the file and let the guest expand btrfs on the next
+mount.
+
 The guest mounts the disk at `/workspace`, and everything a build writes stays
 there: sources, cargo's own `./target`, and the cargo home, which lives in the
 tree as `cargo/` and is bound at `~/.cargo` (seeded once from the registry the
@@ -164,8 +170,14 @@ launch mounted there, then kept on the disk). Three consequences:
   keeps showing its own contents;
 - the build disk is neither created nor attached: with `target/` and the registry
   inside the tree it has nothing left to hold;
-- `/nix` stays on the host-composed overlay. `--nix=lower:blk` is refused with
-  this flag, because it would attach a second block disk for one launch.
+- `/nix` follows the disk: the launch serves it from the read-only btrfs
+  **block lower** built from the image's store, and the writable layer lives in
+  the tree at `/workspace/.cang/nix/<digest-key>/` (one subvolume per image
+  generation, `upper`/`work` as plain children, seeded by the guest once). The
+  guest's overlay is then the only `/nix` mount. There is no `--nix` flag: a
+  launch without `--workspace-disk` keeps the host-composed overlay instead, and
+  if the lower cannot be built (host space, or an image whose `cang-guest-init`
+  predates the guest half) the launch keeps that overlay and names the reason.
 
 ## Volumes
 
@@ -246,8 +258,14 @@ Both disks are grown by the same command, so one invocation can name both:
 
 ## Reclaiming the `/nix` upper
 
-The writable `/nix` upper lives inside the build disk, so cang collects it in a
-short maintenance VM rather than on the host:
+The writable `/nix` upper lives inside a disk image, so cang collects it in a
+short maintenance VM rather than on the host.
+
+**Known gap after 2026-11-20:** a `--workspace-disk` launch keeps its `/nix`
+generations in the *workspace* tree (`/workspace/.cang/nix/`), and `cang nix gc`
+still points at the build disk, which that launch does not have. Until it is
+retargeted, a workspace-disk launch collects nothing and its generations accumulate
+inside the workspace image.
 
 ```bash
 ./result/bin/cang nix gc --dry-run     # what would go, and its size

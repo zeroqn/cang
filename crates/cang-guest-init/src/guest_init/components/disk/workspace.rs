@@ -71,9 +71,14 @@ fn ensure_ready_with(
         ops.chown(cargo_home, identity.uid, identity.gid)?;
     }
 
-    // The bind always happens, even though `~/.cargo` is already a mount: that
-    // mount is the launch's registry on the share, and covering it is the point.
+    // The launch mounts the host's registry at `~/.cargo` and this replaces it: the
+    // host mount is unmounted rather than covered, so exactly one filesystem is
+    // behind the path and nothing reads the share by mistake afterwards.
     let target = Path::new(CARGO_HOME_TARGET);
+    if ops.is_mounted(target)? {
+        ops.unmount(target)
+            .context("failed to unmount the launch's ~/.cargo registry mount")?;
+    }
     ops.create_dir_all(target)?;
     ops.bind_mount(cargo_home, target)
         .context("failed to bind the workspace cargo home at ~/.cargo")?;
@@ -87,6 +92,7 @@ trait WorkspaceDiskOps {
     fn mount_btrfs(&self, disk: &Path, mount: &Path) -> Result<()>;
     fn bind_mount(&self, source: &Path, target: &Path) -> Result<()>;
     fn chown(&self, path: &Path, uid: u32, gid: u32) -> Result<()>;
+    fn unmount(&self, path: &Path) -> Result<()>;
     fn is_empty(&self, path: &Path) -> Result<bool>;
     fn seed_cargo_home(&self, from: &Path, to: &Path) -> Result<()>;
 }
@@ -120,6 +126,10 @@ impl WorkspaceDiskOps for SystemWorkspaceDiskOps {
 
     fn chown(&self, path: &Path, uid: u32, gid: u32) -> Result<()> {
         crate::guest_init::fs::chown(path, uid, gid)
+    }
+
+    fn unmount(&self, path: &Path) -> Result<()> {
+        crate::guest_init::command::run("umount", &[path_str(path)?])
     }
 
     fn is_empty(&self, path: &Path) -> Result<bool> {
@@ -234,6 +244,13 @@ mod tests {
             Ok(())
         }
 
+        fn unmount(&self, path: &Path) -> Result<()> {
+            let key = path.display().to_string();
+            self.operations.borrow_mut().push(format!("umount:{key}"));
+            self.mounted.borrow_mut().retain(|entry| entry != &key);
+            Ok(())
+        }
+
         fn is_empty(&self, path: &Path) -> Result<bool> {
             self.operations
                 .borrow_mut()
@@ -268,9 +285,35 @@ mod tests {
                 "is_empty:/workspace/cargo",
                 "seed:/home/dev/.cargo:/workspace/cargo",
                 "chown:/workspace/cargo:1000:1001",
+                "findmnt:/home/dev/.cargo",
                 "mkdir:/home/dev/.cargo",
                 "bind:/workspace/cargo:/home/dev/.cargo",
             ]
+        );
+    }
+
+    /// The launch's registry mount is unmounted, not covered: one filesystem sits
+    /// behind `~/.cargo`, and it is the tree's.
+    #[test]
+    fn the_launch_registry_mount_is_unmounted_before_the_bind() {
+        let ops = FakeWorkspaceDiskOps::new();
+        ops.mounted.borrow_mut().push("/home/dev/.cargo".to_owned());
+        ensure_ready_with(&contract(), &identity(), &ops).expect("should mount");
+
+        let operations = ops.operations.borrow();
+        let unmount = operations
+            .iter()
+            .position(|op| op == "umount:/home/dev/.cargo")
+            .expect("the launch mount is unmounted");
+        let bind = operations
+            .iter()
+            .position(|op| op == "bind:/workspace/cargo:/home/dev/.cargo")
+            .expect("the tree's cargo is bound");
+        assert!(unmount < bind, "unmount first, then bind");
+        assert_eq!(
+            ops.mounted.borrow().as_slice(),
+            ["/workspace", "/home/dev/.cargo"],
+            "exactly one mount remains at the path, and it is the tree's"
         );
     }
 

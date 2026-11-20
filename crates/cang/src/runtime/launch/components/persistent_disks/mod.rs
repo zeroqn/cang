@@ -65,9 +65,9 @@ pub(crate) fn build_disk_env_pairs(disk: &RawBtrfsDisk) -> [(String, String); 4]
 pub(crate) fn prepare_nix_lower_block(
     intent: &crate::runtime::launch::config::HostNixOverlay,
     guest_init: &Path,
-    mode: Option<nix_lower::NixLowerMode>,
+    want_block_lower: bool,
 ) -> Result<Option<nix_lower::NixLowerBlock>> {
-    nix_lower::prepare_block(intent, guest_init, mode)
+    nix_lower::prepare_block(intent, guest_init, want_block_lower)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

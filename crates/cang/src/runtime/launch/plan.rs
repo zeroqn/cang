@@ -69,8 +69,9 @@ pub(crate) struct LaunchPlan {
     pub(crate) landlock: LandlockMode,
     pub(crate) allocator: AllocatorMode,
     pub(crate) preserve_debug: bool,
-    pub(crate) nix_lower:
-        Option<crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode>,
+    /// Whether `/nix` is composed in the guest from a block lower (with its upper
+    /// inside the workspace tree). Derived from the workspace disk alone.
+    pub(crate) nix_block_lower: bool,
     pub(crate) config_diagnostics: ConfigDiagnostics,
 }
 
@@ -119,7 +120,6 @@ impl LaunchPlan {
             options.workspace_disk.as_deref(),
             options.workspace_size.as_deref(),
             &workspace_dir,
-            options.nix_lower,
         )?;
         let mut bind_mounts = mounts::prepare_dev_mounts(
             &workspace_dir,
@@ -187,7 +187,11 @@ impl LaunchPlan {
             landlock,
             allocator: options.allocator,
             preserve_debug: options.preserve_debug,
-            nix_lower: options.nix_lower,
+            // `/nix` follows the disk: a workspace-disk launch composes the overlay in
+            // the guest over a block lower with its upper inside the workspace tree; a
+            // launch without one keeps the host-composed overlay on the share. There is
+            // no flag for this any more.
+            nix_block_lower: workspace_disk.is_some(),
             config_diagnostics: ConfigDiagnostics {
                 config_path: config.path().to_path_buf(),
                 config_loaded: config.loaded(),
@@ -205,9 +209,6 @@ fn resolve_workspace_disk(
     path: Option<&Path>,
     size: Option<&str>,
     workspace_dir: &Path,
-    nix_lower: Option<
-        crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode,
-    >,
 ) -> Result<Option<(PathBuf, Option<u64>)>> {
     let Some(path) = path else {
         if size.is_some() {
@@ -222,16 +223,6 @@ fn resolve_workspace_disk(
     } else {
         workspace_dir.join(path)
     };
-    if matches!(
-        nix_lower,
-        Some(crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode::Blk)
-    ) {
-        anyhow::bail!(
-            "--workspace-disk cannot be combined with --nix=lower:blk: a workspace-disk launch \
-             keeps /nix on the host-composed overlay so it attaches one block disk, not two; \
-             drop the nix flag or the workspace disk"
-        );
-    }
     let size_bytes = match size {
         Some(value) => Some(
             crate::runtime::maintenance::disk_resize::parse_size_bytes_for_label(
@@ -442,7 +433,6 @@ mod tests {
             preserve_debug: false,
             workspace_disk: None,
             workspace_size: None,
-            nix_lower: None,
             mem_gib: None,
             network_mode: NetworkMode::Tsi,
             pulse: None,
@@ -497,29 +487,6 @@ mod tests {
         let plan = plan_with(options);
 
         assert_eq!(plan.workspace_disk_size_bytes, None);
-    }
-
-    #[test]
-    fn a_workspace_disk_launch_refuses_the_nix_block_lower() {
-        let dir = tempfile::tempdir().expect("tempdir should exist");
-        let mut options = runtime_options();
-        options.workspace_disk = Some(PathBuf::from("/tmp/work.raw"));
-        options.nix_lower = Some(
-            crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode::Blk,
-        );
-
-        let err = LaunchPlan::from_env_values(
-            options,
-            PathBuf::from("/tmp/example-project"),
-            Some(dir.path().join("state").as_path()),
-            Some(dir.path().join("config").as_path()),
-            Some(dir.path().join("home").as_path()),
-        )
-        .expect_err("the combination must be refused");
-
-        let message = format!("{err:#}");
-        assert!(message.contains("--nix=lower:blk"), "{message}");
-        assert!(message.contains("--workspace-disk"), "{message}");
     }
 
     #[test]

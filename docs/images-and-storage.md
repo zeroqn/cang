@@ -144,112 +144,60 @@ manual cleanup or a workspace overlay reset if they become inconsistent.
   `--container-store bind` is not supported, and cang does not migrate old
   host-directory container stores.
 
-### Both `/nix` layers on block devices
+### `/nix` on the block devices, driven by the workspace disk
 
-The host overlay above is the fallback. When cang can serve it, `/nix` is instead
-built entirely from virtio-blk disks, and the *guest* composes the overlay: the
-read-only btrfs image of the image's store (mounted at `/run/cang/nix-lower`) is
-`lowerdir`, and the writable layer lives on the workspace's build disk. Reading
-the store off a block device is what pays: `find /nix/store` 206-215 ms against
-864-2033 ms and `du -s` 267 ms against 9.2-10.4 s with the same tree over
-virtio-fs, before the upper moved as well.
+The host overlay above is the fallback. A launch that names a workspace disk - the
+btrfs tree described in [usage](usage.md) - gets `/nix` from virtio-blk instead,
+and the *guest* composes the overlay: the read-only btrfs image of the image's store
+(mounted at `/run/cang/nix-lower`) is `lowerdir`, and the writable layer lives in
+the **workspace tree**. Reading the store off a block device is what pays:
+`find /nix/store` 206-215 ms against 864-2033 ms and `du -s` 267 ms against
+9.2-10.4 s with the same tree over virtio-fs, before the upper moved as well.
 
-`--nix` names both layers and they resolve as one decision: `blk` on either axis
-moves both (the guest composes the overlay out of two disks), `virtiofs` on
-either keeps both on the host share, and naming them differently is a named
-error. The older `--nix-lower` flag and its
-`CANG_NIX_LOWER_BLOCK` environment spelling are gone: the guest-side
+There is no flag for any of it. `/nix` follows the workspace: `--workspace-disk`
+means the block pair, no workspace disk means the host-composed overlay. The
+`--nix=lower:...,upper:...` axis this section used to describe is gone; the guest-side
 `CANG_NIX_LOWER_*` variables remain, as the contract between the two halves.
 
-The writable upper follows the same axis. With both layers block, the guest owns
-the whole verdict: the read-only image is `lowerdir` and the upper and work dirs
-live on the workspace's *build disk* (`cang-build.raw`, mount
-`/home/dev/.cache/cang-build`), one generation directory per image digest:
+The upper is one generation directory per image digest inside the tree:
 
-    /home/dev/.cache/cang-build/nix-overlay/<digest-key>/          btrfs subvolume
-    /home/dev/.cache/cang-build/nix-overlay/<digest-key>/upper     overlayfs upperdir
-    /home/dev/.cache/cang-build/nix-overlay/<digest-key>/work      overlayfs workdir
+    /workspace/.cang/nix/<digest-key>/          btrfs subvolume
+    /workspace/.cang/nix/<digest-key>/upper     overlayfs upperdir
+    /workspace/.cang/nix/<digest-key>/work      overlayfs workdir
 
 The *generation* directory is the subvolume, not the upper: a btrfs subvolume root
 cannot be an overlayfs upperdir (every write returns `EXDEV`, with nothing in
-`dmesg`). The host cannot prepare any of this - a raw image is not mountable
-rootless - so the guest seeds the generation itself, as root, right before it
-composes the overlay: a new digest is a `btrfs subvolume snapshot` of the previous
-generation (constant time, zero bytes) with its work dir emptied, and the image's
-own Nix DB is staged from the read-only lower, which *is* the image's `/nix`. A
-generation that already exists is left completely alone, so a second boot of the
-same image writes nothing.
+`dmesg`). `upper` and `work` are plain directories inside it, which is also what
+makes a generation snapshot-able: children that are plain directories are cloned
+in constant time, where a nested subvolume would not be copied into a snapshot at
+all.
+
+The host prepares none of it - a raw image is not mountable rootless - so the guest
+seeds the generation itself, as root, right after it mounts the workspace disk and
+before it composes the overlay. A new digest is a `btrfs subvolume snapshot` of the
+previous generation (constant time, zero bytes) with its work dir emptied, and the
+image's own Nix DB is staged from the read-only lower, which *is* the image's
+`/nix`. A generation that already exists is left completely alone, so a second boot
+of the same image writes nothing.
 
 `/nix` then has exactly **one** mount. The host grafts nothing at `/nix` for this
 pairing - its own overlay would be a virtio-fs-backed `/nix` covered by the
-guest's, reachable by no access and read by a guest whose overlay had failed -
-so `CANG_NIX_HOST_OVERLAY` is not set, the mount point is a plain directory (the
+guest's, reachable by no access and read by a guest whose overlay had failed - so
+`CANG_NIX_HOST_OVERLAY` is not set, the mount point is a plain directory (the
 rootfs snapshot's), and the guest's `overlay /nix overlay
 lowerdir=/run/cang/nix-lower,upperdir=…` is the only `/nix` in `/proc/mounts`.
-Every path under `/nix` is therefore on the block devices; `--nix=lower:virtiofs`
-is the mode that keeps a host-composed overlay at `/nix` instead. Because there
-is no overlay underneath it, a failure here fails `/nix` prep with a named reason
+Every path under `/nix` is therefore on the block devices. Because there is no
+overlay underneath it, a failure here fails `/nix` prep with a named reason
 instead of reporting success over a store that was never composed.
 
-Both layers moving is what keeps the pairing legal: a block upper must not write
-into a host-share upper (that mixed pair is refused, below), so `blk` on either
-axis means both.
-
-The first block boot of a workspace whose `/nix` upper was the host's does not
-start empty: the guest imports the store and Nix DB that the host share had
-accumulated, once, into the fresh generation. It imports those two subtrees rather
-than the whole upper because a `/nix` root that ran under the host overlay holds
-live artefacts - `var/nix/daemon-socket/socket` is a socket, and `cp -a` aborts on
-one. Subsequent image digests clone the previous generation instead, and retired
-generations are pruned: a seed keeps the generation that booted plus the newest
-other completed one (the generation the next digest clones from), and deletes the
-rest so the disk does not grow one generation per image forever.
-
-Retired generations are collected at seed time, and on demand with
-`cang nix gc` (`--all` collects the generation in use as well), which runs in the
-same kind of narrow maintenance VM as `cang disk resize` because the disk cannot be
-mounted on the host.
-
-The upper shares the build disk's capacity, so it grows with it:
-`cang disk resize --build 100G` extends the image and the guest's btrfs in one
-maintenance VM (see [usage](usage.md)). A mid-run grow is not available - the
-virtio-blk device's capacity is fixed when the device is created - so the disk is
-sized at launch and grown only between launches.
-
-Measured with both layers block, against `--nix=lower:virtiofs` (the host-composed
-overlay over virtio-fs) in the same run, same image, `tools/nix-lower-cang-smoke`:
-`find /nix/store` 2422 ms against 8508 ms, `du -s /nix/store` 2833 ms against
-11228 ms, and a cold read of the store's 20 largest files 8932 ms against 5894 ms
-- metadata work is what the disk wins, cold data reads are what the host's page
-cache wins.
-
-An ordinary cold 7.x-kernel read of the store used to intermittently return
-stale contents for a 40 KiB window: the guest's btrfs logged `csum failed` (the
-checksum of a zero page), zeroed the window and returned `EIO` - or `SIGBUS` for a
-mapping over it, which is what killed a cold chromium start. The cause was in
-libkrun, not in this module, the image or btrfs: a virtio-blk descriptor whose
-buffer spanned two adjacent guest-memory regions was rejected whole, and the
-request completed with no data and no status, which the guest's driver scored as
-success - so btrfs verified pages that were never written. libkrun's map has such
-a boundary at the end of the kernel image it inserts (`[16 MiB, 16 MiB +
-kernel_size)`), inside RAM the guest is free to allocate from, and the 7.x kernel
-merges reads into multi-folio, multi-megabyte requests whose scatter-gather
-entries cross it (the 6.12 line emits page-sized entries, which cannot). Buffers
-are now split per region (`descriptor_utils::buffer_region_slices`), so the
-request shape no longer matters.
-
-`tools/nix-lower-cang-smoke` asserts the no-lost-page property on every release:
-40 files, 1.7 GB of cold reads at the disk's default request size. With the split
-in place an instrumented 7.3.1 firmware reads them with no lost page in 9 of 9
-sweeps, where the same device lost 1-19 pages per sweep before.
-
-A separate, *deterministic* fault is also fixed: two launches sharing one `[state]
-location`, where the second rebuilt the image while the first one's VM had it
-attached, handed that VM blocks from the other image (2 of 2 measured). cang now
-locks the image per launch - shared for the life of the VM, exclusive for a
-rebuild - so a launch that would have to rebuild under a live VM keeps the
-host-composed overlay and says so. Give concurrent launches their own `[state]
-location` and they share the image read-only instead.
+The upper shares the workspace image's capacity, so it grows with it:
+`--workspace-size` sizes the image at creation and the guest grows btrfs on a later
+mount once the file is larger. Measured with the block pair, against the
+host-composed overlay in the same run, same image,
+`tools/nix-lower-cang-smoke`: `find /nix/store` 2422 ms against 8508 ms,
+`du -s /nix/store` 2833 ms against 11228 ms, and a cold read of the store's 20
+largest files 8932 ms against 5894 ms - metadata work is what the disk wins, cold
+data reads are what the host's page cache wins.
 
 - The image is built with `mkfs.btrfs -q -L CANG_NIX_LOWER
   --rootdir=<image rootfs>/nix --reflink --shrink` inside the Buildah storage

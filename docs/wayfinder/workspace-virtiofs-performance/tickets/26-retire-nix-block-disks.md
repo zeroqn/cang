@@ -1,9 +1,9 @@
 ---
 label: wayfinder:task
 title: Remove the --nix CLI axis - a workspace disk means /nix on a block lower with its upper in the tree
-status: open
+status: closed
 blocked_by: []
-claimed_by: ""
+claimed_by: "pi (2026-11-20)"
 ---
 
 ## Question
@@ -58,7 +58,12 @@ Do:
    image and `nix-overlay.lease.*` files. A default launch must keep using the
    host overlay and the build disk; a workspace-disk launch ignores them. Never
    silently attach a block device the mode did not ask for.
-7. **Docs and tests**: `docs/usage.md`, `docs/images-and-storage.md`,
+7. **`cang nix gc` still points at the build disk.** It launches a maintenance VM
+   with `cang-build.raw` attached and runs the guest's gc there, so with the upper
+   in the workspace tree it collects nothing (recorded as a known gap in
+   `docs/usage.md`). Retargeting it means attaching the workspace image and
+   refusing when the path is not given.
+8. **Docs and tests**: `docs/usage.md`, `docs/images-and-storage.md`,
    `README.md` (`--nix=` prose), `crates/cang-repository-tests`, and the
    `nix-upper-on-block` map (whose ticket 09 is already cancelled and whose
    remaining question - upper on a block disk - is now answered by this ticket's
@@ -66,4 +71,34 @@ Do:
 
 ## Resolution
 
-(to follow)
+**Built and live-verified 2026-11-20** in bob's corrected shape (the block lower
+becomes automatic, the upper moves into the tree), not the original "retire both".
+
+- The `--nix` axis is **gone** (`--nix=lower:blk` is now a plain clap error): no
+  `NixLayer`/`NixLayerMode` grammar, no `NixLowerMode`, no pair-wide resolution, no
+  `--workspace-disk` + `--nix=lower:blk` refusal.
+- `/nix` is **derived from the disk** (`LaunchPlan.nix_block_lower =
+  workspace_disk.is_some()`); the guest composes the overlay over the read-only
+  block lower.
+- The **upper lives at `/workspace/.cang/nix/<digest-key>/`** - a btrfs subvolume
+  whose `upper`/`work` are plain directories inside it (the only copy-up-legal
+  shape; a subvolume root EXDEVs), seeded by the guest right after it mounts the
+  workspace disk and before it composes the overlay, generation-keyed so a lower
+  change cannot reuse a stale cache.
+- An unavailable lower **keeps the launch** (host overlay, named reason on stderr):
+  no flag remains that could ask for a refusal.
+- `cang disk reset` cannot reach a workspace image: it offers only `--containers`/
+  `--force`, pinned by a CLI test.
+- Bonus from the same arm: the launch's `~/.cargo` virtio-fs mount is now
+  **unmounted** before the tree's `cargo/` is bound there, so one filesystem sits
+  behind the path (live: a single `findmnt` line).
+
+Live arm confirmed the derived mode, the single cargo mount, `/workspace` on
+`/dev/vdb`, no build disk - and printed the named fallback
+(`... needs about 8398 MiB free but only 3240 MiB are available`). **The
+guest-composed `/nix` overlay was not exercised**: the host is short of space for
+the lower image this window. [note 60](../notes/60-nix-follows-the-workspace-disk.md).
+
+Carried forward as its own gap: `cang nix gc` still points at `cang-build.raw`, so
+generations inside a workspace image are not collected yet (item 7 above,
+`docs/usage.md`).

@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use crate::logging::{LogLevel, LogSettings};
 use crate::runtime::landlock::LandlockMode;
-use crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode;
 use crate::runtime::launch::config::{AllocatorMode, GuestPermissions, NetworkMode, PulseServer};
 use crate::runtime::seccomp::{AuditMode, SeccompCommand, SeccompMode};
 use crate::runtime::vm::gpu::GpuMode;
@@ -247,15 +246,6 @@ pub(crate) struct Cli {
 
     #[arg(long = "preserve-debug", help = "Preserve task debug state after exit")]
     preserve_debug: bool,
-
-    #[arg(
-        long = "nix",
-        value_name = "KEY:VALUE",
-        value_parser = parse_nix_arg,
-        help = "How /nix's layers are served: lower:MODE, upper:MODE",
-        long_help = "How /nix's two overlay layers are served, as KEY:VALUE; repeat for more than one.\n\n  lower:auto|blk|virtiofs\n    `blk` serves the store from a read-only btrfs image on virtio-blk, which the guest composes its overlay from, and refuses the launch when that image cannot be served (it cannot be built or is locked by another launch, or the image's cang-guest-init predates the guest half) - say virtiofs if you would rather have a launch than a reason. `auto` (the default) does the same but keeps the host-composed overlay and names the reason when the block lower is unavailable. `virtiofs` never builds or attaches an image and keeps the host-composed overlay: find on the store takes 864-2033 ms instead of 206-215 ms.\n\n  upper:auto|blk|virtiofs\n    Where the writable layer of /nix lives. `blk` puts it on the workspace's build disk: the guest seeds one generation per image digest (a snapshot of the newest sibling generation, or a one-time import of the last host-seeded upper, so a move does not re-substitute the store) and composes the overlay over the block lower itself. `auto` and `virtiofs` both mean the host-directory share today.\n\nThe two layers are one decision: `blk` on either axis moves both, `virtiofs` on either keeps both on the host share, and naming the two differently is an error - a block upper forces a block lower. With both layers block the host grafts no /nix at all: the guest's overlay is the only /nix mount, so every /nix access is on the block devices instead of a covered virtio-fs path. Renamed from `--nix-lower`, whose CANG_NIX_LOWER_BLOCK spelling is gone."
-    )]
-    nix: Vec<(NixLayer, NixLayerMode)>,
 
     #[arg(
         long = "mem",
@@ -679,7 +669,6 @@ impl Cli {
     }
 
     pub(crate) fn try_into_runtime_options(self) -> anyhow::Result<RuntimeOptions> {
-        let layer = resolve_nix_layers(&self.nix)?;
         let log_settings = LogSettings::from_process_env(self.log_level, self.debug);
         Ok(RuntimeOptions {
             image: self.image,
@@ -700,11 +689,7 @@ impl Cli {
             preserve_debug: self.preserve_debug,
             workspace_disk: self.workspace_disk,
             workspace_size: self.workspace_size,
-            nix_lower: Some(match layer {
-                NixLayerMode::VirtioFs => NixLowerMode::VirtioFs,
-                NixLayerMode::Blk => NixLowerMode::Blk,
-                NixLayerMode::Auto => NixLowerMode::Auto,
-            }),
+
             mem_gib: self.mem_gib,
             network_mode: if self.tsi {
                 NetworkMode::Tsi
@@ -765,7 +750,6 @@ pub(crate) struct RuntimeOptions {
     pub(crate) preserve_debug: bool,
     pub(crate) workspace_disk: Option<PathBuf>,
     pub(crate) workspace_size: Option<String>,
-    pub(crate) nix_lower: Option<NixLowerMode>,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
@@ -1182,81 +1166,43 @@ mod tests {
         assert!(parse_gpu_shm_arg("").is_err());
     }
 
+    /// A `--workspace-disk` image is a path the user named, not cang state, so no
+    /// maintenance command may reach it: `disk reset` offers only the container
+    /// store and `disk resize` only the two state-root disks.
     #[test]
-    fn parses_nix_layer_modes_and_rejects_anything_else() {
-        use crate::cli::{NixLayer, NixLayerMode, parse_nix_arg};
+    fn maintenance_commands_offer_no_way_to_touch_a_workspace_disk() {
+        use clap::CommandFactory;
+
+        let mut command = Cli::command();
+        let disk = command
+            .find_subcommand_mut("disk")
+            .expect("cang has a disk command");
+        let mut names = Vec::new();
+        for subcommand in disk.get_subcommands_mut() {
+            let mut option_names: Vec<String> = subcommand
+                .get_arguments()
+                .filter_map(|argument| argument.get_long())
+                .map(str::to_owned)
+                .collect();
+            option_names.sort();
+            names.push((subcommand.get_name().to_owned(), option_names));
+        }
+        names.sort();
 
         assert_eq!(
-            parse_nix_arg("lower:blk").expect("lower:blk"),
-            (NixLayer::Lower, NixLayerMode::Blk)
+            names,
+            vec![
+                (
+                    "reset".to_owned(),
+                    vec!["containers".to_owned(), "force".to_owned()]
+                ),
+                (
+                    "resize".to_owned(),
+                    vec!["build".to_owned(), "containers".to_owned()]
+                ),
+            ],
+            "a workspace-disk path must never be reachable from `cang disk`"
         );
-        assert_eq!(
-            parse_nix_arg("upper:virtiofs").expect("upper:virtiofs"),
-            (NixLayer::Upper, NixLayerMode::VirtioFs)
-        );
-        assert_eq!(
-            parse_nix_arg("lower:auto").expect("lower:auto"),
-            (NixLayer::Lower, NixLayerMode::Auto)
-        );
-
-        let err = parse_nix_arg("lower:block").expect_err("an unknown mode is refused");
-        assert!(err.contains("blk"), "{err}");
-        assert!(err.contains("virtiofs"), "{err}");
-        let err = parse_nix_arg("middle:blk").expect_err("an unknown layer is refused");
-        assert!(err.contains("lower") && err.contains("upper"), "{err}");
-        let err = parse_nix_arg("blk").expect_err("a bare mode names no axis");
-        assert!(err.contains("lower") && err.contains("upper"), "{err}");
-    }
-
-    /// The two `/nix` layers are one decision: `blk` on either moves both,
-    /// `virtiofs` on either keeps both on the host share, and naming them
-    /// differently is an error rather than a guess.
-    #[test]
-    fn resolve_nix_layers_is_pair_wide_and_refuses_a_contradiction() {
-        use crate::cli::{NixLayer, NixLayerMode, resolve_nix_layers};
-
-        assert_eq!(
-            resolve_nix_layers(&[]).expect("the default"),
-            NixLayerMode::Auto
-        );
-        assert_eq!(
-            resolve_nix_layers(&[(NixLayer::Lower, NixLayerMode::Blk)]).expect("blk"),
-            NixLayerMode::Blk
-        );
-        assert_eq!(
-            resolve_nix_layers(&[(NixLayer::Lower, NixLayerMode::VirtioFs)]).expect("virtiofs"),
-            NixLayerMode::VirtioFs
-        );
-
-        // A later occurrence of the same key wins, as with `--virtiofs`.
-        assert_eq!(
-            resolve_nix_layers(&[
-                (NixLayer::Upper, NixLayerMode::Blk),
-                (NixLayer::Upper, NixLayerMode::Auto),
-            ])
-            .expect("the last upper wins"),
-            NixLayerMode::Auto
-        );
-
-        // Naming either layer decides both: a virtiofs upper moves the lower off
-        // the block disk with it, and a block upper moves the lower onto it.
-        assert_eq!(
-            resolve_nix_layers(&[(NixLayer::Upper, NixLayerMode::VirtioFs)]).expect("virtiofs"),
-            NixLayerMode::VirtioFs
-        );
-        assert_eq!(
-            resolve_nix_layers(&[(NixLayer::Upper, NixLayerMode::Blk)]).expect("blk"),
-            NixLayerMode::Blk
-        );
-
-        let err = resolve_nix_layers(&[
-            (NixLayer::Lower, NixLayerMode::VirtioFs),
-            (NixLayer::Upper, NixLayerMode::Blk),
-        ])
-        .expect_err("a block upper cannot pair with a virtiofs lower");
-        let err = format!("{err:#}");
-        assert!(err.contains("disagree"), "{err}");
-        assert!(err.contains("mixed pair"), "{err}");
     }
 
     #[test]
@@ -2748,102 +2694,4 @@ fn virtiofs_option_rejects_unknown_keys_and_values() {
         Cli::try_parse_from(["cang", "--virtiofs=cache-symlinks:maybe", "--", "true"]).is_err()
     );
     assert!(Cli::try_parse_from(["cang", "--virtiofs=negative-entry:soon", "--", "true"]).is_err());
-}
-
-/// One layer of the `/nix` overlay that `--nix=KEY:VALUE` names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NixLayer {
-    /// The read-only store the image ships, served from a btrfs image on
-    /// virtio-blk (or through a host-composed overlay on virtio-fs).
-    Lower,
-    /// The writable layer a build writes into.
-    Upper,
-}
-
-/// How one `/nix` layer is served.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NixLayerMode {
-    /// The fast layer when it can be served, the host share otherwise.
-    Auto,
-    /// An image on the workspace block disk, or no launch.
-    Blk,
-    /// The host share, through virtio-fs.
-    VirtioFs,
-}
-
-impl NixLayerMode {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Blk => "blk",
-            Self::VirtioFs => "virtiofs",
-        }
-    }
-}
-
-/// Parse one `--nix=KEY:VALUE`; KEY is `lower` or `upper`, VALUE one of the
-/// three modes.
-fn parse_nix_arg(value: &str) -> Result<(NixLayer, NixLayerMode), String> {
-    let Some((key, mode)) = value.split_once(':') else {
-        return Err(format!(
-            "{value}: expected KEY:VALUE, where KEY is lower or upper and VALUE is auto, blk or virtiofs (for example --nix=lower:blk)"
-        ));
-    };
-    let layer = match key {
-        "lower" => NixLayer::Lower,
-        "upper" => NixLayer::Upper,
-        other => {
-            return Err(format!(
-                "unknown /nix layer '{other}': use lower (the read-only store the image ships) or upper (the writable layer a build writes into)"
-            ));
-        }
-    };
-    let mode = match mode {
-        "auto" => NixLayerMode::Auto,
-        "blk" => NixLayerMode::Blk,
-        "virtiofs" => NixLayerMode::VirtioFs,
-        other => {
-            return Err(format!(
-                "unknown /nix mode '{other}' for {key}: use auto (the fast layer when it can be served, the host share otherwise), blk (the block disk or no launch) or virtiofs (the host share)"
-            ));
-        }
-    };
-    Ok((layer, mode))
-}
-
-/// Resolve every `--nix=KEY:VALUE` into the pair-wide decision.
-///
-/// The layers are one decision, so the axes are not independent: `blk` on
-/// either moves both (a block upper forces a block lower, because the guest
-/// composes the overlay and needs a lower it can mount), `virtiofs` on either
-/// keeps both on the host share, and naming them differently is an error. A
-/// later occurrence of the same key wins, as with `--virtiofs`.
-fn resolve_nix_layers(values: &[(NixLayer, NixLayerMode)]) -> anyhow::Result<NixLayerMode> {
-    let mut lower = NixLayerMode::Auto;
-    let mut upper = NixLayerMode::Auto;
-    for (layer, mode) in values {
-        match layer {
-            NixLayer::Lower => lower = *mode,
-            NixLayer::Upper => upper = *mode,
-        }
-    }
-    if matches!(
-        (lower, upper),
-        (NixLayerMode::Blk, NixLayerMode::VirtioFs) | (NixLayerMode::VirtioFs, NixLayerMode::Blk)
-    ) {
-        anyhow::bail!(
-            "/nix layers disagree (lower:{}, upper:{}): the layers are one filesystem family and a mixed pair is refused - name one of them and let it decide both",
-            lower.as_str(),
-            upper.as_str()
-        );
-    }
-    Ok(
-        if lower == NixLayerMode::Blk || upper == NixLayerMode::Blk {
-            NixLayerMode::Blk
-        } else if lower == NixLayerMode::VirtioFs || upper == NixLayerMode::VirtioFs {
-            NixLayerMode::VirtioFs
-        } else {
-            NixLayerMode::Auto
-        },
-    )
 }

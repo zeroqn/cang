@@ -521,6 +521,19 @@ of every request to zero.
   `/dev/fuse` in its Landlock set, and `no_new_privs` rules out setuid
   `fusermount3`). **Spike gate: if one relayed op exceeds ~250 us the product
   surface does not work, and the numbers come back to bob.** [note 58](notes/58-reverse-share-transport.md).
+- [Remove the --nix CLI axis - a workspace disk means /nix on a block lower with its
+  upper in the tree](tickets/26-retire-nix-block-disks.md): **`/nix` follows the
+  disk and nothing else.** The `--nix` axis is deleted (a plain clap error now),
+  `LaunchPlan.nix_block_lower = workspace_disk.is_some()`, and the writable layer
+  moved from `cang-build.raw` to `/workspace/.cang/nix/<digest-key>/` - a btrfs
+  subvolume whose `upper`/`work` are plain dirs (the copy-up-legal shape), seeded by
+  the guest after it mounts the disk. An unavailable lower keeps the launch with a
+  named reason; `cang disk reset` cannot reach a workspace image. Measured live: the
+  derived mode and the named fallback (3 240 MiB free against an 8 398 MiB floor),
+  one `~/.cargo` mount (the launch's virtio-fs one is unmounted first), `/workspace`
+  on `/dev/vdb`, no build disk - the guest-composed overlay itself is
+  **unexercised** until the host has the space. [note 60](notes/60-nix-follows-the-workspace-disk.md).
+
 - [Worktrees, target/ and the registry inside the image - and what the image is
   keyed on](tickets/24-worktree-target-and-registry-layout.md): **cargo's own
   layout, no sharing implemented in cang.** `target/` is `./target` inside the
