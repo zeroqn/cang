@@ -41,7 +41,9 @@ pub(crate) struct LaunchPlan {
     /// The `/workspace` disk this launch serves, already resolved to an absolute
     /// path, and the size a missing image is created at.
     pub(crate) workspace_disk: Option<PathBuf>,
-    pub(crate) workspace_disk_size_bytes: u64,
+    /// The creation size for a missing image; `None` means the caller did not
+    /// ask, so an existing image of any size is accepted.
+    pub(crate) workspace_disk_size_bytes: Option<u64>,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
@@ -159,7 +161,7 @@ impl LaunchPlan {
             container_store_backend,
             guest_init: options.guest_init,
             workspace_disk: workspace_disk.as_ref().map(|(path, _)| path.clone()),
-            workspace_disk_size_bytes: workspace_disk.map_or(0, |(_, size)| size),
+            workspace_disk_size_bytes: workspace_disk.as_ref().and_then(|(_, size)| *size),
             mem_gib: options.mem_gib,
             network_mode: options.network_mode,
             pulse: options.pulse,
@@ -206,7 +208,7 @@ fn resolve_workspace_disk(
     nix_lower: Option<
         crate::runtime::launch::components::persistent_disks::nix_lower::NixLowerMode,
     >,
-) -> Result<Option<(PathBuf, u64)>> {
+) -> Result<Option<(PathBuf, Option<u64>)>> {
     let Some(path) = path else {
         if size.is_some() {
             anyhow::bail!(
@@ -231,11 +233,13 @@ fn resolve_workspace_disk(
         );
     }
     let size_bytes = match size {
-        Some(value) => crate::runtime::maintenance::disk_resize::parse_size_bytes_for_label(
-            value,
-            "cang workspace disk size",
-        )?,
-        None => crate::runtime::launch::components::persistent_disks::workspace::DEFAULT_SIZE_BYTES,
+        Some(value) => Some(
+            crate::runtime::maintenance::disk_resize::parse_size_bytes_for_label(
+                value,
+                "cang workspace disk size",
+            )?,
+        ),
+        None => None,
     };
     Ok(Some((path, size_bytes)))
 }
@@ -482,7 +486,7 @@ mod tests {
             plan.workspace_disk,
             Some(PathBuf::from("/tmp/example-project/work.raw"))
         );
-        assert_eq!(plan.workspace_disk_size_bytes, 8 * 1024 * 1024 * 1024);
+        assert_eq!(plan.workspace_disk_size_bytes, Some(8 * 1024 * 1024 * 1024));
     }
 
     #[test]
@@ -492,10 +496,7 @@ mod tests {
 
         let plan = plan_with(options);
 
-        assert_eq!(
-            plan.workspace_disk_size_bytes,
-            crate::runtime::launch::components::persistent_disks::workspace::DEFAULT_SIZE_BYTES
-        );
+        assert_eq!(plan.workspace_disk_size_bytes, None);
     }
 
     #[test]

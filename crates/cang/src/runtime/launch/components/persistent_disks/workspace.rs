@@ -49,17 +49,22 @@ pub(crate) struct WorkspaceDisk {
 
 /// Create the workspace image at `path` when it is absent, or validate the one
 /// already there.
+///
+/// `requested_size_bytes` is the *creation* size, and only a lower bound on reuse
+/// when the caller asked for one explicitly: an image first created at 32 GiB
+/// stays usable without having to pass the flag again every launch.
 pub(crate) fn prepare_with_runner(
     path: &Path,
-    size_bytes: u64,
+    requested_size_bytes: Option<u64>,
     runner: &impl RawImageCommandRunner,
 ) -> Result<WorkspaceDisk> {
-    if size_bytes == 0 {
+    if let Some(0) = requested_size_bytes {
         bail!("cang workspace disk size must be greater than zero");
     }
+    let size_bytes = requested_size_bytes.unwrap_or(DEFAULT_SIZE_BYTES);
 
     if let Some(existing_len) = inspect_existing_regular_file(path, &SPEC)? {
-        if existing_len < size_bytes {
+        if requested_size_bytes.is_some_and(|requested| existing_len < requested) {
             bail!(
                 "existing cang workspace disk '{}' is {} bytes, below the requested {} bytes; \
                  grow it with 'truncate -s {} {}' or pass a smaller --workspace-size",
@@ -158,7 +163,8 @@ mod tests {
         let path = temp.path().join("work.raw");
         let runner = FakeRunner::default();
 
-        let disk = prepare_with_runner(&path, 1024, &runner).expect("image should be created");
+        let disk =
+            prepare_with_runner(&path, Some(1024), &runner).expect("image should be created");
 
         assert_eq!(disk.status, WorkspaceDiskStatus::Created);
         assert_eq!(disk.size_bytes, 1024);
@@ -176,7 +182,21 @@ mod tests {
         fs::write(&path, vec![0u8; 4096]).expect("image");
         let runner = FakeRunner::with_probe("btrfs");
 
-        let disk = prepare_with_runner(&path, 1024, &runner).expect("image should be reused");
+        let disk = prepare_with_runner(&path, Some(1024), &runner).expect("image should be reused");
+
+        assert_eq!(disk.status, WorkspaceDiskStatus::Reused);
+        assert_eq!(disk.size_bytes, 4096);
+        assert_eq!(runner.mkfs_call_count(), 0);
+    }
+
+    #[test]
+    fn an_existing_image_below_the_default_is_usable_without_the_size_flag() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("work.raw");
+        fs::write(&path, vec![0u8; 4096]).expect("image");
+        let runner = FakeRunner::with_probe("btrfs");
+
+        let disk = prepare_with_runner(&path, None, &runner).expect("image should be reused");
 
         assert_eq!(disk.status, WorkspaceDiskStatus::Reused);
         assert_eq!(disk.size_bytes, 4096);
@@ -190,7 +210,8 @@ mod tests {
         fs::write(&path, vec![0u8; 4096]).expect("image");
         let runner = FakeRunner::with_probe("ext4");
 
-        let err = prepare_with_runner(&path, 1024, &runner).expect_err("ext4 must be refused");
+        let err =
+            prepare_with_runner(&path, Some(1024), &runner).expect_err("ext4 must be refused");
 
         let message = format!("{err:#}");
         assert!(message.contains("expected btrfs"), "{message}");
@@ -204,7 +225,7 @@ mod tests {
         fs::write(&path, vec![0u8; 1024]).expect("image");
         let runner = FakeRunner::with_probe("btrfs");
 
-        let err = prepare_with_runner(&path, 4096, &runner).expect_err("too small");
+        let err = prepare_with_runner(&path, Some(4096), &runner).expect_err("too small");
 
         assert!(format!("{err:#}").contains("below the requested"));
         assert_eq!(runner.mkfs_call_count(), 0);
@@ -215,14 +236,16 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let dir = temp.path().join("work.raw");
         fs::create_dir(&dir).expect("directory");
-        let err = prepare_with_runner(&dir, 1024, &FakeRunner::default()).expect_err("directory");
+        let err =
+            prepare_with_runner(&dir, Some(1024), &FakeRunner::default()).expect_err("directory");
         assert!(format!("{err:#}").contains("not a regular file"));
 
         let target = temp.path().join("real.raw");
         fs::write(&target, vec![0u8; 4096]).expect("target");
         let link = temp.path().join("link.raw");
         std::os::unix::fs::symlink(&target, &link).expect("symlink");
-        let err = prepare_with_runner(&link, 1024, &FakeRunner::default()).expect_err("symlink");
+        let err =
+            prepare_with_runner(&link, Some(1024), &FakeRunner::default()).expect_err("symlink");
         assert!(format!("{err:#}").contains("symlink"));
     }
 
@@ -233,7 +256,7 @@ mod tests {
         let runner = FakeRunner::default();
         runner.push_mkfs_error("mkfs.btrfs is not installed");
 
-        let err = prepare_with_runner(&path, 1024, &runner).expect_err("format should fail");
+        let err = prepare_with_runner(&path, Some(1024), &runner).expect_err("format should fail");
 
         assert!(format!("{err:#}").contains("mkfs.btrfs is not installed"));
         assert!(!path.exists());

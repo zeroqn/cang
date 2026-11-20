@@ -145,7 +145,9 @@ kill` returns a visible error and leaves or restores the active record so rerun
 or a block device instead of the host directory over virtio-fs. `PATH` is
 created on first use (`--workspace-size`, default `64G`) and validated on reuse:
 a file holding anything other than btrfs, a symlink, or a directory is refused
-rather than reformatted, and so is an image smaller than the requested size.
+rather than reformatted, and so is an image smaller than a size you asked for
+explicitly. `--workspace-size` is a *creation* size: an image first made at
+32G stays usable without passing the flag again.
 
 ```bash
 ./result/bin/cang --workspace-disk ./work.raw --workspace-size 32G -- bash -lc 'findmnt /workspace'
