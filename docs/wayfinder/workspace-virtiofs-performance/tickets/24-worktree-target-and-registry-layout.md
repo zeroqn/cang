@@ -1,7 +1,7 @@
 ---
 label: wayfinder:grilling
 title: Worktrees, target/ and the registry inside the image - and what the image is keyed on
-status: open
+status: closed
 blocked_by: []
 claimed_by: "pi + bob (2026-11-20)"
 ---
@@ -70,6 +70,31 @@ machinery - only source, registry and target *locations*; ticket 26's retirement
 of the build disk now also removes `CARGO_TARGET_DIR`, not just the `/nix` upper;
 the word "worktree" stays out of `crates/` entirely.
 
+### Q3 resolved (2026-11-20, bob): neither - the disk *path* is the identity, the
+cwd is only where you see it
+
+Verbatim: *"Then it opposite. If we specific a raw disk as workspace, then the
+directory we launch from is the reverse view of raw disk workspace. For example
+cwd /foo/bar: cang -> mount /foo/bar as /workspace in cang guest; cang work.raw
+-> reverse "bind mount" work.raw content to /foo/bar"*.
+
+So the model inverts the old one rather than keying the image off the directory:
+
+- **the workspace is a named raw disk** (`work.raw`, or a `/dev/sdX` later) - that
+  file is the identity, and cang creates it if it does not exist;
+- **the guest mounts that disk at `/workspace`**;
+- **the host's cwd becomes the reverse view of that disk's content** (the reverse
+  share, ticket 23, seen at `/foo/bar`), not the source of it;
+- with no disk named, a launch keeps today's behaviour (the host directory served
+  by virtio-fs), so nothing breaks for existing users.
+
+What this settles: no repo-root lookup, no cwd-derived image name; the cwd slug
+(`state/mod.rs:48`) stays only for the per-run task root, logs, leases and the
+guest hostname. A launch that *does* name a disk mounts over its own cwd, so the
+host tree underneath is hidden rather than copied - which moves the "what happens
+to the host copy" question into ticket 25 (seeding) and the mount-time semantics
+into ticket 23's contract.
+
 ## Question
 
 The point of putting `/workspace` on btrfs is cheap copies: `btrfs subvolume
@@ -106,4 +131,17 @@ Decide:
 
 ## Resolution
 
-(to follow)
+Settled 2026-11-20 (bob): **`target/` inside the tree, cang implements no sharing
+of it** (kache owns caching, cargo's defaults are enough); the **cargo home is a
+directory on the image bind-mounted at `~/.cargo`**; **worktrees are plain
+`git worktree add`s in the guest**; **the image is created at 64 GiB and
+auto-grows under a headroom rule with `--workspace-size` and the manual command as
+overrides**; and **the workspace's identity is the named raw disk, with the
+launch directory becoming the reverse view of its content**.
+
+Carried forward: ticket 18 (no target-sharing machinery; source/registry/target
+*locations* only; `--workspace-disk` surface and the mount-over-cwd semantics),
+ticket 25 (a named empty disk is the norm - seeding an existing host tree is an
+explicit act, and the host copy ends up hidden under the mount), ticket 26 (the
+build disk's retirement now also removes `CARGO_TARGET_DIR`), ticket 23 (the host
+view is the launch directory).

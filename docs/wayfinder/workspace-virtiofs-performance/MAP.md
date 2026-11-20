@@ -65,6 +65,11 @@ build disk stops accumulating tenants that have to be grown by hand.
     `DiskAttachment`; a real `/dev/sdX` is a later ticket, not v1.
   - **Placement - `target/` and `CARGO_HOME` move into the workspace image**, the
     `/nix` upper does not (a store upper has to outlive workspace images).
+  - **Identity - the named disk is the workspace, the launch directory is its
+    reverse view** (bob, 2026-11-20, ticket 24's Q3): `cang work.raw` mounts
+    `work.raw` at `/workspace` in the guest and shows its content at the cwd;
+    with no disk named, a launch keeps today's host-directory behaviour. The cwd
+    slug survives only for the per-run task root, logs, leases and hostname.
   - **Fewer block devices - the `/nix` block lower and block upper are removed**,
     not kept. `--nix=lower:blk` and `--nix=upper:...` go away, `/nix` returns to
     the host-composed overlay, and "grow the disk by hand" shrinks instead of
@@ -511,6 +516,16 @@ of every request to zero.
   `/dev/fuse` in its Landlock set, and `no_new_privs` rules out setuid
   `fusermount3`). **Spike gate: if one relayed op exceeds ~250 us the product
   surface does not work, and the numbers come back to bob.**
+- [Worktrees, target/ and the registry inside the image - and what the image is
+  keyed on](tickets/24-worktree-target-and-registry-layout.md): **cargo's own
+  layout, no sharing implemented in cang.** `target/` is `./target` inside the
+  tree (cang stops exporting `CARGO_TARGET_DIR`; kache/user tooling owns caching),
+  the cargo home is a directory on the image bind-mounted at `~/.cargo`,
+  worktrees are plain `git worktree add`s in the guest, and the image is created
+  at 64 GiB with auto-grow under a headroom rule (`--workspace-size` and the
+  manual command as overrides). **The image's identity is the named raw disk**;
+  the launch directory is the reverse view of its content.
+
   [note 58](notes/58-reverse-share-transport.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)

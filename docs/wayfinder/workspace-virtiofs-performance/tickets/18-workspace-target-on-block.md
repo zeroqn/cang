@@ -29,9 +29,12 @@ Decide/do, one session:
    `raw_btrfs.rs:102/115/197`, `RawDiskSpec`) + `block_device_new`
    (`launcher.rs:526`) + a guest mount step that puts it at `/workspace` where the
    virtio-fs bind graft is today (`launcher.rs:450` is the share;
-   `prepared_root/mod.rs` does the graft). Name the flag (`--workspace=image:...`?
-   a size?), the default (off), and the identity rule (which state-root directory
-   owns which image, given the slug comes from the cwd today).
+   `prepared_root/mod.rs` does the graft). Name the flag (`--workspace-disk=<path>`,
+   creating it when absent), the default (off - no disk named means today's
+   host-directory share), and the identity rule, now **settled by ticket 24**:
+   the named disk is the workspace and the cwd becomes the reverse view of its
+   content, so the state-root slug keeps only task roots, logs, leases and the
+   guest hostname.
 2. **What must refuse.** A launch that cannot mount its workspace image (missing
    image, wrong fs, an image another VM has open) must refuse by name, the way
    `--nix=lower:blk` does today - not silently fall back to the share, because a
