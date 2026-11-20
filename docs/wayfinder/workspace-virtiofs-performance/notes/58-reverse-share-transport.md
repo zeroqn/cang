@@ -55,19 +55,24 @@ Sources, and what each is:
    `filesystems/9p.rst`). None of them is a candidate here, for the reasons in
    §2/§3 - the 9p one because it needs a patched *host* kernel, a 9p server in
    the guest and a privileged mount.
-4. **The price floor is worse than the forward share, and there is a measured
-   number for it: one 64-byte vsock ping-pong round trip is ~224 µs**
-   (LWN's table for a KVM guest with `vhost-vsock`, 10 000 requests -
-   https://lwn.net/Articles/1102567/). That is already ~2x the forward share's
-   ~120 µs wall per request (note 46 §1), so plan on **~4-5 k ops/s per in-flight
-   stream** (concurrency is what buys more, and it needs a concurrent guest
-   agent). Measured on this host's own repo, `git status` issues **4 100 path
+4. **The price floor is worse than the forward share** - and it has since been
+   measured on cang's own transport rather than borrowed: **143 µs median per
+   64-byte round trip** through libkrun's userspace muxer, 6.6 k ops/s in one
+   stream, p99 273 µs, with the muxer itself only 3.0 µs of it
+   ([note 61](61-reverse-share-transport-spike.md)). This paragraph originally
+   quoted **~224 µs** from LWN's `vhost-vsock` table
+   (https://lwn.net/Articles/1102567/); cang is faster than that, so treat 143 µs
+   as the floor. Either way it is ~1.2-2x the forward share's ~120 µs wall per
+   request (note 46 §1), so plan on **~6 k ops/s per in-flight stream**; 8 streams
+   reach 15.5 k ops/s aggregate but 483 µs per op, and an 8-vCPU guest is 3x worse
+   than a 2-vCPU one, so concurrency is not the large lever this note assumed.
+   Measured on this host's own repo, `git status` issues **4 100 path
    operations** (2 458 `newfstatat`, 915 `openat`, 727 `getdents64`; 52 ms
-   native) -> **~0.4-0.9 s** through a reverse share; an editor save or a `pi`
-   file read is 3-6 ops (**~1 ms**); a rust-analyzer tree read ~3 k ops
-   (**~0.7-1.3 s**). A host-side *build* would pay the share's own additive
-   ~32 s (464 193 requests, note 51) on top of that - which is why the
-   destination puts the build in the guest.
+   native) -> **0.2-0.45 s** through a reverse share at one stream; an editor save
+   or a `pi` file read is 3-6 ops (**~1 ms**); a rust-analyzer tree read ~3 k ops
+   (**~0.5-1 s**). A host-side *build* would pay the share's own additive ~32 s
+   (464 193 requests, note 51) on top of that - which is why the destination puts
+   the build in the guest.
 5. **Recommendation: candidate (a), a FUSE relay, with the guest half built on
    `fuse-backend-rs`** (Apache-2.0 AND BSD-3-Clause, 0.14.0, 2026-02-26, 2.0 M
    downloads, Cloud Hypervisor org - "a rust library for Fuse servers and
@@ -299,6 +304,12 @@ the Firecracker vsock docs and the virtio-fs documentation. What exists:
 
 ### 4.2 What vsock actually costs, and what the relay adds
 
+> **Superseded by measurement** ([note 61](61-reverse-share-transport-spike.md)):
+> on cang's own fork a 64-byte round trip through the userspace muxer is **143 µs
+> median** (p99 273 µs), and the muxer itself is 3.0 µs of it. The table below is
+> third-party `vhost-vsock`, kept as the reasoning this section was written on;
+> every "at ~224 µs" column under it is now pessimistic by ~1.6x.
+
 Measured, third-party (KVM guest, `vhost-vsock`, receiver pinned, IRQ on another
 vCPU, 10 000 requests):
 
@@ -503,9 +514,12 @@ cannot be represented as inotify anyway, §2), and any `--workspace=image` chang
 
 ## 7. What this note did not establish
 
-- **No cang-local vsock round-trip measurement.** The 224 µs figure is
-  `vhost-vsock` in another project's arm (§4.2); libkrun's userspace muxer should
-  be worse, and that is a hypothesis until step 1 of the spike runs.
+- ~~**No cang-local vsock round-trip measurement.**~~ **Measured on 2026-11-20**
+  ([note 61](61-reverse-share-transport-spike.md)): 143 µs median per 64-byte
+  round trip on cang's own fork, muxer 3.0 µs of it. It is *better* than the
+  borrowed 224 µs, so the "userspace muxer should be worse" hypothesis was wrong;
+  §4.2's table and the §6 gate are kept as the reasoning history, not as the
+  current number.
 - **No live mount of a guest filesystem was attempted** (read-only ticket); the
   FUSE arm proves only that *this host* can mount FUSE unprivileged.
 - The op matrix's (a) column is read from the FUSE opcode set, the fork's

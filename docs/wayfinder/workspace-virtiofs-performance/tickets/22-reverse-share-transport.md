@@ -94,3 +94,27 @@ gated on one measured round trip.**
   bob), then one real mount serving LOOKUP/GETATTR/OPEN/READ/WRITE with a host
   `cat` and a guest `cat` crossing in both directions, then `git status` and one
   editor save measured against the recorded 52 ms native `git status`.
+
+**Measured, later the same day** ([note 61](../notes/61-reverse-share-transport-spike.md), a
+bare-libkrun harness on cang's own fork `2fad450a` = `v2.0.0-cang.22`):
+
+- **the gate passes**: one relayed 64-byte op is a **143 µs median** (150 µs mean,
+  p99 273 µs, 6.6 k ops/s in one stream) - better than the 224 µs this resolution
+  borrowed from a `vhost-vsock` arm, and cang's own muxer is only **3.0 µs/op** of it;
+- **the cost is the VM boundary**: ~175 µs of host CPU per op, split VMM main thread
+  18.5 µs + vCPU threads 116.5/37.5 µs (much of it `kvm.halt_poll_ns=200000` spin,
+  inferred, not isolated);
+- **concurrency is not a large lever**: 8 streams give 15.5 k ops/s aggregate but
+  483 µs *per op*; an 8-vCPU guest is 3x worse than a 2-vCPU one (5.5 k ops/s,
+  reproduced), so cang's default vCPU count matters more than the headroom;
+- **fixed vs per-byte**: fixed ≈ 145 µs/op (nothing below ~8 KiB resolves faster),
+  64 KiB adds 196 µs per round trip (~193 MB/s/direction against a 3.3 GB/s host
+  unix-socket floor); a new stream costs ~0.5 ms;
+- direction confirmed empirically: `listen = true` is host-connects-in,
+  guest-listens, exactly as this resolution said;
+- re-priced at the measurement, a host `git status` (4.1 k path ops) is 0.2-0.45 s
+  at one stream, 0.7-1.5 s at 8-stream latency; an editor save / `pi` read stays
+  sub-millisecond.
+
+So the transport is not the blocker; what remains is whether a FUSE relay on it
+serves the syscalls host tools actually issue (ticket 23).

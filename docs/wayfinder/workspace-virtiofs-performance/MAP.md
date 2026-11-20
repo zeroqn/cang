@@ -519,8 +519,13 @@ of every request to zero.
   `fuse-backend-rs`, host half a thin `/dev/fuse`<->vsock frame pump (the host
   daemon cannot live inside the VM worker: no `mount` in its seccomp policy, no
   `/dev/fuse` in its Landlock set, and `no_new_privs` rules out setuid
-  `fusermount3`). **Spike gate: if one relayed op exceeds ~250 us the product
-  surface does not work, and the numbers come back to bob.** [note 58](notes/58-reverse-share-transport.md).
+  `fusermount3`). **The spike gate passed on measurement** ([note 61](notes/61-reverse-share-transport-spike.md)):
+  one relayed 64-byte op is **143 us median** (p99 273 us, 6.6 k ops/s in a
+  stream), cang's own muxer is 3.0 us of it, so the cost is the VM boundary; 8
+  streams reach 15.5 k ops/s aggregate at 483 us/op, and an 8-vCPU guest is 3x worse
+  than a 2-vCPU one. The transport is not the blocker - the syscall set a relay
+  serves is ([ticket 23](tickets/23-reverse-share-contract.md)).
+  [note 58](notes/58-reverse-share-transport.md).
 - [Remove the --nix CLI axis - a workspace disk means /nix on a block lower with its
   upper in the tree](tickets/26-retire-nix-block-disks.md): **`/nix` follows the
   disk and nothing else.** The `--nix` axis is deleted (a plain clap error now),
