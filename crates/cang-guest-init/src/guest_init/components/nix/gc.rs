@@ -1,11 +1,13 @@
-//! `cang-guest-init internal nix gc`: reclaim the build disk from `/nix` upper
-//! generations the workspace no longer needs.
+//! `cang-guest-init internal nix gc`: reclaim a disk from `/nix` upper generations
+//! the workspace no longer needs.
 //!
-//! The writable `/nix` upper lives inside the build disk's btrfs image, which the
-//! host cannot mount rootless, so reclaiming it needs a guest. The rule is the
-//! seed's own: the generation the workspace used last is the cache, and every other
-//! completed generation is dead weight. `--all` drops the cache as well, so the next
-//! launch starts from an empty upper.
+//! The writable `/nix` upper lives on a guest-mounted disk - the build disk's btrfs
+//! image for a host-directory launch, or the workspace tree for a
+//! `--workspace-disk` one - neither of which the host can mount rootless, so
+//! reclaiming it needs a guest. The rule is the seed's own: the generation the
+//! workspace used last is the cache, and every other completed generation is dead
+//! weight. `--all` drops the cache as well, so the next launch starts from an empty
+//! upper.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -17,7 +19,23 @@ use crate::guest_init::components::env::CangEnv;
 use crate::guest_init::components::nix::block_upper::{SEEDED_SENTINEL, UPPER_DIR};
 
 /// Where the generations live inside the build disk: `<mount>/nix-overlay/<digest>`.
-const GENERATIONS_DIR: &str = "nix-overlay";
+const BUILD_DISK_GENERATIONS_DIR: &str = "nix-overlay";
+
+/// The layout one gc run collects: the disk to mount and the directory that holds
+/// its generations. The host names both, because only it knows whether this
+/// workspace's `/nix` upper is the build disk's or the workspace tree's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::guest_init) struct GcLayout {
+    /// Where the disk is mounted inside this maintenance VM.
+    pub(in crate::guest_init) mount: PathBuf,
+    /// The generations directory, either absolute (already inside a mounted
+    /// filesystem) or relative to `mount`.
+    pub(in crate::guest_init) generations_dir: PathBuf,
+    /// The btrfs label and the cang disk id to find: the build disk's for a
+    /// host-directory launch, the workspace image's for `--workspace-disk`.
+    pub(in crate::guest_init) disk_label: String,
+    pub(in crate::guest_init) disk_id: String,
+}
 
 /// A generation directory on the build disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,38 +47,35 @@ struct Generation {
     bytes: u64,
 }
 
-pub(in crate::guest_init) fn run(all: bool, dry_run: bool) -> Result<()> {
-    let env = CangEnv::from_process_env()?;
-    run_with_ops(
-        all,
-        dry_run,
-        Path::new(build::MOUNT_POINT),
-        &env.build_disk_label,
-        &env.build_disk_id,
-        &SystemGcOps,
-    )
-}
-
-fn run_with_ops(
+pub(in crate::guest_init) fn run(
     all: bool,
     dry_run: bool,
-    mount: &Path,
-    label: &str,
-    id: &str,
-    ops: &impl GcOps,
+    layout: Option<&GcLayout>,
 ) -> Result<()> {
-    let disk = ops.find_disk(label, id)?;
+    let env = CangEnv::from_process_env()?;
+    let layout = layout.cloned().unwrap_or_else(|| GcLayout {
+        mount: PathBuf::from(build::MOUNT_POINT),
+        generations_dir: PathBuf::from(BUILD_DISK_GENERATIONS_DIR),
+        disk_label: env.build_disk_label.clone(),
+        disk_id: env.build_disk_id.clone(),
+    });
+    run_with_ops(all, dry_run, &layout, &SystemGcOps)
+}
+
+fn run_with_ops(all: bool, dry_run: bool, layout: &GcLayout, ops: &impl GcOps) -> Result<()> {
+    let mount = layout.mount.as_path();
+    let disk = ops.find_disk(&layout.disk_label, &layout.disk_id)?;
     ops.create_dir_all(mount)?;
     let was_mounted = ops.is_mounted(mount)?;
     if !was_mounted {
         ops.mount_btrfs(&disk, mount)
-            .with_context(|| format!("failed to mount the build disk '{}'", mount.display()))?;
+            .with_context(|| format!("failed to mount the disk at '{}'", mount.display()))?;
     }
-    let collected = collect(mount, all, dry_run, ops);
+    let collected = collect(layout, all, dry_run, ops);
     if !was_mounted {
         let unmounted = ops
             .unmount(mount)
-            .with_context(|| format!("failed to unmount the build disk '{}'", mount.display()));
+            .with_context(|| format!("failed to unmount the disk at '{}'", mount.display()));
         // A failed collection is the more useful error; a failed unmount still
         // matters, because the maintenance VM is about to exit with its status.
         return match (collected, unmounted) {
@@ -72,8 +87,8 @@ fn run_with_ops(
     collected
 }
 
-fn collect(mount: &Path, all: bool, dry_run: bool, ops: &impl GcOps) -> Result<()> {
-    let generations = ops.generations(mount)?;
+fn collect(layout: &GcLayout, all: bool, dry_run: bool, ops: &impl GcOps) -> Result<()> {
+    let generations = ops.generations(layout)?;
     if generations.is_empty() {
         println!("cang-guest-init: /nix upper gc: nothing to collect");
         return Ok(());
@@ -133,7 +148,7 @@ trait GcOps {
     fn is_mounted(&self, path: &Path) -> Result<bool>;
     fn mount_btrfs(&self, disk: &Path, mount: &Path) -> Result<()>;
     fn unmount(&self, mount: &Path) -> Result<()>;
-    fn generations(&self, mount: &Path) -> Result<Vec<Generation>>;
+    fn generations(&self, layout: &GcLayout) -> Result<Vec<Generation>>;
     fn remove(&self, path: &Path) -> Result<()>;
 }
 
@@ -163,8 +178,15 @@ impl GcOps for SystemGcOps {
 
     /// Every real generation directory, ordered the way the seed picks the one to
     /// clone from: completed first, then newest, then by name.
-    fn generations(&self, mount: &Path) -> Result<Vec<Generation>> {
-        let root = mount.join(GENERATIONS_DIR);
+    fn generations(&self, layout: &GcLayout) -> Result<Vec<Generation>> {
+        // An absolute generations dir is already inside a mounted filesystem (the
+        // workspace tree, mounted by the guest before this ran); a relative one is
+        // joined onto the mount this run performs itself.
+        let root = if layout.generations_dir.is_absolute() {
+            layout.generations_dir.clone()
+        } else {
+            layout.mount.join(&layout.generations_dir)
+        };
         let mut generations = Vec::new();
         let entries = match std::fs::read_dir(&root) {
             Ok(entries) => entries,

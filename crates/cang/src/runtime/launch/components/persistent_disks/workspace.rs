@@ -64,35 +64,7 @@ pub(crate) fn prepare_with_runner(
     let size_bytes = requested_size_bytes.unwrap_or(DEFAULT_SIZE_BYTES);
 
     if let Some(existing_len) = inspect_existing_regular_file(path, &SPEC)? {
-        if requested_size_bytes.is_some_and(|requested| existing_len < requested) {
-            bail!(
-                "existing cang workspace disk '{}' is {} bytes, below the requested {} bytes; \
-                 grow it with 'truncate -s {} {}' or pass a smaller --workspace-size",
-                path.display(),
-                existing_len,
-                size_bytes,
-                size_hint_for(size_bytes),
-                path.display()
-            );
-        }
-        let fs_type = runner.probe_fs_type(path, &SPEC)?;
-        if fs_type != "btrfs" {
-            bail!(
-                "existing cang workspace disk '{}' has filesystem type '{}', expected btrfs; \
-                 refusing to reformat it - point --workspace-disk at another file or delete it",
-                path.display(),
-                if fs_type.is_empty() {
-                    "unknown"
-                } else {
-                    &fs_type
-                }
-            );
-        }
-        return Ok(WorkspaceDisk {
-            path: path.to_path_buf(),
-            size_bytes: existing_len,
-            status: WorkspaceDiskStatus::Reused,
-        });
+        return validate_existing(path, existing_len, requested_size_bytes, runner);
     }
 
     if let Some(parent) = path.parent() {
@@ -124,6 +96,58 @@ pub(crate) fn prepare_with_runner(
         path: path.to_path_buf(),
         size_bytes,
         status: WorkspaceDiskStatus::Created,
+    })
+}
+
+/// Validate an image that must already exist, for a command that must never create
+/// or reformat one (`cang nix gc --workspace-disk`).
+pub(crate) fn validate_existing_with_runner(
+    path: &Path,
+    runner: &impl RawImageCommandRunner,
+) -> Result<WorkspaceDisk> {
+    let Some(existing_len) = inspect_existing_regular_file(path, &SPEC)? else {
+        bail!(
+            "no cang workspace disk at '{}': --workspace-disk names an image a launch created, and cang nix gc does not create one",
+            path.display()
+        );
+    };
+    validate_existing(path, existing_len, None, runner)
+}
+
+fn validate_existing(
+    path: &Path,
+    existing_len: u64,
+    requested_size_bytes: Option<u64>,
+    runner: &impl RawImageCommandRunner,
+) -> Result<WorkspaceDisk> {
+    if requested_size_bytes.is_some_and(|requested| existing_len < requested) {
+        bail!(
+            "existing cang workspace disk '{}' is {} bytes, below the requested {} bytes; \
+             grow it with 'truncate -s {} {}' or pass a smaller --workspace-size",
+            path.display(),
+            existing_len,
+            requested_size_bytes.unwrap_or(existing_len),
+            size_hint_for(requested_size_bytes.unwrap_or(existing_len)),
+            path.display()
+        );
+    }
+    let fs_type = runner.probe_fs_type(path, &SPEC)?;
+    if fs_type != "btrfs" {
+        bail!(
+            "existing cang workspace disk '{}' has filesystem type '{}', expected btrfs; \
+             refusing to reformat it - point --workspace-disk at another file or delete it",
+            path.display(),
+            if fs_type.is_empty() {
+                "unknown"
+            } else {
+                &fs_type
+            }
+        );
+    }
+    Ok(WorkspaceDisk {
+        path: path.to_path_buf(),
+        size_bytes: existing_len,
+        status: WorkspaceDiskStatus::Reused,
     })
 }
 

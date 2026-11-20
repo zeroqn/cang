@@ -29,7 +29,23 @@ pub(in crate::guest_init) fn run(command: GuestInitCommand) -> Result<()> {
                 }
                 NixSubcommand::Wait => crate::guest_init::components::nix::user::wait_for_prep(),
                 NixSubcommand::Gc(gc) => {
-                    crate::guest_init::components::nix::gc::run(gc.all, gc.dry_run)
+                    let layout = match (gc.mount, gc.generations_dir, gc.disk_label, gc.disk_id) {
+                        (None, None, None, None) => None,
+                        (Some(mount), Some(generations_dir), Some(disk_label), Some(disk_id)) => {
+                            Some(crate::guest_init::components::nix::gc::GcLayout {
+                                mount,
+                                generations_dir,
+                                disk_label,
+                                disk_id,
+                            })
+                        }
+                        _ => {
+                            return Err(anyhow::anyhow!(
+                                "--mount, --generations-dir, --disk-label and --disk-id name the gc layout together; pass all four or none (none means the build disk)"
+                            ));
+                        }
+                    };
+                    crate::guest_init::components::nix::gc::run(gc.all, gc.dry_run, layout.as_ref())
                 }
             },
             InternalSubcommand::Podman(podman) => match podman.command {

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser, PartialEq, Eq)]
@@ -115,6 +117,30 @@ pub(in crate::guest_init) struct GcCommand {
         help = "Report what would be collected without deleting anything"
     )]
     pub(in crate::guest_init) dry_run: bool,
+    #[arg(
+        long = "mount",
+        value_name = "PATH",
+        help = "Where this maintenance VM mounts the disk that holds the /nix upper generations; omit for the build disk"
+    )]
+    pub(in crate::guest_init) mount: Option<PathBuf>,
+    #[arg(
+        long = "generations-dir",
+        value_name = "PATH",
+        help = "The generations directory inside that disk: relative to --mount, or absolute when the guest already mounted it"
+    )]
+    pub(in crate::guest_init) generations_dir: Option<PathBuf>,
+    #[arg(
+        long = "disk-label",
+        value_name = "LABEL",
+        help = "The btrfs label of the disk that holds them; required with --mount"
+    )]
+    pub(in crate::guest_init) disk_label: Option<String>,
+    #[arg(
+        long = "disk-id",
+        value_name = "ID",
+        help = "The cang disk id of that disk; required with --mount"
+    )]
+    pub(in crate::guest_init) disk_id: Option<String>,
 }
 
 #[derive(Debug, Args, Clone, PartialEq, Eq)]

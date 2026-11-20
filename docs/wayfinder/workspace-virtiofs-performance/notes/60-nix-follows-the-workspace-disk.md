@@ -141,3 +141,46 @@ this window. That is the one claim this note does not make.
 `cang nix gc` still attaches `cang-build.raw` and collects generations there, so a
 workspace-disk launch (whose generations are in the tree) collects nothing; recorded
 in `docs/usage.md` and ticket 26.
+
+## `cang nix gc --workspace-disk` (2026-11-20, later the same day)
+
+The gap this note recorded is closed: `gc` names the same disk the launch did.
+
+- `NixGcOptions.workspace_disk` (`--workspace-disk PATH`, resolved against the cwd
+  like the launch flag). The image is **validated, never created**
+  (`workspace::validate_existing_with_runner`): `gc` on a missing path is refused by
+  name and nothing is formatted. `workspace::prepare_with_runner` and it now share
+  one `validate_existing`.
+- The maintenance VM is told the whole layout, because only the host knows whether
+  `/nix`'s upper is the build disk's or the tree's:
+  `internal nix gc --mount … --generations-dir … --disk-label … --disk-id …`. The
+  guest's `GcLayout` carries all four, and the guest CLI refuses a partial set rather
+  than guessing a disk. Without them the guest keeps its old build-disk behaviour.
+- The rerun line a failed run prints carries `--workspace-disk`.
+
+Live (nix-built `cang` + musl guest-init override, `--root` used only to *fabricate*
+a second generation by hand):
+
+```
+$ cang nix gc --workspace-disk /tmp/gc.raw
+cang-guest-init: /nix upper gc: keeping 'sha256-7da7c3cf…' (360457 bytes)
+cang-guest-init: /nix upper gc: collected 'sha256-fakegeneration' (8388608 bytes)
+cang-guest-init: /nix upper gc: freed 8388608 bytes across 1 generation(s)
+nix-upper-collected	/tmp/gc.raw
+```
+
+Next boot of that image: one generation left, `state=ready`,
+`…/upper: AlreadySeeded`, `/nix` mounted as the overlay — so gc deleted the dead
+generation and the cache it kept is real. `cang nix gc --workspace-disk /tmp/nope.raw`
+refuses (`--workspace-disk names an image a launch created, and cang nix gc does not
+create one`) and creates nothing.
+
+**A regression this uncovered, in my own ticket-18 commit:** the `/workspace`
+requirement added to the launch-config *decode* path rejected every maintenance VM
+(`cang launch config requires a /workspace mount`), because those launches have no
+bind mounts at all - which broke `cang nix gc` and would have broken
+`cang disk resize` too. The check now exempts a mount-less launch: a task launch
+serves `/workspace` from a bind mount or its own disk, a maintenance VM is neither.
+Re-verified live after the fix: `cang disk resize --build 101G` resized the build
+disk (`resized-build-disk … 108447924224`) and `cang nix gc --dry-run` (build disk)
+reported `nothing to collect` from inside the maintenance VM.

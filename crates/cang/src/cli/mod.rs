@@ -538,7 +538,7 @@ pub(crate) enum ImagesCommand {
 pub(crate) enum NixCommand {
     #[command(
         name = "gc",
-        about = "Reclaim the /nix upper on the build disk: keep the generation this workspace used last, collect the rest"
+        about = "Reclaim the /nix upper generations a workspace no longer needs: keep the one it used last, collect the rest"
     )]
     Gc {
         #[arg(
@@ -551,13 +551,21 @@ pub(crate) enum NixCommand {
             help = "Report what would be collected without deleting anything"
         )]
         dry_run: bool,
+        #[arg(
+            long = "workspace-disk",
+            value_name = "PATH",
+            help = "Collect the generations of a --workspace-disk image instead of the build disk's",
+            long_help = "Collect the /nix upper generations of a --workspace-disk image instead of the build disk's.\n\nA --workspace-disk launch keeps its `/nix` upper inside that image's tree (`/workspace/.cang/nix/<digest-key>/`), so its generations are not on the build disk and `cang nix gc` alone collects nothing. Pass the same path the launch used. Relative paths are resolved against the current directory, exactly as the launch flag resolves them."
+        )]
+        workspace_disk: Option<PathBuf>,
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NixGcOptions {
     pub(crate) all: bool,
     pub(crate) dry_run: bool,
+    pub(crate) workspace_disk: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

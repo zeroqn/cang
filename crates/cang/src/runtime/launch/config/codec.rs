@@ -505,11 +505,15 @@ impl LaunchConfig {
             .into_iter()
             .map(|(index, disk)| disk.finish(index))
             .collect::<Result<Vec<_>>>()?;
-        // A launch that mounts its `/workspace` from its own disk has no
-        // `/workspace` bind mount; anything else must still name one.
-        if !disks
-            .iter()
-            .any(|disk| disk.id == super::model::WORKSPACE_DISK_ID)
+        // A task launch serves `/workspace` either from a bind mount or from its own
+        // disk, and must name one of the two. A maintenance VM (`cang disk resize`,
+        // `cang nix gc`) has no bind mounts at all - it exists to run one guest
+        // command against an attached disk - so an empty mount list is its own
+        // answer rather than a missing `/workspace`.
+        if !mounts.is_empty()
+            && !disks
+                .iter()
+                .any(|disk| disk.id == super::model::WORKSPACE_DISK_ID)
         {
             mounts::require_workspace_mount(&mounts)?;
         }

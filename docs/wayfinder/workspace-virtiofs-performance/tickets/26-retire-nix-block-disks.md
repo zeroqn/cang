@@ -104,6 +104,12 @@ still demanded the build disk (so the overlay never composed), and every arm has
 wait for `state=ready` because `/nix` prep is a background step.
 [note 60](../notes/60-nix-follows-the-workspace-disk.md).
 
-Carried forward as its own gap: `cang nix gc` still points at `cang-build.raw`, so
-generations inside a workspace image are not collected yet (item 7 above,
-`docs/usage.md`).
+**`cang nix gc` retargeted** (2026-11-20): `--workspace-disk PATH` names the image
+whose generations to collect, validated but never created, and the maintenance VM is
+told the layout explicitly (`--mount/--generations-dir/--disk-label/--disk-id`).
+Verified live: it kept the completed generation, collected a dead one (8 MiB freed),
+and the next boot reported `AlreadySeeded` with `/nix` composed as the overlay; a
+missing image is refused and created nothing. The same round found and fixed a
+regression from ticket 18 - the `/workspace` requirement in the launch-config decode
+rejected every mount-less maintenance VM, breaking `gc` and `resize`
+([note 60](../notes/60-nix-follows-the-workspace-disk.md)).

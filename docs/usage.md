@@ -261,17 +261,25 @@ Both disks are grown by the same command, so one invocation can name both:
 The writable `/nix` upper lives inside a disk image, so cang collects it in a
 short maintenance VM rather than on the host.
 
-**Known gap after 2026-11-20:** a `--workspace-disk` launch keeps its `/nix`
-generations in the *workspace* tree (`/workspace/.cang/nix/`), and `cang nix gc`
-still points at the build disk, which that launch does not have. Until it is
-retargeted, a workspace-disk launch collects nothing and its generations accumulate
-inside the workspace image.
+Without a workspace disk, that image is the build disk:
 
 ```bash
 ./result/bin/cang nix gc --dry-run     # what would go, and its size
 ./result/bin/cang nix gc               # collect everything but the cache in use
 ./result/bin/cang nix gc --all         # collect that too, so the next launch starts empty
 ```
+
+A `--workspace-disk` launch keeps its generations inside *that* image instead
+(`/workspace/.cang/nix/`), so collecting them names the same disk the launch did:
+
+```bash
+./result/bin/cang nix gc --workspace-disk ./work.raw --dry-run
+./result/bin/cang nix gc --workspace-disk ./work.raw --all
+```
+
+That image is *validated*, never created: `gc` on a path with no image is refused
+rather than formatted, and it attaches the disk read-write only long enough for the
+maintenance VM to delete whole generations.
 
 One generation directory per image digest keeps its cache. `gc` keeps the
 generation this workspace used last and collects the rest; `--all` collects it as

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use super::{GcOps, Generation, collect, run_with_ops};
+use super::{GcLayout, GcOps, Generation, collect, run_with_ops};
 
 /// A build disk on the host side of the fake: real directories under a tempdir,
 /// with only the mount, the disk lookup and `du`/`btrfs` faked.
@@ -39,19 +39,21 @@ impl Harness {
         path
     }
 
+    fn layout(&self) -> GcLayout {
+        GcLayout {
+            mount: self.mount.clone(),
+            generations_dir: self.mount.join("nix-overlay"),
+            disk_label: "cang-build".to_owned(),
+            disk_id: "cang-build-disk".to_owned(),
+        }
+    }
+
     fn collect(&self, all: bool, dry_run: bool) -> anyhow::Result<()> {
-        collect(&self.mount, all, dry_run, &self.ops)
+        collect(&self.layout(), all, dry_run, &self.ops)
     }
 
     fn run(&self, all: bool, dry_run: bool) -> anyhow::Result<()> {
-        run_with_ops(
-            all,
-            dry_run,
-            &self.mount,
-            "cang-build",
-            "cang-build-disk",
-            &self.ops,
-        )
+        run_with_ops(all, dry_run, &self.layout(), &self.ops)
     }
 
     fn removed(&self) -> Vec<String> {
@@ -109,8 +111,12 @@ impl GcOps for FakeGcOps {
         Ok(())
     }
 
-    fn generations(&self, mount: &Path) -> anyhow::Result<Vec<Generation>> {
-        let root = mount.join("nix-overlay");
+    fn generations(&self, layout: &GcLayout) -> anyhow::Result<Vec<Generation>> {
+        let root = if layout.generations_dir.is_absolute() {
+            layout.generations_dir.clone()
+        } else {
+            layout.mount.join(&layout.generations_dir)
+        };
         let mut generations = Vec::new();
         for entry in fs::read_dir(&root).expect("generations dir is readable") {
             let entry = entry.expect("entry");

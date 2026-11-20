@@ -32,12 +32,13 @@ impl LaunchConfig {
             spec.mounts,
             spec.host_nix_overlay.as_ref(),
         )?;
-        // A launch whose `/workspace` comes from its own disk contributes no
-        // `/workspace` bind mount; every other launch must still have one.
-        if !spec
-            .disks
-            .iter()
-            .any(|disk| disk.id == model::WORKSPACE_DISK_ID)
+        // A task launch serves `/workspace` either from a bind mount or from its own
+        // disk; a mount-less maintenance VM is neither and is exempt.
+        if !mounts.is_empty()
+            && !spec
+                .disks
+                .iter()
+                .any(|disk| disk.id == model::WORKSPACE_DISK_ID)
         {
             components::mounts::require_workspace_mount(&mounts)?;
         }
