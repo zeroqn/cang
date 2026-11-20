@@ -123,6 +123,27 @@ CRDT in the future Q4: (a)"*.
   silently reverts to the host tree.
 
 
+## Decision 4(a) amended, with the evidence (2026-11-21, [note 63](../notes/63-fuse-relay-death-semantics-and-write-cap.md))
+
+Decision 4(a) **stands as written** - `EIO`, the mount stays - and the `mmap` worry
+that briefly contradicted it was a broken probe. Three consequences the implementation
+must honour:
+
+1. **Answer every request `-EIO` immediately; never unmount on death.** `SIGBUS`
+   arrives for a mapped fault only *because* the connection answers and stays; a
+   normal `fusermount3 -u` is refused `EBUSY` while a mapping holds the file, and a
+   lazy `-u -z` succeeds but detaches the name while the superblock survives the open
+   mapping - so the reader still blocks, and worse, path tools stop failing and start
+   seeing an **empty directory** (`ls` rc=0, `cat` `ENOENT`). A silent "your workspace
+   is empty" is worse than `EIO`.
+2. **`mmap` stays a cost objection, not a correctness one**: at 398 µs per read frame
+   a fault-heavy tool pays a frame per page, so `rust-analyzer`/`rustc` remain
+   impracticable through this mount, while `git`'s index mapping now works.
+3. **The pump is serial, so one stalled request stalls every other client**: with the
+   pump `SIGSTOP`ped, `mountpoint(1)` blocked for its full 2 s timeout. Any future
+   concurrency work belongs to the pump (note 61's 8-stream transport reaches 15.5 k
+   ops/s aggregate) and must keep the death semantics above.
+
 ## Acceptance arms, measured (2026-11-20, [note 62](../notes/62-fuse-relay-spike.md))
 
 A real relay exists and was measured against decision 5, so each of these is evidence
@@ -135,7 +156,7 @@ rather than intent:
 | a host write through the mount, read back inside the guest | ✔ (guest `cat` + `ls -l` in the guest's own shell) |
 | decision 4(a): `kill -9` the guest, then host `ls`/`cat`/`stat`/`mkdir`/`rm`/`dd` | ✔ **`EIO` every time**, stale mount stays, one named pump line |
 | cost of the same work on both sides (`git status` over 764 files) | **0.211 s through the relay vs 0.040 s native** (5.3x warm, 41x cold when the index stat cache is re-hashed) |
-| **decision 4(a) for an `mmap`ed file** | ✘ **not `EIO`**: a fault on an already-mapped page spins forever (`-EIO`-answering pump: 1.67 M replies in 15 s, no `SIGBUS`; `close(/dev/fuse)`: ~1 core of kernel spin, still no `SIGBUS`). `git` mmaps its index, `rustc`/`rust-analyzer` map everything - so 4(a) needs an amendment (ticket 31), not a code tweak |
+| **decision 4(a) for an `mmap`ed file** | ✔ **`SIGBUS`**, amended by [note 63](../notes/63-fuse-relay-death-semantics-and-write-cap.md): a fault on an unread page gets `SIGBUS` 8/8 boots, ~20 ms after that page's READ is answered `-EIO`. Note 62's "livelock" was a probe artifact (a `SIGBUS` handler that *returned*), retracted there. |
 
 Two more measured facts that constrain the implementation: writes are capped at
 **4 KiB per frame** (`max_write=4096`, 4 MiB in 998 frames = 12.8 MB/s) because the

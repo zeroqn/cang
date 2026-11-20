@@ -585,9 +585,14 @@ of every request to zero.
   a mount exists, guest-only files read back on the host and host writes read back in
   the guest, `EIO` for every syscall after the guest is killed, host `git status`
   0.211 s against 0.040 s native (5.3x warm), 236 µs median per FUSE frame - but
-  **an `mmap`ed file's fault livelocks on death instead of raising `SIGBUS`**, so
-  decision 4(a) is amended by [ticket 31](tickets/31-relay-death-and-write-frames.md)
-  together with the 4 KiB write cap.
+  and [ticket 31](tickets/31-relay-death-and-write-frames.md) settled the two things
+  note 62 got wrong: an `mmap`ed fault **does** get `SIGBUS` after `kill -9` (the
+  "livelock" was a `SIGBUS` handler that returned; 8/8 boots, ~20 ms after the page's
+  `-EIO`), no unmount delivers it - and a **lazy unmount turns `EIO` into a silent
+  empty workspace**, so decision 4(a) stands and the rule is "answer `-EIO`, never
+  unmount"; and the 4 KiB write cap was a guest INIT flag lifted by 8 lines in a
+  vendored `fuse-backend-rs`, taking a 4 MiB write from ~10 MB/s (1 024 frames) to
+  ~87 MB/s (4 frames). [note 63](notes/63-fuse-relay-death-semantics-and-write-cap.md).
 
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 

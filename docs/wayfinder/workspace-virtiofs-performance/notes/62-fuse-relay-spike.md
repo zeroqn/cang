@@ -1,5 +1,26 @@
 # 62 - FUSE relay spike: the guest's btrfs tree mounted on the host, live
 
+> **Corrections (2026-11-21, [note 63](63-fuse-relay-death-semantics-and-write-cap.md)).**
+> Two things below are wrong and are kept only as the reasoning history:
+> 1. **§7(b)'s "an existing `mmap` livelocks after `kill -9`" is false.** The probe
+>    (`src/mmapwatch.c`) installed a `SIGBUS` handler that *returned*, so the load was
+>    re-executed in a loop: what looked like a hang was `SIGBUS` being delivered
+>    thousands of times a second. With the handler at its default disposition the
+>    fault gets `SIGBUS` in 8/8 boots, ~20 ms after the connection answers that page's
+>    READ with `-EIO` - and **no unmount is what delivers it**. The v1 death contract
+>    is therefore decision 4(a) exactly as written: answer `-EIO`, never unmount
+>    (a lazy unmount instead turns loud `EIO` into a silent empty workspace).
+> 2. **§6's op-name labels are shifted by one from opcode 14 up** (`relay-host`'s
+>    `opname()` table uses a numbering the kernel does not). The kernel/
+>    `fuse-backend-rs` enum is `Open=14`, `Read=15`, `Write=16`, `StatFs=17`,
+>    `Fsync=20`, `Flush=25`, `Opendir=27`, `Readdirplus=44`; key on the numeric
+>    opcode, not the printed name, when re-reading the raw `stats.tsv`. The aggregate
+>    figures (236 µs/frame, frame counts, `git status` timings) are unaffected.
+> 3. The 4 KiB write cap in §6/§8 was lifted in note 63 by 8 added lines in a
+>    vendored `fuse-backend-rs`: 4 MiB goes from ~10 MB/s (1 024 frames) to
+>    ~87 MB/s (4 frames).
+
+
 **Measured 2026-11-20** on this host (28 cores, `kvm.halt_poll_ns=200000`), against
 libkrun from a copy of `deps/libkrun` at **`v2.0.0-cang.22` (`2fad450a`)** built
 here with `--features ffi,blk`, firmware `libkrunfw-v5.6.2-cang.6`, two vCPUs, 1 GiB
@@ -51,6 +72,14 @@ v1 because it is not `EIO` for `mmap`.**
   reply advertises neither `FUSE_BIG_WRITES` nor `FUSE_MAX_PAGES`, so a 4 MiB write
   is 998 frames and runs at **12.8 MB/s**. That is a guest-side INIT flag, not a
   transport change, and the first thing to price.
+> **Superseded 2026-11-21 (note 63).** The `mmap` half of this bullet is a probe
+> artifact: `src/mmapwatch.c`'s `SIGBUS` handler returns to the faulting load, so a
+> delivered `SIGBUS` re-faults forever and looks exactly like a livelock. With a
+> default-disposition probe a fault on an unread page gets `SIGBUS` in every arm
+> (8/8 boots), 20 ms after the pump answers that page's READ with `-EIO`; no
+> unmount delivers it. Note 63 has the measurements and the corrected
+> recommendation. The `EIO`-for-path-syscalls half of this bullet stands.
+
 
 ## 1. What was built, and where
 
@@ -328,6 +357,12 @@ afterwards - a different contract from (a), and not the `EIO` ticket 23 decided.
 `fusermount3 -u -z` unmounts the stale mount cleanly in both modes; that is the only
 escape hatch this spike demonstrated, and it contradicts "the stale mount stays", so
 it needs bob's decision rather than a code tweak.
+
+> **Corrected in note 63 (2026-11-21):** `-u -z` detaches the name but not the
+> connection (the open mapping keeps the superblock alive), so it gives a
+> fault-blocked reader nothing; and because it leaves the empty underlying directory
+> in place, path tools stop failing with `EIO` and start reporting an empty workspace.
+> The v1 recommendation is now: answer every request `-EIO`, never unmount.
 
 **(c) A durability observation, not a failure arm.** A file the guest created and
 never synced (`COLD.bin`, 5.5 MB, VM then `kill -9`ed) came back as **0 bytes** on
