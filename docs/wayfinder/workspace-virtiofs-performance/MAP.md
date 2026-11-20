@@ -535,7 +535,12 @@ of every request to zero.
   guest-composed overlay works** - `overlay lowerdir=/run/cang/nix-lower,
   upperdir=/workspace/.cang/nix/<digest>/upper`, generation `Fresh` then
   `AlreadySeeded`, and `find /nix/store` 1 718/776/206 ms against 6 947/2 197/627 ms
-  on the host overlay in the same window. [note 60](notes/60-nix-follows-the-workspace-disk.md).
+  on the host overlay in the same window. **And `cang nix gc --workspace-disk PATH`
+  now collects the tree's generations** (validated, never created), verified live by
+  collecting a dead generation while the completed one stayed `AlreadySeeded` on the
+  next boot - which also uncovered and fixed a ticket-18 regression that had broken
+  every mount-less maintenance VM, `cang disk resize` included.
+  [note 60](notes/60-nix-follows-the-workspace-disk.md).
 
 - [Worktrees, target/ and the registry inside the image - and what the image is
   keyed on](tickets/24-worktree-target-and-registry-layout.md): **cargo's own
