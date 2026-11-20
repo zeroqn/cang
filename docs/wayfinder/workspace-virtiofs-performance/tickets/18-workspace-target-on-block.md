@@ -63,7 +63,10 @@ image (or a block device) the guest mounts itself: sources, cargo's own
 live inside it. The `/workspace` virtio-fs bind mount and the
 `~/.cargo` mount are dropped for that mode; the build disk is neither created
 nor attached; `/nix` stays on the host-composed overlay and `--nix=lower:blk`
-is refused rather than silently attaching a second block disk.
+is refused rather than silently attaching a second block disk. **(Superseded the
+same day by ticket 26's corrected shape: a workspace disk will make the block
+lower automatic and move its upper into the tree; the refusal goes with the flag
+it refuses.)**
 
 Live evidence: `/workspace /dev/vdb btrfs`, `/home/dev/.cargo /dev/vdb[/cargo]
 btrfs`, `/dev/vda`+`/dev/vdb` only, `findmnt /home/dev/.cache/cang-build` empty,

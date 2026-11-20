@@ -1,6 +1,6 @@
 ---
 label: wayfinder:task
-title: Retire the /nix block lower and block upper - one fewer disk, not one more
+title: Remove the --nix CLI axis - a workspace disk means /nix on a block lower with its upper in the tree
 status: open
 blocked_by: []
 claimed_by: ""
@@ -8,34 +8,61 @@ claimed_by: ""
 
 ## Question
 
-bob, 2026-11-20: **"remove `/nix` lower and upper blk support. Manually grow disk
-is painful. Fewer blk is better."** `/nix` goes back to the host-composed overlay
-over the single virtio-fs connection, and the block-disks it grew disappear.
+bob, 2026-11-20, **corrected the same day**: the first shape of this ticket
+retired the `/nix` block lower altogether; bob's correction keeps it and makes it
+automatic. Verbatim: *"`--nix` cli argument can be removed. workspace raw
+automatically mean `/nix` block lower. Otherwise old method virtiofs and overlayfs
+in host then mount to `/nix` in cang guest is used."* And on the upper: *"We can
+have `/nix` upper in workspace disk, then overlayfs it above `/nix` block lower."*
+
+So the axis collapses into the disk:
+
+| launch | `/nix` |
+| --- | --- |
+| `--workspace-disk PATH` | guest-composed overlay: read-only btrfs **block lower** built from the image's store, plus `upper`/`work` inside the **workspace btrfs tree** |
+| no workspace disk | host-composed overlay over virtio-fs, mounted at `/nix` (today's default) |
+
+`--nix=lower|upper:...` disappears as a surface: no `NixLowerMode`, no
+`NixUpperMode`, no `CANG_NIX_LOWER_BLOCK` mode flag deciding *whether*, and the
+`--workspace-disk` + `--nix=lower:blk` refusal added in ticket 18 goes away with
+the flag it refuses.
 
 Do:
 
-1. **Remove the surface**: `--nix=lower:blk` and `--nix=upper:...` (grammar at
-   `cli/mod.rs:2770`, parse test `cli/mod.rs:1171`, strict-blk refusal
-   `nix_lower.rs:409`), the `CANG_NIX_LOWER_BLOCK` guest contract, the block image
-   preparation (`prepare_nix_lower_block`, `persistent_disks/mod.rs:64`), the
-   profiler metadata (`session/mod.rs:264-287`), and the guest-side block-lower/upper
-   mount steps. Keep the host overlay path (`runtime/session/nix_overlay.rs`) as
-   the only one.
-2. **What remains of `--nix`**: `lower:auto|virtiofs` and `upper:` modes - or does
-   the axis collapse to nothing? Decide and say so; `--nix-lower` is already retired
-   by the `nix-upper-on-block` map's ticket 10.
-3. **Migration**: an existing state root carries `cang-build.raw`, a nix-lower
-   image and lease files (`nix-overlay.lease.*` seen in a real root). What removal
-   does to a launch that has them, and what the user is told - never a silent
-   fallback to the block disk.
-4. **The number that could reopen it**: measure a store-read-heavy guest on the
-   host overlay (the `1500 /nix reads` profile from the map's cache-symlinks work)
-   and record it. If the store is measurably slower, that is a *share* question for
-   the map's fog, not a reason to keep the disk.
-5. **Docs and tests**: `docs/usage.md`, `docs/images-and-storage.md`,
-   `crates/cang-repository-tests` (which pins the btrfs helper symlinks and the
-   image layer list), and the `nix-upper-on-block` map, which is withdrawn in part
-   by this.
+1. **Remove the surface**: the `--nix` flag and its grammar (`cli/mod.rs:2770`),
+   `NixLowerMode`/`NixUpperMode`, the parse tests, and the strict-blk refusal
+   (`nix_lower.rs:409`). A launch's `/nix` mode is derived from whether it has a
+   workspace disk; there is nothing to opt into.
+2. **Move the upper into the tree.** Today the block-mode upper is
+   `/home/dev/.cache/cang-build/nix-overlay/<generation>/upper` on the build disk
+   (`nix_lower.rs:96`, `:225-235`, `:1132`) and reaches the guest as
+   `CANG_NIX_LOWER_UPPERDIR`. With a workspace disk it has to live inside the
+   workspace btrfs tree, which the host cannot see - so the **guest** creates
+   `upper/` and `work/` there after mounting the disk, and the two dirs must be
+   plain directories inside the tree, never a subvolume root (copy-up returns
+   `EXDEV` otherwise - `docs/wayfinder/nix-upper-on-block`).
+3. **Order the guest steps**: mount workspace -> create the upper/work dirs ->
+   mount the read-only lower -> compose the overlay at `/nix`. Today the lower
+   and overlay come first and the upper is pre-created host-side.
+4. **Generation keying.** The lower is per store generation; an upper accumulated
+   against an older lower must not be reused blindly. Recommendation: key the
+   upper directory by generation inside the tree (`/workspace/.cang/nix/<gen>/`)
+   and delete the previous one on switch, the same way the build disk does today.
+   **This is the one judgement call in the ticket** - bob may prefer a single
+   stable upper that survives image rebuilds.
+5. **What a missing lower does**: the image cannot be built (host space) or the
+   guest cannot mount it. Keep today's `auto` behaviour under the new shape -
+   serve the host-composed overlay and name the reason - because there is no flag
+   left to say "fail instead".
+6. **Migration**: an existing state root carries `cang-build.raw`, a nix-lower
+   image and `nix-overlay.lease.*` files. A default launch must keep using the
+   host overlay and the build disk; a workspace-disk launch ignores them. Never
+   silently attach a block device the mode did not ask for.
+7. **Docs and tests**: `docs/usage.md`, `docs/images-and-storage.md`,
+   `README.md` (`--nix=` prose), `crates/cang-repository-tests`, and the
+   `nix-upper-on-block` map (whose ticket 09 is already cancelled and whose
+   remaining question - upper on a block disk - is now answered by this ticket's
+   step 2).
 
 ## Resolution
 

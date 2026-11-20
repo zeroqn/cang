@@ -43,10 +43,13 @@ editing those same files through the reverse share; and live arms that say what
 each cost, measured against the recorded virtio-fs numbers above (the 45 s
 cold-build penalty at `v2.0.0-cang.13`, the 8.2 s compile-test iteration).
 
-**And fewer block devices, not more (bob, 2026-11-20).** With the workspace on a
-disk, the `/nix` block lower and the block upper are **retired**: `/nix` goes
-back to the host-composed overlay over the one virtio-fs connection, and the
-build disk stops accumulating tenants that have to be grown by hand.
+**And `/nix` follows the disk (bob, 2026-11-20, correcting the same day).** A
+launch that names a workspace disk gets `/nix` as a guest-composed overlay too -
+read-only btrfs **block lower** built from the image's store, with its
+**`upper`/`work` inside the workspace tree** - while a launch without one keeps
+today's host-composed overlay over virtio-fs. The `--nix` flag disappears
+entirely: the mode is derived from the disk, and "grow the disk by hand" stops
+being a separate chore for a separate disk.
 
 ## Notes
 
@@ -70,11 +73,13 @@ build disk stops accumulating tenants that have to be grown by hand.
     `work.raw` at `/workspace` in the guest and shows its content at the cwd;
     with no disk named, a launch keeps today's host-directory behaviour. The cwd
     slug survives only for the per-run task root, logs, leases and hostname.
-  - **Fewer block devices - the `/nix` block lower and block upper are removed**,
-    not kept. `--nix=lower:blk` and `--nix=upper:...` go away, `/nix` returns to
-    the host-composed overlay, and "grow the disk by hand" shrinks instead of
-    growing another disk. The `nix-upper-on-block` map is withdrawn in part by
-    this (`docs/wayfinder/nix-upper-on-block/MAP.md`).
+  - **The `--nix` axis is removed, and `/nix` follows the workspace disk**
+    (bob, 2026-11-20, correcting his morning's "retire the `/nix` block disks"):
+    a workspace-disk launch gets the read-only **block lower** automatically,
+    with `upper`/`work` living **inside the workspace btrfs tree**; a launch
+    without a disk keeps the host-composed overlay over virtio-fs. No flag
+    decides it, and the `nix-upper-on-block` map's remaining question is answered
+    by ticket 26 (`docs/wayfinder/nix-upper-on-block/MAP.md`).
 - **Reading of those decisions** (the narrowings and the freedoms, so a later
   session does not re-ask them):
   - "Fewer blk" is a **rule**, not a one-off: a new block disk must displace work
@@ -532,8 +537,10 @@ of every request to zero.
   `./target` and a `cargo/` home bound at `~/.cargo` live in the tree, and the
   build disk is neither created nor attached.** Same 342 MB / 2136-entry archive
   into the same `/workspace`: **496 ms** on the block workspace vs **14 290 ms**
-  over the share (~29x). `/nix` stays on the overlay and `--nix=lower:blk` is
-  refused with the flag. Not yet: the reverse share (the launch directory still
+  over the share (~29x). `/nix` stays on the overlay for now and
+  `--nix=lower:blk` is refused with the flag - **both change under ticket 26's
+  corrected shape** (the block lower becomes automatic, its upper moving into the
+  tree). Not yet: the reverse share (the launch directory still
   shows its own contents), seeding a populated host tree (ticket 25), the cold
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
