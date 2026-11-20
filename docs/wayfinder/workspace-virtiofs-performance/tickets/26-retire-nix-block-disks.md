@@ -93,11 +93,16 @@ becomes automatic, the upper moves into the tree), not the original "retire both
   **unmounted** before the tree's `cargo/` is bound there, so one filesystem sits
   behind the path (live: a single `findmnt` line).
 
-Live arm confirmed the derived mode, the single cargo mount, `/workspace` on
-`/dev/vdb`, no build disk - and printed the named fallback
-(`... needs about 8398 MiB free but only 3240 MiB are available`). **The
-guest-composed `/nix` overlay was not exercised**: the host is short of space for
-the lower image this window. [note 60](../notes/60-nix-follows-the-workspace-disk.md).
+Live, second round (14 GiB free, so the lower was served): the guest composes
+`/nix` as `overlay lowerdir=/run/cang/nix-lower,upperdir=/workspace/.cang/nix/<digest>/upper`,
+seeds the generation as a btrfs subvolume (`Fresh`, sentinel inside `upper/`), reuses
+it on the next boot (`AlreadySeeded`), and the store repair passes. Alternating arms
+in one window: `find /nix/store` **1 718 / 776 / 206 ms** (block) against
+**6 947 / 2 197 / 627 ms** (host overlay), `du -s` **2 904 / 528 ms** against
+**9 310 / 9 341 ms**. Two real bugs surfaced and were fixed: the seed's mount check
+still demanded the build disk (so the overlay never composed), and every arm has to
+wait for `state=ready` because `/nix` prep is a background step.
+[note 60](../notes/60-nix-follows-the-workspace-disk.md).
 
 Carried forward as its own gap: `cang nix gc` still points at `cang-build.raw`, so
 generations inside a workspace image are not collected yet (item 7 above,

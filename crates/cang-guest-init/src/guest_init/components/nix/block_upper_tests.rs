@@ -674,22 +674,45 @@ fn an_empty_leftover_generation_directory_becomes_a_subvolume() {
     assert!(harness.work.is_dir());
 }
 
-/// The upper is on the build disk because that disk is a local filesystem; on an
-/// unmounted path it would be a task-rootfs directory that loses every object at
-/// exit, so the seed refuses rather than pretending.
+/// The upper is on a guest-mounted disk because that disk is a local filesystem;
+/// on an unmounted path it would be a task-rootfs directory that loses every
+/// object at exit, so the seed refuses rather than pretending.
 #[test]
-fn an_unmounted_build_disk_fails_the_seed() {
+fn an_unmounted_disk_fails_the_seed() {
     let harness = Harness::new();
     harness.ops.mounted.set(false);
 
-    let err = harness
-        .seed()
-        .expect_err("an unmounted build disk must fail");
+    let err = harness.seed().expect_err("an unmounted disk must fail");
 
     assert!(
-        format!("{err:#}").contains("is on the build disk but"),
+        format!("{err:#}").contains("which is not mounted"),
         "{err:#}"
     );
+}
+
+/// The disk the upper lives on follows the upper's own path: a generation inside
+/// the workspace tree asks about the workspace mount, not the build disk's.
+#[test]
+fn a_generation_in_the_workspace_tree_checks_the_workspace_mount() {
+    let harness = Harness::new();
+    let upper = Path::new(crate::guest_init::components::disk::workspace::MOUNT_POINT)
+        .join(".cang/nix/sha256-current/upper");
+    let work = upper.with_file_name("work");
+
+    assert_eq!(
+        super::guest_disk_mount_point(&upper),
+        Some(crate::guest_init::components::disk::workspace::MOUNT_POINT),
+        "the workspace mount, not the build disk, carries this generation"
+    );
+    assert_eq!(
+        super::guest_disk_mount_point(Path::new("/home/dev/.cache/cang-build/nix-overlay/x/upper")),
+        Some("/home/dev/.cache/cang-build")
+    );
+    assert_eq!(
+        super::guest_disk_mount_point(Path::new("/elsewhere/upper")),
+        None
+    );
+    let _ = (&harness, work);
 }
 
 /// The work dir is created as part of the generation, so one named outside the

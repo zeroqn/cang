@@ -56,7 +56,63 @@ works on that layout; nothing in this change forces a rotation policy.
   (and `--force`), asserted by a new CLI test that pins both `disk` subcommands'
   option lists. A `--workspace-disk` path is the user's, not cang state.
 
-## The live arm (and what it could not measure)
+## The live arm, second round: the guest-composed `/nix` overlay does work
+
+The first round could not build the lower (host space). With 14 GiB free the block
+pair was served and the full path exercised. Artifacts:
+`nix build .#cang` = `/nix/store/kfs6mz9hc7z9jzgmiaifzxi89xfmqy8m-cang-0.22.0`,
+guest-init `/nix/store/7k9awdi16mm7srb94bgzns9dh8026npf-cang-static-x86_64-unknown-linux-musl-0.22.0/bin/cang-guest-init`.
+
+Two things the first round also exposed, both fixed here:
+
+1. **`seed_block_upper` still demanded the build disk.** It checked
+   `is_mounted("/home/dev/.cache/cang-build")` unconditionally, so a generation in
+   the workspace tree died with *"the /nix upper '…' is on the build disk but
+   '/home/dev/.cache/cang-build' is not mounted"* (`nix-prep.status: state=failed`,
+   `/nix` never composed, no overlay mount). The disk is now read off the upper's own
+   path (`guest_disk_mount_point`: workspace mount first, then the build disk, and the
+   build disk as the fallback for a path under neither), and that same helper decides
+   the root.rs policy (`!host_overlay || on-a-guest-disk ⇒ fatal`) and whether the
+   guest creates the dirs or seeds them.
+2. **`/nix` is a background prep**, so a command that starts immediately sees no
+   `/nix` mount yet; every arm below waits for `state=ready`.
+
+First boot, guest log and mounts (verbatim):
+
+```
+Create subvolume '/workspace/.cang/nix/sha256-7da7c3cffedcba2442f0ba65ff25354a85698f54c8b69b751399602c737e8b7e'
+cang-guest-init: /nix upper '/workspace/.cang/nix/<digest>/upper': Fresh
+cang-nix-store-repair: ok - every path in the Nix DB has its store object
+/dev/vdb  /workspace            btrfs
+/dev/vdc  /run/cang/nix-lower   btrfs ro
+overlay   /nix  rw,lowerdir=/run/cang/nix-lower,upperdir=/workspace/.cang/nix/<digest>/upper,workdir=/workspace/.cang/nix/<digest>/work,redirect_dir=nofollow,uuid=on,userxattr
+```
+
+Second boot of the same image: `… : AlreadySeeded`, `state=ready`, the same single
+`/nix` overlay mount, and `ls -a <digest>/upper` contains `.cang-upper-seeded` - the
+sentinel is inside `upper/`, not the generation dir, which is why a generation
+listing does not show it.
+
+### The numbers, alternating arms, same image, same window
+
+Probe run inside each VM after `state=ready`: `find /nix/store` (recursive) three
+times, then `du -s /nix/store` twice.
+
+| measurement | block pair (`/nix` = overlay over blk lower + tree upper) | host overlay (`/nix` = virtiofs) |
+| --- | --- | --- |
+| `find /nix/store` #1 | 1 718 ms | 6 947 ms |
+| `find /nix/store` #2 | 776 ms | 2 197 ms |
+| `find /nix/store` #3 | 206 ms | 627 ms |
+| `du -s /nix/store` #1 | 2 904 ms | 9 310 ms |
+| `du -s /nix/store` #2 | 528 ms | 9 341 ms |
+| store paths | 685 | 686 |
+
+Same direction and magnitude as the recorded 2 422 vs 8 508 ms (`find`) and
+2 833 vs 11 228 ms (`du`) from `tools/nix-lower-cang-smoke`. Note `du` on the host
+overlay does not warm up (9 310 → 9 341 ms) while the block pair does (2 904 → 528),
+because the guest keeps the lower's page cache and metadata.
+
+## The first round (host out of space)
 
 ```
 /tmp/cang-host/bin/cang --workspace-disk /tmp/ws-test.raw \

@@ -531,8 +531,11 @@ of every request to zero.
   named reason; `cang disk reset` cannot reach a workspace image. Measured live: the
   derived mode and the named fallback (3 240 MiB free against an 8 398 MiB floor),
   one `~/.cargo` mount (the launch's virtio-fs one is unmounted first), `/workspace`
-  on `/dev/vdb`, no build disk - the guest-composed overlay itself is
-  **unexercised** until the host has the space. [note 60](notes/60-nix-follows-the-workspace-disk.md).
+  on `/dev/vdb`, no build disk. **Second round with the host's space back: the
+  guest-composed overlay works** - `overlay lowerdir=/run/cang/nix-lower,
+  upperdir=/workspace/.cang/nix/<digest>/upper`, generation `Fresh` then
+  `AlreadySeeded`, and `find /nix/store` 1 718/776/206 ms against 6 947/2 197/627 ms
+  on the host overlay in the same window. [note 60](notes/60-nix-follows-the-workspace-disk.md).
 
 - [Worktrees, target/ and the registry inside the image - and what the image is
   keyed on](tickets/24-worktree-target-and-registry-layout.md): **cargo's own

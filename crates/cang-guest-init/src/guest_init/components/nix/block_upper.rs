@@ -83,24 +83,16 @@ const LIVE_DB_RELATIVE: &str = "var/nix/db";
 /// have left beside it, and the schema the database was created with.
 const DB_FILES: [&str; 4] = ["db.sqlite", "db.sqlite-wal", "db.sqlite-shm", "schema"];
 
-/// Whether this upper is on a filesystem the guest mounted itself rather than
-/// the host's share.
-///
-/// The host names the path, not the placement, so the placement is read off the
-/// path: everything under a guest-mounted disk (the build disk, or the workspace
-/// disk whose tree holds the upper for a `--workspace-disk` launch) is a
-/// filesystem the guest prepared and has to seed itself; everything else is a
-/// directory the host already seeded. That is what decides both whether the guest
-/// seeds and whether a failure is fatal
-/// ([`crate::guest_init::components::nix::root`]).
-pub(in crate::guest_init) fn is_on_build_disk(upperdir: &Path) -> bool {
-    // A guest-prepared filesystem, either way: the build disk of a launch that has
-    // one, or the workspace disk, whose tree holds the upper for a
-    // `--workspace-disk` launch. Both are mounted before nix-prep runs.
-    upperdir.starts_with(Path::new(build::MOUNT_POINT))
-        || upperdir.starts_with(Path::new(
-            crate::guest_init::components::disk::workspace::MOUNT_POINT,
-        ))
+/// Which guest-mounted disk carries a path, when one does: the build disk's mount
+/// point or the workspace disk's, longest prefix first so a workspace tree that
+/// happens to sit under `/workspace` is never mistaken for the other.
+pub(in crate::guest_init) fn guest_disk_mount_point(path: &Path) -> Option<&'static str> {
+    [
+        crate::guest_init::components::disk::workspace::MOUNT_POINT,
+        build::MOUNT_POINT,
+    ]
+    .into_iter()
+    .find(|mount| path.starts_with(Path::new(mount)))
 }
 
 /// What one seed did, for the profile log and the tests.
@@ -149,14 +141,19 @@ fn seed_block_upper_with(
     ops: &impl SeedOps,
 ) -> Result<SeedOutcome> {
     // Seeding is only ever useful on the disk it is meant for: on an unmounted
-    // build-disk path the upper would be a task-rootfs directory that looks like a
-    // cache and loses every object at exit, so a missing mount is a failure and
-    // not a quiet fallback.
-    if !ops.is_mounted(Path::new(build::MOUNT_POINT))? {
+    // guest-disk path the upper would be a task-rootfs directory that looks like a
+    // cache and loses every object at exit, so a missing mount is a failure and not
+    // a quiet fallback. Which disk that is follows the upper's own path - the build
+    // disk of a launch that has one, or the workspace disk whose tree holds the
+    // upper for a `--workspace-disk` launch.
+    // A path under no known disk keeps the original requirement - the build disk -
+    // so an older host that named one there still gets the check it always got.
+    let mount = guest_disk_mount_point(upper).unwrap_or(build::MOUNT_POINT);
+    if !ops.is_mounted(Path::new(mount))? {
         bail!(
-            "the /nix upper '{}' is on the build disk but '{}' is not mounted",
+            "the /nix upper '{}' is on the disk mounted at '{}', which is not mounted",
             upper.display(),
-            build::MOUNT_POINT
+            mount
         );
     }
     let generation = upper.parent().ok_or_else(|| {

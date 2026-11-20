@@ -430,7 +430,7 @@ pub(in crate::guest_init) fn block_lower_failure_policy(
     upperdir: &Path,
     host_overlay: bool,
 ) -> BlockLowerFailure {
-    if !host_overlay || block_upper::is_on_build_disk(upperdir) {
+    if !host_overlay || block_upper::guest_disk_mount_point(upperdir).is_some() {
         BlockLowerFailure::Fatal
     } else {
         BlockLowerFailure::KeepHostOverlay
@@ -479,15 +479,15 @@ fn mount_block_lower(
     // neither does: that generation, `upper` and `work` are all the seed's to
     // create, as one unit (a subvolume cannot be made over an existing
     // directory), so this step only prepares the host-share pair.
-    let on_build_disk = block_upper::is_on_build_disk(&contract.upperdir);
+    let on_guest_disk = block_upper::guest_disk_mount_point(&contract.upperdir).is_some();
     profiler.measure_result(PROFILE_PREPARE_BLOCK_DIRS, || {
-        if !on_build_disk {
+        if !on_guest_disk {
             fs::create_dir_all(&contract.workdir)?;
             fs::create_dir_all(&contract.upperdir)?;
         }
         Ok(())
     })?;
-    if on_build_disk {
+    if on_guest_disk {
         let outcome = profiler.measure_result(PROFILE_SEED_BLOCK_UPPER, || {
             block_upper::seed_block_upper(
                 &contract.upperdir,
