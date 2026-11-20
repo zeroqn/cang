@@ -7,34 +7,21 @@
  *   - forks virgl_render_server --socket-fd=<child> with the cang-equivalent
  *     render-server environment (LD_LIBRARY_PATH=vulkan-loader:mesa,
  *     VK_DRIVER_FILES=<radeon ICD>, MESA_SHADER_CACHE_DIR=/dev/shm/mesa-cache)
- *   - passes the PARENT end to libkrun via krun_set_gpu_options3 (the same
- *     function cang's launcher.rs configure_gpu uses, flags 0xe43)
+ *   - hands the PARENT end to libkrun's GPU device
+ *     (krun_gpu_device_set_render_server_fd, flags 0xe43) -- the ABI-2 spelling
+ *     of what v1's krun_set_gpu_options3 took as a fourth argument
  *
- * This is the exact path the in-process options2 probe does NOT exercise, and
+ * This is the exact path the in-process launcher.c probe does NOT exercise, and
  * the path under which chromium's venus ring/fence init stalls in production.
+ *
+ * The ABI-2 VM assembly lives in abivm.h.
  */
-#include <errno.h>
-#include <fcntl.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <unistd.h>
 
-#include <libkrun.h>
+#include "abivm.h"
 
-/* FLAGS_VENUS matches cang's VIRGLRENDERER_VENUS_FLAGS (launcher.rs) exactly:
-   USE_EGL|THREAD_SYNC|VENUS|RENDER_SERVER|DRM|USE_VIDEO = 0xe43 (3651).
-   USE_VIDEO (1<<11) is not defined in the pinned libkrun.h, hence the literal. */
-#define FLAGS_VENUS 0xe43
-
-static void fail(const char *what, int rc) {
-    fprintf(stderr, "launcher-rs: %s failed rc=%d errno=%d (%s)\n", what, rc, errno, strerror(errno));
-    exit(1);
-}
 static void exec_render_server(int child_fd, int parent_fd) {
     const char *exec_path = getenv("RENDER_SERVER_EXEC_PATH");
     if (!exec_path || !*exec_path) {
@@ -46,7 +33,7 @@ static void exec_render_server(int child_fd, int parent_fd) {
 
     /* If CANG_BOOTSTRAP=<cang-bin>, use the REAL cang render-server bootstrap
      * (applies Landlock + the packaged render-server seccomp policy, then execs
-     * the RS) — the exact product sandbox.  We pass the real PARENT end as
+     * the RS) -- the exact product sandbox.  We pass the real PARENT end as
      * CANG_RENDER_SERVER_PARENT_FD (the bootstrap closes that copy) and the
      * child end as CANG_RENDER_SERVER_CHILD_FD (the RS keeps it).  If
      * SANDBOX_RS=1, apply the seccomp allowlist alone.  Otherwise exec the RS
@@ -69,7 +56,7 @@ static void exec_render_server(int child_fd, int parent_fd) {
     }
 
     /* If LANDLOCK_RS=<variant>, apply cang's render-server Landlock rule set
-     * (as-shipped without REFER, or refer-fix with it) before exec — the A/B
+     * (as-shipped without REFER, or refer-fix with it) before exec -- the A/B
      * of the Landlock root cause.  Takes precedence over the sandbox modes so
      * Landlock alone can be tested. */
     const char *landlock_variant = getenv("LANDLOCK_RS");
@@ -99,18 +86,23 @@ static void exec_render_server(int child_fd, int parent_fd) {
     _exit(2);
 }
 
-/* argv[1] = rootfs dir, argv[2] = console output file */
+/* argv[1] = rootfs dir, argv[2] = console output file
+ * argv[3] = optional virtio-gpu virgl flag word (default 0xe43) */
 int main(int argc, char **argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <rootfs-dir> <console-output-file>\n", argv[0]);
+        fprintf(stderr, "usage: %s <rootfs-dir> <console-output-file> [gpu-flags-hex]\n",
+                argv[0]);
         return 2;
     }
     const char *rootfs = argv[1];
     const char *console = argv[2];
+    uint32_t gpu_flags = FLAGS_VENUS_EXTERNAL;
+    if (argc >= 4)
+        gpu_flags = (uint32_t)strtoul(argv[3], NULL, 0);
 
     int fds[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds) != 0)
-        fail("socketpair", errno);
+        abivm_fail("socketpair", errno);
     int parent_fd = fds[0];
     int child_fd = fds[1];
 
@@ -124,7 +116,7 @@ int main(int argc, char **argv) {
 
     pid_t pid = fork();
     if (pid < 0)
-        fail("fork", errno);
+        abivm_fail("fork", errno);
     if (pid == 0) {
         /* Child: run the render server (direct, or through the sandbox /
          * cang bootstrap).  The parent socketpair end stays open only in
@@ -136,35 +128,12 @@ int main(int argc, char **argv) {
     }
     close(child_fd); /* parent keeps only parent_fd */
 
-    krun_init_log(KRUN_LOG_TARGET_DEFAULT, KRUN_LOG_LEVEL_DEBUG, KRUN_LOG_STYLE_NEVER, 0);
+    fprintf(stderr,
+            "launcher-rs: render server pid=%d socketpair parent_fd=%d child_fd=%d "
+            "gpu_flags=0x%x\n",
+            (int)pid, parent_fd, child_fd, gpu_flags);
 
-    int32_t ctx = krun_create_ctx();
-    if (ctx < 0)
-        fail("krun_create_ctx", ctx);
-
-    int32_t rc;
-    if ((rc = krun_set_vm_config((uint32_t)ctx, 2, 512)) < 0)
-        fail("krun_set_vm_config", rc);
-    if ((rc = krun_set_root((uint32_t)ctx, rootfs)) < 0)
-        fail("krun_set_root", rc);
-
-    /* The exact product call: external render server fd through options3. */
-    if ((rc = krun_set_gpu_options3((uint32_t)ctx, FLAGS_VENUS,
-                                    256ull * 1024 * 1024, parent_fd)) < 0)
-        fail("krun_set_gpu_options3", rc);
-
-    if ((rc = krun_set_console_output((uint32_t)ctx, console)) < 0)
-        fail("krun_set_console_output", rc);
-
-    const char *guest_init_argv[] = { NULL };
-    const char *guest_init_envp[] = { NULL };
-    if ((rc = krun_set_exec((uint32_t)ctx, "/init", guest_init_argv, guest_init_envp)) < 0)
-        fail("krun_set_exec", rc);
-
-    fprintf(stderr, "launcher-rs: booting rootfs=%s gpu_flags=0x%x render-server-pid=%d\n",
-            rootfs, FLAGS_VENUS, (int)pid);
-
-    int32_t rc2 = krun_start_enter((uint32_t)ctx);
-    fail("krun_start_enter", rc2);
+    /* `true`: cang's render-server work is debugged from libkrun's log too. */
+    abivm_boot(rootfs, console, gpu_flags, parent_fd, true);
     return 1;
 }

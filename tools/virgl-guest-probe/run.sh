@@ -8,34 +8,34 @@
 #
 # The launcher routes the guest console to a host file; this script greps it for
 # the probe verdict.  RENDER_SERVER_EXEC_PATH must point at the render server of
-# the same virglrenderer the libkrun closure links (its libvirglrenderer.so.1).
+# the same virglrenderer the launcher's libkrun links (its libvirglrenderer.so.1);
+# unless it is already set, it is resolved from the built launcher's own
+# library paths.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLAGS="${1:-0x2c0}"
 
+echo "=== building launcher (nix build .#launcher, which builds .#libkrun) ==="
+LAUNCHER="$(nix build "$HERE#launcher" --no-link --print-out-paths)"
+echo "launcher: $LAUNCHER"
+
 # Resolve the virglrenderer that libkrun actually links (its resolved lib path)
 # so RENDER_SERVER_EXEC_PATH matches the libvirglrenderer loaded at runtime.
-# Uses `ldd` (not `readelf`) because readelf is not part of the default NixOS
-# user environment.
-find_libkrun_vgl() {
-    local lib
-    for lib in /nix/store/*-libkrun-cang-*/lib/libkrun.so; do
-        local rp
-        rp="$(ldd "$lib" 2>/dev/null | grep -oE '/nix/store/[A-Za-z0-9.+-]+-virglrenderer-1\.3\.0/lib' | head -1)"
-        if [[ -n "$rp" ]]; then
-            echo "${rp%/lib}"
-            return 0
-        fi
-    done
+# `ldd` on the launcher walks the whole chain: the launcher -> libkrun ->
+# libvirglrenderer.
+find_launcher_vgl() {
+    local rp
+    rp="$(ldd "$LAUNCHER/bin/launcher" 2>/dev/null | grep -oE '/nix/store/[A-Za-z0-9.+_-]+-virglrenderer-[^/]+/lib' | head -1)"
+    if [[ -n "$rp" ]]; then
+        echo "${rp%/lib}"
+        return 0
+    fi
     return 1
 }
 
-# Preferred: the virglrenderer package from the nixpkgs the launcher was built
-# with (the flake devShell sets RENDER_SERVER_EXEC_PATH already).  Fall back to
-# discovering it from a libkrun store path.
 if [[ -z "${RENDER_SERVER_EXEC_PATH:-}" ]]; then
-    vgl="$(find_libkrun_vgl || true)"
+    vgl="$(find_launcher_vgl || true)"
     if [[ -n "$vgl" ]]; then
         export RENDER_SERVER_EXEC_PATH="$vgl/libexec/virgl_render_server"
     else
@@ -46,8 +46,14 @@ fi
 echo "RENDER_SERVER_EXEC_PATH=$RENDER_SERVER_EXEC_PATH"
 
 echo "=== building guest rootfs (nix build .#guest-rootfs) ==="
-ROOTFS="$(nix build .#guest-rootfs --no-link --print-out-paths)"
+ROOTFS="$(nix build "$HERE#guest-rootfs" --no-link --print-out-paths)"
 echo "rootfs: $ROOTFS"
+
+# libkrun loads the guest firmware (`libkrunfw.so.5`) with dlopen by soname, so
+# the firmware has to be on the loader path; take the pinned one the product
+# boots rather than whatever else is installed on this host.
+FIRMWARE="$(nix build "$HERE#libkrunfw" --no-link --print-out-paths)"
+echo "libkrunfw: $FIRMWARE"
 
 # Resolve the host-side 64-bit vulkan-loader and mesa from the rootfs closure
 # (which uses the same flake nixpkgs).  The render server's venus renderer (vkr)
@@ -74,13 +80,9 @@ if [[ -z "$MESAICD" ]]; then
     echo "error: cannot resolve a ${ICD} ICD from rootfs" >&2
     exit 1
 fi
-export LD_LIBRARY_PATH="${VKLOADER}:${MESA}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="${FIRMWARE}/lib:${VKLOADER}:${MESA}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export VK_DRIVER_FILES="$MESAICD"
 echo "VK_DRIVER_FILES=$VK_DRIVER_FILES (ICD=$ICD)"
-
-echo "=== building launcher (nix build .#launcher) ==="
-LAUNCHER="$(nix build .#launcher --no-link --print-out-paths)"
-echo "launcher: $LAUNCHER"
 
 BASE="$(mktemp -d)"
 CONSOLE="$BASE/guest-console.log"
