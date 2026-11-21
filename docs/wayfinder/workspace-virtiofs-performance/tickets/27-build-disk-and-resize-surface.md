@@ -3,7 +3,7 @@ label: wayfinder:grilling
 title: What happens to cang-build.raw and the `cang disk resize --build` surface once its tenants move
 status: open
 blocked_by: [18, 24, 26]
-claimed_by: ""
+claimed_by: "pi + bob (2026-11-21)"
 ---
 
 ## Question
@@ -30,6 +30,26 @@ Decide:
 4. **Container store stays** (`--container-store raw-disk`, `cang-containers.raw`):
    confirm it is untouched by this, since "fewer blk" is a rule about *new* disks,
    not a licence to remove a shipped one.
+
+## Round answers (2026-11-21, bob)
+
+- **1 - retire the build disk AND delete an existing one automatically.** Not the
+  gentle option: `cang-build.raw` stops being created and attached, and a launch
+  that finds one reclaims its space. Safety limits this ticket already fixes:
+  the deletion is logged with the reclaimed bytes, happens only when nothing else
+  holds the image (no attachment, no lock), and `cang disk reset --build` stays as
+  the explicit command. **What this costs a user**: the warm `target/` and
+  `CARGO_HOME` in that file are gone - so the deletion message says so, and says
+  what replaces them (the workspace image's own tree).
+- **2 - `cang disk resize --workspace-disk PATH`**, and `--build` becomes a named
+  refusal pointing here. `--containers` stays.
+- **3 - the workspace image grows itself by default**: before a launch or serve
+  mounts it, grow it when the free space recorded by the previous run was under
+  ~10 % and the host keeps >= 2x headroom; `--workspace-size` stays the creation
+  size; a named warning when the cap or the host headroom refuses.
+- **4 - generations of the `/nix` upper stay where ticket 26 put them**; nothing to
+  do now (they are subvolumes, hardlinked from the image, and `cang nix gc`
+  collects stale ones).
 
 ## Resolution
 
