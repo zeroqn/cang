@@ -535,6 +535,14 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                 {
                                     env.push(pair);
                                 }
+                                // The guest relay is what watches the served
+                                // tree, so the host's decision has to reach it
+                                // through the guest environment.
+                                if let Some(pair) =
+                                    workspace_relay::watch_guest_env_pair_from_process_env()
+                                {
+                                    env.push(pair);
+                                }
                                 if let Some(pair) = pty_raw_passthrough::guest_env_pair(pty.mode) {
                                     env.push(pair);
                                 }

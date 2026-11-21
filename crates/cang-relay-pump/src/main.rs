@@ -116,9 +116,9 @@ fn main() -> Result<()> {
     };
     let fuse_fd = mount.into_fd();
     let outcome = {
-        let mut log = |line: &str| eprintln!("{line}");
-        pump::relay(fuse_fd, &mut transport, &mut stats, &mut log)
-            .context("workspace relay stopped")?
+        let log: std::sync::Arc<dyn Fn(&str) + Send + Sync> =
+            std::sync::Arc::new(|line: &str| eprintln!("{line}"));
+        pump::relay(fuse_fd, &mut transport, &mut stats, log).context("workspace relay stopped")?
     };
     stats.flush();
     let _ = transport.flush();

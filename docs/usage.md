@@ -197,10 +197,14 @@ lower-frequency host tooling pays the trip.
 
 What it promises, and what it does not:
 
-- **the image is authoritative**; the host view may be *stale* - a host reader
-  can see an older version of a file until it reopens it, and no host `inotify`
-  event is generated for a guest-side write (the FUSE protocol can invalidate
-  cache, not synthesise an event);
+- **the image is authoritative**; the host view may be *stale* - without the
+  invalidation watcher below, a host reader that keeps a descriptor open sees an
+  older version of a file for as long as its attribute timeout (5 s), and for a
+  same-size rewrite never. A plain `open` is always fresh (`CachePolicy::Auto`
+  drops the cached pages on open), so this is the long-lived reader - the agent
+  harness, an editor, a `tail -f` - and never `cat`/`git`. No host `inotify`
+  event is synthesised either way: the FUSE protocol can invalidate cache, it
+  cannot deliver an event;
 - **the mount does not outlive the launch**: when the task ends, or the VM dies,
   cang unmounts it and the launch directory shows its own contents again, so a
   guest-side file is invisible on the host between launches. For a view that
@@ -210,6 +214,27 @@ What it promises, and what it does not:
 `--workspace-relay` does not arbitrate a concurrent host write and guest write to
 one file: it is the flag for a launch whose tree the host reads, not one it
 writes at the same time.
+
+**The invalidation watcher** (`CANG_WORKSPACE_RELAY_WATCH=1` on the `cang`
+command, forwarded into the guest environment; off by default) closes the
+held-descriptor window from the guest side: the guest relay watches the tree it
+serves and sends the host's kernel `FUSE_NOTIFY_INVAL_INODE` (`off = 0`,
+`len = 0`) for a file whose content the guest changed. A host reader that holds
+its descriptor open then sees the new bytes in **~1 ms** - one FUSE round trip -
+instead of 5 s, and a same-size rewrite stops being invisible; a `stat` of the
+path is equally fresh. Names are left to the mount's own 5 s entry timeout: the
+kernel's `INVAL_ENTRY` path takes the parent directory's inode lock, and the
+host pump is the mount's only server, so a host lookup in flight against that
+lock deadlocks the mount (measured); `INVAL_INODE` never waits that way, and it
+cannot refresh an open descriptor anyway. It invalidates cache and does nothing
+more: a tool waiting for a host `inotify` event still needs a reopen or a
+re-stat. The price is one inotify watch per directory (679 for the workspace tree
+measured here; 1 374 for this repository's sources plus `.git`, 3 641 with a
+populated `target/`, against the guest's 122 262-watch limit) and per-path
+coalescing within one inotify drain, so a `target/` write storm costs at most one
+`INVAL_INODE` per file rather than the 3.4-4.4 raw events per file a `tar`
+extraction produces, and a flood of them does not slow the mount (~5 000
+notifications/s delivered, `git status` unchanged).
 
 ### A workspace server: the host's view between launches
 

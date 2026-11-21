@@ -11,6 +11,8 @@ use fuse_backend_rs::api::server::{MetricsHook, Server};
 use fuse_backend_rs::passthrough::{Config, PassthroughFs};
 use fuse_backend_rs::transport::{FuseBuf, FuseDevWriter, Reader, Writer};
 
+use crate::nodeids::NodeIds;
+
 /// Largest message the relay carries: the 1 MiB `max_write` the INIT reply
 /// advertises plus a full page of headers (libfuse's `FUSE_KERN_BUF_PAGES`
 /// rule). A full 1 MiB WRITE frame is 1 048 656 bytes.
@@ -149,6 +151,9 @@ pub struct RelayServer {
     /// while composing a split reply) discards its device write instead of
     /// failing `EBADF` on fd -1.
     devnull: RawFd,
+    /// What this connection's replies told the relay about the tree, so the
+    /// watcher can name an invalidation by nodeid instead of by path.
+    nodeids: NodeIds,
     pub ops: OpCounts,
 }
 
@@ -180,8 +185,16 @@ impl RelayServer {
         Ok(Self {
             server: Server::new(passthrough),
             devnull,
+            nodeids: NodeIds::new(),
             ops: OpCounts::default(),
         })
+    }
+
+    /// The connection's path -> nodeid table, for the invalidation watcher.
+    ///
+    /// Cloning gives a second handle onto the same table, not a copy.
+    pub fn node_ids(&self) -> NodeIds {
+        self.nodeids.clone()
     }
 
     /// Serve one request frame already read from the transport.
@@ -211,7 +224,13 @@ impl RelayServer {
             .handle_message(reader, Writer::FuseDev(writer), None, Some(&self.ops))
         {
             Ok(0) => Ok(Frame::NoReply),
-            Ok(len) => Ok(Frame::Reply(len)),
+            Ok(len) => {
+                // The reply is the only place the relay learns which nodeids the
+                // host's mount holds: a LOOKUP/READDIRPLUS/CREATE/MKDIR reply
+                // carries them, and an invalidation has to name one.
+                self.nodeids.note_reply(request, &reply[..len]);
+                Ok(Frame::Reply(len))
+            }
             Err(_) => Ok(Frame::Failed),
         }
     }

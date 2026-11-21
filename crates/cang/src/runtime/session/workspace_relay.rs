@@ -32,10 +32,38 @@ use std::time::{Duration, Instant};
 
 use crate::runtime::host_tools::{RuntimeTool, runtime_tool_program};
 
+/// The guest environment pair for [`WATCH_ENV`], when the host set it.
+pub(in crate::runtime::session) fn watch_guest_env_pair_from_process_env()
+-> Option<(String, String)> {
+    guest_env_pair_from_value(std::env::var(WATCH_ENV).ok().as_deref())
+}
+
+pub(in crate::runtime::session) fn guest_env_pair_from_value(
+    value: Option<&str>,
+) -> Option<(String, String)> {
+    value
+        .filter(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .map(|_| (WATCH_ENV.to_owned(), "1".to_owned()))
+}
+
 /// Where the pump reports its state, inside the task directory.
 pub(crate) const PUMP_STATE_FILE: &str = "relay-pump.state";
 /// Where the pump's own stderr goes when cang does not have a TTY for it.
 pub(crate) const PUMP_STATS_FILE: &str = "relay-pump.stats.tsv";
+/// The host-side knob for the guest's invalidation watcher.
+///
+/// The guest relay is what watches the served tree, so the decision has to
+/// cross the host -> guest environment: `cang` forwards this variable into the
+/// guest environment when it is set, `cang-guest-init` hands its environment to
+/// the relay it spawns, and the relay's `--watch` flag reads it. That keeps the
+/// OFF and ON arms of the measurement the same image and the same binary.
+pub(in crate::runtime::session) const WATCH_ENV: &str = "CANG_WORKSPACE_RELAY_WATCH";
+
 /// The `fusermount3 -o` options for the workspace mount. No
 /// `default_permissions` (the kernel would check mode bits against the host
 /// uid), no `auto_unmount` (the contract wants a stale mount to stay).
@@ -635,6 +663,24 @@ exit 1"#,
         assert_eq!(unescape_mountinfo_field(b"/a\\040b"), b"/a b");
         assert_eq!(unescape_mountinfo_field(b"/a\\134b"), b"/a\\b");
         assert_eq!(unescape_mountinfo_field(b"/a\\"), b"/a\\");
+    }
+
+    /// The watcher's knob is a guest environment variable, so the OFF arm must
+    /// be the absence of it and the ON arm the same image with it set.
+    #[test]
+    fn the_watch_knob_is_only_forwarded_for_a_truthy_value() {
+        assert_eq!(guest_env_pair_from_value(None), None);
+        assert_eq!(guest_env_pair_from_value(Some("")), None);
+        assert_eq!(guest_env_pair_from_value(Some("0")), None);
+        assert_eq!(guest_env_pair_from_value(Some("false")), None);
+        assert_eq!(
+            guest_env_pair_from_value(Some("1")),
+            Some((WATCH_ENV.to_owned(), "1".to_owned()))
+        );
+        assert_eq!(
+            guest_env_pair_from_value(Some(" ON ")),
+            Some((WATCH_ENV.to_owned(), "1".to_owned()))
+        );
     }
 
     #[test]

@@ -24,14 +24,24 @@
 //!   commit write is discarded. (With `fd = -1` every directory listing failed
 //!   `EBADF` and the whole reply stream shifted.)
 //!
+//! A guest-side write (`cargo fmt`, a checkout) is invisible to the host's page
+//! cache, so the relay can also tell the host's kernel to drop what it cached:
+//! `inval` composes the `INVAL_INODE`/`INVAL_ENTRY` notifications, `nodeids`
+//! remembers the nodeids its own replies handed out, and `watch` turns the
+//! guest's `inotify` events into them (`CANG_WORKSPACE_RELAY_WATCH=1` or
+//! `--watch`; off by default).
+//!
 //! The INIT reply advertises `FUSE_BIG_WRITES | FUSE_MAX_PAGES`
 //! (`max_write = 1 MiB`, `max_pages = 256`): `fuse-backend-rs` 0.12.1 caps
 //! `max_write` at 4 KiB unless the *filesystem* asks for those flags, which
 //! `PassthroughFs::init` never did, so a 4 MiB write was 1 024 frames at
 //! ~10 MB/s (note 63).
 
+pub mod inval;
+pub mod nodeids;
 pub mod server;
 pub mod vsock;
+pub mod watch;
 
 /// Marker the relay prints once its listener is bound, so `cang-guest-init`
 /// can hold the task command until the host's mount has something to talk to.
