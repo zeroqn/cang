@@ -594,6 +594,14 @@ of every request to zero.
   vendored `fuse-backend-rs`, taking a 4 MiB write from ~10 MB/s (1 024 frames) to
   ~87 MB/s (4 frames). [note 63](notes/63-fuse-relay-death-semantics-and-write-cap.md).
 
+- [A workspace server VM that serves the image whenever no task VM runs](tickets/29-workspace-server-vm.md):
+  **`cang workspace serve|stop|status <disk>`**, one long-lived VM holding the image
+  under an exclusive canonical-path `flock`; a `--workspace-disk` launch on that image
+  is **refused by name** (no handoff, no auto-stop), the mount lives exactly as long
+  as the server, and teardown is unmount-then-VM with its result as the exit code.
+  Live: mount <10 s, host `git status` 58-67 ms, both writes crossing, `stop` 267 ms,
+  restart showing the file a task wrote in between, `EBUSY` exit 1.
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)

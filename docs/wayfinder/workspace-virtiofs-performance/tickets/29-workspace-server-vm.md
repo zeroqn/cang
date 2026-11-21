@@ -1,7 +1,7 @@
 ---
 label: wayfinder:prototype
 title: A workspace server VM that serves the image whenever no task VM runs
-status: open
+status: closed
 blocked_by: []
 claimed_by: "pi (stage 1 shipped 2026-11-21)"
 ---
@@ -96,4 +96,24 @@ Recorded before implementing, so a later session can see what was chosen and why
 
 ## Resolution
 
-(to follow)
+Settled and shipped 2026-11-21 (bob's stage-2 decisions in this ticket, commit
+`a14d2928`, [note 65](../notes/65-workspace-server-verified.md)):
+
+- **`cang workspace serve|stop|status <DISK>`**, on the session machinery, with the
+  terminal attach skipped so `^C` is an ordered teardown rather than a keystroke the
+  guest payload receives;
+- **single writer by refusal**: an exclusive canonical-path `flock` for the server,
+  shared for `--workspace-disk` launches, both refusals naming the image and
+  `cang workspace stop`; no handoff, no automatic stop;
+- **the mount lives exactly as long as the server**, read-write; teardown is
+  unmount-then-stop-VM and its result is the exit code, an `EBUSY` unmount being a
+  named refusal (exit 1) rather than a loop;
+- verified live by an independent pass: mount <10 s, host `git status` 58-67 ms,
+  both writes crossing, both refusals, `stop` 267 ms, task launch then working,
+  restart showing the task's file, `EBUSY` exit 1.
+
+**Still out of this ticket** (they are the next effort, not this one): the
+read-only flip under a task (it has nothing to act on while the lease keeps owners
+mutually exclusive), handoff/reconnect (a task cannot take the image while the
+server runs), and the `-EIO` window (no mount outlives its server). Ticket 30
+remains the invalidation watcher.
