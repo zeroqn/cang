@@ -839,6 +839,7 @@ mod tests {
             waypipe: None,
             exec: None,
             managed_session: None,
+            workspace_relay: None,
             seccomp: SeccompMode::Enforce {
                 policy_path: Path::new("/policy.json").to_path_buf(),
             },

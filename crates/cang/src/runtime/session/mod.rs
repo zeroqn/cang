@@ -25,13 +25,15 @@ pub(crate) mod supervisor;
 pub(crate) mod task_control;
 mod terminal_env;
 mod waypipe_broker;
+mod workspace_relay;
 
 use crate::runtime::RuntimeProfileScope;
 use crate::runtime::launch::components::persistent_disks::raw_btrfs::HostRawImageCommandRunner;
 use crate::runtime::launch::components::persistent_disks::workspace;
 use crate::runtime::launch::config::{
     self, DEFAULT_PULSE_BRIDGE_PORT, DEFAULT_WAYPIPE_PORT, ExecConfig, LaunchConfig, LaunchSpec,
-    ManagedSessionConfig, PulseBridgeConfig, WaypipeConfig,
+    ManagedSessionConfig, PulseBridgeConfig, WaypipeConfig, WorkspaceRelayConfig,
+    workspace_relay_port,
 };
 use crate::runtime::launch::{
     HostPersistentDiskPreparer, LaunchPlan, NixLowerDiskStatus, PersistentDiskPreparer,
@@ -337,6 +339,28 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                         lease.handle().task_dir(),
                     )
                     .context("failed to allocate cang exec socket")?;
+                    // `--workspace-relay`: the socket libkrun binds for the
+                    // guest's relay listener, and the guest port it carries -
+                    // the first free one in the launch's own port registry.
+                    let workspace_relay = plan
+                        .workspace_relay
+                        .then(|| {
+                            managed_attach_socket::allocate_workspace_relay(
+                                lease.handle().task_id(),
+                                lease.handle().task_dir(),
+                            )
+                        })
+                        .transpose()
+                        .context("failed to allocate cang workspace relay socket")?
+                        .map(|socket| WorkspaceRelayConfig {
+                            socket,
+                            guest_port: workspace_relay_port(&[
+                                DEFAULT_ATTACH_PORT,
+                                DEFAULT_WAYPIPE_PORT,
+                                DEFAULT_EXEC_PORT,
+                                DEFAULT_PULSE_BRIDGE_PORT,
+                            ]),
+                        });
                     let pulse_bridge = if let Some(host_port) =
                         plan.pulse.and_then(|pulse| pulse.host_loopback_port())
                     {
@@ -487,6 +511,7 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                             }),
                             exec: Some(exec.clone()),
                             managed_session: Some(managed_session.clone()),
+                            workspace_relay: workspace_relay.clone(),
                         })
                     }) {
                         Ok(mut config) => {
@@ -531,21 +556,51 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                     protocol_version: managed_session.protocol_version,
                                 }),
                             };
+                            // The host side of the reverse share: the pump owns
+                            // the mount for exactly the life of this launch, so
+                            // its teardown is ordered before the task dir (which
+                            // holds the pump's own state file) is cleaned up.
+                            let workspace_relay_guard = match &workspace_relay {
+                                Some(relay) => Some(workspace_relay::WorkspaceRelayGuard::start(
+                                    workspace_relay::pump_program(),
+                                    lease.handle().task_dir(),
+                                    &plan.workspace_dir,
+                                    &relay.socket,
+                                    plan.profile,
+                                )?),
+                                None => None,
+                            };
+                            let helper_result =
+                                profiler.measure_result_with("helper_session", |profiler| {
+                                    HostSupervisor.run(
+                                        &config,
+                                        lease.handle().task_dir(),
+                                        profiler,
+                                        &active_task,
+                                        plan.daemon,
+                                        attach_input_policy,
+                                    )
+                                });
+                            let relay_outcome = workspace_relay_guard
+                                .as_ref()
+                                .map(workspace_relay::WorkspaceRelayGuard::outcome);
+                            drop(workspace_relay_guard);
+                            profiler.record_metadata(
+                                "workspace_relay",
+                                relay_outcome
+                                    .as_ref()
+                                    .map_or("disabled", |outcome| outcome.as_profile_value()),
+                            );
+                            if let Some(relay) = &workspace_relay {
+                                tracing::debug!(
+                                    guest_port = relay.guest_port,
+                                    socket = %relay.socket.display(),
+                                    "cang workspace relay"
+                                );
+                            }
                             BtrfsHostRunResult::Helper {
                                 managed: config.is_managed_session(),
-                                result: profiler.measure_result_with(
-                                    "helper_session",
-                                    |profiler| {
-                                        HostSupervisor.run(
-                                            &config,
-                                            lease.handle().task_dir(),
-                                            profiler,
-                                            &active_task,
-                                            plan.daemon,
-                                            attach_input_policy,
-                                        )
-                                    },
-                                ),
+                                result: helper_result,
                             }
                         }
                         Err(err) => BtrfsHostRunResult::SetupFailed(err),
@@ -718,6 +773,7 @@ mod tests {
             guest_init: None,
             preserve_debug: false,
             workspace_disk: None,
+            workspace_relay: false,
             workspace_size: None,
             mem_gib: None,
             network_mode: config::NetworkMode::Tsi,

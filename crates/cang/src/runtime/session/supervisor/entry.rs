@@ -508,6 +508,7 @@ mod tests {
             mounts: Vec::new(),
             host_nix_overlay: None,
             guest_init_override: None,
+            workspace_relay: None,
             disks: Vec::new(),
             ram_mib: 1024,
             vcpus: 1,

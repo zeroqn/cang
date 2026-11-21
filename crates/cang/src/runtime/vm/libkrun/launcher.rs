@@ -773,7 +773,8 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             || config.pulse_bridge.is_some()
             || config.waypipe.is_some()
             || config.exec.is_some()
-            || config.managed_session.is_some();
+            || config.managed_session.is_some()
+            || config.workspace_relay.is_some();
         if !needs_vsock {
             return Ok(());
         }
@@ -856,6 +857,43 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             )?;
             tracing::debug!("krun_vsock_device_add_unix_port: managed attach registered");
         }
+        if let Some(relay) = &config.workspace_relay {
+            // The workspace relay listens in the guest and the host connects in,
+            // exactly like `cang exec`: `listen = true` is the reverse-share
+            // direction (note 61 §2).
+            tracing::debug!(
+                guest_port = relay.guest_port,
+                socket = %relay.socket.display(),
+                "krun_vsock_device_add_unix_port: workspace relay begin"
+            );
+            setup(
+                "krun_vsock_device_add_unix_port workspace relay",
+                self.api
+                    .vsock_device_add_unix_port(vsock, relay.guest_port, &relay.socket, true),
+            )?;
+            tracing::debug!("krun_vsock_device_add_unix_port: workspace relay registered");
+            // The socket has to end up owned by the host user for its pump to
+            // connect; the identities the other worker-created sockets already
+            // carry are that user, and the worker (which created this one) is
+            // the only identity that can `chown` it.
+            let host_owner = config
+                .managed_session
+                .as_ref()
+                .map(|managed| (managed.attach_socket_uid, managed.attach_socket_gid))
+                .or_else(|| {
+                    config
+                        .exec
+                        .as_ref()
+                        .map(|exec| (exec.socket_uid, exec.socket_gid))
+                });
+            match host_owner {
+                Some((uid, gid)) => hand_relay_socket_to_host(relay, uid, gid),
+                None => tracing::warn!(
+                    socket = %relay.socket.display(),
+                    "no managed or exec socket identity to hand the workspace relay socket to"
+                ),
+            }
+        }
         if config.network_mode == NetworkMode::Tsi && !config.publish.is_empty() {
             let forwards =
                 tsi_port_forwards(&config.publish).context("libkrun TSI publish setup failed")?;
@@ -918,6 +956,81 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
         tracing::debug!(device, "krun_net_device_new_unixstream_fd: complete");
         Ok(())
     }
+}
+
+/// Hand the relay's acceptor socket to the host user.
+///
+/// libkrun's muxer creates it from this process, which is the mapped worker
+/// identity (`165536` on this host), mode `0755` - and a `connect(2)` on a Unix
+/// socket needs *write* permission, so the unprivileged `cang` process and its
+/// pump would get `EACCES` forever. `managed_ready` already repairs the attach
+/// and exec sockets the same way, from inside the worker's namespace, because
+/// only the creating identity can `chown` one.
+///
+/// The pump retries its connect until it is allowed, so a socket that appears a
+/// moment after this call is still served; the deadline only bounds the thread.
+fn hand_relay_socket_to_host(
+    relay: &crate::runtime::launch::config::WorkspaceRelayConfig,
+    uid: u32,
+    gid: u32,
+) {
+    const OWNER_FIX_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+    const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+    let path = relay.socket.clone();
+    std::thread::Builder::new()
+        .name("cang-workspace-relay-socket-owner".to_owned())
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            while started.elapsed() < OWNER_FIX_DEADLINE {
+                if path.exists() {
+                    let mut owned = false;
+                    for (what, rc) in [
+                        ("chown", unsafe {
+                            libc::chown(
+                                c_path_launcher(&path).as_ptr(),
+                                uid as libc::uid_t,
+                                gid as libc::gid_t,
+                            )
+                        }),
+                        ("chmod", unsafe {
+                            libc::chmod(c_path_launcher(&path).as_ptr(), 0o600)
+                        }),
+                    ] {
+                        if rc != 0 {
+                            tracing::warn!(
+                                socket = %path.display(),
+                                operation = what,
+                                error = %std::io::Error::last_os_error(),
+                                "workspace relay socket owner repair failed"
+                            );
+                        } else {
+                            owned = true;
+                        }
+                    }
+                    if owned {
+                        tracing::debug!(
+                            socket = %path.display(),
+                            uid,
+                            gid,
+                            "workspace relay socket handed to the host user"
+                        );
+                        return;
+                    }
+                }
+                std::thread::sleep(POLL);
+            }
+            tracing::warn!(
+                socket = %path.display(),
+                "the workspace relay socket never appeared for owner repair"
+            );
+        })
+        .ok();
+}
+
+/// A NUL-terminated copy of `path` for the libc calls above.
+fn c_path_launcher(path: &std::path::Path) -> std::ffi::CString {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap_or_default()
 }
 
 fn setup<T>(name: &str, result: Result<T>) -> Result<T> {

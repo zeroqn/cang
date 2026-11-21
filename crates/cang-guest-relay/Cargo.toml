@@ -1,0 +1,23 @@
+[package]
+name = "cang-guest-relay"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "cang-guest-relay"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+libc.workspace = true
+rustfs-mimalloc.workspace = true
+# The guest half of the reverse share, from crates.io 0.12.1 with the two INIT
+# flags this relay needs added (`vendor/`, `vendor/bigwrites.patch`). The
+# workspace `[patch.crates-io]` entry is what makes the vendored copy the one
+# that is compiled.
+fuse-backend-rs = { version = "0.12.1", default-features = false, features = ["fusedev"] }
+
+[dev-dependencies]
+tempfile.workspace = true

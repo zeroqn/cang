@@ -254,6 +254,16 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         }
         Ok(())
     })?;
+
+    profiler.measure_result("start-workspace-relay", || {
+        // The host mounts this tree over FUSE, so the server has to be listening
+        // before the task command can do anything useful - and it serves what
+        // `mount-workspace-disk` just mounted, which is why this step is after it.
+        if let Some(contract) = env_contract.cang.workspace_relay.as_ref() {
+            crate::guest_init::components::relay::start(contract.port, &contract.root)?;
+        }
+        Ok(())
+    })?;
     profiler.measure_result("seed-zg-models", || {
         crate::guest_init::components::zg::seed_models(process::is_root(), &identity)
     })?;
@@ -487,6 +497,9 @@ fn cang_env_from(env: &impl EnvSource) -> Result<CangEnv> {
             .var("CANG_NIX_DISK_LABEL")
             .unwrap_or_else(|| crate::guest_init::components::env::RAW_NIX_DISK_LABEL.to_owned()),
         workspace_disk: crate::guest_init::components::env::WorkspaceDiskContract::from_lookup(
+            |name| env.var(name).filter(|value| !value.is_empty()),
+        )?,
+        workspace_relay: crate::guest_init::components::env::WorkspaceRelayContract::from_lookup(
             |name| env.var(name).filter(|value| !value.is_empty()),
         )?,
         containers_disk_id: env.var("CANG_CONTAINERS_DISK_ID").unwrap_or_else(|| {

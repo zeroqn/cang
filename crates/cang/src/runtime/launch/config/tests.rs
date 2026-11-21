@@ -91,6 +91,7 @@ fn launch_config_defaults_to_guest_init_enter_fish_shell() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -180,6 +181,7 @@ fn launch_config_uses_explicit_guest_command() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -256,6 +258,7 @@ fn launch_config_round_trips_through_hex_line_format() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -336,6 +339,7 @@ fn launch_config_round_trips_pulse_bridge_and_exports_guest_port() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -383,6 +387,7 @@ fn launch_config_round_trips_managed_session_contract() {
         host_gid: 1001,
         vcpus: 2,
         disks: Vec::new(),
+        workspace_relay: None,
         extra_env: Vec::new(),
         host_nix_overlay: None,
         pulse_bridge: None,
@@ -454,6 +459,7 @@ fn managed_session_extra_env_terminal_vars_are_guest_visible() {
         host_gid: 1001,
         vcpus: 2,
         disks: Vec::new(),
+        workspace_relay: None,
         extra_env: vec![
             ("TERM".to_owned(), "xterm-kitty".to_owned()),
             ("COLORTERM".to_owned(), "truecolor".to_owned()),
@@ -537,6 +543,7 @@ fn non_managed_launch_does_not_allow_terminal_identity_from_image_env() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -584,6 +591,7 @@ fn launch_config_round_trips_seccomp_modes() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
     config.seccomp = SeccompMode::Audit(AuditMode::Full {
@@ -646,6 +654,7 @@ fn launch_config_round_trips_landlock_modes() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -700,6 +709,7 @@ fn launch_config_legacy_missing_landlock_mode_defaults_to_relax() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build")
     .serialize();
@@ -755,6 +765,7 @@ fn launch_config_legacy_missing_perf_defaults_to_false() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build")
     .serialize()
@@ -805,6 +816,7 @@ fn launch_config_rejects_legacy_enforce_landlock_mode() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build")
     .serialize();
@@ -853,6 +865,7 @@ fn launch_config_refuses_to_serialize_unresolved_default_gap_audit() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
     config.seccomp = SeccompMode::Audit(AuditMode::DefaultGap {
@@ -906,6 +919,7 @@ fn launch_config_rejects_inconsistent_seccomp_fields() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -995,6 +1009,7 @@ fn launch_config_round_trips_volume_source_kind_and_access_mode() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -1059,6 +1074,7 @@ fn launch_config_carries_host_nix_overlay_and_adds_reserved_nix_mount() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("host nix overlay config should build");
 
@@ -1125,6 +1141,7 @@ fn launch_config_rejects_user_mount_that_collides_with_host_nix_overlay() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect_err("duplicate /nix mount should fail");
 
@@ -1181,6 +1198,7 @@ fn launch_config_rejects_noncanonical_reserved_target_aliases() {
             waypipe: None,
             exec: None,
             managed_session: None,
+            workspace_relay: None,
         })
         .expect_err("target aliases should fail before prepared-root normalization");
 
@@ -1230,6 +1248,7 @@ fn launch_config_carries_publish_specs_from_launch_spec() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -1376,6 +1395,7 @@ fn launch_config_rejects_config_codex_mounts() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect_err("config codex source should be rejected");
 
@@ -1425,6 +1445,7 @@ fn launch_config_requires_guest_init_override_to_be_read_only() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect_err("guest-init override bind must be read-only");
 
@@ -1588,6 +1609,7 @@ fn libkrun_envp_stays_tiny_while_guest_config_env_is_allowlisted() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -1701,6 +1723,7 @@ fn launch_config_emits_allocator_selector() {
             waypipe: None,
             exec: None,
             managed_session: None,
+            workspace_relay: None,
         })
         .expect("launch config should build");
 
@@ -1757,6 +1780,7 @@ fn guest_debug_env_follows_effective_log_level() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
     assert!(!config.guest_config_env_contains("CANG_GUEST_DEBUG", "1"));
@@ -1796,6 +1820,7 @@ fn guest_debug_env_follows_effective_log_level() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
     assert!(config.guest_config_env_contains("CANG_GUEST_DEBUG", "1"));
@@ -1839,6 +1864,7 @@ fn profile_env_does_not_raise_guest_debug_level() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -1884,6 +1910,7 @@ fn passt_mode_sets_guest_passt_dns_gate() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -1936,6 +1963,7 @@ fn writes_cang_config_json_under_task_rootfs() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 
@@ -1999,6 +2027,7 @@ fn malformed_image_env_is_rejected() {
             waypipe: None,
             exec: None,
             managed_session: None,
+            workspace_relay: None,
         })
         .expect_err("malformed image env should fail");
         assert!(err.to_string().contains("cang image env entry"));
@@ -2046,6 +2075,7 @@ fn image_cmd_is_used_before_default_shell_when_guest_command_is_empty() {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("launch config should build");
 

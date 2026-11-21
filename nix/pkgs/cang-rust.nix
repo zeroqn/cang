@@ -54,7 +54,7 @@ let
   # (`nix flake update fenix`) from re-hashing it.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-pfGktGWH5fioe2ET11gNublJn+y6N5su74/rlRFx+4A=";
+    hash = "sha256-EE7v/cMA7eXPgLA9ec9IAyITxyIYYEhBuX+ojbYgoR0=";
   };
 
   # Building libkrun is what needs clang/libclang (krun-display and krun-input
@@ -114,6 +114,13 @@ let
         ln -s ${pkgs.passt}/bin/pasta "$out/libexec/cang-helpers/pasta"
         ln -s ${pkgs.passt}/bin/passt "$out/libexec/cang-helpers/passt"
         ln -s ${pkgs.strace}/bin/strace "$out/libexec/cang-helpers/strace"
+        # The workspace reverse share's host half. It stays a plain child of the
+        # cang process - `fusermount3` needs its setuid mount, which
+        # `no_new_privs` in cang's sandbox would refuse - so it is installed as a
+        # helper rather than confined like the render server.
+        if [ -x "$out/bin/relay-pump" ]; then
+          mv "$out/bin/relay-pump" "$out/libexec/cang-helpers/relay-pump"
+        fi
         ln -s ${pkgs.virglrenderer}/libexec/virgl_render_server "$out/libexec/cang-helpers/virgl_render_server"
         ${pkgs.lib.optionalString (libkrunfw != null) ''
           for library in ${pkgs.lib.getLib libkrunfw}/lib/libkrunfw.so*; do
@@ -168,13 +175,21 @@ let
       nativeBuildInputs = ciSccacheNativeBuildInputs;
 
       CARGO_BUILD_TARGET = muslTarget;
+      # The workspace reverse share's guest half ships in the same store path as
+      # the bootstrap, so `cang-guest-init` resolves it as a sibling
+      # (`/nix/store/<hash>-cang/bin/cang-guest-relay`) and no store path has to
+      # be baked into a launch.
       cargoBuildFlags = [
         "--package"
         "cang-guest-init"
+        "--package"
+        "cang-guest-relay"
       ];
       cargoTestFlags = [
         "--package"
         "cang-guest-init"
+        "--package"
+        "cang-guest-relay"
       ];
     }
     // ciSccacheEnv

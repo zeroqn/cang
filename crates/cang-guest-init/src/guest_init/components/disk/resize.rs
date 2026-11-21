@@ -247,6 +247,7 @@ mod tests {
             host_gid: None,
             nix_disk_id: RAW_NIX_DISK_ID.to_owned(),
             nix_disk_label: RAW_NIX_DISK_LABEL.to_owned(),
+            workspace_relay: None,
             containers_disk_id: RAW_CONTAINER_DISK_ID.to_owned(),
             containers_disk_label: RAW_CONTAINER_DISK_LABEL.to_owned(),
             build_disk_id: RAW_BUILD_DISK_ID.to_owned(),

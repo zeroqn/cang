@@ -32,6 +32,10 @@ pub(in crate::guest_init) const NIX_LOWER_BLOCK_ENV: &str = "CANG_NIX_LOWER_BLOC
 /// The `--workspace-disk` contract: which disk to mount at `/workspace`.
 pub(in crate::guest_init) const WORKSPACE_DISK_ID_ENV: &str = "CANG_WORKSPACE_DISK_ID";
 pub(in crate::guest_init) const WORKSPACE_DISK_LABEL_ENV: &str = "CANG_WORKSPACE_DISK_LABEL";
+/// `--workspace-relay`: the vsock port the guest's FUSE server listens on, and
+/// the tree it serves. Both are set or neither is.
+pub(in crate::guest_init) const WORKSPACE_RELAY_PORT_ENV: &str = "CANG_WORKSPACE_RELAY_PORT";
+pub(in crate::guest_init) const WORKSPACE_RELAY_ROOT_ENV: &str = "CANG_WORKSPACE_RELAY_ROOT";
 pub(in crate::guest_init) const NIX_LOWER_DISK_ID_ENV: &str = "CANG_NIX_LOWER_DISK_ID";
 pub(in crate::guest_init) const NIX_LOWER_DISK_LABEL_ENV: &str = "CANG_NIX_LOWER_DISK_LABEL";
 pub(in crate::guest_init) const NIX_LOWER_UPPERDIR_ENV: &str = "CANG_NIX_LOWER_UPPERDIR";
@@ -177,9 +181,49 @@ pub(in crate::guest_init) struct CangEnv {
     /// `Some` only for a `--workspace-disk` launch: the guest mounts that btrfs
     /// tree at `/workspace` itself and binds its cargo home onto `~/.cargo`.
     pub(in crate::guest_init) workspace_disk: Option<WorkspaceDiskContract>,
+    /// `Some` only for a `--workspace-relay` launch: the vsock port the guest's
+    /// FUSE server must listen on, and the tree it serves.
+    pub(in crate::guest_init) workspace_relay: Option<WorkspaceRelayContract>,
     /// `Some` only when the host attached a read-only `/nix` lower disk and the
     /// guest is therefore the one composing the `/nix` overlay.
     pub(in crate::guest_init) nix_lower: Option<NixLowerContract>,
+}
+
+/// What a `--workspace-relay` launch needs from the host: the vsock port the
+/// guest's FUSE server listens on, and the tree it serves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::guest_init) struct WorkspaceRelayContract {
+    pub(in crate::guest_init) port: u32,
+    pub(in crate::guest_init) root: String,
+}
+
+impl WorkspaceRelayContract {
+    /// A port without a root would serve a guess, so both are required when
+    /// either is set - the same rule as the workspace disk contract.
+    pub(in crate::guest_init) fn from_lookup(
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<Option<Self>> {
+        let port = lookup(WORKSPACE_RELAY_PORT_ENV);
+        let root = lookup(WORKSPACE_RELAY_ROOT_ENV);
+        match (port, root) {
+            (None, None) => Ok(None),
+            (Some(port), Some(root)) => {
+                let port = port.parse::<u32>().with_context(|| {
+                    format!("{WORKSPACE_RELAY_PORT_ENV} '{port}' is not a vsock port")
+                })?;
+                if port == 0 {
+                    anyhow::bail!("{WORKSPACE_RELAY_PORT_ENV} must be nonzero");
+                }
+                Ok(Some(Self { port, root }))
+            }
+            (Some(_), None) => anyhow::bail!(
+                "{WORKSPACE_RELAY_PORT_ENV} is set but {WORKSPACE_RELAY_ROOT_ENV} is not"
+            ),
+            (None, Some(_)) => anyhow::bail!(
+                "{WORKSPACE_RELAY_ROOT_ENV} is set but {WORKSPACE_RELAY_PORT_ENV} is not"
+            ),
+        }
+    }
 }
 
 /// What a `--workspace-disk` launch needs from the host: which disk to mount at
@@ -300,6 +344,9 @@ impl CangEnv {
             build_disk_label: env::var("CANG_BUILD_DISK_LABEL")
                 .unwrap_or_else(|_| RAW_BUILD_DISK_LABEL.to_owned()),
             workspace_disk: WorkspaceDiskContract::from_lookup(|name| {
+                env::var(name).ok().filter(|value| !value.is_empty())
+            })?,
+            workspace_relay: WorkspaceRelayContract::from_lookup(|name| {
                 env::var(name).ok().filter(|value| !value.is_empty())
             })?,
             nix_lower: NixLowerContract::from_lookup(|name| {

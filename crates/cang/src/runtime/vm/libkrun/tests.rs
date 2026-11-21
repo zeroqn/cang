@@ -538,6 +538,7 @@ fn config() -> LaunchConfig {
         waypipe: None,
         exec: None,
         managed_session: None,
+        workspace_relay: None,
     })
     .expect("config should build")
 }

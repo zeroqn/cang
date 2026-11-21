@@ -22,6 +22,7 @@ pub(crate) enum RuntimeTool {
     Passt,
     Strace,
     VirglRenderServer,
+    RelayPump,
 }
 
 impl RuntimeTool {
@@ -35,6 +36,7 @@ impl RuntimeTool {
             Self::Passt => "passt",
             Self::Strace => "strace",
             Self::VirglRenderServer => "virgl_render_server",
+            Self::RelayPump => "relay-pump",
         }
     }
 
@@ -48,6 +50,7 @@ impl RuntimeTool {
             Self::Passt => "CANG_PASST",
             Self::Strace => "CANG_STRACE",
             Self::VirglRenderServer => "CANG_VIRGL_RENDER_SERVER",
+            Self::RelayPump => "CANG_RELAY_PUMP",
         }
     }
 }
@@ -137,6 +140,21 @@ mod tests {
             ),
             Some(PathBuf::from(
                 "/nix/store/hash-cang/libexec/cang-helpers/buildah"
+            ))
+        );
+    }
+
+    #[test]
+    fn the_relay_pump_is_a_package_helper_like_the_others() {
+        assert_eq!(RuntimeTool::RelayPump.basename(), "relay-pump");
+        assert_eq!(RuntimeTool::RelayPump.override_env(), "CANG_RELAY_PUMP");
+        assert_eq!(
+            package_helper_path_for_exe(
+                Path::new("/nix/store/hash-cang/bin/cang"),
+                RuntimeTool::RelayPump
+            ),
+            Some(PathBuf::from(
+                "/nix/store/hash-cang/libexec/cang-helpers/relay-pump"
             ))
         );
     }

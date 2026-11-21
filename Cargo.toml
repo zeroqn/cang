@@ -3,6 +3,8 @@ members = [
   "crates/cang",
   "crates/cang-libkrun",
   "crates/cang-guest-init",
+  "crates/cang-guest-relay",
+  "crates/cang-relay-pump",
   "crates/cang-attach-protocol",
   "crates/cang-exec-protocol",
   "crates/cang-repository-tests",
@@ -11,6 +13,8 @@ default-members = [
   "crates/cang",
   "crates/cang-libkrun",
   "crates/cang-guest-init",
+  "crates/cang-guest-relay",
+  "crates/cang-relay-pump",
   "crates/cang-attach-protocol",
   "crates/cang-exec-protocol",
   "crates/cang-repository-tests",
@@ -21,7 +25,12 @@ resolver = "3"
 # this workspace, which turns `cargo test --workspace` into a run of libkrun's own
 # test targets and takes its crates out of lint-capping - neither is wanted, the
 # dependency is meant to be a dependency.
-exclude = ["deps"]
+# `crates/cang-guest-relay/vendor` holds the third-party `fuse-backend-rs` source
+# this tree patches by path (see the `[patch.crates-io]` entry below). A path
+# dependency that lives inside a member's directory would otherwise be enrolled
+# as a workspace member, which would put a foreign crate's formatting and lints
+# under `cargo fmt --check` and `clippy -D warnings`.
+exclude = ["deps", "crates/cang-guest-relay/vendor"]
 
 [workspace.package]
 version = "0.22.0"
@@ -52,6 +61,16 @@ vt100 = "0.16"
 # manifest names, so a local patch to the video path needs no fork commit and no
 # re-fetch - the same shape as `deps/libkrun`. libkrun's revision stays the
 # fallback for a build of the fork on its own.
+# The guest half of the workspace reverse share (`cang-guest-relay`) is
+# `fuse-backend-rs` 0.12.1 with 8 lines added to `passthrough`'s `init()`: the
+# crates.io release answers the kernel's INIT with neither `FUSE_BIG_WRITES` nor
+# `FUSE_MAX_PAGES`, so `max_write` stays 4 KiB and a 4 MiB write is 1 024 frames
+# (~10 MB/s). The vendored copy is the same release plus that delta
+# (`crates/cang-guest-relay/vendor/bigwrites.patch`), and this patch entry is
+# what makes it the compiled source.
+[patch.crates-io]
+fuse-backend-rs = { path = "crates/cang-guest-relay/vendor/fuse-backend-rs" }
+
 [patch."https://github.com/zeroqn/rutabaga_gfx"]
 rutabaga_gfx = { path = "deps/rutabaga_gfx" }
 

@@ -231,6 +231,13 @@ pub(crate) struct Cli {
     workspace_disk: Option<PathBuf>,
 
     #[arg(
+        long = "workspace-relay",
+        help = "Mount the launch directory on the host, served by the guest's /workspace tree",
+        long_help = "Mount the launch directory on the host, served by the guest's /workspace tree over a FUSE relay (the reverse share).\n\nThis is a measurement surface until the workspace server VM exists: the mount is there only while this cang process runs, it is read-write, and nothing invalidates the host's caches when the guest writes (no host inotify event is generated for a guest-side write). It needs --workspace-disk, because the tree being served is the disk's, not the host directory's.\n\nThe mount is at the launch directory, which is where ticket 23 puts the host's view: the host copy of the tree is shadowed for the life of the launch. If the guest stops answering, every host syscall fails with EIO and the mount stays until cang exits (it never silently reverts to the host tree). A host process whose working directory is inside the mount keeps it busy, so `fusermount3 -u` from another directory is what clears a mount left behind.\n\nRefused with --daemon (a daemon launch returns while the task keeps running, and the mount's lifetime is this process's) and with a --workspace-disk image inside the launch directory itself (mounting the guest tree over that directory would hide the image file the VM attaches)."
+    )]
+    workspace_relay: bool,
+
+    #[arg(
         long = "workspace-size",
         value_name = "SIZE",
         help = "Creation size for a new --workspace-disk image, for example 64G (default 64G)"
@@ -696,6 +703,7 @@ impl Cli {
             guest_init: self.guest_init,
             preserve_debug: self.preserve_debug,
             workspace_disk: self.workspace_disk,
+            workspace_relay: self.workspace_relay,
             workspace_size: self.workspace_size,
 
             mem_gib: self.mem_gib,
@@ -757,6 +765,7 @@ pub(crate) struct RuntimeOptions {
     pub(crate) guest_init: Option<PathBuf>,
     pub(crate) preserve_debug: bool,
     pub(crate) workspace_disk: Option<PathBuf>,
+    pub(crate) workspace_relay: bool,
     pub(crate) workspace_size: Option<String>,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,

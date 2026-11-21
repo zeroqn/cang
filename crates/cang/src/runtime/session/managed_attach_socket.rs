@@ -21,6 +21,11 @@ pub(crate) fn allocate_pulse_bridge(task_id: &str, task_dir: &Path) -> Result<Pa
     allocate_named(task_id, task_dir, "pulse")
 }
 
+/// The unix socket libkrun binds for the guest's workspace relay listener.
+pub(crate) fn allocate_workspace_relay(task_id: &str, task_dir: &Path) -> Result<PathBuf> {
+    allocate_named(task_id, task_dir, "wr")
+}
+
 pub(crate) fn allocate_waypipe_data(task_id: &str, task_dir: &Path) -> Result<PathBuf> {
     allocate_named(task_id, task_dir, "wd")
 }
@@ -204,6 +209,24 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, RUNTIME_DIR_MODE);
+    }
+
+    #[test]
+    fn the_workspace_relay_socket_has_its_own_prefix() {
+        let temp = tempdir().unwrap();
+        let socket = allocate_in_runtime_parent(
+            temp.path(),
+            current_uid(),
+            "task-a",
+            Path::new("/task"),
+            "wr",
+        )
+        .expect("allocate relay socket path");
+        assert!(
+            socket.file_name().unwrap().as_bytes().starts_with(b"wr-"),
+            "{}",
+            socket.display()
+        );
     }
 
     #[test]

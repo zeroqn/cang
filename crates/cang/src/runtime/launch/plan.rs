@@ -44,6 +44,9 @@ pub(crate) struct LaunchPlan {
     /// The creation size for a missing image; `None` means the caller did not
     /// ask, so an existing image of any size is accepted.
     pub(crate) workspace_disk_size_bytes: Option<u64>,
+    /// Whether this launch also mounts the launch directory on the host, served
+    /// by the guest's `/workspace` tree (`--workspace-relay`).
+    pub(crate) workspace_relay: bool,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
@@ -121,6 +124,12 @@ impl LaunchPlan {
             options.workspace_size.as_deref(),
             &workspace_dir,
         )?;
+        let workspace_relay = resolve_workspace_relay(
+            options.workspace_relay,
+            options.daemon,
+            workspace_disk.as_ref().map(|(path, _)| path.as_path()),
+            &workspace_dir,
+        )?;
         let mut bind_mounts = mounts::prepare_dev_mounts(
             &workspace_dir,
             home_dir,
@@ -162,6 +171,7 @@ impl LaunchPlan {
             guest_init: options.guest_init,
             workspace_disk: workspace_disk.as_ref().map(|(path, _)| path.clone()),
             workspace_disk_size_bytes: workspace_disk.as_ref().and_then(|(_, size)| *size),
+            workspace_relay,
             mem_gib: options.mem_gib,
             network_mode: options.network_mode,
             pulse: options.pulse,
@@ -233,6 +243,48 @@ fn resolve_workspace_disk(
         None => None,
     };
     Ok(Some((path, size_bytes)))
+}
+
+/// Decide whether this launch mounts the launch directory on the host through
+/// the guest's relay, and refuse by name when it cannot.
+///
+/// Three refusals, each for a reason the launch cannot fix itself:
+///
+/// * `--workspace-relay` without `--workspace-disk`: the tree the relay serves
+///   is the disk's, and a launch that serves `/workspace` from the host
+///   directory already gives the host that tree;
+/// * with `--daemon`: a daemon launch returns while the task keeps running, and
+///   the mount lives exactly as long as this cang process;
+/// * with a workspace image *inside* the launch directory: the mount lands on
+///   that directory, so the image the VM attaches would be hidden behind it
+///   (and, if it were opened after the mount, created inside the guest's tree).
+fn resolve_workspace_relay(
+    requested: bool,
+    daemon: bool,
+    workspace_disk: Option<&Path>,
+    workspace_dir: &Path,
+) -> Result<bool> {
+    if !requested {
+        return Ok(false);
+    }
+    let Some(disk) = workspace_disk else {
+        anyhow::bail!(
+            "--workspace-relay requires --workspace-disk: the relay serves the guest's /workspace btrfs tree, and a launch without that disk already shares the host directory over virtio-fs"
+        );
+    };
+    if daemon {
+        anyhow::bail!(
+            "--workspace-relay cannot be used with --daemon: the host mount lives as long as the cang process, and a daemon launch returns while the task keeps running"
+        );
+    }
+    if disk.starts_with(workspace_dir) {
+        anyhow::bail!(
+            "--workspace-relay refuses a workspace disk image inside the launch directory: '{}' is under '{}', and the mount lands on that directory, which would hide the image file the VM attaches; move the image outside the tree",
+            disk.display(),
+            workspace_dir.display()
+        );
+    }
+    Ok(true)
 }
 
 fn resolve_waypipe(options: &RuntimeOptions) -> Result<Option<PathBuf>> {
@@ -433,6 +485,7 @@ mod tests {
             preserve_debug: false,
             workspace_disk: None,
             workspace_size: None,
+            workspace_relay: false,
             mem_gib: None,
             network_mode: NetworkMode::Tsi,
             pulse: None,

@@ -15,8 +15,9 @@ pub(crate) use model::{
     DIRGE_HOME_TAG, DIRGE_HOME_TARGET, DiskAttachment, ExecConfig, GuestInitOverrideMount,
     GuestPermissions, HostNixOverlay, LaunchConfig, LaunchSpec, MANAGED_GUEST_KERNEL_CONSOLE_LOG,
     ManagedSessionConfig, NIX_TARGET, NetworkMode, OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET,
-    PulseBridgeConfig, PulseServer, SCCACHE_TAG, SCCACHE_TARGET, WORKSPACE_DISK_ID, WORKSPACE_TAG,
-    WORKSPACE_TARGET, WaypipeConfig, ZVEC_GREP_TAG, ZVEC_GREP_TARGET, canonical_mount_target,
+    PulseBridgeConfig, PulseServer, SCCACHE_TAG, SCCACHE_TARGET, WORKSPACE_DISK_ID,
+    WORKSPACE_RELAY_ROOT, WORKSPACE_TAG, WORKSPACE_TARGET, WaypipeConfig, WorkspaceRelayConfig,
+    ZVEC_GREP_TAG, ZVEC_GREP_TARGET, canonical_mount_target, workspace_relay_port,
 };
 
 #[cfg(test)]
@@ -100,6 +101,18 @@ impl LaunchConfig {
                 &waypipe.guest_port.to_string(),
             );
         }
+        if let Some(relay) = &spec.workspace_relay {
+            guest_env::insert_env(
+                &mut guest_config_env,
+                model::GUEST_WORKSPACE_RELAY_PORT_ENV,
+                &relay.guest_port.to_string(),
+            );
+            guest_env::insert_env(
+                &mut guest_config_env,
+                model::GUEST_WORKSPACE_RELAY_ROOT_ENV,
+                WORKSPACE_RELAY_ROOT,
+            );
+        }
         if let Some(exec) = &spec.exec {
             guest_env::insert_env(
                 &mut guest_config_env,
@@ -167,6 +180,7 @@ impl LaunchConfig {
             waypipe: spec.waypipe,
             exec: spec.exec,
             managed_session: spec.managed_session,
+            workspace_relay: spec.workspace_relay,
             seccomp: Default::default(),
             landlock: Default::default(),
         })

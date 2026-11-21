@@ -15,7 +15,7 @@ use super::guest_env::guest_config_json;
 use super::model::{
     BindMount, BindMountSourceKind, CANG_KRUN_CONFIG_PATH, DiskAttachment, ExecConfig,
     GuestInitOverrideMount, HostNixOverlay, LaunchConfig, ManagedSessionConfig, NetworkMode,
-    PulseBridgeConfig, WaypipeConfig,
+    PulseBridgeConfig, WaypipeConfig, WorkspaceRelayConfig,
 };
 
 impl LaunchConfig {
@@ -227,6 +227,18 @@ impl LaunchConfig {
             push_field(&mut out, "exec.socket_uid", &exec.socket_uid.to_string());
             push_field(&mut out, "exec.socket_gid", &exec.socket_gid.to_string());
         }
+        if let Some(relay) = &self.workspace_relay {
+            push_field(
+                &mut out,
+                "workspace_relay.socket",
+                &relay.socket.display().to_string(),
+            );
+            push_field(
+                &mut out,
+                "workspace_relay.guest_port",
+                &relay.guest_port.to_string(),
+            );
+        }
         if let Some(managed) = &self.managed_session {
             push_field(
                 &mut out,
@@ -431,6 +443,8 @@ impl LaunchConfig {
                     | "exec.protocol_version"
                     | "exec.socket_uid"
                     | "exec.socket_gid"
+                    | "workspace_relay.socket"
+                    | "workspace_relay.guest_port"
                     | "managed_session.attach_socket"
                     | "managed_session.guest_port"
                     | "managed_session.protocol_version"
@@ -523,6 +537,7 @@ impl LaunchConfig {
         let pulse_bridge = parse_pulse_bridge(&fields)?;
         let waypipe = parse_waypipe(&fields)?;
         let exec = parse_exec(&fields)?;
+        let workspace_relay = parse_workspace_relay(&fields)?;
         let managed_session = parse_managed_session(&fields)?;
         let seccomp = SeccompMode::parse_config_value(
             fields.get("seccomp.mode").map(String::as_str),
@@ -566,6 +581,7 @@ impl LaunchConfig {
             waypipe,
             exec,
             managed_session,
+            workspace_relay,
             seccomp,
             landlock,
         })
@@ -640,6 +656,27 @@ fn parse_exec(fields: &BTreeMap<String, String>) -> Result<Option<ExecConfig>> {
         socket_gid: required_field(fields, "exec.socket_gid")?
             .parse::<u32>()
             .context("cang launch config exec.socket_gid is invalid")?,
+    }))
+}
+
+fn parse_workspace_relay(
+    fields: &BTreeMap<String, String>,
+) -> Result<Option<WorkspaceRelayConfig>> {
+    let keys_present = ["workspace_relay.socket", "workspace_relay.guest_port"]
+        .iter()
+        .any(|key| fields.contains_key(*key));
+    if !keys_present {
+        return Ok(None);
+    }
+    let guest_port = required_field(fields, "workspace_relay.guest_port")?
+        .parse::<u32>()
+        .context("cang launch config workspace_relay.guest_port is invalid")?;
+    if guest_port == 0 {
+        anyhow::bail!("cang launch config workspace_relay.guest_port must be nonzero");
+    }
+    Ok(Some(WorkspaceRelayConfig {
+        socket: PathBuf::from(required_field(fields, "workspace_relay.socket")?),
+        guest_port,
     }))
 }
 

@@ -931,6 +931,7 @@ mod tests {
             waypipe: None,
             exec: None,
             managed_session: None,
+            workspace_relay: None,
             seccomp: SeccompMode::Off,
             landlock: LandlockMode::Relax,
         }

@@ -11,6 +11,17 @@ use crate::runtime::vm::gpu::GpuMode;
 
 pub(crate) const DEFAULT_PULSE_BRIDGE_PORT: u32 = 50_429;
 pub(crate) const DEFAULT_WAYPIPE_PORT: u32 = 50_427;
+/// The first port a launch offers the workspace relay, and where the search for
+/// a free one stops. cang's vsock ports are a registry of published constants -
+/// attach 50 426, waypipe 50 427, exec 50 428, Pulse bridge 50 429 - so a new
+/// channel takes the next one rather than a hand-picked number that might later
+/// collide with one of them.
+pub(crate) const WORKSPACE_RELAY_PORT_FIRST: u32 = 50_430;
+pub(crate) const WORKSPACE_RELAY_PORT_LAST: u32 = 50_459;
+/// The guest tree the relay serves: the workspace disk's mount point. The guest
+/// knows it from `CANG_WORKSPACE_RELAY_ROOT`, so a future second tree needs no
+/// protocol change.
+pub(crate) const WORKSPACE_RELAY_ROOT: &str = "/workspace";
 pub(crate) const WORKSPACE_TAG: &str = "cang-workspace";
 /// The disk id that makes a launch's `/workspace` a btrfs tree of its own
 /// (`--workspace-disk`): with it the launch contributes no `/workspace` bind
@@ -52,6 +63,8 @@ pub(super) const GUEST_WAYLAND_ENV: &str = "CANG_WAYLAND";
 pub(super) const GUEST_WAYPIPE_PORT_ENV: &str = "CANG_WAYPIPE_PORT";
 pub(super) const GUEST_PULSE_SERVER_ENV: &str = "CANG_PULSE_SERVER";
 pub(super) const GUEST_PULSE_BRIDGE_PORT_ENV: &str = "CANG_PULSE_BRIDGE_PORT";
+pub(super) const GUEST_WORKSPACE_RELAY_PORT_ENV: &str = "CANG_WORKSPACE_RELAY_PORT";
+pub(super) const GUEST_WORKSPACE_RELAY_ROOT_ENV: &str = "CANG_WORKSPACE_RELAY_ROOT";
 pub(super) const GUEST_EXEC_PORT_ENV: &str = "CANG_EXEC_PORT";
 pub(super) const GUEST_EXEC_PROTOCOL_VERSION_ENV: &str = "CANG_EXEC_PROTOCOL_VERSION";
 pub(super) const GUEST_PERMISSIONS_ENV: &str = "CANG_PERMISSIONS";
@@ -445,6 +458,7 @@ pub(crate) struct LaunchSpec<'a> {
     pub(crate) waypipe: Option<WaypipeConfig>,
     pub(crate) exec: Option<ExecConfig>,
     pub(crate) managed_session: Option<ManagedSessionConfig>,
+    pub(crate) workspace_relay: Option<WorkspaceRelayConfig>,
 }
 
 /// Serialized helper/libkrun execution contract.
@@ -462,6 +476,28 @@ pub(crate) struct PulseBridgeConfig {
 pub(crate) struct WaypipeConfig {
     pub(crate) socket: PathBuf,
     pub(crate) guest_port: u32,
+}
+
+/// The host-side half of the workspace reverse share: the unix socket libkrun
+/// binds for the guest's relay listener, and the guest port it carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkspaceRelayConfig {
+    pub(crate) socket: PathBuf,
+    pub(crate) guest_port: u32,
+}
+
+/// Pick the workspace relay's guest port out of the launch's port registry.
+///
+/// The caller passes the ports this launch already uses; the first free value at
+/// or above [`WORKSPACE_RELAY_PORT_FIRST`] is the answer, so adding a channel can
+/// neither reuse 50 426-50 429 nor hardcode a number blind.
+pub(crate) fn workspace_relay_port(taken: &[u32]) -> u32 {
+    for port in WORKSPACE_RELAY_PORT_FIRST..=WORKSPACE_RELAY_PORT_LAST {
+        if !taken.contains(&port) {
+            return port;
+        }
+    }
+    WORKSPACE_RELAY_PORT_FIRST
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -523,6 +559,7 @@ pub(crate) struct LaunchConfig {
     pub(crate) waypipe: Option<WaypipeConfig>,
     pub(crate) exec: Option<ExecConfig>,
     pub(crate) managed_session: Option<ManagedSessionConfig>,
+    pub(crate) workspace_relay: Option<WorkspaceRelayConfig>,
     pub(crate) seccomp: SeccompMode,
     pub(crate) landlock: LandlockMode,
 }

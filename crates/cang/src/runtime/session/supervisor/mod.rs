@@ -227,6 +227,7 @@ mod tests {
             waypipe: None,
             exec: None,
             managed_session: None,
+            workspace_relay: None,
             seccomp: Default::default(),
             landlock: Default::default(),
         }
