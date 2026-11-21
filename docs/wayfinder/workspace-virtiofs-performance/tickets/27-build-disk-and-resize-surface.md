@@ -1,7 +1,7 @@
 ---
 label: wayfinder:grilling
 title: What happens to cang-build.raw and the `cang disk resize --build` surface once its tenants move
-status: open
+status: closed
 blocked_by: [18, 24, 26]
 claimed_by: "pi + bob (2026-11-21)"
 ---
@@ -53,4 +53,27 @@ Decide:
 
 ## Resolution
 
-(to follow)
+Shipped 2026-11-21, commit `6c2680d5`, verified live
+([note 68](../notes/68-build-disk-retired-and-auto-grow.md)).
+
+1. **Retired.** No launch creates or attaches `cang-build.raw`;
+   `CARGO_TARGET_DIR`/`CARGO_HOME` are no longer exported (`target/` is cargo's own
+   `./target` in the tree, the cargo home is the host's `~/.cargo` mount). An
+   existing build disk is **reclaimed at launch**, once, under an exclusive
+   `flock`, never outside the state root, with one line naming what it held and
+   where that lives now. Measured on a planted 96 GiB disk:
+   `cang: reclaimed 96.0 GiB from '…/cang-build.raw' …`.
+2. **The command moved.** `--build` parses and refuses by name pointing at
+   `cang disk resize --workspace-disk PATH SIZE`; `--containers` unchanged
+   (verified growing 64 GiB -> 65 GiB, and the grow-only refusal before that).
+3. **Grow-on-demand is real, on `workspace serve`.** The guest records
+   `cang-workspace-free-bytes<TAB>free<TAB>total` in `/workspace/.cang/free-bytes`
+   on every mount; a serve reads it through one short read-only maintenance VM
+   before mounting and grows when free < 10 % with 2x host headroom. Measured: 2 GiB
+   -> 20 GiB, guest reporting `20G`; the headroom refusal prints both numbers, the
+   step and the manual command; a marker above 10 % does nothing. A one-shot
+   `--workspace-disk` launch does not auto-grow (a VM boot per launch is not worth
+   it) - the refusal line names the manual command for that case.
+4. **The container store is untouched** (`--containers` resizes as before).
+5. `/nix` upper generations stay where ticket 26 put them; `cang nix gc` collects
+   stale ones.

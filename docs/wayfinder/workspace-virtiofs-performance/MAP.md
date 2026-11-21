@@ -623,6 +623,14 @@ of every request to zero.
   rejected experiments persist until reboot. My A/B: 9 s invisible -> visible during
   the write.
 
+- [What happens to cang-build.raw and `cang disk resize --build` once its tenants
+  move](tickets/27-build-disk-and-resize-surface.md): **retired and reclaimed
+  automatically** (`6c2680d5`). No launch creates or attaches it; an existing one is
+  deleted at launch under an exclusive flock with one line naming what it held.
+  Resize moved to `--workspace-disk PATH SIZE` (the old spelling refuses by name), and
+  the workspace image **grows itself on `workspace serve`** when the guest-recorded
+  marker says free < 10 % with 2x host headroom (2 GiB -> 20 GiB measured).
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)
