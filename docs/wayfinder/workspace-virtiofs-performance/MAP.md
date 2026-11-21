@@ -613,6 +613,16 @@ of every request to zero.
   nothing (1 374-3 641 of 122 262) and a storm is ~8 k events/s. Implementation is
   [ticket 32](tickets/32-invalidation-watcher-implementation.md).
 
+- [Implement the invalidation watcher - pump idle-poll, then the guest watcher](tickets/32-invalidation-watcher-implementation.md):
+  **shipped** (`fca99eb4`): the guest relay watches its tree and sends
+  `INVAL_INODE` (`off=0`) so a held host descriptor refreshes in ~1 ms; gated by
+  `CANG_WORKSPACE_RELAY_WATCH`. The implementation found a real hazard and designed
+  it out: `INVAL_ENTRY` and any notification written by the serving thread **hang
+  the mount** (parent inode lock / folio lock), so `INVAL_ENTRY` is never sent and
+  the writer is its own thread. Two `D`-state `relay-pump` processes from the
+  rejected experiments persist until reboot. My A/B: 9 s invisible -> visible during
+  the write.
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)

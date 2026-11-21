@@ -1,9 +1,9 @@
 ---
 label: wayfinder:task
 title: Implement the invalidation watcher - pump idle-poll, then the guest watcher
-status: open
+status: closed
 blocked_by: []
-claimed_by: ""
+claimed_by: "pi (2026-11-21)"
 ---
 
 ## Question
@@ -48,4 +48,32 @@ Do, one session, in this order:
 
 ## Resolution
 
-(to follow)
+Shipped 2026-11-21, commit `fca99eb4`, verified independently
+([note 67](../notes/67-invalidation-watcher-shipped.md)):
+
+- **pump**: transport in the poll set; notifications written by a dedicated
+  thread (`dup(2)` of `/dev/fuse`, bounded queue that drops rather than stalling
+  the serving loop); refused notifications logged and skipped; tests for idle
+  delivery, the reply-path-only control, and the refusal that must not kill the
+  mount.
+- **guest**: `watch.rs` (recursive inotify, per-path coalescing within one
+  drain, counters), `nodeids.rs` (path->nodeid from the relay's own replies),
+  `inval.rs` (frames). Only `INVAL_INODE` with `off=0, len=0`.
+- **gate**: `CANG_WORKSPACE_RELAY_WATCH=1`, forwarded into the guest, off by
+  default.
+- **the defect the implementation found**: two designs hang the mount -
+  `INVAL_ENTRY` (`fuse_reverse_inval_entry` waits on the parent's inode lock)
+  and any notification written by the *serving* thread (`folio_wait_bit_common`,
+  waiting on a folio lock). The first is now never sent (with a test that fails
+  if a code-3 frame appears; note 66 had already measured it as no help for
+  content), the second is designed out by the writer thread. The rejected
+  experiments left two `relay-pump` processes in `D` state that only a reboot
+  clears - they hold no mount.
+- **my A/B on the final tree** (image `660f119ef375`): a same-size rewrite under
+  a held host descriptor is invisible for **9 s** with the gate off and visible
+  **during the write** with it on.
+- Validation: fmt, clippy `-D warnings`, deny, `cargo test` (1 315 tests, 0
+  failures), `nix build .#cang .#container`.
+
+Still open: `mmap` readers were not measured, and no host `inotify` event is
+synthesised (a FUSE property, not a TODO).
