@@ -10,7 +10,9 @@ use anyhow::{Context, Result, bail};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
-use super::raw_btrfs::{RawDiskSpec, RawImageCommandRunner, inspect_existing_regular_file};
+use super::raw_btrfs::{
+    RawDiskSpec, RawImageCommandRunner, extend_file, inspect_existing_regular_file,
+};
 use crate::runtime::launch::config::DiskAttachment;
 
 pub(crate) const ID: &str = crate::runtime::launch::config::WORKSPACE_DISK_ID;
@@ -22,7 +24,6 @@ pub(crate) const LABEL_ENV: &str = "CANG_WORKSPACE_DISK_LABEL";
 /// beside an unpacked registry, and grown by the same paths a resize uses.
 pub(crate) const DEFAULT_SIZE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 pub(crate) const DEFAULT_SIZE_HINT: &str = "64G";
-
 /// A `RawDiskSpec` for the diagnostics only: the workspace disk has no state-root
 /// file name (its path is user-supplied), and its size comes from the flag.
 const SPEC: RawDiskSpec = RawDiskSpec {
@@ -38,6 +39,109 @@ const SPEC: RawDiskSpec = RawDiskSpec {
 pub(crate) enum WorkspaceDiskStatus {
     Created,
     Reused,
+}
+
+/// How much of the image must be free before auto-grow stops: the tree grows once
+/// the free space the guest recorded is under a tenth of the image.
+///
+/// The guest writes that number into the tree's own bookkeeping
+/// (`/workspace/.cang/free-bytes`) right after it mounts the disk, and the host
+/// reads it back through one maintenance VM (`maintenance::workspace_grow`) at the
+/// next launch or `cang workspace serve`.
+pub(crate) const AUTO_GROW_FREE_PERCENT: u64 = 10;
+/// What a grow step adds beyond twice the space in use, so one grow covers a
+/// build that is about to double its output rather than a grow per compile.
+pub(crate) const AUTO_GROW_STEP_SPARE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+/// The headroom rule: the host must have twice the bytes the step would add.
+pub(crate) const AUTO_GROW_HOST_HEADROOM_FACTOR: u64 = 2;
+
+/// What the auto-grow decided about one existing image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AutoGrowDecision {
+    /// Enough free space, or nothing worth growing to: leave the image alone.
+    Leave,
+    /// Grow the host file to this many bytes; the guest expands the btrfs filesystem
+    /// to the new device size when it mounts the disk.
+    Grow { target_size_bytes: u64 },
+    /// The step is wanted but the host cannot pay for it: report and leave the image
+    /// alone, because a host disk filled by an image is a worse answer than a full
+    /// workspace.
+    Refuse {
+        target_size_bytes: u64,
+        needed_bytes: u64,
+        host_free_bytes: u64,
+    },
+}
+
+/// The auto-grow rule, as a function of what the guest saw and what the host has.
+///
+/// `free_bytes` is the number the guest wrote into its tree; `size_bytes` is the
+/// image's current length, which is the denominator a user's "10 % free" means.
+pub(crate) fn plan_auto_grow(
+    size_bytes: u64,
+    free_bytes: u64,
+    host_free_bytes: u64,
+) -> AutoGrowDecision {
+    if free_bytes.saturating_mul(100) >= size_bytes.saturating_mul(AUTO_GROW_FREE_PERCENT) {
+        return AutoGrowDecision::Leave;
+    }
+    let used_bytes = size_bytes.saturating_sub(free_bytes);
+    // Twice what is in use, plus a fixed spare, so the next grow is not one compile
+    // away. Always above the current size: `used > 0.9 * size` under the rule above.
+    let target_size_bytes = used_bytes
+        .saturating_mul(2)
+        .saturating_add(AUTO_GROW_STEP_SPARE_BYTES);
+    if target_size_bytes <= size_bytes {
+        return AutoGrowDecision::Leave;
+    }
+    let needed_bytes = target_size_bytes - size_bytes;
+    let required_host_bytes = needed_bytes.saturating_mul(AUTO_GROW_HOST_HEADROOM_FACTOR);
+    if host_free_bytes < required_host_bytes {
+        return AutoGrowDecision::Refuse {
+            target_size_bytes,
+            needed_bytes,
+            host_free_bytes,
+        };
+    }
+    AutoGrowDecision::Grow { target_size_bytes }
+}
+
+/// Grow an existing workspace image to at least `target_size_bytes`, accepting one
+/// that is already there.
+///
+/// Only the host half runs here: the sparse file is extended, and the guest expands
+/// the btrfs filesystem to the new device size when it next mounts the disk. A
+/// missing image is refused - the launch creates images, a resize never does.
+pub(crate) fn grow_existing_at_least_with_runner(
+    path: &Path,
+    target_size_bytes: u64,
+    runner: &impl RawImageCommandRunner,
+) -> Result<WorkspaceDisk> {
+    let Some(current_len) = inspect_existing_regular_file(path, &SPEC)? else {
+        bail!(
+            "no cang workspace disk at '{}': a launch creates the image, and `cang disk resize --workspace-disk` only grows one that exists - launch cang with that --workspace-disk path first",
+            path.display()
+        );
+    };
+    if target_size_bytes < current_len {
+        bail!(
+            "requested workspace disk size {} bytes must not be smaller than its current size {} bytes for '{}'; cang workspace images only grow",
+            target_size_bytes,
+            current_len,
+            path.display()
+        );
+    }
+    // The workspace's own validation, not the state-root disks': there is no
+    // creation-size floor to enforce here.
+    validate_existing(path, current_len, None, runner)?;
+    if target_size_bytes > current_len {
+        extend_file(path, target_size_bytes, &SPEC)?;
+    }
+    Ok(WorkspaceDisk {
+        path: path.to_path_buf(),
+        size_bytes: target_size_bytes.max(current_len),
+        status: WorkspaceDiskStatus::Reused,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,6 +388,142 @@ mod tests {
 
         assert!(format!("{err:#}").contains("mkfs.btrfs is not installed"));
         assert!(!path.exists());
+    }
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    fn sized_image(dir: &Path, name: &str, len: u64) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, vec![0u8; 4096]).expect("image");
+        let file = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("image open");
+        file.set_len(len).expect("image size");
+        path
+    }
+
+    #[test]
+    fn grow_extends_an_existing_image_without_reformatting() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = sized_image(temp.path(), "work.raw", 8 * GIB);
+        let runner = FakeRunner::with_probe("btrfs");
+
+        let disk = grow_existing_at_least_with_runner(&path, 32 * GIB, &runner)
+            .expect("grow should happen");
+
+        assert_eq!(disk.size_bytes, 32 * GIB);
+        assert_eq!(disk.status, WorkspaceDiskStatus::Reused);
+        assert_eq!(fs::metadata(&path).expect("metadata").len(), 32 * GIB);
+        assert_eq!(runner.mkfs_call_count(), 0);
+    }
+
+    #[test]
+    fn grow_accepts_an_image_already_at_the_target() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = sized_image(temp.path(), "work.raw", 32 * GIB);
+        let runner = FakeRunner::with_probe("btrfs");
+
+        let disk = grow_existing_at_least_with_runner(&path, 32 * GIB, &runner)
+            .expect("an already-reached size is a retry, not an error");
+
+        assert_eq!(disk.size_bytes, 32 * GIB);
+        assert_eq!(runner.mkfs_call_count(), 0);
+    }
+
+    #[test]
+    fn grow_refuses_a_smaller_target_and_a_missing_image() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = sized_image(temp.path(), "work.raw", 8 * GIB);
+        let runner = FakeRunner::with_probe("btrfs");
+
+        let err = grow_existing_at_least_with_runner(&path, 4 * GIB, &runner)
+            .expect_err("shrink must fail");
+        assert!(format!("{err:#}").contains("only grow"), "{err:#}");
+
+        let missing = temp.path().join("absent.raw");
+        let err = grow_existing_at_least_with_runner(&missing, 8 * GIB, &runner)
+            .expect_err("a missing image must not be created");
+        assert!(
+            format!("{err:#}").contains("no cang workspace disk at"),
+            "{err:#}"
+        );
+        assert!(!missing.exists(), "a resize never creates the image");
+    }
+
+    #[test]
+    fn grow_refuses_an_image_that_is_not_btrfs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = sized_image(temp.path(), "work.raw", 8 * GIB);
+        let runner = FakeRunner::with_probe("ext4");
+
+        let err = grow_existing_at_least_with_runner(&path, 16 * GIB, &runner)
+            .expect_err("ext4 must be refused");
+
+        assert!(format!("{err:#}").contains("expected btrfs"), "{err:#}");
+        assert_eq!(fs::metadata(&path).expect("metadata").len(), 8 * GIB);
+    }
+
+    /// Under a tenth free, the step is twice what is in use plus a fixed spare, so
+    /// the next grow is not one compile away.
+    #[test]
+    fn the_rule_grows_to_twice_the_used_space_plus_a_spare() {
+        let size = 64 * GIB;
+        let free = 2 * GIB; // 3.1 % free
+        let used = size - free;
+
+        assert_eq!(
+            plan_auto_grow(size, free, u64::MAX),
+            AutoGrowDecision::Grow {
+                target_size_bytes: used * 2 + AUTO_GROW_STEP_SPARE_BYTES
+            }
+        );
+    }
+
+    #[test]
+    fn the_rule_leaves_an_image_with_a_tenth_or_more_free() {
+        // A size divisible by ten, so "exactly a tenth" is exact in u64 bytes
+        // (64 GiB / 10 truncates to a value just under a tenth, which the rule
+        // correctly reads as `Grow`).
+        let size = 60 * GIB;
+
+        assert_eq!(
+            plan_auto_grow(size, size / 10, u64::MAX),
+            AutoGrowDecision::Leave,
+            "exactly a tenth free is enough"
+        );
+        assert_eq!(
+            plan_auto_grow(size, 0, u64::MAX),
+            AutoGrowDecision::Grow {
+                target_size_bytes: size * 2 + AUTO_GROW_STEP_SPARE_BYTES
+            }
+        );
+        assert_eq!(plan_auto_grow(0, 0, u64::MAX), AutoGrowDecision::Leave);
+    }
+
+    /// The host pays twice the step or the image does not grow: filling the host's
+    /// own disk to rescue a workspace is not a trade cang makes silently.
+    #[test]
+    fn the_rule_refuses_when_the_host_cannot_pay_twice_the_step() {
+        let size = 64 * GIB;
+        let free = GIB;
+        let target = (size - free) * 2 + AUTO_GROW_STEP_SPARE_BYTES;
+        let needed = target - size;
+
+        assert_eq!(
+            plan_auto_grow(size, free, needed * 2 - 1),
+            AutoGrowDecision::Refuse {
+                target_size_bytes: target,
+                needed_bytes: needed,
+                host_free_bytes: needed * 2 - 1,
+            }
+        );
+        assert_eq!(
+            plan_auto_grow(size, free, needed * 2),
+            AutoGrowDecision::Grow {
+                target_size_bytes: target
+            }
+        );
     }
 
     #[test]

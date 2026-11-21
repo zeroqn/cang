@@ -421,7 +421,7 @@ live in the topic docs:
 
 - [Usage reference](docs/usage.md) — `cang exec`, detach/attach sessions,
   task control (`ps`/`kill`), volumes, the root shell handoff, raw-disk
-  maintenance (`cang disk resize --build|--containers`,
+  maintenance (`cang disk resize --workspace-disk|--containers`,
   `cang nix gc`), and guest-init overrides.
 - [Graphics and audio](docs/graphics-audio.md) — Pulse TCP audio, remote
   Waypipe, GPU, and Wayland passthrough.
@@ -466,9 +466,11 @@ matching the task-volume contract.
 `--workspace-disk PATH` takes `/workspace` off the share: the tree becomes a
 btrfs filesystem on a raw image (created on first use at `--workspace-size`,
 default `64G`) or a block device, which the guest mounts itself. Sources,
-cargo's own `./target` and the cargo home all live inside it, the build disk is
-not attached at all, `/nix` stays on the host-composed overlay, and `--nix=lower:blk`
-is refused with it so the launch attaches one block disk rather than two.
+cargo's own `./target`, the cargo home and the writable `/nix` upper all live
+inside it, and the retired build disk (`cang-build.raw`) is neither created nor
+attached. The image grows itself before a `cang workspace serve` mounts it; a
+one-shot launch leaves that to `cang disk resize --workspace-disk PATH SIZE`
+(`docs/usage.md`).
 
 Writing a 342 MB / 2136-entry source tree into the same `/workspace` took
 **0.50 s** on the disk against **14.3 s** over the share (warm, same archive,

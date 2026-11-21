@@ -1,10 +1,14 @@
 //! Grow-only resize for the workspace's raw persistent disks.
 //!
-//! `disk resize --containers` and `disk resize --build` do the same two things: grow
-//! the host sparse image, then boot one narrow maintenance VM that mounts the
-//! image and has the guest expand its btrfs filesystem. Only the disk, the
-//! guest-side resize target and the report label differ, so they differ here as
-//! one enum.
+//! `disk resize --containers` and `disk resize --workspace-disk` do the same two
+//! things: grow the host sparse image, then boot one narrow maintenance VM that
+//! mounts the image and has the guest expand its btrfs filesystem. Only the disk,
+//! the guest-side resize target and the report label differ, so they differ here
+//! as one enum.
+//!
+//! The build disk `disk resize --build` used to grow is retired (wayfinder ticket
+//! 27): no launch creates one, so the command is a named refusal in
+//! `DiskCommand::validate` and there is no third enum arm for it.
 
 use anyhow::{Context, Result, anyhow, bail};
 use std::env;
@@ -13,10 +17,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cli::DiskMaintenanceOptions;
 use crate::runtime::fork_child;
-use crate::runtime::launch::components::persistent_disks::raw_btrfs::RawBtrfsDisk;
+use crate::runtime::launch::components::persistent_disks::raw_btrfs::{
+    HostRawImageCommandRunner, RawBtrfsDisk,
+};
 use crate::runtime::launch::components::persistent_disks::{
-    build_disk_attachment, build_disk_env_pairs, container_store_attachment,
-    container_store_raw_disk_env_pairs, grow_build_disk, grow_container_store,
+    container_store_attachment, container_store_raw_disk_env_pairs, grow_container_store, workspace,
 };
 use crate::runtime::launch::config::{DiskAttachment, LaunchConfig, NetworkMode};
 use crate::runtime::launch::plan::ImageSelection;
@@ -40,34 +45,30 @@ use super::namespace;
 const MAINTENANCE_LAUNCH_CONF: &str = "maintenance-launch.conf";
 
 const CONTAINER_STORE_TASK_PREFIX: &str = "container-store-resize";
-const BUILD_DISK_TASK_PREFIX: &str = "build-disk-resize";
+pub(crate) const WORKSPACE_DISK_TASK_PREFIX: &str = "workspace-disk-resize";
 
-/// Which workspace raw disk a maintenance run grows.
+/// The state-root raw disk a maintenance run grows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DiskKind {
     ContainerStore,
-    BuildDisk,
 }
 
 impl DiskKind {
     fn grow(self, state_root: &Path, target_size_bytes: u64) -> Result<RawBtrfsDisk> {
         match self {
             Self::ContainerStore => grow_container_store(state_root, target_size_bytes),
-            Self::BuildDisk => grow_build_disk(state_root, target_size_bytes),
         }
     }
 
     fn attachment(self, disk: &RawBtrfsDisk) -> DiskAttachment {
         match self {
             Self::ContainerStore => container_store_attachment(disk),
-            Self::BuildDisk => build_disk_attachment(disk),
         }
     }
 
     fn env_pairs(self, disk: &RawBtrfsDisk) -> Vec<(String, String)> {
         match self {
             Self::ContainerStore => container_store_raw_disk_env_pairs(disk).to_vec(),
-            Self::BuildDisk => build_disk_env_pairs(disk).to_vec(),
         }
     }
 
@@ -75,28 +76,24 @@ impl DiskKind {
     fn guest_target(self) -> &'static str {
         match self {
             Self::ContainerStore => "containers",
-            Self::BuildDisk => "build",
         }
     }
 
     fn hostname(self) -> &'static str {
         match self {
             Self::ContainerStore => "cang-container-store-maintenance",
-            Self::BuildDisk => "cang-build-disk-maintenance",
         }
     }
 
     fn task_prefix(self) -> &'static str {
         match self {
             Self::ContainerStore => CONTAINER_STORE_TASK_PREFIX,
-            Self::BuildDisk => BUILD_DISK_TASK_PREFIX,
         }
     }
 
     fn report_action(self) -> &'static str {
         match self {
             Self::ContainerStore => "resized-container-store",
-            Self::BuildDisk => "resized-build-disk",
         }
     }
 
@@ -104,7 +101,6 @@ impl DiskKind {
     fn size_label(self) -> &'static str {
         match self {
             Self::ContainerStore => "container-store size",
-            Self::BuildDisk => "build disk size",
         }
     }
 
@@ -113,7 +109,6 @@ impl DiskKind {
     fn rerun_command(self, size: &str) -> String {
         match self {
             Self::ContainerStore => format!("cang disk resize --containers {size}"),
-            Self::BuildDisk => format!("cang disk resize --build {size}"),
         }
     }
 }
@@ -149,6 +144,81 @@ pub(crate) fn resize(
     ))
 }
 
+/// Grow the workspace image `path` names to `size`, then have a maintenance VM
+/// expand its btrfs filesystem to the new device size.
+///
+/// This is the only resize that acts on a user-named path rather than on a
+/// state-root disk, so it validates the image (btrfs, a regular file, already
+/// there) instead of creating one: creation belongs to the launch, and a `cang
+/// disk resize` on a typo must not mkfs over it.
+pub(crate) fn resize_workspace_image(
+    path: &Path,
+    size: &str,
+    options: &DiskMaintenanceOptions,
+    runner: &impl MaintenanceVmRunner,
+) -> Result<String> {
+    let layout = current_state_layout()?;
+    let task_report = ensure_workspace_has_no_running_tasks(layout.root_dir(), &ProcfsInspector)?;
+    let path = resolve_disk_path(path)?;
+    let target_size_bytes = parse_size_bytes_for_label(size, WORKSPACE_SIZE_LABEL)?;
+    let disk = workspace::grow_existing_at_least_with_runner(
+        &path,
+        target_size_bytes,
+        &HostRawImageCommandRunner,
+    )?;
+
+    run_maintenance_guest(
+        WORKSPACE_DISK_TASK_PREFIX,
+        WORKSPACE_DISK_HOSTNAME,
+        vec![
+            "internal".to_owned(),
+            "resize".to_owned(),
+            "workspace".to_owned(),
+        ],
+        vec![workspace::attachment(&disk)],
+        workspace::env_pairs(&disk).to_vec(),
+        &layout,
+        options,
+        runner,
+    )
+    .with_context(|| {
+        format!(
+            "cang grew the host workspace image '{}' to {} bytes but failed to resize the guest btrfs filesystem; fix the reported VM/guest issue and rerun `{}`",
+            disk.path.display(),
+            target_size_bytes,
+            workspace_rerun_command(&disk.path, size)
+        )
+    })?;
+
+    Ok(render_report(
+        "resized-workspace-disk",
+        &disk.path,
+        disk.size_bytes,
+        &task_report,
+    ))
+}
+
+const WORKSPACE_DISK_HOSTNAME: &str = "cang-workspace-disk-maintenance";
+const WORKSPACE_SIZE_LABEL: &str = "workspace disk size";
+
+fn workspace_rerun_command(path: &Path, size: &str) -> String {
+    format!(
+        "cang disk resize --workspace-disk {} {size}",
+        path.display()
+    )
+}
+
+/// Resolve a user-named disk path against the current directory, exactly as the
+/// `--workspace-disk` launch flag resolves it.
+pub(crate) fn resolve_disk_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    Ok(env::current_dir()
+        .context("failed to resolve the current directory for a disk path")?
+        .join(path))
+}
+
 fn run_guest_resize(
     kind: DiskKind,
     layout: &StateLayout,
@@ -173,9 +243,13 @@ fn run_guest_resize(
 }
 
 /// One maintenance VM: materialize a rootfs from the image, boot it with `argv` and
-/// the disks it needs, then clean the rootfs up whether the guest succeeded or not.
+/// the disks it needs, run `run` against that VM, then clean the rootfs up whether
+/// the guest succeeded or not.
+///
+/// `run` is where the caller differs: a resize only needs "did it succeed", while
+/// the workspace auto-grow reads a value off the guest console.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn run_maintenance_guest(
+pub(crate) fn with_maintenance_guest<T>(
     task_prefix: &str,
     hostname: &str,
     argv: Vec<String>,
@@ -183,8 +257,8 @@ pub(crate) fn run_maintenance_guest(
     env: Vec<(String, String)>,
     layout: &StateLayout,
     options: &DiskMaintenanceOptions,
-    runner: &impl MaintenanceVmRunner,
-) -> Result<()> {
+    run: impl FnOnce(&LaunchConfig, &Path) -> Result<T>,
+) -> Result<T> {
     let manager = TaskRootfsManager::new(layout.root_dir().to_path_buf(), layout.image_cache_dir());
     let task_id = maintenance_task_id(task_prefix)?;
     let handle = manager.materialize_btrfs_from_buildah(
@@ -213,17 +287,41 @@ pub(crate) fn run_maintenance_guest(
             options,
             handle.process_config(),
         )?;
-        runner.run(&config, handle.task_dir())
+        run(&config, handle.task_dir())
     };
     let cleanup_result = lease.cleanup();
     match (run_result, cleanup_result) {
-        (Ok(()), Ok(_)) => Ok(()),
-        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Ok(value), Ok(_)) => Ok(value),
+        (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
         (Err(run_error), Ok(_)) => Err(run_error),
         (Err(run_error), Err(cleanup_error)) => Err(cleanup_error.context(format!(
             "failed to clean cang maintenance rootfs after guest error: {run_error:#}"
         ))),
     }
+}
+
+/// One maintenance VM whose only job is a guest-side action's exit status.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_maintenance_guest(
+    task_prefix: &str,
+    hostname: &str,
+    argv: Vec<String>,
+    attachments: Vec<DiskAttachment>,
+    env: Vec<(String, String)>,
+    layout: &StateLayout,
+    options: &DiskMaintenanceOptions,
+    runner: &impl MaintenanceVmRunner,
+) -> Result<()> {
+    with_maintenance_guest(
+        task_prefix,
+        hostname,
+        argv,
+        attachments,
+        env,
+        layout,
+        options,
+        |config, task_state_dir| runner.run(config, task_state_dir),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -297,17 +395,25 @@ fn maintenance_ram_mib(mem_gib: Option<u32>) -> Result<u32> {
 
 pub(crate) trait MaintenanceVmRunner {
     fn run(&self, config: &LaunchConfig, task_state_dir: &Path) -> Result<()>;
+
+    /// The same run, with the guest console captured instead of inherited.
+    ///
+    /// The guest's console *is* its stdin/stdout/stderr (libkrun's default console
+    /// device), so a guest that prints a value and exits hands it back here.
+    fn run_capturing(&self, _config: &LaunchConfig, _task_state_dir: &Path) -> Result<Vec<u8>> {
+        bail!("this maintenance VM runner cannot capture the guest console")
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HostMaintenanceVmRunner;
 
-impl MaintenanceVmRunner for HostMaintenanceVmRunner {
-    fn run(&self, config: &LaunchConfig, task_state_dir: &Path) -> Result<()> {
-        // The VM step runs as its own process, wrapped in the keep-id user
-        // namespace: preparing the root, mounting the disk and starting `libkrun`
-        // need privileges a rootless caller only has inside one, while the rootfs
-        // materialization that already happened must stay outside it.
+impl HostMaintenanceVmRunner {
+    /// The maintenance VM as its own process, wrapped in the keep-id user
+    /// namespace: preparing the root, mounting the disk and starting `libkrun`
+    /// need privileges a rootless caller only has inside one, while the rootfs
+    /// materialization that already happened must stay outside it.
+    fn command(config: &LaunchConfig, task_state_dir: &Path) -> Result<std::process::Command> {
         let config_path = task_state_dir.join(MAINTENANCE_LAUNCH_CONF);
         config.write_to(&config_path)?;
         let exe = std::env::current_exe()
@@ -318,6 +424,13 @@ impl MaintenanceVmRunner for HostMaintenanceVmRunner {
             .arg(MAINTENANCE_VM_ARG)
             .arg(&config_path);
         namespace::wrap(&mut command)?;
+        Ok(command)
+    }
+}
+
+impl MaintenanceVmRunner for HostMaintenanceVmRunner {
+    fn run(&self, config: &LaunchConfig, task_state_dir: &Path) -> Result<()> {
+        let mut command = Self::command(config, task_state_dir)?;
         let status = command.status().with_context(|| {
             format!(
                 "failed to start the cang maintenance VM for '{}'",
@@ -329,6 +442,29 @@ impl MaintenanceVmRunner for HostMaintenanceVmRunner {
         } else {
             bail!("cang maintenance VM exited with status {status}")
         }
+    }
+
+    fn run_capturing(&self, config: &LaunchConfig, task_state_dir: &Path) -> Result<Vec<u8>> {
+        let output = Self::command(config, task_state_dir)?
+            .output()
+            .with_context(|| {
+                format!(
+                    "failed to start the cang maintenance VM for '{}'",
+                    config.hostname
+                )
+            })?;
+        if !output.status.success() {
+            bail!(
+                "cang maintenance VM exited with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout).trim()
+            );
+        }
+        // Both streams: the guest's own `println!` and its `eprintln!` are the same
+        // console, and a Rust process does not have to pick one.
+        let mut console = output.stdout;
+        console.extend_from_slice(&output.stderr);
+        Ok(console)
     }
 }
 
@@ -529,17 +665,16 @@ mod tests {
 
     #[test]
     fn size_parser_accepts_frozen_whole_number_binary_suffix_grammar() {
-        for kind in [DiskKind::ContainerStore, DiskKind::BuildDisk] {
-            assert_eq!(parse_size_bytes("1", kind).unwrap(), 1);
-            assert_eq!(parse_size_bytes("1K", kind).unwrap(), 1024);
-            assert_eq!(parse_size_bytes("2m", kind).unwrap(), 2 * 1024_u64.pow(2));
-            assert_eq!(parse_size_bytes("3GiB", kind).unwrap(), 3 * 1024_u64.pow(3));
-            assert_eq!(parse_size_bytes("4tib", kind).unwrap(), 4 * 1024_u64.pow(4));
-            assert_eq!(
-                parse_size_bytes(" 128G ", kind).unwrap(),
-                128 * 1024_u64.pow(3)
-            );
-        }
+        let kind = DiskKind::ContainerStore;
+        assert_eq!(parse_size_bytes("1", kind).unwrap(), 1);
+        assert_eq!(parse_size_bytes("1K", kind).unwrap(), 1024);
+        assert_eq!(parse_size_bytes("2m", kind).unwrap(), 2 * 1024_u64.pow(2));
+        assert_eq!(parse_size_bytes("3GiB", kind).unwrap(), 3 * 1024_u64.pow(3));
+        assert_eq!(parse_size_bytes("4tib", kind).unwrap(), 4 * 1024_u64.pow(4));
+        assert_eq!(
+            parse_size_bytes(" 128G ", kind).unwrap(),
+            128 * 1024_u64.pow(3)
+        );
     }
 
     #[test]
@@ -561,12 +696,16 @@ mod tests {
         }
     }
 
-    /// The same grammar under each disk's own label, so a build-disk error names
-    /// the build disk rather than the container store.
+    /// The same grammar under the label the caller names, so a workspace-image
+    /// error names the workspace image rather than the container store.
     #[test]
     fn size_parser_names_the_disk_it_parsed() {
-        let err = parse_size_bytes("1.5G", DiskKind::BuildDisk).expect_err("fraction should fail");
-        assert!(format!("{err:#}").contains("build disk size"), "{err:#}");
+        let err = parse_size_bytes_for_label("1.5G", WORKSPACE_SIZE_LABEL)
+            .expect_err("fraction should fail");
+        assert!(
+            format!("{err:#}").contains("workspace disk size"),
+            "{err:#}"
+        );
         assert!(!format!("{err:#}").contains("container-store"), "{err:#}");
     }
 
@@ -611,27 +750,27 @@ mod tests {
         assert!(config.guest_config_env.is_empty());
     }
 
-    /// The build disk's maintenance VM attaches only `cang-build.raw` and asks the
-    /// guest to resize that one; the guest finds it by the id and label it ships.
+    /// The workspace image's maintenance VM attaches only that image and asks the
+    /// guest to resize it; the guest finds it by the id and label the launch contract
+    /// already uses.
     #[test]
-    fn build_disk_maintenance_config_targets_internal_build_resize() {
-        let disk = test_disk(
-            Path::new("/state/cang-build.raw"),
-            "cang-build",
-            "CANG_BUILD",
-        );
-        let kind = DiskKind::BuildDisk;
+    fn workspace_disk_maintenance_config_targets_internal_workspace_resize() {
+        let disk = workspace::WorkspaceDisk {
+            path: PathBuf::from("/data/work.raw"),
+            size_bytes: 64 * 1024 * 1024 * 1024,
+            status: workspace::WorkspaceDiskStatus::Reused,
+        };
         let config = maintenance_launch_config(
-            kind.hostname(),
+            WORKSPACE_DISK_HOSTNAME,
             Path::new("/rootfs"),
             "/nix/store/hash/bin/cang-guest-init",
             None,
-            vec![kind.attachment(&disk)],
-            kind.env_pairs(&disk),
+            vec![workspace::attachment(&disk)],
+            workspace::env_pairs(&disk).to_vec(),
             vec![
                 "internal".to_owned(),
                 "resize".to_owned(),
-                kind.guest_target().to_owned(),
+                "workspace".to_owned(),
             ],
             &test_options(),
             &OciProcessConfig::default(),
@@ -639,21 +778,21 @@ mod tests {
         .expect("config should build");
 
         assert_eq!(config.disks.len(), 1);
-        assert_eq!(config.disks[0].id, "cang-build");
-        assert_eq!(config.disks[0].path, Path::new("/state/cang-build.raw"));
-        assert_eq!(config.hostname, "cang-build-disk-maintenance");
-        assert_eq!(config.argv, ["internal", "resize", "build"]);
+        assert_eq!(config.disks[0].id, workspace::ID);
+        assert_eq!(config.disks[0].path, Path::new("/data/work.raw"));
+        assert_eq!(config.hostname, "cang-workspace-disk-maintenance");
+        assert_eq!(config.argv, ["internal", "resize", "workspace"]);
         assert!(
             config
                 .env
                 .iter()
-                .any(|(key, value)| key == "CANG_BUILD_DISK_ID" && value == "cang-build")
+                .any(|(key, value)| key == workspace::ID_ENV && value == workspace::ID)
         );
         assert!(
             config
                 .env
                 .iter()
-                .any(|(key, value)| key == "CANG_BUILD_DISK_LABEL" && value == "CANG_BUILD")
+                .any(|(key, value)| key == workspace::LABEL_ENV && value == workspace::LABEL)
         );
     }
 
@@ -686,8 +825,8 @@ mod tests {
             "cang disk resize --containers 128G"
         );
         assert_eq!(
-            DiskKind::BuildDisk.rerun_command("100G"),
-            "cang disk resize --build 100G"
+            workspace_rerun_command(Path::new("/data/work.raw"), "96G"),
+            "cang disk resize --workspace-disk /data/work.raw 96G"
         );
     }
 

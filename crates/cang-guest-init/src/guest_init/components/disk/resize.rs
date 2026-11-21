@@ -60,6 +60,17 @@ impl ResizeOps for SystemResizeOps {
                 &env.build_disk_label,
                 &env.build_disk_id,
             ),
+            ResizeTarget::Workspace => {
+                let contract = env.workspace_disk.as_ref().ok_or_else(|| {
+                    anyhow!(
+                        "this maintenance VM was started without a workspace disk contract, so there is no workspace image to resize"
+                    )
+                })?;
+                crate::guest_init::components::disk::workspace::find_disk(
+                    &contract.disk_label,
+                    &contract.disk_id,
+                )
+            }
         }
     }
 
@@ -95,6 +106,7 @@ impl ResizeTarget {
             Self::Nix => "/nix",
             Self::Containers => "container storage",
             Self::Build => "build disk cache",
+            Self::Workspace => "workspace tree",
         }
     }
 
@@ -103,6 +115,7 @@ impl ResizeTarget {
             Self::Nix => Path::new("/run/cang/resize-nix"),
             Self::Containers => Path::new("/run/cang/resize-containers"),
             Self::Build => Path::new("/run/cang/resize-build"),
+            Self::Workspace => Path::new("/run/cang/resize-workspace"),
         }
     }
 }
@@ -170,6 +183,31 @@ mod tests {
         );
     }
 
+    /// The workspace image resizes through its own mount point, found by the id
+    /// and label the workspace disk contract carries.
+    #[test]
+    fn resize_mounts_the_workspace_disk_at_the_workspace_mount_point() {
+        let ops = FakeResizeOps::new(false);
+        let mut env = test_env();
+        env.workspace_disk = Some(crate::guest_init::components::env::WorkspaceDiskContract {
+            disk_id: "cang-workspace".to_owned(),
+            disk_label: "CANG_WORKSPACE".to_owned(),
+        });
+        run_with_ops(ResizeTarget::Workspace, &env, &ops).unwrap();
+
+        assert_eq!(
+            ops.operations.borrow().as_slice(),
+            [
+                "find:workspace",
+                "mkdir:/run/cang/resize-workspace",
+                "findmnt:/run/cang/resize-workspace",
+                "mount:/dev/vdd:/run/cang/resize-workspace",
+                "resize:/run/cang/resize-workspace",
+                "umount:/run/cang/resize-workspace",
+            ]
+        );
+    }
+
     struct FakeResizeOps {
         mounted: bool,
         operations: RefCell<Vec<String>>,
@@ -202,6 +240,10 @@ mod tests {
                 ResizeTarget::Build => {
                     self.record("find:build");
                     Ok(PathBuf::from("/dev/vdc"))
+                }
+                ResizeTarget::Workspace => {
+                    self.record("find:workspace");
+                    Ok(PathBuf::from("/dev/vdd"))
                 }
             }
         }

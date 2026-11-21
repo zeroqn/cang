@@ -153,11 +153,34 @@ explicitly. `--workspace-size` is a *creation* size: an image first made at
 ./result/bin/cang --workspace-disk ./work.raw --workspace-size 32G -- bash -lc 'findmnt /workspace'
 ```
 
-Cang never deletes or grows that image for you: it is a path you named, not cang
-state, so no `cang disk` subcommand can reach it (`cang disk reset` still only
-offers `--containers`). `--workspace-size` sizes it at creation; to make an
-existing image bigger, grow the file and let the guest expand btrfs on the next
-mount.
+Cang grows that image itself, but only where growing it pays for itself. The
+decision is taken *between* runs, because a guest mount and a mid-run grow are
+mutually exclusive: virtio-blk fixes a device's size when it is probed. So the
+guest records what its tree had free (`/workspace/.cang/free-bytes`) when it
+mounts the disk, and the host reads that number back through one short read-only
+maintenance VM. An image whose `cang-guest-init` predates that note reports
+nothing, and the host grows nothing without a number.
+
+- **`cang workspace serve` grows the image before it mounts it.** The server is
+  long-lived, so one maintenance VM before its mount is a once-per-server cost.
+  Under a tenth of the image free, the image grows by twice what is in use plus
+  `16G` (so the next grow is not one compile away), and the host must keep twice
+  that step's headroom. When the host cannot pay, the serve says so on one line
+  with both numbers and starts anyway; the command that grows it by hand is
+  `cang disk resize --workspace-disk PATH SIZE`.
+- **a one-shot `--workspace-disk` launch does not auto-grow**: adding a whole
+  maintenance VM boot to every launch is not worth the convenience. Grow it by
+  hand instead, which is the same command the refusal line names:
+
+```bash
+./result/bin/cang disk resize --workspace-disk ./work.raw 100G
+```
+
+Only the host's sparse file grows either way: the guest expands its btrfs
+filesystem to the new device size when it next mounts the disk. `--workspace-size`
+stays a *creation* size, never a cap, so a refusal is about the host's free
+space, not about the flag - and no `cang disk` subcommand deletes an image:
+`cang disk reset` still only offers `--containers`.
 
 The guest mounts the disk at `/workspace`, and everything a build writes stays
 there: sources, cargo's own `./target`, and the cargo home, which lives in the
@@ -341,9 +364,9 @@ These commands manage only the current workspace's `cang-containers.raw` disk
 used by the raw-disk container store. They do not inspect or migrate any legacy
 host-directory container store and do not resize or reset cang's host `/nix`
 overlay state.
-`resize` is grow-only: `--containers SIZE` (and `--build SIZE`, below) accepts
-bytes or binary suffixes such as `K`, `M`, `G`, `T`, `KiB`, `MiB`, `GiB`, and
-`TiB`, and the requested size must be larger than the current raw file. It grows the host sparse file first, then
+`resize` is grow-only: `--containers SIZE` (and `--workspace-disk PATH SIZE`,
+below) accepts bytes or binary suffixes such as `K`, `M`, `G`, `T`, `KiB`, `MiB`,
+`GiB`, and `TiB`, and the requested size must be larger than the current raw file. It grows the host sparse file first, then
 starts a narrow one-shot direct-libkrun maintenance VM that runs
 `cang-guest-init internal resize containers` to expand the guest btrfs
 filesystem. If that guest resize fails after the host file has grown, cang does
@@ -359,38 +382,52 @@ For a manual smoke test on a host with Buildah, btrfs-progs, and libkrun
 available, run `cang --container-store raw-disk` once, then run the `resize`
 and `reset --containers --force` commands above.
 
-## Build-disk maintenance
+## The retired build disk
 
-```bash
-./result/bin/cang disk resize --build 100G
+The workspace's `cang-build.raw` btrfs image used to hold cargo's `target/` and
+`CARGO_HOME`. Both live in the tree now - `./target` is cargo's own, and the
+cargo home is `cargo/` inside the workspace, bound at `~/.cargo` - so cang no
+longer creates, attaches or exports a build disk, and `cang disk resize --build`
+is a named refusal pointing at `cang disk resize --workspace-disk PATH SIZE`.
+There is no `cang disk reset --build` (the reset subcommand names `--containers`,
+the only disk with a recreate path), and no launch refuses to delete one: the
+reclaim below is the only thing that removes it, plus `rm` if you would rather not
+wait for the next launch.
+
+A launch that finds a build disk from an earlier cang reclaims it, and says so on
+one line with the bytes it recovered:
+
+```
+cang: reclaimed 96.0 GiB from '<state root>/cang-build.raw' - a warm target/, the
+cargo home and the retired /nix upper lived there; they now live in the workspace
+image's tree, ...
 ```
 
-Both disks are grown by the same command, so one invocation can name both:
-
-```bash
-./result/bin/cang disk resize --build 100G --containers 128G
-```
+The deletion is deliberately narrow: only `cang-build.raw` under this workspace's
+state root, only when it is a regular file, and only when an exclusive non-blocking
+`flock` on it succeeds - an image another guest still has attached is left alone,
+silently. A removal that fails is reported on one line and the launch continues,
+because a file nothing needs any more must not fail a launch. What it costs you:
+that warm `target/` and registry are gone, and the workspace image's own tree is
+what replaces them.
 
 ## Reclaiming the `/nix` upper
 
 The writable `/nix` upper lives inside a disk image, so cang collects it in a
 short maintenance VM rather than on the host.
 
-Without a workspace disk, that image is the build disk:
-
-```bash
-./result/bin/cang nix gc --dry-run     # what would go, and its size
-./result/bin/cang nix gc               # collect everything but the cache in use
-./result/bin/cang nix gc --all         # collect that too, so the next launch starts empty
-```
-
-A `--workspace-disk` launch keeps its generations inside *that* image instead
+A `--workspace-disk` launch keeps its generations inside that image
 (`/workspace/.cang/nix/`), so collecting them names the same disk the launch did:
 
 ```bash
-./result/bin/cang nix gc --workspace-disk ./work.raw --dry-run
-./result/bin/cang nix gc --workspace-disk ./work.raw --all
+./result/bin/cang nix gc --workspace-disk ./work.raw --dry-run  # what would go, and its size
+./result/bin/cang nix gc --workspace-disk ./work.raw            # collect everything but the cache in use
+./result/bin/cang nix gc --workspace-disk ./work.raw --all      # collect that too, so the next launch starts empty
 ```
+
+`--workspace-disk` is required: the build disk that used to hold the upper
+without one is retired (see "The retired build disk" above), so a run without the
+flag refuses by name instead of collecting nothing.
 
 That image is *validated*, never created: `gc` on a path with no image is refused
 rather than formatted, and it attaches the disk read-write only long enough for the
@@ -408,32 +445,37 @@ this subcommand cannot run it: reload the image (or pass
 `--guest-init <path-to-a-newer-cang-guest-init>` on the launch that builds it)
 before using `gc`.
 
-The build disk is the workspace's `cang-build.raw` btrfs image, created by the
-first launch at 96 GiB. The guest mounts it at `/home/dev/.cache/cang-build` and
-cargo puts both working sets there, so a warm `target/` and registry survive
-across tasks:
+## Resizing a workspace image
 
-- `CARGO_TARGET_DIR=/home/dev/.cache/cang-build/target`
-- `CARGO_HOME=/home/dev/.cache/cang-build/cargo`
+```bash
+./result/bin/cang disk resize --workspace-disk ./work.raw 100G
+```
 
-`resize` grows that image when a workspace's build output outgrows it. `--size`
-accepts the same bytes or binary suffixes as the container-store command (`K`,
-`M`, `G`, `T`, `KiB`, `MiB`, `GiB`, `TiB`), must not be smaller than the image's
-current size, and an equal size is accepted: a run that grew the host file and
-then failed in the guest is retried by rerunning the same command. It grows the
-host sparse file first, then starts the same narrow one-shot direct-libkrun
-maintenance VM and runs `cang-guest-init internal resize build`, which mounts the
-image and expands its btrfs filesystem to the new device size. The disk must
-already exist, so launch `cang` once in the workspace before the first resize.
+This is the only resize that acts on a path you named rather than on a state-root
+disk, so it validates the image (a regular file, btrfs, already there) instead of
+creating it: creation belongs to the launch, and a resize on a typo must not
+`mkfs` over it. It is also what a one-shot launch leaves to you, since only
+`cang workspace serve` grows an image by itself (see "A workspace on its own
+disk").
+
+`SIZE` accepts the same bytes or binary suffixes as the container-store command
+(`K`, `M`, `G`, `T`, `KiB`, `MiB`, `GiB`, `TiB`), must not be smaller than the
+image's current size, and an equal size is accepted: a run that grew the host file
+and then failed in the guest is retried by rerunning the same command. It grows
+the host sparse file first, then starts one narrow one-shot direct-libkrun
+maintenance VM and runs `cang-guest-init internal resize workspace`, which mounts
+the image and expands its btrfs filesystem to the new device size. The
+`cang workspace serve` auto-grow takes the same two halves, so a grown image needs
+nothing extra: the next mount finds the new device size and expands to fit.
 
 The extra space appears in the guest only after the guest's btrfs filesystem has
-been expanded; if that guest step fails, the host image stays grown and the
-error names the rerun command.
+been expanded; if that guest step fails, the host image stays grown and the error
+names the rerun command.
 
 Like the container-store command, `resize` prepares the maintenance VM's root on
 the host, and that step bind-mounts and so needs `CAP_SYS_ADMIN`: run it as root
 or inside a rootless user namespace, for example
-`podman unshare -- cang disk resize --build 100G`.
+`podman unshare -- cang disk resize --workspace-disk ./work.raw 100G`.
 
 ## Guest-init override
 

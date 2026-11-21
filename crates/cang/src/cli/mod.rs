@@ -97,8 +97,8 @@ impl PtyOptions {
   cang images remove --dry-run feedfacecafe
   cang images remove feedfacecafe
   cang images remove ghcr.io/example/cang:d
-  cang disk resize --build 100G
-  cang disk resize --build 100G --containers 128G
+  cang disk resize --workspace-disk work.raw 96G
+  cang disk resize --containers 128G
   cang disk reset --containers --force
   cang ps
   cang attach <task-id-or-handle-selector>
@@ -471,10 +471,33 @@ impl DiskCommand {
     /// a launch that silently does nothing.
     fn validate(&self) -> anyhow::Result<()> {
         match self {
+            // `--build` stays parseable so an old script or habit reaches this
+            // message: the disk it names is gone, and the replacement is a flag
+            // that did not exist when the script was written.
+            Self::Resize { build: Some(_), .. } => anyhow::bail!(
+                "cang disk resize --build is retired: cang no longer creates or attaches a build disk, because cargo's target/ and the cargo home now live in the workspace image's tree - grow that image instead with `cang disk resize --workspace-disk PATH SIZE`"
+            ),
             Self::Resize {
-                build: None,
+                workspace_disk: None,
                 containers: None,
-            } => anyhow::bail!("cang disk resize needs --build SIZE, --containers SIZE, or both"),
+                ..
+            } => anyhow::bail!(
+                "cang disk resize needs --containers SIZE, or --workspace-disk PATH SIZE"
+            ),
+            Self::Resize {
+                workspace_disk: Some(_),
+                size: None,
+                ..
+            } => anyhow::bail!(
+                "cang disk resize --workspace-disk PATH needs a size: pass the new grow-only size as the positional SIZE, for example `cang disk resize --workspace-disk work.raw 96G`"
+            ),
+            Self::Resize {
+                workspace_disk: None,
+                size: Some(_),
+                ..
+            } => anyhow::bail!(
+                "cang disk resize SIZE needs --workspace-disk PATH: a bare SIZE has no disk to grow (the --build disk it used to mean is retired)"
+            ),
             Self::Reset {
                 containers: false, ..
             } => anyhow::bail!(
@@ -495,7 +518,8 @@ pub(crate) enum DiskCommand {
         #[arg(
             long = "build",
             value_name = "SIZE",
-            help = "New grow-only size for the build disk (cargo cache and /nix upper), for example 100G"
+            help = "Retired: the build disk is gone. Use --workspace-disk PATH SIZE instead",
+            long_help = "Retired with the build disk (its cargo cache and /nix upper moved into the workspace image's tree). Accepted so an old script fails with a message that names the replacement rather than an unknown-flag error: cang disk resize --workspace-disk PATH SIZE"
         )]
         build: Option<String>,
         #[arg(
@@ -504,6 +528,18 @@ pub(crate) enum DiskCommand {
             help = "New grow-only size for the container-store disk, for example 128G"
         )]
         containers: Option<String>,
+        #[arg(
+            long = "workspace-disk",
+            value_name = "PATH",
+            help = "The workspace image to grow, named as the launch named it; give its new size as the positional SIZE",
+            long_help = "Grow a `--workspace-disk` image to the new size given as the positional SIZE, for example `cang disk resize --workspace-disk work.raw 96G`.\n\nThe image must already exist: a launch creates and formats it, and a resize only grows it. The host file is extended first, then one maintenance VM expands the btrfs filesystem inside it to the new device size. Growing is the only direction, and a `cang workspace serve` also grows the image itself before it mounts it once its tree is under 10% free; a one-shot launch does not, which is why this command exists."
+        )]
+        workspace_disk: Option<PathBuf>,
+        #[arg(
+            value_name = "SIZE",
+            help = "New grow-only size for --workspace-disk's image, for example 96G"
+        )]
+        size: Option<String>,
     },
 
     #[command(name = "reset", about = "Delete and recreate a raw disk")]
@@ -902,6 +938,23 @@ pub(crate) struct RuntimeOptions {
     pub(crate) publish: Vec<String>,
     pub(crate) volumes: Vec<VolumeSpec>,
     pub(crate) guest_command: Vec<String>,
+}
+
+impl RuntimeOptions {
+    /// The options a maintenance VM this launch boots would need (`cang disk ...`,
+    /// `cang nix gc`, and a serve's workspace auto-grow): the same image, the same
+    /// `--guest-init` override and the same memory, so a maintenance run reads the
+    /// image the launch itself is about to boot rather than whatever the default
+    /// selection would pick.
+    pub(crate) fn disk_maintenance_options(&self) -> DiskMaintenanceOptions {
+        DiskMaintenanceOptions {
+            image: self.image.clone(),
+            pull_latest: self.pull_latest,
+            guest_init: self.guest_init.clone(),
+            mem_gib: self.mem_gib,
+            log_settings: self.log_settings.clone(),
+        }
+    }
 }
 
 /// One `--virtiofs=KEY:VALUE` share option.
@@ -1334,7 +1387,11 @@ mod tests {
                 ),
                 (
                     "resize".to_owned(),
-                    vec!["build".to_owned(), "containers".to_owned()]
+                    vec![
+                        "build".to_owned(),
+                        "containers".to_owned(),
+                        "workspace-disk".to_owned()
+                    ]
                 ),
             ],
             "a workspace-disk path must never be reachable from `cang disk`"
@@ -2602,14 +2659,65 @@ fn parses_task_control_ps_and_kill_subcommands() {
 }
 
 #[test]
+fn the_resize_surface_grows_a_named_workspace_image_and_refuses_the_old_spelling() {
+    use std::path::PathBuf;
+
+    let grown = Cli::try_parse_from([
+        "cang",
+        "disk",
+        "resize",
+        "--workspace-disk",
+        "work.raw",
+        "96G",
+    ])
+    .expect("--workspace-disk with a positional size should parse");
+    match grown.try_into_action().expect("valid action") {
+        crate::cli::CliAction::Disk { command, .. } => assert_eq!(
+            command,
+            crate::cli::DiskCommand::Resize {
+                build: None,
+                containers: None,
+                workspace_disk: Some(PathBuf::from("work.raw")),
+                size: Some("96G".to_owned()),
+            }
+        ),
+        other => panic!("expected disk resize action, got {other:?}"),
+    }
+
+    for (argv, expected) in [
+        (
+            vec!["cang", "disk", "resize", "--build", "100G"],
+            "--build is retired",
+        ),
+        (
+            vec!["cang", "disk", "resize", "--workspace-disk", "work.raw"],
+            "needs a size",
+        ),
+        (
+            vec!["cang", "disk", "resize", "96G"],
+            "or --workspace-disk PATH SIZE",
+        ),
+    ] {
+        let err = Cli::try_parse_from(argv)
+            .expect("the flags still parse")
+            .try_into_action()
+            .expect_err("the surface must refuse");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in {message:?}"
+        );
+    }
+}
+
+#[test]
 fn parses_the_disk_resize_and_reset_subcommands() {
-    let build = Cli::try_parse_from(["cang", "disk", "resize", "--build", "100G"])
-        .expect("disk resize --build should parse");
     let both = Cli::try_parse_from([
         "cang",
         "disk",
         "resize",
-        "--build",
+        "--workspace-disk",
+        "work.raw",
         "100G",
         "--containers",
         "128G",
@@ -2618,22 +2726,14 @@ fn parses_the_disk_resize_and_reset_subcommands() {
     let reset = Cli::try_parse_from(["cang", "disk", "reset", "--containers", "--force"])
         .expect("disk reset --containers should parse");
 
-    match build.try_into_action().expect("valid action") {
-        crate::cli::CliAction::Disk { command, .. } => assert_eq!(
-            command,
-            crate::cli::DiskCommand::Resize {
-                build: Some("100G".to_owned()),
-                containers: None,
-            }
-        ),
-        other => panic!("expected disk resize action, got {other:?}"),
-    }
     match both.try_into_action().expect("valid action") {
         crate::cli::CliAction::Disk { command, .. } => assert_eq!(
             command,
             crate::cli::DiskCommand::Resize {
-                build: Some("100G".to_owned()),
+                build: None,
                 containers: Some("128G".to_owned()),
+                workspace_disk: Some(std::path::PathBuf::from("work.raw")),
+                size: Some("100G".to_owned()),
             }
         ),
         other => panic!("expected disk resize action, got {other:?}"),
@@ -2656,7 +2756,7 @@ fn a_disk_resize_names_at_least_one_disk() {
     let err = options
         .try_into_action()
         .expect_err("a resize that names no disk is refused");
-    assert!(format!("{err:#}").contains("--build"), "{err:#}");
+    assert!(format!("{err:#}").contains("--workspace-disk"), "{err:#}");
 
     let err = Cli::try_parse_from(["cang", "disk", "resize", "--size", "100G"])
         .expect_err("the old per-disk --size spelling is gone");

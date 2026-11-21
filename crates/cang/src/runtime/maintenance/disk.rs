@@ -1,18 +1,19 @@
 //! `cang disk`: the workspace's raw disks, which share one grow-and-resize flow.
 //!
-//! Two disks exist, and a third consumer arrived when the writable `/nix` upper
-//! moved into the build disk - so one command names them by flag instead of one
-//! command tree per disk:
+//! Two disks can be grown, and they are named differently because only one of them
+//! is cang state:
 //!
-//! - `--build`: `cang-build.raw`, carrying cargo's `target/`, `CARGO_HOME` and
-//!   now the `/nix` overlay's upper; grow-only, because the image is created by
-//!   the first launch in a workspace.
 //! - `--containers`: the container-store disk, which also has the destructive
 //!   recreate only it needs.
+//! - `--workspace-disk PATH`: the image a launch named, with its new size as a
+//!   positional `SIZE`. The image is the user's, so the command takes the path
+//!   rather than deriving one, and it only grows an image that already exists.
 //!
-//! A single invocation may name both. Each disk's grow is the same
-//! [`disk_resize::resize`] flow: extend the sparse image on the host, then let
-//! one narrow maintenance VM grow the btrfs inside it.
+//! `--build` is retired (wayfinder ticket 27): `cang-build.raw` is no longer created
+//! or attached, and `DiskCommand::validate` refuses it by name, pointing here.
+//!
+//! Each disk's grow is the same [`disk_resize::resize`] flow: extend the sparse
+//! image on the host, then let one narrow maintenance VM grow the btrfs inside it.
 
 use anyhow::{Result, bail};
 
@@ -28,15 +29,29 @@ use super::disk_resize::{self, DiskKind, HostMaintenanceVmRunner};
 
 pub(crate) fn run(command: DiskCommand, options: DiskMaintenanceOptions) -> Result<String> {
     match command {
-        DiskCommand::Resize { build, containers } => {
-            if build.is_none() && containers.is_none() {
-                bail!("cang disk resize needs --build SIZE, --containers SIZE, or both");
+        DiskCommand::Resize {
+            build,
+            containers,
+            workspace_disk,
+            size,
+        } => {
+            // `validate` already refused `--build`; this is the belt to that braces,
+            // for a caller that constructs the command instead of parsing it.
+            if build.is_some() {
+                bail!(
+                    "cang disk resize --build is retired: cang no longer creates or attaches a build disk - grow the workspace image with `cang disk resize --workspace-disk PATH SIZE`"
+                );
             }
             let mut reports: Vec<String> = Vec::new();
-            if let Some(size) = build {
-                reports.push(disk_resize::resize(
-                    DiskKind::BuildDisk,
-                    &size,
+            if let Some(path) = workspace_disk {
+                let size = size.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "cang disk resize --workspace-disk PATH needs a size as the positional SIZE"
+                    )
+                })?;
+                reports.push(disk_resize::resize_workspace_image(
+                    &path,
+                    size,
                     &options,
                     &HostMaintenanceVmRunner,
                 )?);

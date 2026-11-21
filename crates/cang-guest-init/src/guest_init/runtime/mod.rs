@@ -62,6 +62,11 @@ pub(in crate::guest_init) fn run(command: GuestInitCommand) -> Result<()> {
             InternalSubcommand::Pulse(pulse) => {
                 crate::guest_init::components::pulse::run(pulse.port, pulse.uid, pulse.gid)
             }
+            InternalSubcommand::Workspace(workspace) => match workspace.command {
+                crate::guest_init::cli::WorkspaceSubcommand::FreeBytes => {
+                    crate::guest_init::components::disk::workspace::report_free_bytes()
+                }
+            },
             InternalSubcommand::Resize(resize) => {
                 crate::guest_init::components::disk::resize::run(resize.target)
             }

@@ -2,17 +2,16 @@
 //!
 //! The writable upper lives inside a btrfs image the host cannot mount rootless, so
 //! collecting it needs a guest: one narrow maintenance VM with that disk attached,
-//! running `cang-guest-init internal nix gc`. Which disk follows the launch surface -
-//! the build disk for a host-directory launch, or the image named by
-//! `--workspace-disk`, whose tree holds the upper at `/workspace/.cang/nix/` - and
-//! the selection rule is the guest's: keep the generation this workspace used last,
-//! collect the rest, with `--all` collecting that one too.
+//! running `cang-guest-init internal nix gc`. The disk is the one `--workspace-disk`
+//! names, whose tree holds the upper at `/workspace/.cang/nix/`; the selection rule
+//! is the guest's: keep the generation this workspace used last, collect the rest,
+//! with `--all` collecting that one too. There is no build disk to fall back to
+//! (ticket 27 retired it), so a run without `--workspace-disk` refuses by name.
 
 use anyhow::{Context, Result};
 
 use crate::cli::{DiskMaintenanceOptions, NixCommand, NixGcOptions};
 use crate::runtime::launch::components::persistent_disks::{
-    build_disk_attachment, build_disk_env_pairs, existing_build_disk,
     raw_btrfs::HostRawImageCommandRunner,
     workspace::{self, WorkspaceDisk},
 };
@@ -99,48 +98,37 @@ impl CollectTarget {
     }
 }
 
-/// The build disk, or the image `--workspace-disk` names.
+/// The image `--workspace-disk` names, which is the only disk that can hold the
+/// upper now that the build disk is retired.
 ///
 /// A workspace image is *validated*, never created or grown: `gc` on a path with no
 /// image is a typo, and mkfs-ing it would be the worst possible response.
 fn collect_target(
     options: &NixGcOptions,
-    layout: &crate::state::StateLayout,
+    _layout: &crate::state::StateLayout,
 ) -> Result<CollectTarget> {
-    if let Some(path) = options.workspace_disk.as_deref() {
-        let path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .context("failed to resolve the current directory for --workspace-disk")?
-                .join(path)
-        };
-        let disk: WorkspaceDisk =
-            workspace::validate_existing_with_runner(&path, &HostRawImageCommandRunner)?;
-        return Ok(CollectTarget {
-            path: disk.path.clone(),
-            attachment: workspace::attachment(&disk),
-            env_pairs: workspace::env_pairs(&disk).to_vec(),
-            guest_mount: "/workspace".to_owned(),
-            guest_generations_dir: "/workspace/.cang/nix".to_owned(),
-            disk_label: workspace::LABEL.to_owned(),
-            disk_id: workspace::ID.to_owned(),
-        });
-    }
-
-    let Some(disk) = existing_build_disk(layout.root_dir())? else {
+    let Some(path) = options.workspace_disk.as_deref() else {
         anyhow::bail!(
-            "this workspace has no build disk, so it has no /nix upper to collect - launch cang here once first, or pass --workspace-disk for an image whose tree holds it"
+            "cang nix gc needs --workspace-disk PATH: the /nix upper lives in the workspace image's tree, and cang no longer keeps a build disk to collect from - pass the same image the launch named, for example 'cang nix gc --workspace-disk work.raw'"
         );
     };
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("failed to resolve the current directory for --workspace-disk")?
+            .join(path)
+    };
+    let disk: WorkspaceDisk =
+        workspace::validate_existing_with_runner(&path, &HostRawImageCommandRunner)?;
     Ok(CollectTarget {
         path: disk.path.clone(),
-        attachment: build_disk_attachment(&disk),
-        env_pairs: build_disk_env_pairs(&disk).to_vec(),
-        guest_mount: "/home/dev/.cache/cang-build".to_owned(),
-        guest_generations_dir: "/home/dev/.cache/cang-build/nix-overlay".to_owned(),
-        disk_label: disk.label.clone(),
-        disk_id: disk.id.clone(),
+        attachment: workspace::attachment(&disk),
+        env_pairs: workspace::env_pairs(&disk).to_vec(),
+        guest_mount: "/workspace".to_owned(),
+        guest_generations_dir: "/workspace/.cang/nix".to_owned(),
+        disk_label: workspace::LABEL.to_owned(),
+        disk_id: workspace::ID.to_owned(),
     })
 }
 
@@ -219,58 +207,27 @@ mod tests {
 
     fn target(mount: &str, generations: &str) -> CollectTarget {
         CollectTarget {
-            path: std::path::PathBuf::from("/state/workspace/cang-build.raw"),
+            path: std::path::PathBuf::from("/data/work.raw"),
             attachment: crate::runtime::launch::config::DiskAttachment {
-                id: "cang-build-disk".to_owned(),
-                path: std::path::PathBuf::from("/state/workspace/cang-build.raw"),
+                id: "cang-workspace".to_owned(),
+                path: std::path::PathBuf::from("/data/work.raw"),
                 read_only: false,
             },
             env_pairs: Vec::new(),
             guest_mount: mount.to_owned(),
             guest_generations_dir: generations.to_owned(),
-            disk_label: "cang-build".to_owned(),
-            disk_id: "cang-build-disk".to_owned(),
+            disk_label: "CANG_WORKSPACE".to_owned(),
+            disk_id: "cang-workspace".to_owned(),
         }
     }
 
-    /// The guest is told the layout every run, so it never has to guess which disk
-    /// holds the generations: the build disk for a host-directory launch, the
-    /// workspace tree for a `--workspace-disk` one.
+    /// The guest is told the layout every run, so it never has to guess where the
+    /// generations are: the workspace tree the launch named, and nothing else.
     #[test]
     fn the_guest_argv_names_the_layout_and_the_flags_that_were_asked_for() {
-        let build = target(
-            "/home/dev/.cache/cang-build",
-            "/home/dev/.cache/cang-build/nix-overlay",
-        );
+        let workspace = target("/workspace", "/workspace/.cang/nix");
         assert_eq!(
-            argv(&options(false, false), &build),
-            [
-                "internal",
-                "nix",
-                "gc",
-                "--mount",
-                "/home/dev/.cache/cang-build",
-                "--generations-dir",
-                "/home/dev/.cache/cang-build/nix-overlay",
-                "--disk-label",
-                "cang-build",
-                "--disk-id",
-                "cang-build-disk",
-            ]
-        );
-        assert_eq!(
-            argv(&options(true, true), &build)
-                .last()
-                .map(String::as_str),
-            Some("--dry-run")
-        );
-        let workspace = CollectTarget {
-            disk_label: "CANG_WORKSPACE".to_owned(),
-            disk_id: "cang-workspace".to_owned(),
-            ..target("/workspace", "/workspace/.cang/nix")
-        };
-        assert_eq!(
-            argv(&options(true, false), &workspace),
+            argv(&options(false, false), &workspace),
             [
                 "internal",
                 "nix",
@@ -283,8 +240,38 @@ mod tests {
                 "CANG_WORKSPACE",
                 "--disk-id",
                 "cang-workspace",
-                "--all",
             ]
+        );
+        assert_eq!(
+            argv(&options(true, true), &workspace)
+                .last()
+                .map(String::as_str),
+            Some("--dry-run")
+        );
+        assert_eq!(
+            argv(&options(true, false), &workspace)
+                .last()
+                .map(String::as_str),
+            Some("--all")
+        );
+    }
+
+    /// Without `--workspace-disk` there is nothing to collect: the build disk that
+    /// used to hold this workspace's upper is retired, so the refusal names the
+    /// flag instead of looking for a disk that no launch creates.
+    #[test]
+    fn a_run_without_a_workspace_disk_refuses_by_name() {
+        let layout = disk_resize::current_state_layout().expect("state layout");
+
+        let err = collect_target(&options(false, false), &layout).expect_err("must refuse");
+
+        assert!(
+            format!("{err:#}").contains("cang nix gc needs --workspace-disk PATH"),
+            "{err:#}"
+        );
+        assert!(
+            !format!("{err:#}").contains("cang-build.raw"),
+            "the retired build disk is not offered as a target: {err:#}"
         );
     }
 

@@ -191,8 +191,12 @@ overlay underneath it, a failure here fails `/nix` prep with a named reason
 instead of reporting success over a store that was never composed.
 
 The upper shares the workspace image's capacity, so it grows with it:
-`--workspace-size` sizes the image at creation and the guest grows btrfs on a later
-mount once the file is larger. Measured with the block pair, against the
+`--workspace-size` sizes the image at creation, `cang workspace serve` grows the
+image itself before it mounts it (when the tree's recorded free space is under a
+tenth of it and the host keeps twice the step's headroom), and the guest expands
+btrfs to the new device size on the next mount. A one-shot `--workspace-disk`
+launch does not auto-grow: `cang disk resize --workspace-disk PATH SIZE` is the
+command, and `docs/usage.md` states the split plainly. Measured with the block pair, against the
 host-composed overlay in the same run, same image,
 `tools/nix-lower-cang-smoke`: `find /nix/store` 2422 ms against 8508 ms,
 `du -s /nix/store` 2833 ms against 11228 ms, and a cold read of the store's 20

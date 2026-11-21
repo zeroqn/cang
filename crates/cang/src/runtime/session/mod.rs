@@ -5,7 +5,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use crate::cli::RuntimeOptions;
+use crate::cli::{DiskMaintenanceOptions, RuntimeOptions};
+use crate::runtime::maintenance::{disk_resize::HostMaintenanceVmRunner, workspace_grow};
 use crate::runtime::session::rootfs::image_source::ImageCacheCommand;
 use crate::runtime::session::task_control::TaskControlCommand;
 use crate::task_rootfs::TaskRootfsBackend;
@@ -29,8 +30,9 @@ mod workspace_relay;
 pub(crate) mod workspace_server;
 
 use crate::runtime::RuntimeProfileScope;
-use crate::runtime::launch::components::persistent_disks::raw_btrfs::HostRawImageCommandRunner;
-use crate::runtime::launch::components::persistent_disks::workspace;
+use crate::runtime::launch::components::persistent_disks::{
+    self, raw_btrfs::HostRawImageCommandRunner, workspace,
+};
 use crate::runtime::launch::config::{
     self, DEFAULT_PULSE_BRIDGE_PORT, DEFAULT_WAYPIPE_PORT, ExecConfig, LaunchConfig, LaunchSpec,
     ManagedSessionConfig, PulseBridgeConfig, WaypipeConfig, WorkspaceRelayConfig,
@@ -134,6 +136,10 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
     })?;
     prepare_terminal_trace_file_from_process_env(pty.trace, &cwd)
         .context("failed to prepare cang terminal trace file")?;
+    // Kept beside the plan because the plan consumes the options: an auto-grow
+    // boots the maintenance VM the same way `cang disk ...` does, and it must boot
+    // the image and guest-init this launch would boot.
+    let maintenance_options = options.disk_maintenance_options();
     let plan =
         profiler.measure_result("launch_plan_build", || LaunchPlan::from_env(options, cwd))?;
     // The single-writer rule on a workspace image (ticket 29): a workspace
@@ -152,6 +158,20 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
         })?,
         None => None,
     };
+    // `/workspace` grows itself - but only for a server, where it pays for itself.
+    // The marker that decides is inside the image and only a guest can read it,
+    // so this costs one short read-only maintenance VM. A `cang workspace serve`
+    // mounts that image once and then stays up for as long as its tree is used,
+    // which makes it a once-per-server cost paid before the tree has anything in
+    // it; a one-shot `--workspace-disk` launch does not auto-grow, because a whole
+    // extra VM boot on every launch is not what "fewer manual grows" was worth.
+    // That case is left to `cang disk resize --workspace-disk`, which the refusal
+    // line names, and `docs/usage.md` says so plainly.
+    if plan.workspace_server
+        && let Some(disk) = plan.workspace_disk.as_deref()
+    {
+        auto_grow_workspace_image(&mut profiler, disk, &maintenance_options);
+    }
     // The server's shutdown handlers exist before any launch work happens: a
     // stop request that arrives while the rootfs is still being materialized
     // must be an ordered teardown, not the default action killing cang and
@@ -369,10 +389,30 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
             let mut workspace_server_session: Option<workspace_server::WorkspaceServerSession> =
                 None;
             let mut workspace_server_report: Option<workspace_server::ShutdownReport> = None;
+            // Ticket 27: `cang-build.raw` is retired. This launch reclaims the
+            // one a previous cang left in this workspace, and says what it held.
+            // Deliberately not part of the launch's own success: a busy image is
+            // `Ok(None)` (a guest is still using it, so it stays), and a real
+            // removal error is reported on one line and the launch continues -
+            // a file nothing needs any more must not fail a launch that has
+            // nothing to do with it.
+            match profiler.measure_result("retired_build_disk_reclaim", || {
+                persistent_disks::reclaim_retired_build_disk(plan.state_layout.root_dir())
+            }) {
+                Ok(Some(reclaimed)) => {
+                    eprintln!(
+                        "{}",
+                        persistent_disks::retired_build_disk::report(&reclaimed)
+                    );
+                }
+                Ok(None) => {}
+                Err(err) => eprintln!(
+                    "cang: could not reclaim a retired build disk; leaving it alone: {err:#}"
+                ),
+            }
             let host_run_result = match profiler
                 .measure_result("persistent_disk_preparation", || {
-                    HostPersistentDiskPreparer
-                        .prepare(plan.state_layout.root_dir(), plan.workspace_disk.is_none())
+                    HostPersistentDiskPreparer.prepare(plan.state_layout.root_dir())
                 })
                 .context("failed to prepare cang persistent dev cache disks")
             {
@@ -807,6 +847,56 @@ fn resolve_workspace(workspace: Option<&std::path::Path>) -> Result<PathBuf> {
         bail!("cang workspace is not a directory: {}", workspace.display());
     }
     Ok(workspace)
+}
+
+/// Auto-grow the workspace image a `cang workspace serve` is about to mount.
+///
+/// Called with the server's exclusive image lease already held and before its VM
+/// exists, so the grow cannot race a second launch and the guest that mounts the
+/// image next already sees the larger device. One line is printed when the image
+/// grew or when the headroom rule refused it, and nothing at all when there is
+/// nothing to do.
+///
+/// Best-effort by design: this is a convenience in front of the mount, not a
+/// condition of it. An image that does not exist yet (a first serve creates it at
+/// `--workspace-size`), a guest-init that predates the marker, or a maintenance VM
+/// that failed to boot all leave the image as it is, and the serve proceeds; only
+/// the last of those says so, because it is the one a user may want to know about.
+fn auto_grow_workspace_image(
+    profiler: &mut CangHostProfiler,
+    disk: &std::path::Path,
+    options: &DiskMaintenanceOptions,
+) {
+    // The grow policy needs the host file's length, and a first serve has no file
+    // yet: creation is the launch's job, so there is nothing to decide here.
+    let size_bytes = match std::fs::symlink_metadata(disk) {
+        Ok(metadata) if metadata.file_type().is_file() => metadata.len(),
+        Ok(_) => return,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => {
+            eprintln!(
+                "cang: could not inspect the workspace image '{}', so it was not grown automatically: {err}",
+                disk.display()
+            );
+            return;
+        }
+    };
+    let outcome = match profiler.measure_result("workspace_auto_grow", || {
+        workspace_grow::auto_grow(disk, size_bytes, options, &HostMaintenanceVmRunner)
+    }) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            eprintln!(
+                "cang: could not read the workspace image's free-space marker, so it was not grown automatically: {err:#}"
+            );
+            return;
+        }
+    };
+    if let Some(line) = workspace_grow::grew_line(&outcome) {
+        eprintln!("{line}");
+    } else if let Some(line) = workspace_grow::refused_line(disk, &outcome) {
+        eprintln!("{line}");
+    }
 }
 
 fn host_profile_enabled(options: &RuntimeOptions) -> bool {

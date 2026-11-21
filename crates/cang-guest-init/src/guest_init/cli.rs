@@ -80,6 +80,24 @@ pub(in crate::guest_init) enum InternalSubcommand {
     Podman(PodmanCommand),
     Pulse(PulseCommand),
     Resize(ResizeCommand),
+    Workspace(WorkspaceCommand),
+}
+
+/// `cang-guest-init internal workspace ...`: one-shot reads of the workspace tree
+/// that run in a maintenance VM, because the disk is a raw image the host cannot
+/// mount.
+#[derive(Debug, Args, Clone, PartialEq, Eq)]
+pub(in crate::guest_init) struct WorkspaceCommand {
+    #[command(subcommand)]
+    pub(in crate::guest_init) command: WorkspaceSubcommand,
+}
+
+#[derive(Debug, Subcommand, Clone, PartialEq, Eq)]
+pub(in crate::guest_init) enum WorkspaceSubcommand {
+    /// Print the free-space marker the tree's last mount recorded, on one line,
+    /// so the host can decide whether the image needs to grow before it mounts it
+    /// again (the host's client is `maintenance::workspace_grow`).
+    FreeBytes,
 }
 
 #[derive(Debug, Args, Clone, PartialEq, Eq)]
@@ -294,6 +312,48 @@ mod tests {
         assert_eq!(podman.command, PodmanSubcommand::ServiceWait);
     }
 
+    /// The workspace image's free-space marker is read by a maintenance VM: the
+    /// host's auto-grow client spells that as `internal workspace free-bytes`.
+    #[test]
+    fn parses_hidden_internal_workspace_free_bytes_command() {
+        let cli = GuestInitCli::try_parse_from([
+            "cang-guest-init",
+            "internal",
+            "workspace",
+            "free-bytes",
+        ])
+        .expect("internal workspace free-bytes should parse");
+        let GuestInitCommand::Internal(internal) = cli.command else {
+            panic!("expected internal command");
+        };
+        let InternalSubcommand::Workspace(workspace) = internal.command else {
+            panic!("expected internal workspace command");
+        };
+        assert_eq!(
+            workspace.command,
+            crate::guest_init::cli::WorkspaceSubcommand::FreeBytes
+        );
+    }
+
+    /// `cang disk resize --workspace-disk PATH SIZE` grows the workspace image and
+    /// then asks the guest to expand the filesystem to the new device size.
+    #[test]
+    fn parses_hidden_internal_resize_workspace_command() {
+        let cli =
+            GuestInitCli::try_parse_from(["cang-guest-init", "internal", "resize", "workspace"])
+                .expect("internal resize workspace should parse");
+        let GuestInitCommand::Internal(internal) = cli.command else {
+            panic!("expected internal command");
+        };
+        let InternalSubcommand::Resize(resize) = internal.command else {
+            panic!("expected internal resize command");
+        };
+        assert_eq!(
+            resize.target,
+            crate::guest_init::cli::ResizeTarget::Workspace
+        );
+    }
+
     #[test]
     fn parses_hidden_internal_resize_command() {
         let cli = GuestInitCli::try_parse_from(["cang-guest-init", "internal", "resize", "nix"])
@@ -319,4 +379,7 @@ pub(in crate::guest_init) enum ResizeTarget {
     Nix,
     Containers,
     Build,
+    /// The tree `/workspace` is mounted from: `cang disk resize --workspace-disk`
+    /// grows the host file, and this expands the filesystem inside it to fit.
+    Workspace,
 }
