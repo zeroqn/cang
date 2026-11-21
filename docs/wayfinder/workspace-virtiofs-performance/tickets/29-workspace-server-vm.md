@@ -65,6 +65,35 @@ Decide/do, one session:
 Build on the relay spike (ticket 22's harness + the FUSE relay), not on a new
 transport.
 
+## Decisions for stage 2 (2026-11-21, this session - taken where the ticket asks, so the build has a shape)
+
+Recorded before implementing, so a later session can see what was chosen and why:
+
+1. **Surface - a new `cang workspace serve <disk>` subcommand**, not `--daemon` and not
+   the no-command shell. It reuses the *session* machinery (task rootfs, supervisor,
+   managed attach, exec socket) because that is what gives it `cang exec`, `cang ps`
+   and `cang kill` for free, and it **does not** reuse the per-launch task-rootfs
+   cost: the rootfs is created once per server and its btrfs snapshot is reused on
+   restart. `--daemon` is wrong here (it returns while the task runs; the mount must
+   live exactly as long as the server).
+2. **Ownership - a lease file beside the image, flock-based**, exactly the shape
+   `ImageLock` already uses for the block image: the server takes an *exclusive* flock
+   for its lifetime; a task launch that names the same disk takes it *shared* (it
+   already does for its own image) and **refuses by name** while the server holds it,
+   telling the user to `cang workspace stop` first. No automatic stop, no waiting: a
+   silent stop would turn "start a build" into "kill the session someone is editing
+   in". Handoff (server releases, task takes, server re-takes) is *not* stage 2.
+3. **Mount lifecycle - the mount is up for the server's lifetime and read-write**,
+   because nothing else may touch the image while it runs (§2). The read-only flip of
+   ticket 23 §3 only becomes necessary once a task can take the image while the
+   server survives, which this stage forbids; the flip stays open.
+   A host process with its cwd inside the mount makes `fusermount3 -u` fail
+   (`EBUSY`); the server reports that by name and exits, rather than looping.
+4. **Live proof**: `cang workspace serve work.raw`, host `ls`/`git status`/write
+   through the mount; a `cang --workspace-disk work.raw -- …` launch refused by
+   name; `cang workspace stop`, then the launch works; restart the server, the
+   mount returns.
+
 ## Resolution
 
 (to follow)

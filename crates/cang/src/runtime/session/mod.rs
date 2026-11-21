@@ -26,6 +26,7 @@ pub(crate) mod task_control;
 mod terminal_env;
 mod waypipe_broker;
 mod workspace_relay;
+pub(crate) mod workspace_server;
 
 use crate::runtime::RuntimeProfileScope;
 use crate::runtime::launch::components::persistent_disks::raw_btrfs::HostRawImageCommandRunner;
@@ -135,6 +136,47 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
         .context("failed to prepare cang terminal trace file")?;
     let plan =
         profiler.measure_result("launch_plan_build", || LaunchPlan::from_env(options, cwd))?;
+    // The single-writer rule on a workspace image (ticket 29): a workspace
+    // server holds the image exclusively for its whole lifetime, and every
+    // `--workspace-disk` launch holds it shared. Taken before the workspace task
+    // gate below, so a launch that may not have the image is refused for *that*
+    // reason - by name, pointing at `cang workspace stop`.
+    let _workspace_lease = match plan.workspace_disk.as_deref() {
+        Some(disk) if plan.workspace_server => {
+            Some(profiler.measure_result("workspace_server_lease", || {
+                workspace_server::WorkspaceLease::acquire_server(disk)
+            })?)
+        }
+        Some(disk) => profiler.measure_result("workspace_image_lease", || {
+            workspace_server::WorkspaceLease::acquire_task(disk)
+        })?,
+        None => None,
+    };
+    // The server's shutdown handlers exist before any launch work happens: a
+    // stop request that arrives while the rootfs is still being materialized
+    // must be an ordered teardown, not the default action killing cang and
+    // leaving the VM behind.
+    let workspace_server_signals = plan
+        .workspace_server
+        .then(workspace_server::install_signals)
+        .transpose()?;
+    if plan.workspace_server {
+        profiler.measure_result("workspace_server_mountpoint", || {
+            workspace_server::refuse_occupied_mountpoint(&plan.workspace_dir)
+        })?;
+    }
+    // What happens to the terminal when the guest is ready. A workspace server
+    // attaches nothing: the attach client puts the host terminal into raw mode,
+    // so `^C` would reach the guest payload as a keystroke and stop the VM
+    // before its mount was unmounted - the opposite of the teardown order the
+    // server guarantees.
+    let initial_attach = if plan.workspace_server {
+        supervisor::InitialAttach::Skip
+    } else if plan.daemon {
+        supervisor::InitialAttach::AttachThenDetach
+    } else {
+        supervisor::InitialAttach::Attach
+    };
     // `cang -- <command>` is a process launcher, not an interactive session: its
     // caller's stdin is a closed pipe or /dev/null in every scripted use, and
     // reading that as a detach request dropped both the command's output and its
@@ -321,6 +363,12 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                 None => profiler.record_metadata("nix_lower_block_status", "disabled"),
             }
 
+            // A workspace server's own bookkeeping: the state file `cang
+            // workspace stop`/`status` read (removed when this scope ends) and
+            // the monitor's report, which decides the exit code below.
+            let mut workspace_server_session: Option<workspace_server::WorkspaceServerSession> =
+                None;
+            let mut workspace_server_report: Option<workspace_server::ShutdownReport> = None;
             let host_run_result = match profiler
                 .measure_result("persistent_disk_preparation", || {
                     HostPersistentDiskPreparer
@@ -556,6 +604,22 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                     protocol_version: managed_session.protocol_version,
                                 }),
                             };
+                            // Announced before the VM starts, so a `cang
+                            // workspace stop` that arrives during the launch can
+                            // find (and stop) the server instead of racing it.
+                            if let (Some(disk), Some(signals)) = (
+                                plan.workspace_disk.as_ref(),
+                                workspace_server_signals.as_ref(),
+                            ) {
+                                workspace_server_session =
+                                    Some(workspace_server::WorkspaceServerSession::start(
+                                        disk,
+                                        &plan.workspace_dir,
+                                        lease.handle().task_id(),
+                                        lease.handle().task_dir(),
+                                        std::sync::Arc::clone(signals),
+                                    )?);
+                            }
                             // The host side of the reverse share: the pump owns
                             // the mount for exactly the life of this launch, so
                             // its teardown is ordered before the task dir (which
@@ -570,6 +634,25 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                 )?),
                                 None => None,
                             };
+                            // A workspace server hands the mount to a monitor
+                            // thread, which is what enforces the order the ticket
+                            // requires: the mount is gone before the VM stops, and
+                            // a mount that never appears stops the server with a
+                            // named reason instead of leaving an unusable VM.
+                            let mut server_monitor = None;
+                            let mut launch_relay_guard = None;
+                            if let Some(guard) = workspace_relay_guard {
+                                match workspace_server_session.as_ref() {
+                                    Some(session) => {
+                                        server_monitor = Some(session.monitor(
+                                            guard,
+                                            lease.handle().task_dir(),
+                                            lease.handle().task_id(),
+                                        )?);
+                                    }
+                                    None => launch_relay_guard = Some(guard),
+                                }
+                            }
                             let helper_result =
                                 profiler.measure_result_with("helper_session", |profiler| {
                                     HostSupervisor.run(
@@ -577,14 +660,33 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                         lease.handle().task_dir(),
                                         profiler,
                                         &active_task,
-                                        plan.daemon,
+                                        initial_attach,
                                         attach_input_policy,
                                     )
                                 });
-                            let relay_outcome = workspace_relay_guard
+                            let relay_outcome = launch_relay_guard
                                 .as_ref()
-                                .map(workspace_relay::WorkspaceRelayGuard::outcome);
-                            drop(workspace_relay_guard);
+                                .map(workspace_relay::WorkspaceRelayGuard::outcome)
+                                .or_else(|| {
+                                    server_monitor
+                                        .as_ref()
+                                        .map(workspace_server::WorkspaceServerMonitor::outcome)
+                                });
+                            drop(launch_relay_guard);
+                            if let Some(monitor) = server_monitor {
+                                let report = monitor.finish();
+                                profiler.record_metadata(
+                                    "workspace_server",
+                                    match &report {
+                                        Some(report) if report.failure().is_some() => {
+                                            "failed-teardown"
+                                        }
+                                        Some(_) => "stopped",
+                                        None => "vm-ended",
+                                    },
+                                );
+                                workspace_server_report = report;
+                            }
                             profiler.record_metadata(
                                 "workspace_relay",
                                 relay_outcome
@@ -598,6 +700,7 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                     "cang workspace relay"
                                 );
                             }
+
                             BtrfsHostRunResult::Helper {
                                 managed: config.is_managed_session(),
                                 result: helper_result,
@@ -608,13 +711,19 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                 }
                 Err(err) => BtrfsHostRunResult::SetupFailed(err),
             };
-            let managed_helper_succeeded = matches!(
-                &host_run_result,
-                BtrfsHostRunResult::Helper {
-                    managed: true,
-                    result: Ok(_),
-                }
-            );
+            // A workspace server's helper is stopped with a signal rather than
+            // exiting with its guest, so the helper's own cleanup does not run:
+            // the launcher removes the active-task record and the task rootfs
+            // itself. Without this every server stop left a stale `cang ps` row
+            // and a rootfs snapshot behind.
+            let managed_helper_succeeded = !plan.workspace_server
+                && matches!(
+                    &host_run_result,
+                    BtrfsHostRunResult::Helper {
+                        managed: true,
+                        result: Ok(_),
+                    }
+                );
             let cleanup_result = if managed_helper_succeeded {
                 profiler.measure_result("task_state_cleanup", || Ok(lease.preserve()))
             } else if plan.preserve_debug {
@@ -636,9 +745,20 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                     lease.cleanup()
                 })
             };
-            finalize_profiled_btrfs_run(host_run_result, cleanup_result, || {
+            let exit_code = finalize_profiled_btrfs_run(host_run_result, cleanup_result, || {
                 profiler.emit_to_stderr();
-            })
+            })?;
+            // A workspace server that was *asked* to stop succeeded even though
+            // its VM was signalled; anything the teardown could not finish (a
+            // mount that stayed busy, a relay that never mounted) decides the
+            // exit code, by name.
+            match workspace_server_report {
+                Some(report) => match report.failure() {
+                    Some(failure) => Err(anyhow::anyhow!("{failure}")),
+                    None => Ok(ExitCode::SUCCESS),
+                },
+                None => Ok(exit_code),
+            }
         }
         TaskRootfsBackend::FuseOverlay => bail!(
             "cang fuse-overlay task rootfs materialization is not implemented in this phase; use btrfs-snapshot or wait for the fuse-overlay slice"
@@ -775,6 +895,7 @@ mod tests {
             workspace_disk: None,
             workspace_relay: false,
             workspace_size: None,
+            workspace_serve: false,
             mem_gib: None,
             network_mode: config::NetworkMode::Tsi,
             pulse: None,

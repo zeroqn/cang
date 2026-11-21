@@ -207,6 +207,38 @@ pub fn entrypoint() -> ExitCode {
                 }
             }
         }
+        CliAction::WorkspaceStop { disk, log_settings } => {
+            if let Err(err) = logging::init_tracing(&log_settings) {
+                eprintln!("cang: {err:#}");
+                return ExitCode::from(1);
+            }
+            match runtime::run_workspace_stop(&disk) {
+                Ok(output) => {
+                    print!("{output}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("cang: {err:#}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        CliAction::WorkspaceStatus { disk, log_settings } => {
+            if let Err(err) = logging::init_tracing(&log_settings) {
+                eprintln!("cang: {err:#}");
+                return ExitCode::from(1);
+            }
+            match runtime::run_workspace_status(&disk) {
+                Ok(output) => {
+                    print!("{output}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("cang: {err:#}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         CliAction::Seccomp {
             command,
             log_settings,

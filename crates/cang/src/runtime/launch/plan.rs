@@ -47,6 +47,10 @@ pub(crate) struct LaunchPlan {
     /// Whether this launch also mounts the launch directory on the host, served
     /// by the guest's `/workspace` tree (`--workspace-relay`).
     pub(crate) workspace_relay: bool,
+    /// Whether this launch *is* a workspace server (`cang workspace serve`): the
+    /// mount lives as long as the VM, the image lease is exclusive, and the
+    /// teardown order is unmount-then-stop.
+    pub(crate) workspace_server: bool,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
@@ -124,11 +128,13 @@ impl LaunchPlan {
             options.workspace_size.as_deref(),
             &workspace_dir,
         )?;
+        let workspace_server = options.workspace_serve;
         let workspace_relay = resolve_workspace_relay(
             options.workspace_relay,
             options.daemon,
             workspace_disk.as_ref().map(|(path, _)| path.as_path()),
             &workspace_dir,
+            workspace_server,
         )?;
         let mut bind_mounts = mounts::prepare_dev_mounts(
             &workspace_dir,
@@ -172,6 +178,7 @@ impl LaunchPlan {
             workspace_disk: workspace_disk.as_ref().map(|(path, _)| path.clone()),
             workspace_disk_size_bytes: workspace_disk.as_ref().and_then(|(_, size)| *size),
             workspace_relay,
+            workspace_server,
             mem_gib: options.mem_gib,
             network_mode: options.network_mode,
             pulse: options.pulse,
@@ -255,14 +262,19 @@ fn resolve_workspace_disk(
 ///   directory already gives the host that tree;
 /// * with `--daemon`: a daemon launch returns while the task keeps running, and
 ///   the mount lives exactly as long as this cang process;
-/// * with a workspace image *inside* the launch directory: the mount lands on
-///   that directory, so the image the VM attaches would be hidden behind it
-///   (and, if it were opened after the mount, created inside the guest's tree).
+/// * with a workspace image *inside* the launch directory of a *task* launch:
+///   the mount lands on that directory, so the image the VM attaches would be
+///   hidden behind it (and, if it were opened after the mount, created inside
+///   the guest's tree). A workspace *server* is exempt: it opens the image
+///   while the host directory is still visible, it holds the lease file
+///   descriptor open across the mount, and `cang workspace serve work.raw` from
+///   inside the served directory is the natural spelling.
 fn resolve_workspace_relay(
     requested: bool,
     daemon: bool,
     workspace_disk: Option<&Path>,
     workspace_dir: &Path,
+    serve: bool,
 ) -> Result<bool> {
     if !requested {
         return Ok(false);
@@ -277,7 +289,7 @@ fn resolve_workspace_relay(
             "--workspace-relay cannot be used with --daemon: the host mount lives as long as the cang process, and a daemon launch returns while the task keeps running"
         );
     }
-    if disk.starts_with(workspace_dir) {
+    if !serve && disk.starts_with(workspace_dir) {
         anyhow::bail!(
             "--workspace-relay refuses a workspace disk image inside the launch directory: '{}' is under '{}', and the mount lands on that directory, which would hide the image file the VM attaches; move the image outside the tree",
             disk.display(),
@@ -486,6 +498,7 @@ mod tests {
             workspace_disk: None,
             workspace_size: None,
             workspace_relay: false,
+            workspace_serve: false,
             mem_gib: None,
             network_mode: NetworkMode::Tsi,
             pulse: None,

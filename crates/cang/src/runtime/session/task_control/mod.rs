@@ -214,6 +214,43 @@ pub(crate) fn write_active_task(spec: ActiveTaskSpec, process: ProcessIdentity) 
     write_active_task_record(&record)
 }
 
+/// The active-task record a task directory holds, once its helper exists.
+///
+/// The workspace server reads this to learn which process group *is* the VM it
+/// has to stop, so a server stop and `cang kill` agree about identity instead of
+/// each keeping its own pid.
+pub(crate) fn read_registered_task(task_dir: &Path) -> Result<Option<ActiveTaskRecord>> {
+    let path = active_record_path(task_dir);
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(err).with_context(|| format!("failed to read '{}'", path.display()));
+        }
+    };
+    decode_record(&contents)
+        .map(Some)
+        .with_context(|| format!("failed to parse '{}'", path.display()))
+}
+
+/// This process's own identity, in the shape the active-task record uses, so a
+/// later `kill`-shaped check cannot signal a reused pid.
+pub(crate) fn current_process_identity() -> Result<ProcessIdentity> {
+    let pid = unsafe { libc::getpid() };
+    let pgid = unsafe { libc::getpgrp() };
+    let sid = unsafe { libc::getsid(0) };
+    if pid <= 0 || pgid <= 0 || sid < 0 {
+        bail!("this process has no usable pid, process group or session id");
+    }
+    read_process_identity(
+        Path::new(PROC_ROOT),
+        Path::new(BOOT_ID_PATH),
+        u32::try_from(pid).context("this process's pid does not fit in u32")?,
+        u32::try_from(pgid).context("this process's process group does not fit in u32")?,
+        u32::try_from(sid).context("this process's session id does not fit in u32")?,
+    )
+}
+
 pub(crate) fn remove_active_task(task_dir: &Path) -> Result<()> {
     let path = active_record_path(task_dir);
     match fs::remove_file(&path) {

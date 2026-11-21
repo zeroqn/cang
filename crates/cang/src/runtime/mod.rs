@@ -65,6 +65,14 @@ pub(crate) fn run_task_control_command(command: TaskControlCommand) -> Result<St
     session::run_task_control_command(command)
 }
 
+pub(crate) fn run_workspace_stop(disk: &std::path::Path) -> Result<String> {
+    session::workspace_server::run_stop(disk)
+}
+
+pub(crate) fn run_workspace_status(disk: &std::path::Path) -> Result<String> {
+    session::workspace_server::run_status(disk)
+}
+
 pub(crate) fn run_seccomp_command(command: SeccompCommand) -> Result<String> {
     seccomp::run_seccomp_command(command)
 }

@@ -203,13 +203,71 @@ What it promises, and what it does not:
   cache, not synthesise an event);
 - **the mount does not outlive the launch**: when the task ends, or the VM dies,
   cang unmounts it and the launch directory shows its own contents again, so a
-  guest-side file is invisible on the host between launches. A long-lived
-  workspace-server VM that keeps the view up is the next step, not this flag;
+  guest-side file is invisible on the host between launches. For a view that
+  stays up between launches, run a workspace server (next section);
 - while the guest is gone, requests are answered `-EIO` rather than hanging.
 
-`--workspace-relay` is a measurement surface for that next step: it is not
-compatible with the read-only-under-a-task rule yet (a host write and a guest
-write to one file are not arbitrated).
+`--workspace-relay` does not arbitrate a concurrent host write and guest write to
+one file: it is the flag for a launch whose tree the host reads, not one it
+writes at the same time.
+
+### A workspace server: the host's view between launches
+
+`cang workspace serve PATH` starts one long-lived VM that mounts the image at
+`/workspace`, starts the guest relay, and mounts the guest's tree on a host
+directory - the current one by default, `--mount-at PATH` to name another. It
+stays in the foreground until it is interrupted (`^C`, `cang workspace stop`), so
+the host's view of the image is continuous instead of dying with each launch:
+
+```bash
+cd /tmp/serve-here
+./result/bin/cang workspace serve /tmp/ws.raw
+# another shell, from anywhere:
+./result/bin/cang workspace status /tmp/ws.raw
+./result/bin/cang exec <task-id-or-handle> -- bash -lc 'ls /workspace'
+./result/bin/cang workspace stop /tmp/ws.raw
+```
+
+The image path is created on first use exactly like `--workspace-size` describes,
+and a relative path resolves against the served directory. The mount appears only
+once the guest relay is *listening* - the pump proves the transport before it
+calls `mount(2)` - and the server stops itself with a named reason if it never
+appears, rather than leaving a VM whose tree nobody can see.
+
+**One writer, enforced.** A workspace server holds an exclusive lease on the
+image for its whole lifetime (a `flock` keyed on the disk path, in cang's
+per-user runtime directory). A `--workspace-disk` launch naming the same image
+takes that lease *shared*, so it is refused by name - "stop it first with `cang
+workspace stop PATH`" - while a server holds it, and a second `cang workspace
+serve` of the same image is refused the same way. Cang never stops the server for
+you: turning "start a build" into "kill the session someone is editing in" is not
+a decision it makes. Two `--workspace-disk` launches still share one image
+between them, as they always did.
+
+**Ordering, enforced.** On `^C`/`SIGTERM`/`SIGHUP` the guest is first asked to
+flush `/workspace` to its disk (`sync -f /workspace` in the guest, over the exec
+channel), because the VM is stopped with a signal rather than shut down and its
+uncommitted btrfs transaction would otherwise be dropped - a host write made
+through the mount a second before a stop is lost without it. Then the mount is
+unmounted **while the guest is still serving it**, and only then is the VM
+stopped.
+If `fusermount3 -u` is refused because a host process has its working directory
+inside the mount, the server reports that by name and exits non-zero instead of
+looping; leave the directory and either restart the server or run `fusermount3 -u
+PATH` yourself.
+
+The server keeps its managed session but attaches *no* terminal to it, on
+purpose: an attach client puts the host terminal into raw mode, `^C` would then
+reach the guest payload as a keystroke, and the VM would stop before its mount was
+unmounted - the reverse of the order above. `cang exec`, `cang ps` and `cang kill`
+work against it exactly as they do against any other task (with `cang exec`,
+`cang ps` and `cang kill` run from the served directory, because they find their
+state root through the current directory), and `cang workspace status` reports
+the recorded process and whether its mount is up.
+
+A running server is still one VM with its own task rootfs and its own `/nix`
+upper inside the served image (see "Reclaiming the `/nix` upper"); stopping and
+restarting it costs a boot, not a rebuild.
 
 ## Volumes
 

@@ -22,7 +22,7 @@ use crate::runtime::session::supervisor::managed_ready;
 use crate::runtime::session::supervisor::readiness_pipe::{ParentReadyPipe, READY_FD_ENV};
 use crate::runtime::session::supervisor::render_server::{self, RenderServerEnv};
 use crate::runtime::session::supervisor::sigwinch::SigwinchForwarder;
-use crate::runtime::session::supervisor::{ChildStatus, LIBKRUN_ENTER_HELPER_ARG};
+use crate::runtime::session::supervisor::{ChildStatus, InitialAttach, LIBKRUN_ENTER_HELPER_ARG};
 use crate::runtime::session::task_control::{
     ActiveTaskSpec, ProcessIdentity, remove_active_task, write_active_task,
 };
@@ -41,7 +41,7 @@ pub(crate) fn run_helper_process(
     config_path: &Path,
     profiler: &mut CangHostProfiler,
     active_task: &ActiveTaskSpec,
-    daemon_initial_attach: bool,
+    initial_attach: InitialAttach,
     attach_input_policy: AttachInputPolicy,
 ) -> Result<ChildStatus> {
     let host_profile_enabled = profiler.is_enabled();
@@ -165,12 +165,28 @@ pub(crate) fn run_helper_process(
                 "failed while waiting for managed cang attach readiness",
             ));
         }
+        if !initial_attach.attaches() {
+            // No terminal is attached (a workspace server): the managed session
+            // still exists - its readiness gate above repaired the exec socket
+            // and captured the helper's logs - but nothing reads the guest's
+            // output, so the helper's exit status is the whole result.
+            let status = profiler.measure_result("helper_wait_process", || {
+                child
+                    .wait()
+                    .context("failed to wait for managed cang helper")
+            })?;
+            tracing::debug!(?status, "cang managed helper exited with no attach client");
+            return Ok(match status.code() {
+                Some(code) => ChildStatus::exited(code),
+                None => ChildStatus::signaled(),
+            });
+        }
         let exit_observer =
             |code| managed_exit_marker::write_observed_guest_exit(&active_task.task_dir, code);
         let attach_result = profiler.measure_result("helper_initial_attach", || {
             attach::attach_to_ready_socket_with_input_policy_and_exit_observer(
                 &managed.attach_socket,
-                daemon_initial_attach,
+                initial_attach.detaches_after_initial_output(),
                 attach_input_policy,
                 Some(&exit_observer),
             )

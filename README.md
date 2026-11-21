@@ -411,6 +411,9 @@ Run/help:
 ./result/bin/cang disk resize --containers 128G
 ./result/bin/cang disk reset --containers --force
 ./result/bin/cang disk resize --build 100G
+./result/bin/cang workspace serve /tmp/ws.raw
+./result/bin/cang workspace status /tmp/ws.raw
+./result/bin/cang workspace stop /tmp/ws.raw
 ```
 
 `cang exec`, the session lifecycle, and the rest of the day-to-day reference
@@ -469,9 +472,12 @@ is refused with it so the launch attaches one block disk rather than two.
 
 Writing a 342 MB / 2136-entry source tree into the same `/workspace` took
 **0.50 s** on the disk against **14.3 s** over the share (warm, same archive,
-measured 2026-11-20). The host's view of that tree (a reverse share) is not
-built yet, so the launch directory still shows its own contents rather than the
-guest's; `docs/usage.md` states what that means.
+measured 2026-11-20). The host's view of that tree is the reverse share:
+`--workspace-relay` mounts it for the life of one launch, and
+`cang workspace serve PATH` keeps it up between launches from a long-lived
+workspace server VM that holds the image exclusively (a second guest that names
+the same image is refused by name). `docs/usage.md` states what the view
+promises.
 
 ### Host write visibility from inside the guest
 

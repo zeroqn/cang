@@ -23,6 +23,7 @@
 use anyhow::{Context, Result, bail};
 use std::ffi::OsString;
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -79,6 +80,8 @@ pub(crate) struct WorkspaceRelayGuard {
     outcome: Arc<Mutex<RelayMountOutcome>>,
     /// Named line printed once by the watcher (`true` = already printed).
     reported: Arc<Mutex<bool>>,
+    /// What [`WorkspaceRelayGuard::shutdown`] found, once it has run.
+    teardown: Option<RelayTeardown>,
 }
 
 impl std::fmt::Debug for WorkspaceRelayGuard {
@@ -169,7 +172,14 @@ impl WorkspaceRelayGuard {
             fusermount: fusermount_program(),
             outcome,
             reported,
+            teardown: None,
         })
+    }
+
+    /// The outcome slot itself, for a caller that lets another thread own the
+    /// guard (the workspace server) and still wants to report what it saw.
+    pub(crate) fn outcome_handle(&self) -> Arc<Mutex<RelayMountOutcome>> {
+        Arc::clone(&self.outcome)
     }
 
     /// The outcome the watcher has reached so far.
@@ -207,9 +217,39 @@ impl WorkspaceRelayGuard {
     }
 }
 
-impl Drop for WorkspaceRelayGuard {
-    fn drop(&mut self) {
-        self.report();
+/// What became of the mount when the guard tore it down.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RelayTeardown {
+    /// The pump unmounted on `SIGTERM` (the only unmount path it owns).
+    PumpUnmounted,
+    /// The pump could not unmount it, so cang removed the mount itself.
+    FallbackUnmounted,
+    /// The mount is still there: something holds it busy.
+    Busy(String),
+}
+
+impl WorkspaceRelayGuard {
+    /// Unmount the mount and stop the pump, in that order, and report whether the
+    /// host view actually went away.
+    ///
+    /// For a plain launch nothing calls this explicitly and `Drop` does the same
+    /// work - stage 1's lifetime, the mount dies with the launch. A *workspace
+    /// server* calls it first, because the ticket requires the mount to be gone
+    /// **before** the VM is stopped, and `Drop` is too late for that.
+    ///
+    /// Idempotent: the pump is already gone and the mount is already gone on the
+    /// second call, which then reports success.
+    pub(crate) fn shutdown(&mut self) -> Result<()> {
+        match self.teardown() {
+            RelayTeardown::Busy(message) => Err(anyhow::anyhow!("{message}")),
+            RelayTeardown::PumpUnmounted | RelayTeardown::FallbackUnmounted => Ok(()),
+        }
+    }
+
+    fn teardown(&mut self) -> RelayTeardown {
+        if let Some(teardown) = &self.teardown {
+            return teardown.clone();
+        }
         // The pump unmounts on SIGTERM, and that is the only unmount path.
         unsafe { libc::kill(self.pid, libc::SIGTERM) };
         if !wait_for_exit(&mut self.child, TEARDOWN_TIMEOUT) {
@@ -220,23 +260,48 @@ impl Drop for WorkspaceRelayGuard {
             unsafe { libc::kill(self.pid, libc::SIGKILL) };
             let _ = wait_for_exit(&mut self.child, KILL_TIMEOUT);
         }
-        if !is_fuse_mount(&self.mountpoint) {
-            return;
-        }
-        // The pump could not unmount (it is gone, or it reported a failure):
-        // cang tries once itself, and says so if the path stays busy.
-        match unmount(&self.fusermount, &self.mountpoint) {
-            Ok(()) => eprintln!(
+        let teardown = if !is_mountpoint(&self.mountpoint) {
+            RelayTeardown::PumpUnmounted
+        } else {
+            // The pump could not unmount (it is gone, or it reported a failure):
+            // cang tries once itself, and names a mount something still holds.
+            match unmount(&self.fusermount, &self.mountpoint) {
+                Ok(()) => RelayTeardown::FallbackUnmounted,
+                // The unmount failing while the mount is already gone (a race
+                // with the pump) is a success.
+                Err(_) if !is_mountpoint(&self.mountpoint) => RelayTeardown::PumpUnmounted,
+                Err(err) => RelayTeardown::Busy(format!(
+                    "the workspace mount at '{}' is still mounted: `fusermount3 -u {}` was refused \
+                     ({err:#}); a host process whose working directory or open file is inside the \
+                     mount keeps it busy, so `fusermount3 -u {}` from another directory is what \
+                     clears it",
+                    self.mountpoint.display(),
+                    self.mountpoint.display(),
+                    self.mountpoint.display()
+                )),
+            }
+        };
+        if teardown == RelayTeardown::FallbackUnmounted {
+            eprintln!(
                 "cang: unmounted the workspace relay at '{}'",
                 self.mountpoint.display()
-            ),
-            Err(err) => eprintln!(
-                "cang: the workspace relay mount at '{}' is still there ({err:#}); \
-                 a process whose working directory is inside it keeps it busy, so \
-                 `fusermount3 -u {}` from another directory is what clears it",
-                self.mountpoint.display(),
-                self.mountpoint.display()
-            ),
+            );
+        }
+        self.teardown = Some(teardown.clone());
+        teardown
+    }
+}
+
+impl Drop for WorkspaceRelayGuard {
+    fn drop(&mut self) {
+        self.report();
+        let initiated_here = self.teardown.is_none();
+        // A caller that already got the refusal printed it itself; a launch that
+        // never asked for the ordered teardown has not seen it yet.
+        if let RelayTeardown::Busy(message) = self.teardown()
+            && initiated_here
+        {
+            eprintln!("cang: {message}");
         }
     }
 }
@@ -356,6 +421,54 @@ pub(crate) fn unmount(program: &OsString, mountpoint: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Is anything mounted on `path`?
+///
+/// `/proc/self/mountinfo`, not `statfs(2)`: a FUSE mount whose connection is
+/// gone answers `-ENOTCONN` to `statfs`, so asking the *filesystem* whether it is
+/// still mounted says "no" for exactly the stale mount a teardown has to report.
+pub(crate) fn is_mountpoint(path: &Path) -> bool {
+    match std::fs::read_to_string("/proc/self/mountinfo") {
+        Ok(mountinfo) => {
+            let target = path.as_os_str().as_bytes();
+            mountinfo.lines().any(|line| {
+                line.split(' ')
+                    .nth(4)
+                    .is_some_and(|field| unescape_mountinfo_field(field.as_bytes()) == target)
+            })
+        }
+        // No mountinfo to read is not an answer: fall back to the filesystem.
+        Err(_) => is_fuse_mount(path),
+    }
+}
+
+/// `mountinfo` escapes space, tab, newline and backslash as `\040` and friends.
+fn unescape_mountinfo_field(field: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(field.len());
+    let mut index = 0;
+    while index < field.len() {
+        if field[index] != b'\\' || index + 3 >= field.len() {
+            output.push(field[index]);
+            index += 1;
+            continue;
+        }
+        let octal = &field[index + 1..index + 4];
+        match std::str::from_utf8(octal)
+            .ok()
+            .and_then(|digits| u8::from_str_radix(digits, 8).ok())
+        {
+            Some(byte) => {
+                output.push(byte);
+                index += 4;
+            }
+            None => {
+                output.push(field[index]);
+                index += 1;
+            }
+        }
+    }
+    output
 }
 
 /// `statfs(2)`'s answer for "this path is a FUSE mount".
@@ -504,12 +617,24 @@ exit 1"#,
     }
 
     #[test]
-    fn a_plain_directory_is_not_a_workspace_relay_mount() {
+    fn a_plain_directory_is_not_a_mountpoint() {
         let dir = tempfile::tempdir().expect("tempdir");
-        assert!(!is_fuse_mount(dir.path()));
-        assert!(!is_fuse_mount(Path::new(
+        assert!(!is_mountpoint(dir.path()));
+        assert!(!is_mountpoint(Path::new(
             "/nonexistent/cang-workspace-relay"
         )));
+        // The tmpfs every Linux host has mounted: the check must answer "yes"
+        // for a mount it did not create, or `cang workspace serve` would mount
+        // over one.
+        assert!(is_mountpoint(Path::new("/proc")));
+    }
+
+    #[test]
+    fn mountinfo_escapes_are_decoded() {
+        assert_eq!(unescape_mountinfo_field(b"/a/b"), b"/a/b");
+        assert_eq!(unescape_mountinfo_field(b"/a\\040b"), b"/a b");
+        assert_eq!(unescape_mountinfo_field(b"/a\\134b"), b"/a\\b");
+        assert_eq!(unescape_mountinfo_field(b"/a\\"), b"/a\\");
     }
 
     #[test]

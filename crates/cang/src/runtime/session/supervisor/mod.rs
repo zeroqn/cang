@@ -34,6 +34,34 @@ pub(crate) fn is_supervisor_internal_arg(arg: &str) -> bool {
     )
 }
 
+/// What the launcher does with the managed session's attach socket when the
+/// guest is ready.
+///
+/// A task launch attaches the terminal (`Attach`), a `--daemon` launch attaches
+/// and then detaches (`AttachThenDetach`), and a **workspace server** does not
+/// attach at all (`Skip`): the attach client puts the host terminal into raw
+/// mode, so `^C` would reach the guest payload as a keystroke and stop the VM
+/// before its mount was unmounted. Skipping the attach keeps the rest of the
+/// managed session - the readiness gate that also hands the exec socket to the
+/// host user, the helper's log capture, the identity repairs - exactly as it is
+/// for a task launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InitialAttach {
+    Attach,
+    AttachThenDetach,
+    Skip,
+}
+
+impl InitialAttach {
+    fn attaches(self) -> bool {
+        !matches!(self, Self::Skip)
+    }
+
+    fn detaches_after_initial_output(self) -> bool {
+        matches!(self, Self::AttachThenDetach)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChildStatus {
     Exited(i32),
@@ -70,7 +98,7 @@ pub(crate) trait Supervisor {
         task_state_dir: &Path,
         profiler: &mut CangHostProfiler,
         active_task: &ActiveTaskSpec,
-        daemon_initial_attach: bool,
+        initial_attach: InitialAttach,
         attach_input_policy: AttachInputPolicy,
     ) -> Result<ChildStatus>;
 }
@@ -85,7 +113,7 @@ impl Supervisor for HostSupervisor {
         task_state_dir: &Path,
         profiler: &mut CangHostProfiler,
         active_task: &ActiveTaskSpec,
-        daemon_initial_attach: bool,
+        initial_attach: InitialAttach,
         attach_input_policy: AttachInputPolicy,
     ) -> Result<ChildStatus> {
         let _waypipe_broker = active_task
@@ -112,7 +140,7 @@ impl Supervisor for HostSupervisor {
             &config_path,
             profiler,
             active_task,
-            daemon_initial_attach,
+            initial_attach,
             attach_input_policy,
         )
     }

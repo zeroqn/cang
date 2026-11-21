@@ -48,6 +48,10 @@ impl From<CliAllocatorMode> for AllocatorMode {
     }
 }
 
+/// The command a workspace server runs in its guest: it must outlive every host
+/// tooling call, and it is the only thing controlling the VM's lifetime.
+pub(crate) const WORKSPACE_SERVER_COMMAND: [&str; 2] = ["sleep", "infinity"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CliGpu {
     pub(crate) mode: GpuMode,
@@ -226,14 +230,14 @@ pub(crate) struct Cli {
         long = "workspace-disk",
         value_name = "PATH",
         help = "Serve /workspace from a btrfs disk image or block device instead of the host directory",
-        long_help = "Serve /workspace from a btrfs disk image (created on first use at --workspace-size) or a block device, instead of the host directory over virtio-fs.\n\nThe guest mounts it at /workspace and everything a build writes stays on it: sources, cargo's own ./target and the cargo home (a directory inside the tree, bind mounted at ~/.cargo in the guest). The host-directory /workspace bind mount and the ~/.cargo bind mount are dropped for such a launch, as is the build disk - nothing is left for it to hold.\n\nA path holding a filesystem other than btrfs is refused rather than reformatted, and so is one smaller than the requested size. The host's view of the guest tree (the reverse share) is not built yet: for now the launch directory keeps showing the host copy, so this is a measurement surface, not a coherent one."
+        long_help = "Serve /workspace from a btrfs disk image (created on first use at --workspace-size) or a block device, instead of the host directory over virtio-fs.\n\nThe guest mounts it at /workspace and everything a build writes stays on it: sources, cargo's own ./target and the cargo home (a directory inside the tree, bind mounted at ~/.cargo in the guest). The host-directory /workspace bind mount and the ~/.cargo bind mount are dropped for such a launch, as is the build disk - nothing is left for it to hold.\n\nA path holding a filesystem other than btrfs is refused rather than reformatted, and so is one smaller than the requested size. The host's view of the guest tree is the reverse share: `--workspace-relay` mounts it for the life of one launch, and `cang workspace serve PATH` keeps it up between launches from a long-lived workspace server VM."
     )]
     workspace_disk: Option<PathBuf>,
 
     #[arg(
         long = "workspace-relay",
         help = "Mount the launch directory on the host, served by the guest's /workspace tree",
-        long_help = "Mount the launch directory on the host, served by the guest's /workspace tree over a FUSE relay (the reverse share).\n\nThis is a measurement surface until the workspace server VM exists: the mount is there only while this cang process runs, it is read-write, and nothing invalidates the host's caches when the guest writes (no host inotify event is generated for a guest-side write). It needs --workspace-disk, because the tree being served is the disk's, not the host directory's.\n\nThe mount is at the launch directory, which is where ticket 23 puts the host's view: the host copy of the tree is shadowed for the life of the launch. If the guest stops answering, every host syscall fails with EIO and the mount stays until cang exits (it never silently reverts to the host tree). A host process whose working directory is inside the mount keeps it busy, so `fusermount3 -u` from another directory is what clears a mount left behind.\n\nRefused with --daemon (a daemon launch returns while the task keeps running, and the mount's lifetime is this process's) and with a --workspace-disk image inside the launch directory itself (mounting the guest tree over that directory would hide the image file the VM attaches)."
+        long_help = "Mount the launch directory on the host, served by the guest's /workspace tree over a FUSE relay (the reverse share).\n\nThe mount is there only while this cang process runs, it is read-write, and nothing invalidates the host's caches when the guest writes (no host inotify event is generated for a guest-side write). It needs --workspace-disk, because the tree being served is the disk's, not the host directory's. For a host view that outlives the launch, use `cang workspace serve PATH`: a long-lived workspace server VM owns the image between launches and holds the same mount up.\n\nThe mount is at the launch directory, which is where the host's view belongs: the host copy of the tree is shadowed for the life of the launch. If the guest stops answering, every host syscall fails with EIO and the mount stays until cang exits (it never silently reverts to the host tree). A host process whose working directory is inside the mount keeps it busy, so `fusermount3 -u` from another directory is what clears a mount left behind.\n\nWhile a workspace server holds the image, a --workspace-disk launch naming the same image is refused by name: only one guest may mount it at a time, and `cang workspace stop PATH` is how the server is stopped.\n\nRefused with --daemon (a daemon launch returns while the task keeps running, and the mount's lifetime is this process's) and with a --workspace-disk image inside the launch directory itself (mounting the guest tree over that directory would hide the image file the VM attaches)."
     )]
     workspace_relay: bool,
 
@@ -375,6 +379,15 @@ pub(crate) enum CliCommand {
     Nix {
         #[command(subcommand)]
         command: NixCommand,
+    },
+
+    #[command(
+        name = "workspace",
+        about = "Serve one workspace disk to the host from a long-lived workspace server VM"
+    )]
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommand,
     },
 
     #[command(
@@ -568,6 +581,59 @@ pub(crate) enum NixCommand {
     },
 }
 
+/// The host's view of one workspace image: up (`serve`), down (`stop`), or
+/// reported (`status`).
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub(crate) enum WorkspaceCommand {
+    #[command(
+        name = "serve",
+        about = "Start a workspace server VM: mount the image at a host directory until interrupted"
+    )]
+    Serve {
+        #[arg(
+            value_name = "DISK",
+            help = "The btrfs workspace image (or block device) to serve; created on first use"
+        )]
+        disk: PathBuf,
+
+        #[arg(
+            long = "mount-at",
+            value_name = "PATH",
+            help = "The host directory the guest's tree is mounted on (default: the current directory)",
+            long_help = "The host directory the guest's tree is mounted on. Defaults to the current directory, which is where ticket 23 puts the host's view - the mount shadows that directory's own contents for as long as the server runs, so run it from an empty directory or pass --mount-at to name another one."
+        )]
+        mount_at: Option<PathBuf>,
+
+        #[arg(
+            long = "workspace-size",
+            value_name = "SIZE",
+            help = "Creation size for a new image, for example 64G (default 64G)"
+        )]
+        workspace_size: Option<String>,
+    },
+
+    #[command(
+        name = "stop",
+        about = "Stop the workspace server serving one image and unmount its host view"
+    )]
+    Stop {
+        #[arg(
+            value_name = "DISK",
+            help = "The workspace image whose server should stop (the path the server was started with)"
+        )]
+        disk: PathBuf,
+    },
+
+    #[command(
+        name = "status",
+        about = "Report the workspace server and host mount for one image"
+    )]
+    Status {
+        #[arg(value_name = "DISK", help = "The workspace image to report on")]
+        disk: PathBuf,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NixGcOptions {
     pub(crate) all: bool,
@@ -620,6 +686,14 @@ pub(crate) enum CliAction {
     Doctor {
         log_settings: LogSettings,
     },
+    WorkspaceStop {
+        disk: PathBuf,
+        log_settings: LogSettings,
+    },
+    WorkspaceStatus {
+        disk: PathBuf,
+        log_settings: LogSettings,
+    },
 }
 
 impl Cli {
@@ -667,6 +741,45 @@ impl Cli {
                     command,
                     log_settings: LogSettings::from_process_env(self.log_level, self.debug),
                 },
+                CliCommand::Workspace { command } => match command {
+                    WorkspaceCommand::Stop { disk } => CliAction::WorkspaceStop {
+                        disk,
+                        log_settings: LogSettings::from_process_env(self.log_level, self.debug),
+                    },
+                    WorkspaceCommand::Status { disk } => CliAction::WorkspaceStatus {
+                        disk,
+                        log_settings: LogSettings::from_process_env(self.log_level, self.debug),
+                    },
+                    WorkspaceCommand::Serve {
+                        disk,
+                        mount_at,
+                        workspace_size,
+                    } => {
+                        let mut options = self.try_into_runtime_options()?;
+                        if options.daemon {
+                            anyhow::bail!(
+                                "--daemon cannot be used with 'cang workspace serve': the host mount lives exactly as long as the server process, and a daemon launch returns while the VM keeps running"
+                            );
+                        }
+                        let mount_at = match mount_at {
+                            Some(path) => path,
+                            None => anyhow::Context::context(
+                                std::env::current_dir(),
+                                "'cang workspace serve' needs a current directory to mount the guest's tree on; pass --mount-at PATH",
+                            )?,
+                        };
+                        options.workspace = Some(mount_at.clone());
+                        options.workspace_disk = Some(disk.clone());
+                        options.workspace_size = workspace_size;
+                        options.workspace_relay = true;
+                        options.guest_command = WORKSPACE_SERVER_COMMAND
+                            .iter()
+                            .map(|arg| (*arg).to_owned())
+                            .collect();
+                        options.workspace_serve = true;
+                        CliAction::Run(Box::new(options))
+                    }
+                },
             })
         } else {
             Ok(CliAction::Run(Box::new(self.try_into_runtime_options()?)))
@@ -705,6 +818,7 @@ impl Cli {
             workspace_disk: self.workspace_disk,
             workspace_relay: self.workspace_relay,
             workspace_size: self.workspace_size,
+            workspace_serve: false,
 
             mem_gib: self.mem_gib,
             network_mode: if self.tsi {
@@ -767,6 +881,11 @@ pub(crate) struct RuntimeOptions {
     pub(crate) workspace_disk: Option<PathBuf>,
     pub(crate) workspace_relay: bool,
     pub(crate) workspace_size: Option<String>,
+    /// `cang workspace serve`: the same launch with the server's lifetime, its
+    /// exclusive image lease and its mount ownership. The disk is
+    /// `workspace_disk` and the mount point is `workspace`, exactly as for a
+    /// launch that spells those flags itself.
+    pub(crate) workspace_serve: bool,
     pub(crate) mem_gib: Option<u32>,
     pub(crate) network_mode: NetworkMode,
     pub(crate) pulse: Option<PulseServer>,
@@ -2697,6 +2816,125 @@ fn virtiofs_cache_symlinks_option_is_parsed_and_overridden() {
         None,
         "no option means cang's default, with the environment able to override it"
     );
+}
+
+#[test]
+fn workspace_serve_is_the_normal_launch_with_the_server_marker() {
+    let cli = Cli::try_parse_from(["cang", "workspace", "serve", "/tmp/ws.raw"])
+        .expect("serve should parse");
+    let action = cli.try_into_action().expect("serve should resolve");
+
+    match action {
+        crate::cli::CliAction::Run(options) => {
+            assert!(options.workspace_serve, "serve must mark the launch");
+            assert_eq!(options.workspace_disk, Some(PathBuf::from("/tmp/ws.raw")));
+            assert!(options.workspace_relay, "the server always mounts the tree");
+            assert!(!options.daemon);
+            assert_eq!(
+                options.workspace,
+                Some(std::env::current_dir().expect("cwd")),
+                "the mount lands on the launch directory by default"
+            );
+            assert_eq!(
+                options.guest_command,
+                crate::cli::WORKSPACE_SERVER_COMMAND
+                    .iter()
+                    .map(|arg| (*arg).to_owned())
+                    .collect::<Vec<_>>(),
+                "the guest payload must outlive host tooling"
+            );
+        }
+        other => panic!("serve must resolve to a run action, got {other:?}"),
+    }
+}
+
+#[test]
+fn workspace_serve_mount_at_and_size_override_the_defaults() {
+    let cli = Cli::try_parse_from([
+        "cang",
+        "workspace",
+        "serve",
+        "--mount-at",
+        "/tmp/serve-here",
+        "--workspace-size",
+        "32G",
+        "work.raw",
+    ])
+    .expect("serve with overrides should parse");
+    match cli.try_into_action().expect("serve should resolve") {
+        crate::cli::CliAction::Run(options) => {
+            assert!(options.workspace_serve);
+            assert_eq!(options.workspace_disk, Some(PathBuf::from("work.raw")));
+            assert_eq!(
+                options.workspace,
+                Some(PathBuf::from("/tmp/serve-here")),
+                "named overrides are carried by their own fields"
+            );
+            assert_eq!(options.workspace_size.as_deref(), Some("32G"));
+        }
+        other => panic!("serve must resolve to a run action, got {other:?}"),
+    }
+}
+
+#[test]
+fn workspace_serve_refuses_daemon_by_name() {
+    let err = Cli::try_parse_from(["cang", "--daemon", "workspace", "serve", "/tmp/ws.raw"])
+        .expect("the flag combination parses, cang refuses it")
+        .try_into_action()
+        .expect_err("--daemon with a workspace server must be refused");
+
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("--daemon cannot be used with 'cang workspace serve'"),
+        "{message}"
+    );
+    assert!(
+        message.contains("mount lives exactly as long as"),
+        "{message}"
+    );
+}
+
+#[test]
+fn workspace_stop_and_status_need_no_vm() {
+    match Cli::try_parse_from(["cang", "workspace", "stop", "/tmp/ws.raw"])
+        .expect("stop should parse")
+        .try_into_action()
+        .expect("stop should resolve")
+    {
+        crate::cli::CliAction::WorkspaceStop { disk, .. } => {
+            assert_eq!(disk, PathBuf::from("/tmp/ws.raw"));
+        }
+        other => panic!("stop must resolve to a stop action, got {other:?}"),
+    }
+    match Cli::try_parse_from(["cang", "workspace", "status", "/tmp/ws.raw"])
+        .expect("status should parse")
+        .try_into_action()
+        .expect("status should resolve")
+    {
+        crate::cli::CliAction::WorkspaceStatus { disk, .. } => {
+            assert_eq!(disk, PathBuf::from("/tmp/ws.raw"));
+        }
+        other => panic!("status must resolve to a status action, got {other:?}"),
+    }
+    assert!(
+        Cli::try_parse_from(["cang", "workspace", "serve"]).is_err(),
+        "serve needs a disk to serve"
+    );
+    assert!(
+        Cli::try_parse_from(["cang", "workspace", "bogus", "/tmp/ws.raw"]).is_err(),
+        "the workspace surface is exactly serve/stop/status"
+    );
+}
+
+#[test]
+fn a_plain_launch_has_no_workspace_server_marker() {
+    let options = Cli::try_parse_from(["cang", "--", "true"])
+        .expect("plain launch should parse")
+        .try_into_runtime_options()
+        .expect("valid options");
+
+    assert!(!options.workspace_serve);
+    assert!(!options.workspace_relay);
 }
 
 #[test]
