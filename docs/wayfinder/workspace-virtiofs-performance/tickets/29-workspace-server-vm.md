@@ -3,7 +3,7 @@ label: wayfinder:prototype
 title: A workspace server VM that serves the image whenever no task VM runs
 status: open
 blocked_by: []
-claimed_by: ""
+claimed_by: "pi (stage 1 shipped 2026-11-21)"
 ---
 
 ## Measured baseline this builds on (2026-11-20, [note 62](../notes/62-fuse-relay-spike.md))
@@ -15,6 +15,24 @@ per FUSE frame**, 2.9-3.6 k frames/s serial, host `git status` **0.211 s** again
 for the two items ticket 31 owns (death semantics for `mmap`, and the 4 KiB write
 cap). The pump reconnects after a restart (unmount + restart re-connects to the same
 guest), which is what makes a *server VM* lifetime independent of a mount's.
+
+## Stage 1 shipped (2026-11-21, commit `e47250c6`, [note 64](../notes/64-relay-stage1-live-arms.md))
+
+The relay itself is now cang's own code and runs in a real launch:
+`--workspace-relay` + `--workspace-disk` mounts the guest's tree on the launch
+directory through a FUSE relay over vsock (guest half `crates/cang-guest-relay`,
+host half `crates/cang-relay-pump`, guest port 50 430). Live numbers: host
+`git status --porcelain` **75 ms** against **11 ms** warm guest-native; INIT
+`flags=0x406020 max_write=1048576 max_pages=256` (the big-write patch is in the
+product path). Two defects were found by those arms and fixed: the acceptor socket
+was created as the worker identity so the pump got `EACCES` for ever (the worker now
+hands it to the host user), and the guest server served its own `/` instead of
+`/workspace` because `fuse-backend-rs` reads the tree from `config.root_dir`.
+
+**What stage 1 deliberately does not have** - the rest of this ticket: the mount
+dies with the launch (so `-EIO` has no window, and between launches the host sees
+its own directory again), no read-only-under-a-task flip, no reconnect across a
+server restart, and no single-writer lease between a server and a task VM.
 
 ## Question
 

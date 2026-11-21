@@ -165,9 +165,9 @@ tree as `cargo/` and is bound at `~/.cargo` (seeded once from the registry the
 launch mounted there, then kept on the disk). Three consequences:
 
 - the host-directory `/workspace` bind mount and the `~/.cargo` mount are dropped
-  for such a launch, so the guest's tree is the only copy - the reverse share
-  that would show it back on the host is not built yet, and the launch directory
-  keeps showing its own contents;
+  for such a launch, so the guest's tree is the only copy - `--workspace-relay`
+  is what shows it back on the host, and without it the launch directory keeps
+  showing its own contents;
 - the build disk is neither created nor attached: with `target/` and the registry
   inside the tree it has nothing left to hold;
 - `/nix` follows the disk: the launch serves it from the read-only btrfs
@@ -178,6 +178,38 @@ launch mounted there, then kept on the disk). Three consequences:
   launch without `--workspace-disk` keeps the host-composed overlay instead, and
   if the lower cannot be built (host space, or an image whose `cang-guest-init`
   predates the guest half) the launch keeps that overlay and names the reason.
+
+### Seeing the guest's tree on the host
+
+`--workspace-relay` (only valid with `--workspace-disk`) mounts the guest's tree
+on the launch directory for the duration of the task, so `git`, an editor and the
+agent harness itself keep working on the real files:
+
+```bash
+./result/bin/cang --workspace-disk ./work.raw --workspace-relay -- bash -lc 'cargo build'
+```
+
+The mount is a FUSE filesystem served by the guest over vsock: every host
+operation is a round trip to the VM (measured ~143 us, so `git status` on this
+repository takes about 75 ms against 11 ms inside the guest). That is the whole
+point - writes and reads on a hot build path never leave the guest, and only the
+lower-frequency host tooling pays the trip.
+
+What it promises, and what it does not:
+
+- **the image is authoritative**; the host view may be *stale* - a host reader
+  can see an older version of a file until it reopens it, and no host `inotify`
+  event is generated for a guest-side write (the FUSE protocol can invalidate
+  cache, not synthesise an event);
+- **the mount does not outlive the launch**: when the task ends, or the VM dies,
+  cang unmounts it and the launch directory shows its own contents again, so a
+  guest-side file is invisible on the host between launches. A long-lived
+  workspace-server VM that keeps the view up is the next step, not this flag;
+- while the guest is gone, requests are answered `-EIO` rather than hanging.
+
+`--workspace-relay` is a measurement surface for that next step: it is not
+compatible with the read-only-under-a-task rule yet (a host write and a guest
+write to one file are not arbitrated).
 
 ## Volumes
 
