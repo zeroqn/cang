@@ -602,6 +602,17 @@ of every request to zero.
   Live: mount <10 s, host `git status` 58-67 ms, both writes crossing, `stop` 267 ms,
   restart showing the file a task wrote in between, `EBUSY` exit 1.
 
+- [Can the serving guest keep the host's cache fresh for its own tree writes?](tickets/30-guest-side-invalidation-watcher.md):
+  **yes, and only `INVAL_INODE` with `off=0` does it** - a held host descriptor sees a
+  guest write in **0.77-1.35 ms** against **4.95-4.99 s** stale (and *never* for a
+  same-size rewrite); `INVAL_ENTRY`/`DELETE` never refresh an open inode's pages. A
+  plain `open` was never stale (`CachePolicy::Auto` drops pages on open), so the
+  problem is long-lived readers only. The pump must **poll the transport while
+  idle** (+138/-40 in one file, 1.57 us/notification, ~1 ms end to end); the
+  reply-path-only drain leaves the 4.98 s window exactly where it was. Watches cost
+  nothing (1 374-3 641 of 122 262) and a storm is ~8 k events/s. Implementation is
+  [ticket 32](tickets/32-invalidation-watcher-implementation.md).
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)
