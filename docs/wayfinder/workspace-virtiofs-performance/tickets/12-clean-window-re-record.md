@@ -92,3 +92,29 @@ So this ticket's remaining work is **variance, not another setting**: 3 runs per
 interleaved inside one window, medians rather than single runs, and host
 `/proc/stat` steal sampled per run so the two can be correlated. Until that is done
 the guest rows are a range, and the map says so.
+
+## Interleaved window, 2026-11-22 16:20-16:55 (added after the A/B)
+
+`run.sh` gained `--interleave`, and the first interleaved window (3 runs per arm,
+`host`+`guest-local`+`guest-virtiofs`, every run cold at 2401 `Compiling`/0 `Fresh`)
+came out:
+
+| run | host | guest-local | guest-virtiofs | penalty |
+| --- | --- | --- | --- | --- |
+| 1 | 92.0 | 139.7 | 176.0 | 1.26x |
+| 2 | 90.9 | 116.6 | 149.2 | 1.28x |
+| 3 | 91.2 | 43.2 | 76.7 | 1.78x |
+
+- the variance is **run-scale**: the guest arms differ 3x *within* this one
+  window while the host arm moves 1.2%;
+- a **guest run beats the host by ~2x** on identical work, so the tool's
+  `host / guest-local` "VM penalty" is below 1x here - and the storage medium is
+  excluded, because the same payload on the host with sources and target in
+  `/dev/shm` measured **90.4 s twice**.
+
+**This ticket's residual is therefore the variance itself**, not another
+configuration: a host-vs-guest timestamp pair, guest `/proc/stat` deltas and host
+steal **per run**, joined by run label. Until one of those explains the 3x swing and
+the inverted VM ratio, no number this tool prints on this host - including the
+virtio-fs penalty the map exists for - is interpretable. `--interleave` is kept
+because it at least puts the arms in one window.

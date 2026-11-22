@@ -179,3 +179,51 @@ variance on:
    per run so the two can be correlated. `halt_poll_ns`, `force_avic`, guest RAM and
    the kernel are all ruled out or untested-but-unlikely by this A/B.
 
+## 7. Interleaved window (2026-11-22 16:20-16:55): the guest arm beats the host by ~2x, and the variance is run-scale
+
+`run.sh` gained `--interleave` (one run of each arm, then the next run of each, so
+all arms share one window) and the first interleaved window ran **3 runs per arm**,
+one arm at a time, `host` + `guest-local` + `guest-virtiofs`:
+
+| run | host | guest-local | guest-virtiofs | penalty (vf/local) |
+| --- | --- | --- | --- | --- |
+| 1 | 92.0 | 139.7 | 176.0 | 1.26x |
+| 2 | 90.9 | 116.6 | 149.2 | 1.28x |
+| 3 | 91.2 | **43.2** | **76.7** | **1.78x** |
+| spread | **1.2%** | **3.2x** | **2.3x** | 1.26-1.78x |
+
+Every one of those nine runs is cold - each inner log carries **2401 `Compiling`,
+0 `Fresh`**, its own `target=`, and the same `rustc 1.99.1`/`jobs=26`.
+
+Two things follow, and the second is the important one:
+
+1. **The variance is run-scale, not window-scale.** Run 3 of both guest arms came in
+   at roughly a third of run 1, twenty minutes later inside the *same* interleaved
+   window, while the host arm moved 1.2% across the same three runs. So "the guest
+   arms move 2x between windows" (§6) understated it: they move 3x *within* one.
+2. **A guest run can beat the host by ~2x on identical cold work** (43.2 s against
+   91.2 s). That inverts what the tool prints: it reports
+   `host / guest-local` as "the VM penalty", and on this host that ratio is
+   **0.47-0.77x**, i.e. negative. The storage medium is **not** the explanation -
+   the same payload run on the *host* with its target in `/dev/shm` (and its sources
+   in `/dev/shm` too) took **90.4 s and 90.4 s**, 2401 `Compiling` each, against the
+   90.9-91.2 s of the btrfs-target host arm. So a RAM target changes nothing on the
+   host, while the guest's RAM target coincides with a 2x faster run.
+   A second confirmation of the fast regime: an extra `guest-local` run immediately
+   after run 3 came in at **52.5 s**.
+
+**What is ruled out, cumulatively, for the guest arm's instability and speed:**
+`halt_poll_ns` (§6, 3% difference inside an 18% spread, two runs per side), the
+guest kernel (flat firmware A/B in a clean window), the storage medium (the host-RAM
+arms above), the workload and toolchain (2401 `Compiling`/`0` `Fresh` and identical
+`rustc` in every run), and host CPU load (the host arm is flat at 1.2% across the
+same window while the guest arms swing 3x).
+
+**What is left, and what would settle it**: the guest's own clock/whether the guest
+is really doing the same work in 43 s; and the host's steal/KVM-exit accounting
+sampled *per run* rather than per window. Concretely: a host-vs-guest timestamp pair
+(write a marker from each side and compare the same monotonic interval), guest
+`/proc/stat` deltas per run, and host `/proc/stat` steal per run, joined by run
+label. Until one of those explains it, **no ratio this tool prints on this host is
+interpretable** - including the one the map exists to measure.
+

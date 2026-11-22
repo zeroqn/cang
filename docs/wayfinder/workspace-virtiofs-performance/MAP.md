@@ -277,6 +277,18 @@ control:
   figure), and a **harness defect now fixed**: the devshell's `CARGO_TARGET_DIR`
   made every run after the first a warm no-op (`Finished dev profile in 1.07s`),
   so `run.sh`'s payload now pins its own target directory and prints it.
+- **Interleaved window (2026-11-22 16:20-16:55): the guest arm beats the host,
+  and the variance is run-scale.** With the new `--interleave` mode, 3 runs per arm
+  in one window: host **92.0 / 90.9 / 91.2 s** (1.2% spread), `guest-local`
+  **139.7 / 116.6 / 43.2 s**, `guest-virtiofs` **176.0 / 149.2 / 76.7 s** - all
+  cold (2401 `Compiling`, 0 `Fresh`), and the penalty ratio **1.26x / 1.28x /
+  1.78x** across the three rounds. So the guest arms move **3x inside one window**
+  (not 2x between windows), and a guest run can be **~2x faster than the host** on
+  identical work, which makes the tool's "VM penalty" negative here. The storage
+  medium is excluded (the same payload on the host with sources *and* target in
+  `/dev/shm`: **90.4 s twice**). Left to explain: the guest's clock/work and
+  per-run steal accounting - [note 72](notes/72-clean-window-baseline.md) §7.
+
 - **The guest arms are not a baseline yet (2026-11-22 16:05 A/B).** `halt_poll_ns`
   was toggled 0 vs 200000 by root and **ruled out**: 2 runs per side gave
   `guest-local` **166.0, 141.3 s** (off) against **147.7, 169.0 s** (default) - a 3%

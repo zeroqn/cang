@@ -28,6 +28,13 @@
 # record per run, and a file in the workspace survives an arm whose cang CLI is
 # killed early.
 #
+#   --interleave       run every arm once, then again, ... (run N of each arm
+#                      before run N+1 of any) instead of all of one arm's runs
+#                      first. On a host whose guest arms drift between windows this
+#                      is the difference between a median and a snapshot: a single
+#                      arm's three runs can span 18% by themselves, so spread the
+#                      arms across the same window and compare medians.
+#
 #   --report           print the ratio table for the recorded runs and exit
 #
 # Env: CANG (default <repo>/result/bin/cang), IMAGE, BENCH_ROOT, RUNS, WORKLOAD,
@@ -49,6 +56,7 @@ workload_kind=${WORKLOAD:-synthetic}
 arms=host,guest-virtiofs,guest-local
 rebuild_workload=0
 report=0
+interleave=0
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -62,7 +70,8 @@ while [ $# -gt 0 ]; do
         --bench-root) bench_root=$2; shift 2 ;;
         --bench-root=*) bench_root=${1#*=}; shift ;;
         --report) report=1; shift ;;
-        -h|--help) sed -n '2,42p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --interleave) interleave=1; shift ;;
+        -h|--help) sed -n '2,46p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "run.sh: unknown argument $1" >&2; exit 2 ;;
     esac
 done
@@ -376,58 +385,87 @@ for arm in ${arms//,/ }; do
     esac
 done
 
-for arm in ${arms//,/ }; do
+# The run loop pair. `--interleave` runs one arm's run 1, then every other arm's
+# run 1, then run 2 of each, so the arms share one window; without it each arm
+# finishes its own runs before the next arm starts, which is fine on a stationary
+# host and misleading on this one (note 72: a single arm's runs span 18%, and the
+# arms themselves move ~2x between windows).
+run_one() {
+    arm=$1
     dir=$bench_root/$arm
+    n=$2
+    log=$bench_root/logs/$arm-$n.log
+    tag=$arm-$n-$(date +%s)
+    result=$dir/bench-result-$tag.txt
+    : >"$log"
+    rm -f "$result"
+    capture=$bench_root/logs/threads-$arm-$n.txt
+    sampler_pid=
+    case $arm in guest-*) start_sampler "$capture" ;; esac
+    start=$(now_ms)
     case $arm in
-    guest-*)
-        require_workspace_free "$dir"
-        if [ "$workload_kind" = cang ]; then warm_cargo_registry "$dir"; fi
+    host)
+        ( cd "$dir" && CARGO_BUILD_JOBS=$jobs nix develop "$repo" --command \
+            bash bench-inner.sh "$tag" "$result" ) >>"$log" 2>&1
+        ;;
+    guest-virtiofs)
+        launch_guest_arm "$dir" "$log" "$result" \
+            sh bench-inner.sh "$tag" "/workspace/$(basename "$result")"
+        ;;
+    guest-local)
+        launch_guest_arm "$dir" "$log" "$result" sh -c '
+            set -eu
+            # RAM-backed and FUSE-free: a plain cang guest mounts no
+            # containers disk (/dev/vdb is absent unless podman runs) and
+            # /home is the image root, so /dev/shm is the guest-local
+            # location that actually exists. This is the CPU/IO floor of the
+            # VM itself.
+            local_dir=/dev/shm/cang-rust-bench
+            rm -rf "$local_dir"
+            mkdir -p "$local_dir"
+            cp /workspace/workload.tar "$local_dir/workload.tar"
+            tar -C "$local_dir" -xf "$local_dir/workload.tar"
+            rm -f "$local_dir/workload.tar"
+            cp /workspace/bench-inner.sh "$local_dir"/
+            cd "$local_dir"
+            exec sh bench-inner.sh "$1" "/workspace/$2"
+        ' sh "$tag" "$(basename "$result")"
         ;;
     esac
-    for n in $(seq 1 "$runs"); do
-        log=$bench_root/logs/$arm-$n.log
-        tag=$arm-$n-$(date +%s)
-        result=$dir/bench-result-$tag.txt
-        : >"$log"
-        rm -f "$result"
-        capture=$bench_root/logs/threads-$arm-$n.txt
-        sampler_pid=
-        case $arm in guest-*) start_sampler "$capture" ;; esac
-        start=$(now_ms)
+    outer=$(( $(now_ms) - start ))
+    fs_worker_pct=$(stop_sampler "$capture")
+    record "$arm" "$n" "$result" "$outer" "$log" "${fs_worker_pct:--}"
+}
+
+if [ "$interleave" = 1 ]; then
+    for arm in ${arms//,/ }; do
+        dir=$bench_root/$arm
         case $arm in
-        host)
-            ( cd "$dir" && CARGO_BUILD_JOBS=$jobs nix develop "$repo" --command \
-                bash bench-inner.sh "$tag" "$result" ) >>"$log" 2>&1
-            ;;
-        guest-virtiofs)
-            launch_guest_arm "$dir" "$log" "$result" \
-                sh bench-inner.sh "$tag" "/workspace/$(basename "$result")"
-            ;;
-        guest-local)
-            launch_guest_arm "$dir" "$log" "$result" sh -c '
-                set -eu
-                # RAM-backed and FUSE-free: a plain cang guest mounts no
-                # containers disk (/dev/vdb is absent unless podman runs) and
-                # /home is the image root, so /dev/shm is the guest-local
-                # location that actually exists. This is the CPU/IO floor of the
-                # VM itself.
-                local_dir=/dev/shm/cang-rust-bench
-                rm -rf "$local_dir"
-                mkdir -p "$local_dir"
-                cp /workspace/workload.tar "$local_dir/workload.tar"
-                tar -C "$local_dir" -xf "$local_dir/workload.tar"
-                rm -f "$local_dir/workload.tar"
-                cp /workspace/bench-inner.sh "$local_dir"/
-                cd "$local_dir"
-                exec sh bench-inner.sh "$1" "/workspace/$2"
-            ' sh "$tag" "$(basename "$result")"
+        guest-*)
+            require_workspace_free "$dir"
+            if [ "$workload_kind" = cang ]; then warm_cargo_registry "$dir"; fi
             ;;
         esac
-        outer=$(( $(now_ms) - start ))
-        fs_worker_pct=$(stop_sampler "$capture")
-        record "$arm" "$n" "$result" "$outer" "$log" "${fs_worker_pct:--}"
     done
-done
+    for n in $(seq 1 "$runs"); do
+        for arm in ${arms//,/ }; do
+            run_one "$arm" "$n"
+        done
+    done
+else
+    for arm in ${arms//,/ }; do
+        dir=$bench_root/$arm
+        case $arm in
+        guest-*)
+            require_workspace_free "$dir"
+            if [ "$workload_kind" = cang ]; then warm_cargo_registry "$dir"; fi
+            ;;
+        esac
+        for n in $(seq 1 "$runs"); do
+            run_one "$arm" "$n"
+        done
+    done
+fi
 
 echo
 echo "summary: $summary"

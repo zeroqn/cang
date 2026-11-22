@@ -134,6 +134,20 @@ running on the host.
 | guest-local (`/dev/shm`, no FUSE) | **311.264** in the 14:00 window, **141.3-169.0** (4 runs, 18% spread) in the 16:05 window | 3.44x / 1.5-1.9x | 1.00x |
 | guest-virtiofs (`/workspace`) | **372.645** in the 14:00 window, **274.9** in the 16:05 window | 4.12x / 3.0x | **1.20x / 1.63x** |
 
+> **The guest arms are not yet a baseline - and on this host the *host* arm is not
+> a reference either.** An interleaved window (`--runs 3 --interleave`, one run of
+> each arm per round, all cold at 2401 `Compiling`/0 `Fresh`) gave host **92.0 /
+> 90.9 / 91.2 s** (1.2% spread) against `guest-local` **139.7 / 116.6 / 43.2 s** and
+> `guest-virtiofs` **176.0 / 149.2 / 76.7 s** - so the guest arms swing **3x within
+> one window** and a guest run can be **~2x faster than the host on identical work**
+> (43.2 s against 91.2 s), which makes the `host / guest-local` ratio the tool prints
+> as "the VM penalty" come out **below 1x**. The storage medium is not the cause: the
+> same payload on the *host* with both sources and target in `/dev/shm` took
+> **90.4 s twice**. Ruled out so far: `halt_poll_ns`, the guest kernel, the storage
+> medium, the workload/toolchain, and host CPU load. Before quoting any ratio from
+> this tool on this machine, see
+> `docs/wayfinder/workspace-virtiofs-performance/notes/72-clean-window-baseline.md`
+> §6-§7 - and use `--interleave` so the arms at least share a window.
 > **The guest arms are not yet a baseline.** On this host they vary by **~2x between
 > windows** with no known cause (both windows on the same code, image, guest kernel
 > and cold target), and the penalty ratio moves with them - 1.20x in one window,
