@@ -658,6 +658,26 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.23.2` (`57235e65`) - a cang release publishes the workspace relay's host
+  half `relay-pump` as a second neutral ELF
+  (`cang-relay-pump-<arch>-unknown-linux-gnu`, under the same payload contract
+  and attestation as the `cang` ELF), and `.#cang-prebuilt` fetches it from the
+  same pin (`relayPumpAsset`/`relayPumpHash`) instead of compiling it out of
+  this tree. Measured on the release: `.#cang-prebuilt`'s build inputs no longer
+  contain `cargo-deps-vendor`, `rustc` or the workspace source, its
+  `libexec/cang-helpers/relay-pump` is
+  `…-cang-relay-pump-0.23.2-prebuilt-v0.23.2/bin/relay-pump`, and both binaries
+  report the version (`cang 0.23.2`, `relay-pump 0.23.2`).
+  `scripts/update-cang-prebuilt.sh` now pins the two assets together - it
+  validates both payloads before writing anything, so a release with a broken or
+  missing pump leaves `nix/pins.nix` untouched - and `scripts/cang-release.sh`
+  reads both SRIs from one CI run, re-checks both, and proves the helper came
+  from the pin at verify time. Its convergence loop compares every pin commit
+  against the hashes that pin carries, bounded, instead of reading a loop
+  variable after the fact. cang asset sha256
+  `d3bec44a1f38afae366d65629bac64930e039b13178442b50f236317fde3b413`,
+  relay-pump sha256
+  `e2748aaf25350ecf3895850475518609d071afcebc0e9bc5b0c61b4afc370146`.
 - `v0.14.0` (`7b7184e`) - the guest's VA-API decode is fixed where it broke:
   vrend's `h264_decode_bitstream()` filled only the members the H.264 picture
   descriptor carried, so the host's VA driver read the slice type out of whatever
