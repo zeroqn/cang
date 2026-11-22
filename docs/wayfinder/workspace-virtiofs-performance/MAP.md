@@ -647,6 +647,15 @@ of every request to zero.
   help and in `cang-libkrun`'s constant. An `mmap`'d reader is
   [ticket 33](tickets/33-mmap-reader-visibility.md).
 
+- [What does an `mmap`'d guest reader see after a host in-place rewrite?](tickets/33-mmap-reader-visibility.md):
+  **nothing - it stays stale until it re-maps.** Stale for the whole 11.5 s
+  observation (past the 5 s attribute timeout), for MAP_SHARED and MAP_PRIVATE,
+  same-size and grown, truncation (stale bytes, no SIGBUS), and with
+  zero-message-open off - so it is not the lever; only `INVAL_INODE` would drop
+  those pages and nothing sends one in the host->guest direction
+  ([note 71](../notes/71-mmap-reader-never-sees-host-rewrite.md)). `read(2)` readers
+  stay fresh, and `docs/usage.md` now says exactly that.
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)

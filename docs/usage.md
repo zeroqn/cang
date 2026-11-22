@@ -228,6 +228,15 @@ What it promises, and what it does not:
   harness, an editor, a `tail -f` - and never `cat`/`git`. No host `inotify`
   event is synthesised either way: the FUSE protocol can invalidate cache, it
   cannot deliver an event;
+- **an `mmap`'d reader is stale until it re-maps** - in both directions of the
+  model. A guest process that maps a `/workspace` file keeps the pages it faulted:
+  a host in-place rewrite is *not* visible to it (measured stale for 11.5 s, past the
+  5 s attribute timeout, and unaffected by `--virtiofs zero-message-open:off`), and
+  only closing and re-mapping shows the new bytes. `read(2)` readers are fresh in the
+  shapes measured (a fresh `open`, a reopen, a held descriptor). The host-directory
+  share has no way to invalidate a guest mapping; the relay's watcher sends
+  `INVAL_INODE` in the guest -> host direction only.
+
 - **the mount does not outlive the launch**: when the task ends, or the VM dies,
   cang unmounts it and the launch directory shows its own contents again, so a
   guest-side file is invisible on the host between launches. For a view that
