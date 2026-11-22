@@ -3,8 +3,22 @@ label: wayfinder:grilling
 title: Does the zero-message-open win (2.66x on a build) justify relaxing ticket 03's "exact host visibility" by up to attr_timeout?
 status: open
 blocked_by: []
-claimed_by: ""
+claimed_by: "pi (2026-11-21)"
 ---
+
+## Measured first (2026-11-21, [note 70](../notes/70-in-place-rewrite-window-does-not-reproduce.md))
+
+The premise did not reproduce on the shipped tree (guest kernel 7.3.1, cache Auto,
+zero-message-open on, attr/entry timeout 5 s): a host in-place rewrite of the same
+inode was visible at **0.00 s** - the first 200 ms sample - to **both** a held
+descriptor (same size, 51 B -> 51 B) and a fresh reopen, in three arms, with the
+clock sharing done by a marker file rather than by comparing host and guest times.
+
+Not measured: an mmap'd reader (note 63 records that mmap readers were never
+measured either), and any kernel other than 7.3.1.
+
+So the 5 s figure note 23 recorded is not the behaviour of the configuration cang
+ships today, and the docs stating it as a fact are unverified.
 
 ## Question
 
