@@ -1,7 +1,7 @@
 ---
 label: wayfinder:grilling
 title: Does the zero-message-open win (2.66x on a build) justify relaxing ticket 03's "exact host visibility" by up to attr_timeout?
-status: open
+status: closed
 blocked_by: []
 claimed_by: "pi (2026-11-21)"
 ---
@@ -61,3 +61,25 @@ Bob answers one of:
 
 Whichever way it goes, note 23's numbers and the `CANG_FS_STATS` histogram stay
 valid; only the default and the docs move.
+
+## Resolution
+
+Decided by bob 2026-11-21: **accept the default, fix the docs** (and the `mmap` gap
+becomes its own ticket).
+
+1. `CANG_VIRTIOFS_ZERO_MESSAGE_OPEN` stays **on** (2.66x), with
+   `--fs zero-message-open:off` / `CANG_VIRTIOFS_ZERO_MESSAGE_OPEN=0` as the hatch.
+2. The docs stop stating the 5 s content-staleness window as a fact, because on the
+   shipped configuration it did not reproduce: a host in-place rewrite (same size
+   *and* changed size) was visible at the first 200 ms sample to a held descriptor
+   and to a reopen alike ([note 70](../notes/70-in-place-rewrite-window-does-not-reproduce.md)).
+   The corrected wording: what the lever gives up is *close-to-open*; what can still
+   lag is **attribute and directory-entry freshness** (`attr_timeout` /
+   `entry_timeout`, 5 s); contents were measured fresh in the shapes tested.
+   Corrected in `--fs`'s `long_help` (`crates/cang/src/cli/mod.rs`) and in
+   `crates/cang-libkrun/src/lib.rs`'s doc comment on the constant.
+3. `mmap`'d readers are **unmeasured** and that is now
+   [ticket 33](33-mmap-reader-visibility.md), so the docs can say "not measured"
+   rather than implying an answer.
+4. Ticket 03's promise is unchanged in spirit: nothing is *written* stale, and the
+   only window left is the metadata timeout the map already accepted.

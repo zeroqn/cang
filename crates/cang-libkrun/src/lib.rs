@@ -57,12 +57,17 @@ pub const CANG_FS_WORKER_THREADS: usize = 4;
 /// every `.rlib` over FUSE (READ went from 36% of requests to 3%). See note 23 of
 /// the workspace-virtiofs-performance map.
 ///
-/// The one semantic it gives up: a file the guest has read stays cached after the
-/// open that read it, so a *host-side in-place rewrite* of that file becomes
-/// visible to the guest when the attributes refresh (attr_timeout, 5 s) rather
-/// than at the next `open`. Files the host rewrites by rename (every editor, `git
-/// checkout`, `sed -i`) are new inodes and unaffected, as are host-added
-/// directory entries. `CANG_VIRTIOFS_ZERO_MESSAGE_OPEN=0|1` overrides the default per
+/// The one semantic it gives up is *close-to-open*: the guest's cached pages
+/// survive an `open`, so what it reads is its cache rather than a re-fetch on
+/// every open. Measured on the shipped configuration (guest kernel 7.3.1, note 70
+/// of the map): a *host-side in-place rewrite* was visible at the first 200 ms
+/// sample, to a held descriptor and to a reopen alike, at the same size and at a
+/// changed size - so the visible cost in practice is attribute and
+/// directory-entry freshness (`attr_timeout`/`entry_timeout`, 5 s), not file
+/// contents. An `mmap`'d reader has not been measured. Files the host rewrites by
+/// rename (every editor, `git checkout`, `sed -i`) are new inodes and unaffected,
+/// as are host-added directory entries.
+/// `CANG_VIRTIOFS_ZERO_MESSAGE_OPEN=0|1` overrides the default per
 /// launch, so an A/B - or a workspace that needs strict close-to-open - needs no
 /// rebuild.
 pub const CANG_VIRTIOFS_ZERO_MESSAGE_OPEN: bool = true;

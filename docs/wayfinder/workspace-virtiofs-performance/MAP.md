@@ -638,6 +638,15 @@ of every request to zero.
   second run. Proven on this repo: 50 471 entries seeded, the guest's `git status`
   matching the host's exactly.
 
+- [Does zero-message-open's 2.66x justify relaxing exact host visibility?](tickets/20-zero-message-open-coherence-contract.md):
+  **the window it feared does not reproduce** (bob, 2026-11-21). A host in-place
+  rewrite - same size and changed size - was visible at the first 200 ms sample to a
+  held descriptor *and* a reopen ([note 70](../notes/70-in-place-rewrite-window-does-not-reproduce.md)),
+  so the lever stays on by default; what it actually gives up is close-to-open, and
+  what can still lag is attribute/entry freshness. Docs corrected in the `--fs`
+  help and in `cang-libkrun`'s constant. An `mmap`'d reader is
+  [ticket 33](tickets/33-mmap-reader-visibility.md).
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)
