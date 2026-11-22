@@ -90,7 +90,17 @@ let
 
       inherit cargoDeps;
 
-      nativeBuildInputs = ciSccacheNativeBuildInputs ++ libkrunNativeBuildInputs;
+      # `cargoCheckHook` runs the workspace test binaries, and the repository
+      # tests shell out to the `nix/pins.nix` updaters - bash scripts that edit
+      # the pin with python3 - against a copy of the pin. That check environment
+      # is this package's, so python3 has to be in it; without it the pin-updater
+      # test fails on a missing command instead of on what it asserts.
+      nativeBuildInputs =
+        ciSccacheNativeBuildInputs
+        ++ libkrunNativeBuildInputs
+        ++ [
+          pkgs.python3
+        ];
       buildInputs = libkrunBuildInputs;
       env = libkrunEnv;
 
@@ -195,31 +205,7 @@ let
     // ciSccacheEnv
     // ciSccacheAttrs
   );
-  # The workspace relay's host half (`relay-pump`) as a store path of its own.
-  # A source build moves the binary into `$out/libexec/cang-helpers` above; the
-  # published prebuilt asset is the single `cang` ELF, so `.#cang-prebuilt` has
-  # no pump to move and takes this one instead. Without it the helper resolves
-  # to the bare name and `--workspace-relay` fails with `relay-pump: No such file
-  # or directory`.
-  relayPumpPackage = rustToolchain.rustPlatform.buildRustPackage {
-    pname = "cang-relay-pump";
-    version = cangVersion;
-    inherit src cargoDeps;
-
-    # Only the pump: the crate graph it needs (anyhow, clap, libc, mimalloc) is
-    # nothing like cang's, so there is no libkrun, virglrenderer or guest init
-    # here.
-    cargoBuildFlags = [
-      "--package"
-      "cang-relay-pump"
-    ];
-    cargoTestFlags = [
-      "--package"
-      "cang-relay-pump"
-    ];
-  };
-
 in
 {
-  inherit rustPackage cangMuslPackage relayPumpPackage;
+  inherit rustPackage cangMuslPackage;
 }
