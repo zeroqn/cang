@@ -255,7 +255,28 @@ control:
 | guest-local (`/dev/shm`, no FUSE) | 232.0, 232.9, 235.1 (**lever-off: see below**) | 2.2x | 1.00x |
 | guest-virtiofs (`/workspace`) | 298.9, 306.5, 311.4, 326.5 | 2.9x | **1.29-1.36x** |
 
-- **The virtio-fs penalty is ~30%**, and it is a *floor*: the control is RAM.
+> **Re-record attempt in a clean window, 2026-11-22 (HEAD `ee7744bc`, host
+- **Clean-window re-record (2026-11-22, HEAD `ee7744bc`, host `7.3.4-xanmod1`,
+  17.6 GiB, rustc 1.99.1, no cang task, no worker, no `cang-workspace` mount,
+  nothing else running - [note 72](notes/72-clean-window-baseline.md)).** The
+  **host** arm re-measured at **90.5 s** (90.761 / 90.109 / 90.549, 0.7% spread,
+  cold every run), **`guest-local` 311.3 s** and **`guest-virtiofs` 372.6 s** (one
+  run each, cold), so the virtio-fs penalty in this window is **1.20x** - narrowed
+  from the 1.29-1.36x above, while both guest arms are 19-34% slower in absolute
+  seconds than the 2026-10 window and the host arm 13% faster. The guest slowdown is
+  **unattributed**: a firmware A/B in the same window (guest `7.2.10-hardened1` pinned
+  back) measured 311.3 vs 315.7 s, i.e. flat, so the guest kernel is not the cause;
+  the host lost 24 -> 17.6 GiB and is itself nested (steal 23-46% only while a
+  26-vCPU guest lives). A first pass at this ticket reported 435.8 / 857-959 s and a
+  "1.62x from `7.3.5-hardened1`" - **both retracted**: its own probes ran around
+  its arms. What survives from that pass: the share is *faster* per request than
+  note 20's probe (`read` 4336 vs 1528 ops/s at one thread, p50 215 vs 1189 us),
+  `fs_worker` at 3-7% (starved, not idle - so it does not revise the 12% -> 26%
+  figure), and a **harness defect now fixed**: the devshell's `CARGO_TARGET_DIR`
+  made every run after the first a warm no-op (`Finished dev profile in 1.07s`),
+  so `run.sh`'s payload now pins its own target directory and prints it.
+- **The virtio-fs penalty is ~20% in the 2026-11-22 window** (1.20x; ~30% in the
+  2026-10 window), and it is a *floor*: the control is RAM.
 - **Correction (2026-10-26): the FUSE worker uses ~26% of one core, not 12%.**
   The sampler summed the wrong `/proc/<tid>/stat` fields because the thread's comm
   is `fs worker` *with a space*, which shifts every field index by one;
@@ -655,6 +676,15 @@ of every request to zero.
   those pages and nothing sends one in the host->guest direction
   ([note 71](../notes/71-mmap-reader-never-sees-host-rewrite.md)). `read(2)` readers
   stay fresh, and `docs/usage.md` now says exactly that.
+
+- [Re-record the rust-compile baseline in a clean window](tickets/12-clean-window-re-record.md):
+  **done, and it reframed the penalty**: host 90.47 s (3 runs, 0.7 % spread),
+  `guest-local` 311.3 s, `guest-virtiofs` 372.6 s ⇒ **1.20x** virtio-fs penalty
+  (narrowed from 1.29-1.36x) while both guest arms are 19-34 % slower in absolute
+  seconds than the 2026-10 window - guest slowdown **unattributed**, with the guest
+  kernel excluded by a flat firmware A/B ([note 72](../notes/72-clean-window-baseline.md)).
+  Two inflated figures from a first pass retracted, and `run.sh`'s warm-target
+  harness defect fixed.
 
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 

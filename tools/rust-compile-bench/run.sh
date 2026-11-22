@@ -256,8 +256,15 @@ trap on_exit EXIT
 export RUSTC_WRAPPER=
 export CARGO_INCREMENTAL=0
 export CARGO_BUILD_JOBS='"$jobs"'
+# The arm must build into ITS OWN target directory. The devshell exports a
+# CARGO_TARGET_DIR of its own (one per checkout, outside the tree), so the `rm -rf
+# target` below deleted nothing the build used and every run after the first
+# measured a warm target as "Finished dev profile in 1.07s" - 90 s, then 1.5 s,
+# 1.6 s, with zero `Compiling` lines. Pinning it here keeps a run cold no matter
+# how the harness was started.
+export CARGO_TARGET_DIR="$PWD/target"
 if [ -f cang-workload-env.sh ]; then . ./cang-workload-env.sh; fi
-echo "inner: rustc=$(rustc --version 2>/dev/null || echo missing) jobs=$CARGO_BUILD_JOBS"
+echo "inner: rustc=$(rustc --version 2>/dev/null || echo missing) jobs=$CARGO_BUILD_JOBS target=$CARGO_TARGET_DIR"
 rm -rf target
 start=$(date +%s%N)
 if ! '"$build_cmd"'; then

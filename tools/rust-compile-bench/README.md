@@ -112,16 +112,50 @@ produced "silent" failures:
 
 ## Baseline
 
-Measured 2026-10-25/26 on `7.2.11-xanmod1`, 28 CPUs, 24 GiB RAM, cang 0.14.0,
-image `ghcr.io/zeroqn/cang:latest` (rustc/cargo 1.95.0), 26 vCPUs in the guest,
-cold `target/`, `CARGO_BUILD_JOBS=26`, sccache off, incremental off.
+Measured twice. The **canonical figures are the 2026-11-22 window** (below, second
+table); the 2026-10-25/26 window is kept as history because the map's older notes
+quote it, and because the *direction* each arm moved is itself the finding.
 
-> **Window caveat.** These runs were taken while another agent session may have
-> been running its own live smoke on the same host, so treat them as ±, not as
-> canonical. The *ratios* are what this tool reports and they are stable across
-> runs; a clean-window re-record is pending (wayfinder ticket 12). One number is
-> contention-safe in the conservative direction: the FUSE worker thread's CPU
-> share can only be *inflated* by a co-tenant on the host.
+> **Window caveat, 2026-10-25/26.** Those runs were taken while another agent
+> session may have been running its own live smoke on the same host, so treat them
+> as ±, not as canonical. That window was contended.
+
+### 2026-11-22, clean window (canonical)
+
+Host `7.3.4-xanmod1`, 28 CPUs, **17.6 GiB RAM**, rustc/cargo **1.99.1**, cang
+0.22.0 (HEAD `ee7744bc`), `localhost/cang:latest`, guest `vcpus=26`
+`ram_mib=13312`, cold `target/` in every counted run (2401 `Compiling`, 0
+`Fresh`), `CARGO_BUILD_JOBS=26`, sccache off, incremental off, nothing else
+running on the host.
+
+| arm | runs (s) | vs host | vs guest-local |
+|---|---|---|---|
+| host | 90.761, 90.109, 90.549 (mean 90.47, spread 0.7%) | 1.00x | - |
+| guest-local (`/dev/shm`, no FUSE) | 311.264 (single run) | 3.44x | 1.00x |
+| guest-virtiofs (`/workspace`) | 372.645 (single run) | 4.12x | **1.20x** |
+
+The guest rows are single runs: they are minutes long, and a change must still beat
+**~5%** on the guest-virtiofs arm to mean anything.
+
+Two facts worth carrying when comparing to the older window: the **host arm is 13%
+faster** (90.5 s against 104.2/104.7) while **both guest arms are 19-34% slower**
+(311.3 against 232.0 for `guest-local`, 372.6 against 298.9-314.4 for
+`guest-virtiofs`), and the **virtio-fs penalty itself narrowed** (1.20x against
+1.29-1.34x). The guest slowdown is **unattributed**: a firmware A/B in this window
+(same image, same CLI, `CANG_LIBKRUNFW_LIBRARY` -> `libkrunfw-v5.6.2-cang.4`, guest
+`7.2.10-hardened1`) measured 311.3 s against 315.7 s, i.e. **flat**, so the guest
+kernel is not it; the host lost 24 -> 17.6 GiB RAM (the guest gets 13 GiB) and the
+host is itself a nested KVM guest whose steal runs 23-46% *only* while a 26-vCPU
+guest lives. Full record, including what was retracted, in
+`docs/wayfinder/workspace-virtiofs-performance/notes/72-clean-window-baseline.md`.
+
+### 2026-10-25/26 (history)
+
+Host `7.2.11-xanmod1`, 28 CPUs, 24 GiB RAM, cang 0.14.0, image
+`ghcr.io/zeroqn/cang:latest` (rustc/cargo 1.95.0), 26 vCPUs in the guest, cold
+`target/`, `CARGO_BUILD_JOBS=26`, sccache off, incremental off. One number here is
+contention-safe in the conservative direction: the FUSE worker thread's CPU share
+can only be *inflated* by a co-tenant on the host.
 
 ### synthetic workload (2401 crates, 16801 sources, 151 MB)
 
