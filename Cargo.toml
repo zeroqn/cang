@@ -33,7 +33,7 @@ resolver = "3"
 exclude = ["deps", "crates/cang-guest-relay/vendor"]
 
 [workspace.package]
-version = "0.22.0"
+version = "0.23.0"
 edition = "2024"
 
 [workspace.dependencies]
