@@ -264,12 +264,14 @@ control:
   run each, cold), so the virtio-fs penalty in this window is **1.20x** - narrowed
   from the 1.29-1.36x above, while both guest arms are 19-34% slower in absolute
   seconds than the 2026-10 window and the host arm 13% faster. The guest slowdown is
-  **unattributed**: a firmware A/B in the same window (guest `7.2.10-hardened1` pinned
-  back) measured 311.3 vs 315.7 s, i.e. flat, so the guest kernel is not the cause;
-  the host lost 24 -> 17.6 GiB and is itself nested (steal 23-46% only while a
-  26-vCPU guest lives). A first pass at this ticket reported 435.8 / 857-959 s and a
-  "1.62x from `7.3.5-hardened1`" - **both retracted**: its own probes ran around
-  its arms. What survives from that pass: the share is *faster* per request than
+  **unattributed**. A firmware A/B here (guest `7.2.10-hardened1` pinned back,
+  `uname -r` verified) came out **flat** (311.3 vs 315.7 s), while an earlier pass
+  the same day - in a window whose host steal ran 23-46% - measured that same A/B as
+  **1.62x** (435.8 vs 269.2), and its guest rows (435.8 / 857-959 s) are 1.4-2.6x
+  what this window produces (311.3 / 372.6). The kernel difference is therefore
+  **window-dependent**, the gap between the two windows is **unattributed**, and one
+  run per arm cannot separate either; `halt_poll_ns=0` (needs root) is the lever
+  neither pass tested. What both passes agree on: the share is *faster* per request than
   note 20's probe (`read` 4336 vs 1528 ops/s at one thread, p50 215 vs 1189 us),
   `fs_worker` at 3-7% (starved, not idle - so it does not revise the 12% -> 26%
   figure), and a **harness defect now fixed**: the devshell's `CARGO_TARGET_DIR`

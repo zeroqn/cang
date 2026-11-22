@@ -44,10 +44,17 @@ written up in [note 72](../notes/72-clean-window-baseline.md).
    A/B in the same window (guest `7.2.10-hardened1` pinned back) measured 311.3 vs
    315.7 s - flat - so the guest kernel is not the cause. The remaining candidates
    are the host's RAM loss and the nested-virtualisation steal.
-5. **Two claims from a first pass are retracted** (its own probes ran around its
-   arms, inflating the guest rows 1.4-2.6x): the 435.8 / 857-959 s figures and the
-   "1.62x from `7.3.5-hardened1`" conclusion. The retracted rows stay in
-   `summary-synthetic.tsv`, labelled by run order, and are not baseline figures.
+5. **A second pass the same day disagreed, and the disagreement is recorded rather
+   than resolved away.** Its guest rows were 435.8 / 857-959 s against this pass's
+   311.3 / 372.6 (1.4-2.6x), and its firmware A/B was 1.62x (435.8 vs 269.2) where
+   this pass measured flat (311.3 vs 315.7, with `uname -r` proving the override
+   took effect in both). So the kernel difference is **window-dependent** and the
+   gap between the two windows is **unattributed** - not established to be that
+   pass's own probes. Both sets of rows stay in `summary-synthetic.tsv`; only this
+   pass's are baseline figures, and the guest rows are single runs either way.
+6. **The lever neither pass tested**: `halt_poll_ns=0` (and any window where host
+   steal stays 0% under a live 26-vCPU guest). Both need root, so they are bob's if
+   the guest arms are ever to be re-recorded with confidence.
 6. **The `fs_worker` sample** in this window is 0.8-1.5 % (`guest-local`) and 7.0 %
    (`guest-virtiofs`): low, but on a build this slow that is a *starved* worker, not
    an idle one, so it does not revise the 12 % -> 26 % figure ticket 04 was decided

@@ -52,24 +52,52 @@ candidates are the host's RAM (24 GiB at the recorded window, **17.6 GiB** now, 
 the guest gets 13 GiB) and the nested-virtualisation steal that only appears while a
 26-vCPU guest runs.
 
-## Two claims from the first pass of this window retracted
+## A second pass at the same ticket disagreed - here is how it landed
 
-A first pass at this ticket reported `guest-local` 435.8 s, `guest-virtiofs` 959.1 /
-856.6 s, and concluded that **1.62x of the gap was today's `7.3.5-hardened1` guest
-kernel**. Neither survives re-measurement:
+Two sessions measured this window. The first pass (an earlier run on the same day)
+got `guest-local` **435.8 s**, `guest-virtiofs` **959.1 / 856.6 s**, and a firmware
+A/B of **435.8 s (today's 7.3.5) against 269.2 s (7.2.10 pinned back)** - 1.62x,
+which it read as "the new guest kernel is the cause". Its own numbers came from a
+window it had verified cang-level clean, with the host's physical steal at 23-46%
+*while a 26-vCPU guest runs* and near zero when idle.
 
-1. **The guest numbers were contended - by the same session's own probes.** The pass
-   ran `concurrency-scaling.sh`, a `mon-threads.sh` capture and a host `/proc/stat`
-   build probe around and between its arms; its own note 72 first draft cites those
-   probes as concurrent. Re-measured with nothing else running: 311.3 s and 372.6 s,
-   i.e. 1.4x and 2.3-2.6x faster than that pass reported. The retracted rows are
-   kept in `summary-synthetic.tsv` (they are real runs, labelled by run order) but
-   they are **not** baseline figures.
-2. **The firmware A/B is flat** (311.3 vs 315.7 s), so "1.62x from the new guest
-   kernel" is withdrawn. The pin is not the cause of today's guest slowdown on this
-   arm.
+My re-measurements, same arms, later the same day, with nothing else running:
 
-## What the first pass did establish, and is kept
+| arm | first pass | this pass |
+| --- | --- | --- |
+| `guest-local`, today's pin | 435.8 | **311.3** |
+| `guest-local`, 7.2.10 pinned back | 269.2 | **315.7** |
+| `guest-virtiofs` | 959.1 / 856.6 | **372.6** |
+
+So:
+
+1. **The guest rows of the first pass are not the numbers this host produces now**
+   (1.4x on `guest-local`, 2.3-2.6x on `guest-virtiofs`). The cause of that gap between
+   two windows is **unattributed** - it is *not* established that its own probes
+   inflated it (it ran its arms one at a time and checked the window first), so this
+   note records the gap rather than explaining it away.
+2. **The firmware A/B is window-dependent, not a constant factor.** In the earlier
+   window 7.2.10 measured 1.62x faster than 7.3.5 (435.8 vs 269.2); in mine it
+   measured **flat** (311.3 vs 315.7, 1.4 %, inside run-to-run noise). The override
+   itself is proven to take effect - a guest booted with
+   `CANG_LIBKRUNFW_LIBRARY=…cang.4` reports `uname -r` **7.2.10-hardened1**, and one
+   without it reports **7.3.5-hardened1** - so both A/Bs measured the kernel they
+   claimed to. The honest reading is that the 7.3.5-vs-7.2.10 difference appears
+   under some host condition (contention is the only one known to differ between the
+   windows) and vanishes in a clean one; one run per arm cannot separate that, and
+   both passes were one run per arm.
+3. What does **not** move in either pass: the host arm (90.47 s here, and the same
+   thing across the first pass's three runs), the share's own per-request speed
+   (4336 ops/s / p50 215 us, measured by the first pass and consistent with the
+   penalty narrowing to 1.20x), and the `fs_worker` being *starved* (2-7 %) rather
+   than idle during these slow guest builds.
+
+The pending question both passes point at is the same one, and it needs root:
+**does a 26-vCPU guest see steal on this nested host even when nothing else runs,
+and does `halt_poll_ns=0` change it?** Until that is answered, the guest arms here
+are single-run figures from one window, labelled as such.
+
+## What both passes established, and is kept
 
 - the host is a **nested KVM guest**, and physical `steal` runs 23-46 % in 10 s
   windows *only while a 26-vCPU guest is alive* (0.16 % cumulative since boot), which

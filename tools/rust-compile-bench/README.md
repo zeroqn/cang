@@ -141,12 +141,15 @@ Two facts worth carrying when comparing to the older window: the **host arm is 1
 faster** (90.5 s against 104.2/104.7) while **both guest arms are 19-34% slower**
 (311.3 against 232.0 for `guest-local`, 372.6 against 298.9-314.4 for
 `guest-virtiofs`), and the **virtio-fs penalty itself narrowed** (1.20x against
-1.29-1.34x). The guest slowdown is **unattributed**: a firmware A/B in this window
-(same image, same CLI, `CANG_LIBKRUNFW_LIBRARY` -> `libkrunfw-v5.6.2-cang.4`, guest
-`7.2.10-hardened1`) measured 311.3 s against 315.7 s, i.e. **flat**, so the guest
-kernel is not it; the host lost 24 -> 17.6 GiB RAM (the guest gets 13 GiB) and the
-host is itself a nested KVM guest whose steal runs 23-46% *only* while a 26-vCPU
-guest lives. Full record, including what was retracted, in
+1.29-1.34x). The guest slowdown is **unattributed**. A firmware A/B in this window (same image,
+same CLI, `CANG_LIBKRUNFW_LIBRARY` -> `libkrunfw-v5.6.2-cang.4`, guest
+`7.2.10-hardened1`, confirmed by `uname -r` in the guest) measured 311.3 s against
+315.7 s - **flat**; an earlier pass the same day, in a window whose host steal ran
+23-46%, measured the same A/B as 1.62x (435.8 vs 269.2). So the kernel difference
+appears under some host condition and vanishes in a clean one, and one run per arm
+cannot separate that. The host lost 24 -> 17.6 GiB RAM (the guest gets 13 GiB) and
+is itself a nested KVM guest; `halt_poll_ns=0` is the untested lever, and it needs
+root. Full record, including what was retracted, in
 `docs/wayfinder/workspace-virtiofs-performance/notes/72-clean-window-baseline.md`.
 
 ### 2026-10-25/26 (history)
