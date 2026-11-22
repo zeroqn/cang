@@ -65,3 +65,30 @@ written up in [note 72](../notes/72-clean-window-baseline.md).
    first measured a warm target. The payload now pins `CARGO_TARGET_DIR="$PWD/target"`
    and prints it; verified by two host runs with no external export showing 2401
    `Compiling` / 0 `Fresh` in both.
+
+## The halt_poll_ns A/B (added 2026-11-22 16:05)
+
+The lever this ticket named as untested was toggled by root (`halt_poll_ns{,_grow}`
+0 vs the saved 200000/2) with two `guest-local` runs per side:
+
+| run | `halt_poll_ns` | `guest-local` |
+| --- | --- | --- |
+| A1 | 0 | 166.0 s |
+| A2 | 0 | 141.3 s |
+| B1 | 200000 | 147.7 s |
+| B2 | 200000 | 169.0 s |
+
+**Ruled out**: A mean 153.6 s against B mean 158.4 s is a 3% difference inside the
+runs' own 18% spread, with the two slowest runs on opposite sides.
+
+**And it exposed the real problem**: those four runs are half of what the same arm
+measured an hour earlier (311.3, 315.7 s), and `guest-virtiofs` measured 274.9 s
+against 372.6 s - so the guest arms move ~2x **between windows** with nothing known
+changed, and the penalty ratio therefore reads 1.20x or 1.63x depending on which
+window it came from. Neither the code, the image, the guest kernel nor `halt_poll_ns`
+differs across them.
+
+So this ticket's remaining work is **variance, not another setting**: 3 runs per arm
+interleaved inside one window, medians rather than single runs, and host
+`/proc/stat` steal sampled per run so the two can be correlated. Until that is done
+the guest rows are a range, and the map says so.

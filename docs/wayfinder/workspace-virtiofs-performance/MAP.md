@@ -277,6 +277,17 @@ control:
   figure), and a **harness defect now fixed**: the devshell's `CARGO_TARGET_DIR`
   made every run after the first a warm no-op (`Finished dev profile in 1.07s`),
   so `run.sh`'s payload now pins its own target directory and prints it.
+- **The guest arms are not a baseline yet (2026-11-22 16:05 A/B).** `halt_poll_ns`
+  was toggled 0 vs 200000 by root and **ruled out**: 2 runs per side gave
+  `guest-local` **166.0, 141.3 s** (off) against **147.7, 169.0 s** (default) - a 3%
+  difference inside an 18% spread, with the two slowest runs on opposite sides.
+  The finding is the spread itself: the same arm measured **311.3 / 315.7 s** an
+  hour earlier and **141-169 s** now, and `guest-virtiofs` **372.6** then against
+  **274.9** now, so the penalty is **1.20x or 1.63x** depending on the window, with
+  nothing known changed. Until variance is taken (3 runs per arm interleaved in one
+  window, host steal sampled per run), the ratio stays a range, not a point -
+  [note 72](notes/72-clean-window-baseline.md) §6.
+
 - **The virtio-fs penalty is ~20% in the 2026-11-22 window** (1.20x; ~30% in the
   2026-10 window), and it is a *floor*: the control is RAM.
 - **Correction (2026-10-26): the FUSE worker uses ~26% of one core, not 12%.**

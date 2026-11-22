@@ -131,11 +131,18 @@ running on the host.
 | arm | runs (s) | vs host | vs guest-local |
 |---|---|---|---|
 | host | 90.761, 90.109, 90.549 (mean 90.47, spread 0.7%) | 1.00x | - |
-| guest-local (`/dev/shm`, no FUSE) | 311.264 (single run) | 3.44x | 1.00x |
-| guest-virtiofs (`/workspace`) | 372.645 (single run) | 4.12x | **1.20x** |
+| guest-local (`/dev/shm`, no FUSE) | **311.264** in the 14:00 window, **141.3-169.0** (4 runs, 18% spread) in the 16:05 window | 3.44x / 1.5-1.9x | 1.00x |
+| guest-virtiofs (`/workspace`) | **372.645** in the 14:00 window, **274.9** in the 16:05 window | 4.12x / 3.0x | **1.20x / 1.63x** |
 
-The guest rows are single runs: they are minutes long, and a change must still beat
-**~5%** on the guest-virtiofs arm to mean anything.
+> **The guest arms are not yet a baseline.** On this host they vary by **~2x between
+> windows** with no known cause (both windows on the same code, image, guest kernel
+> and cold target), and the penalty ratio moves with them - 1.20x in one window,
+> 1.63x in the next. `halt_poll_ns` was A/B'd and **ruled out** (2 runs per side:
+> 166.0/141.3 s with it off against 147.7/169.0 s at its default, a 3% difference
+> inside an 18% spread). Before quoting a guest figure, run 3 per arm interleaved in
+> one window and take the median, and sample host `/proc/stat` steal alongside -
+> `docs/wayfinder/workspace-virtiofs-performance/notes/72-clean-window-baseline.md`
+> §6 has the numbers and what is ruled out.
 
 Two facts worth carrying when comparing to the older window: the **host arm is 13%
 faster** (90.5 s against 104.2/104.7) while **both guest arms are 19-34% slower**

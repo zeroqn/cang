@@ -128,3 +128,54 @@ are single-run figures from one window, labelled as such.
 - nothing here re-measures the 8.2 s compile-test iteration or the 45 s cold-build
   penalty the map's Destination cites - those come from other notes and were not
   re-taken.
+
+## 6. The halt_poll_ns A/B (2026-11-22, 16:00-16:10): not the lever, and the guest arm moves ~2x between windows
+
+`halt_poll_ns=200000`, `halt_poll_ns_grow=2`, `kvm_amd avic=N`, and the earlier pass's
+diagnostic had put ~50% of each vCPU thread's time in host kernel. The candidate
+explanation was KVM's halt-poll spin (per vCPU, up to 200 us per wakeup, ×26).
+Tested by bob toggling `/sys/module/kvm/parameters/halt_poll_ns{,_grow}` between 0
+and the saved 200000/2, with `guest-local` run twice on each side, one arm at a
+time, cold (2401 `Compiling`, 0 `Fresh`), `cang ps` empty at every preflight:
+
+| run | `halt_poll_ns` | `guest-local` | preflight load |
+| --- | --- | --- | --- |
+| A1 | 0 | **166.0 s** | 4.18 |
+| A2 | 0 | **141.3 s** | 15.21 |
+| B1 | 200000 | **147.7 s** | 6.10 |
+| B2 | 200000 | **169.0 s** | 12.62 |
+
+A mean **153.6 s**, B mean **158.4 s** - a 3% difference, while the four runs
+themselves span 141.3-169.0 s (**18%**). **The toggle is ruled out**: it moves
+nothing that its own run-to-run spread does not already move, and the two *slowest*
+runs are on opposite sides.
+
+And that is the finding, because those four runs are ~half the earlier window's
+figures on the same code:
+
+| arm | earlier window (~14:00) | this window (~16:05) |
+| --- | --- | --- |
+| `guest-local` | 311.3, 315.7 | 141.3-169.0 (4 runs) |
+| `guest-virtiofs` | 372.6 | 274.9 |
+
+So the guest arms on this host vary by **~2x between windows with nothing we know of
+changed**, and the *ratio* the map is about moves with it - `guest-virtiofs` /
+`guest-local` was **1.20x** in the earlier window and **1.63x** now (274.9 against
+169.0). Neither the toggle, the code, the image, nor the guest kernel differs across
+those runs; the host is a nested KVM guest whose own steal is the only measured
+quantity that changes with guest presence.
+
+What follows for the map, and it is the end of this axis until someone takes the
+variance on:
+
+1. **The virtio-fs penalty cannot be stated as a point yet.** Today it has been
+   measured at 1.20x and 1.63x. The map's headline "~20% in the 2026-11-22 window"
+   is one window's single-run ratio, and this note says so.
+2. **One run per arm is not a baseline** for the guest arms, here. The host arm is
+   the only one that behaves like a measurement (90.47, 91.6, 93.6, 104.8 across two
+   windows, 14% spread).
+3. **The next step is variance, not another configuration**: 3 runs per arm
+   interleaved inside one window and a median, plus sampling host `/proc/stat` steal
+   per run so the two can be correlated. `halt_poll_ns`, `force_avic`, guest RAM and
+   the kernel are all ruled out or untested-but-unlikely by this A/B.
+
