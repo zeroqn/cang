@@ -3,6 +3,11 @@
   pins,
   libkrunfw ? null,
   renderServerEnv,
+  # `cang-relay-pump` built from this tree (nix/pkgs/cang-rust.nix). Required,
+  # because the published asset is the single `cang` ELF and nothing else here
+  # can produce the workspace relay's host half: a missing helper resolves to
+  # the bare name and `--workspace-relay` fails to start it.
+  relayPump,
 }:
 let
   cangVersion = pins.cangVersion;
@@ -90,6 +95,7 @@ if builtins.hasAttr prebuiltSystem cangPrebuiltRelease.systems then
         ln -s ${pkgs.passt}/bin/pasta "$out/libexec/cang-helpers/pasta"
         ln -s ${pkgs.passt}/bin/passt "$out/libexec/cang-helpers/passt"
         ln -s ${pkgs.virglrenderer}/libexec/virgl_render_server "$out/libexec/cang-helpers/virgl_render_server"
+        ln -s ${relayPump}/bin/relay-pump "$out/libexec/cang-helpers/relay-pump"
         ${pkgs.lib.optionalString (libkrunfw != null) ''
           for library in ${pkgs.lib.getLib libkrunfw}/lib/libkrunfw.so*; do
             ln -s "$library" "$out/lib/cang/$(basename "$library")"

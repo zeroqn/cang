@@ -268,6 +268,7 @@
               libkrunfw
               ;
             renderServerEnv = renderServerEnv.env;
+            relayPump = rustPackages.relayPumpPackage;
           };
           rustPackages = import ./nix/pkgs/cang-rust.nix {
             inherit

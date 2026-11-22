@@ -813,6 +813,34 @@ fn cang_prebuilt_package_pins_and_patches_neutral_elf() {
     }
 }
 
+/// The workspace relay's host half (`relay-pump`) is not in the published
+/// release asset - that asset is the single `cang` ELF - so `.#cang-prebuilt`
+/// has to build it from this tree and install it where
+/// `runtime/host_tools.rs` looks. v0.23.0 shipped without it and
+/// `--workspace-relay` failed to start a bare `relay-pump` at all.
+#[test]
+fn cang_prebuilt_ships_the_workspace_relay_pump_helper() {
+    for required in [
+        "relayPump,",
+        r#"ln -s ${relayPump}/bin/relay-pump "$out/libexec/cang-helpers/relay-pump""#,
+    ] {
+        assert!(CANG_PREBUILT_NIX.contains(required), "missing {required}");
+    }
+
+    for required in [
+        "relayPumpPackage = rustToolchain.rustPlatform.buildRustPackage {",
+        r#""cang-relay-pump""#,
+        "inherit rustPackage cangMuslPackage relayPumpPackage;",
+    ] {
+        assert!(CANG_RUST_NIX.contains(required), "missing {required}");
+    }
+
+    assert!(
+        FLAKE_NIX.contains("relayPump = rustPackages.relayPumpPackage;"),
+        "flake.nix must hand the source-built relay pump to .#cang-prebuilt"
+    );
+}
+
 #[test]
 fn cang_prebuilt_adr_records_neutral_asset_decision() {
     for required in [

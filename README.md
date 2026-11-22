@@ -52,6 +52,10 @@ rootless Podman tooling for development.
 - `pasta`/`passt` for host-alias networking in both default passt and opt-in
   `--tsi` mode; included in the Nix `.#cang` helper dir, `.#cang-prebuilt`,
   and `nix develop` environments.
+- `relay-pump`, the host half of the workspace reverse share that
+  `--workspace-relay` and `cang workspace serve` mount through, in the same
+  `.#cang` helper dir; `.#cang-prebuilt` builds it from this tree's source
+  because the published release asset is the single `cang` ELF.
 - Optional `cang --pulse=tcp:IP:PORT` audio requires a host Pulse-compatible
   TCP listener, typically provided by `pipewire-pulse`. Cang exports the
   endpoint to guest PulseAudio-compatible clients but does not configure or

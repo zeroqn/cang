@@ -603,9 +603,19 @@ tag-triggered job refuses to publish while `libkrunfwRelease.tag` is a rolling
 Verify the published release against the pin:
 
 ```bash
-nix build .#cang-prebuilt
+nix build .#cang-prebuilt -o result-cang-prebuilt
 ./result-cang-prebuilt/bin/cang --version   # prints `cang <version>`
+./result-cang-prebuilt/libexec/cang-helpers/relay-pump --help   # the workspace relay's host half
 ```
+
+The published asset is the single `cang` ELF, so `.#cang-prebuilt` adds the
+runtime helpers from nixpkgs around it; the one helper nixpkgs cannot supply,
+the workspace relay's host half `relay-pump`, is a cang binary and is built from
+this tree's own source (`relayPumpPackage` in `nix/pkgs/cang-rust.nix`) and
+linked into `libexec/cang-helpers`. v0.23.0's prebuilt omitted it, so
+`--workspace-relay` and `cang workspace serve` failed with
+`failed to start the cang workspace relay pump '"relay-pump"'` (the helper falls
+back to a bare `PATH` lookup, and there is no `relay-pump` on a host's).
 
 #### Fork releases
 
