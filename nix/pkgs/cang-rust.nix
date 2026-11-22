@@ -205,7 +205,31 @@ let
     // ciSccacheEnv
     // ciSccacheAttrs
   );
+  # The workspace relay's host half (`relay-pump`) as a store path of its own.
+  # A source build moves the binary into `$out/libexec/cang-helpers` above; the
+  # published prebuilt asset is the single `cang` ELF, so `.#cang-prebuilt` has
+  # no pump to move and takes this one instead. Without it the helper resolves
+  # to the bare name and `--workspace-relay` fails with `relay-pump: No such file
+  # or directory`.
+  relayPumpPackage = rustToolchain.rustPlatform.buildRustPackage {
+    pname = "cang-relay-pump";
+    version = cangVersion;
+    inherit src cargoDeps;
+
+    # Only the pump: the crate graph it needs (anyhow, clap, libc, mimalloc) is
+    # nothing like cang's, so there is no libkrun, virglrenderer or guest init
+    # here.
+    cargoBuildFlags = [
+      "--package"
+      "cang-relay-pump"
+    ];
+    cargoTestFlags = [
+      "--package"
+      "cang-relay-pump"
+    ];
+  };
+
 in
 {
-  inherit rustPackage cangMuslPackage;
+  inherit rustPackage cangMuslPackage relayPumpPackage;
 }
