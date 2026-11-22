@@ -5,18 +5,18 @@ in
   cangVersion = cargoToml.workspace.package.version;
 
   piCodingAgent = {
-    version = "1.5.0";
+    version = "1.6.0";
     owner = "earendil-works";
     repo = "pi";
-    rev = "v1.5.0";
-    srcHash = "sha256-eH3RuypmXeayuZ9lEag6KW3m2LSM4bDc4ogyHxjZMNI=";
+    rev = "v1.6.0";
+    srcHash = "sha256-UVQnOMYikjxi7JREcxPZh/Uamy0l4rBvhawHR/MZZgo=";
     # `nix/pkgs/pi-coding-agent.nix` builds with bun, not nixpkgs' node:
     # `bunDepsHash` is the recursive hash of the `node_modules` tree
     # `bun install --frozen-lockfile` produces from the generated
     # `nix/pkgs/pi-coding-agent-bun.lock`, and `scripts/update-pi-coding-agent.sh`
     # recomputes it with the pinned bun (the flake's `.#bun`).
-    bunDepsHash = "sha256-Trci9lNDu0QyZ+vo2VwVfwL/VlEnjtVq5PMZ5qiLGNQ=";
-    aiNpmTarballHash = "sha256-4yD+e9K5J3grqaN9NW/lg38aqWpGQyYQ4bO5zLdI6lw=";
+    bunDepsHash = "sha256-MZtXlRF+lWFWAI5/PbVejKnvhLQ2rJwFlaG+axLrWR4=";
+    aiNpmTarballHash = "sha256-1oMS7FdLyVnLf+4m2k9IdtBnrtm7vnbodjWeYNIpR0c=";
   };
 
   # Neither nixpkgs input carries a fixed bun yet - both pin 1.4.2, whose
@@ -235,17 +235,22 @@ in
     };
   };
 
-  # Pinned to the published `@pydantic/monty-linux-x64-gnu` npm tarball. Keep
-  # the version in sync with the `@pydantic/monty` JS client the RLM extension
-  # installs: client and worker reject each other over a protocol-version
-  # mismatch, and upstream may build a newer protocol than the published
-  # client speaks.
+  # Pinned to the published `@pydantic/monty-linux-x64-gnu` npm tarball. The pin
+  # records the *protocol window*, not a version equality: `crates/monty-proto/
+  # src/lib.rs` at the tag declares `PROTOCOL_VERSION = 9` and
+  # `MIN_SUPPORTED_PROTOCOL_VERSION = 7`, so this worker serves clients 7
+  # through 9 - and a `Configure` outside that range is fatal to the handshake
+  # ("unsupported protocol version 6 (server supports protocol versions 7 to 9,
+  # try updating to a newer client version)"). The `@pydantic/monty` JS client
+  # the RLM / code-mode / skill-bridge extensions install must therefore stay
+  # inside that window; they moved to 1.7.0-beta.1 (protocol 9) with this
+  # bump.
   montyPrebuiltRelease = {
-    version = "1.4.0";
+    version = "1.7.0-beta.1";
     systems = {
       x86_64-linux = {
-        asset = "monty-linux-x64-gnu-1.4.0.tgz";
-        hash = "sha256-oB85Akj8K03yVY3nbPxtg2Tlzy6yBbMsvWXN/0sifdY=";
+        asset = "monty-linux-x64-gnu-1.7.0-beta.1.tgz";
+        hash = "sha256-4q8F/XiUTXKrTRQoXV2WBsoHE8uoSjbKschdxKJJ+ec=";
       };
     };
   };
