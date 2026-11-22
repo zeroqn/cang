@@ -686,6 +686,15 @@ of every request to zero.
   Two inflated figures from a first pass retracted, and `run.sh`'s warm-target
   harness defect fixed.
 
+- [Accept a real host block device as the workspace backing](tickets/28-real-block-device-backing.md):
+  **implemented** (bob's "decide" answer), with the live arm handed over as one root
+  command. `--workspace-disk` now takes a device as well as an image; btrfs is reused
+  untouched, another filesystem is refused by name, an empty one is formatted only
+  with `--workspace-format`, and `--workspace-size`, `disk resize` and auto-grow all
+  refuse a device (its size is its owner's). The decision policy is unit-tested;
+  the ioctl path and any live arm are not, because no unprivileged test can reach a
+  block device - `/home/dev/disp/ticket28-dev.sh setup 4G` is the missing step.
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)

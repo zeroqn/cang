@@ -160,6 +160,17 @@ pub(crate) fn resize_workspace_image(
     let layout = current_state_layout()?;
     let task_report = ensure_workspace_has_no_running_tasks(layout.root_dir(), &ProcfsInspector)?;
     let path = resolve_disk_path(path)?;
+    // A device is the host's to size: cang cannot truncate one, and re-sizing its
+    // filesystem alone would be a silent half-operation.
+    if let Some(device_bytes) = workspace::block_device_size_for_cli(&path)? {
+        anyhow::bail!(
+            "'{}' is a block device ({}), and cang does not resize a host device: it has the \
+             size its owner gave it, so change that on the host and the guest's btrfs will \
+             expand on its next mount",
+            path.display(),
+            device_bytes
+        );
+    }
     let target_size_bytes = parse_size_bytes_for_label(size, WORKSPACE_SIZE_LABEL)?;
     let disk = workspace::grow_existing_at_least_with_runner(
         &path,
@@ -756,6 +767,7 @@ mod tests {
     #[test]
     fn workspace_disk_maintenance_config_targets_internal_workspace_resize() {
         let disk = workspace::WorkspaceDisk {
+            backing: workspace::Backing::Image,
             path: PathBuf::from("/data/work.raw"),
             size_bytes: 64 * 1024 * 1024 * 1024,
             status: workspace::WorkspaceDiskStatus::Reused,

@@ -166,6 +166,19 @@ pub(crate) fn read_free_bytes(
 }
 
 fn validate_for_report(path: &Path) -> Result<WorkspaceDisk> {
+    // A report is only ever wanted for an image: a device's size is the host's
+    // business and there is nothing to truncate, so this refuses before a VM boots.
+    if path
+        .metadata()
+        .map(|metadata| std::os::unix::fs::FileTypeExt::is_block_device(&metadata.file_type()))
+        .unwrap_or(false)
+    {
+        anyhow::bail!(
+            "'{}' is a block device: cang never grows a host device, so there is no \
+             free-space report to act on",
+            path.display()
+        );
+    }
     let Some(len) = fs::symlink_metadata(path)
         .map(|metadata| metadata.len())
         .map(Some)
@@ -186,6 +199,7 @@ fn validate_for_report(path: &Path) -> Result<WorkspaceDisk> {
         path: path.to_path_buf(),
         size_bytes: len,
         status: workspace::WorkspaceDiskStatus::Reused,
+        backing: workspace::Backing::Image,
     })
 }
 

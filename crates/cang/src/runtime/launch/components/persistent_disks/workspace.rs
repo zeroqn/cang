@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::fs::{self, File};
+use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 
 use super::raw_btrfs::{
@@ -141,7 +142,16 @@ pub(crate) fn grow_existing_at_least_with_runner(
         path: path.to_path_buf(),
         size_bytes: target_size_bytes.max(current_len),
         status: WorkspaceDiskStatus::Reused,
+        backing: Backing::Image,
     })
+}
+
+/// What the workspace disk actually is: an image cang made and may grow, or a
+/// block device the host owns and cang must never create, format or grow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Backing {
+    Image,
+    Device,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,6 +159,23 @@ pub(crate) struct WorkspaceDisk {
     pub(crate) path: PathBuf,
     pub(crate) size_bytes: u64,
     pub(crate) status: WorkspaceDiskStatus,
+    pub(crate) backing: Backing,
+}
+
+impl WorkspaceDisk {
+    /// A device belongs to the host: cang attaches it, and refuses to size it.
+    pub(crate) fn is_device(&self) -> bool {
+        self.backing == Backing::Device
+    }
+}
+
+/// What the caller asked for when preparing the disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct WorkspaceRequest {
+    /// Only meaningful for an image cang creates; refused with a device.
+    pub(crate) size_bytes: Option<u64>,
+    /// Format a block device cang found with no filesystem on it.
+    pub(crate) format: bool,
 }
 
 /// Create the workspace image at `path` when it is absent, or validate the one
@@ -159,11 +186,26 @@ pub(crate) struct WorkspaceDisk {
 /// stays usable without having to pass the flag again every launch.
 pub(crate) fn prepare_with_runner(
     path: &Path,
-    requested_size_bytes: Option<u64>,
+    request: WorkspaceRequest,
     runner: &impl RawImageCommandRunner,
 ) -> Result<WorkspaceDisk> {
+    let WorkspaceRequest {
+        size_bytes: requested_size_bytes,
+        format,
+    } = request;
     if let Some(0) = requested_size_bytes {
         bail!("cang workspace disk size must be greater than zero");
+    }
+
+    if let Some(device_bytes) = block_device_size(path)? {
+        return prepare_device(path, device_bytes, request, runner);
+    }
+    if format {
+        bail!(
+            "--workspace-format applies only to a block device, and '{}' is not one; a file \
+             --workspace-disk creates is formatted as btrfs on creation",
+            path.display()
+        );
     }
     let size_bytes = requested_size_bytes.unwrap_or(DEFAULT_SIZE_BYTES);
 
@@ -200,7 +242,152 @@ pub(crate) fn prepare_with_runner(
         path: path.to_path_buf(),
         size_bytes,
         status: WorkspaceDiskStatus::Created,
+        backing: Backing::Image,
     })
+}
+
+/// The device's size when `path` is a block device, for a command that must refuse
+/// to size it (`cang disk resize --workspace-disk`).
+pub(crate) fn block_device_size_for_cli(path: &Path) -> Result<Option<u64>> {
+    block_device_size(path)
+}
+
+/// The workspace disk's size, for a caller that only needs to reason about it
+/// before a launch: a device's own size, an image's length, or the size a missing
+/// image would be created at. `None` for a path that is neither.
+pub(crate) fn size_for(path: &Path, requested: Option<u64>) -> Result<Option<u64>> {
+    if let Some(device_bytes) = block_device_size(path)? {
+        return Ok(Some(device_bytes));
+    }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(Some(metadata.len())),
+        Ok(_) => Ok(None),
+        Err(_) => Ok(requested),
+    }
+}
+
+/// A block device's size in bytes, or `None` when the path is not one.
+///
+/// A device is not a file: `metadata.len()` says nothing, and its size has to come
+/// from `BLKGETSIZE64`. Anything else that is neither a file nor absent is refused
+/// here rather than later, because every step below assumes one of those two.
+fn block_device_size(path: &Path) -> Result<Option<u64>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(None),
+    };
+    if !metadata.file_type().is_block_device() {
+        return Ok(None);
+    }
+    let file = File::open(path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::PermissionDenied {
+            anyhow::anyhow!(
+                "cannot open block device '{}': {err}; a device is opened read-write by the \
+                 user running cang, so that user must own it or be in the group that does \
+                 (chown, or `gpasswd -a $USER disk` then log in again)",
+                path.display()
+            )
+        } else {
+            anyhow::anyhow!("failed to open block device '{}': {err}", path.display())
+        }
+    })?;
+    // BLKGETSIZE64: the device's size in bytes, which is what a btrfs filesystem on
+    // it must fit inside.
+    let mut size: u64 = 0;
+    // SAFETY: the request code and the out-pointer are what this ioctl takes, and
+    // `size` outlives the call.
+    let rc = unsafe {
+        libc::ioctl(
+            std::os::fd::AsRawFd::as_raw_fd(&file),
+            BLKGETSIZE64,
+            &mut size as *mut u64,
+        )
+    };
+    if rc != 0 {
+        bail!(
+            "failed to read the size of block device '{}'; is it a real block device?",
+            path.display()
+        );
+    }
+    Ok(Some(size))
+}
+
+/// `_IOR(0x12, 114, size_t)` from `linux/fs.h`: the whole device in bytes.
+const BLKGETSIZE64: libc::c_ulong = 0x8008_7212;
+
+/// Prepare a host block device: reuse it when it already holds btrfs, format it only
+/// when asked and only when it holds nothing, and refuse everything else by name.
+///
+/// The rules exist because this is somebody else's disk: cang never creates one,
+/// never resizes one (that is the host's job), and never reformats one that already
+/// carries a filesystem it did not put there.
+fn prepare_device(
+    path: &Path,
+    device_bytes: u64,
+    request: WorkspaceRequest,
+    runner: &impl RawImageCommandRunner,
+) -> Result<WorkspaceDisk> {
+    if request.size_bytes.is_some() {
+        bail!(
+            "a block device has the size its owner gave it, so --workspace-size does not \
+             apply to '{}' (it is {}); pass --workspace-disk with an image path to get a \
+             file cang creates and grows, or change the device's size on the host",
+            path.display(),
+            human_bytes(device_bytes)
+        );
+    }
+    let fs_type = runner.probe_fs_type(path, &SPEC)?;
+    let status = match plan_device(&fs_type, request.format, path)? {
+        DeviceAction::Reuse => WorkspaceDiskStatus::Reused,
+        DeviceAction::Format => {
+            runner.mkfs_btrfs(path, LABEL, &SPEC).with_context(|| {
+                format!(
+                    "failed to format block device '{}' with btrfs",
+                    path.display()
+                )
+            })?;
+            WorkspaceDiskStatus::Created
+        }
+    };
+    Ok(WorkspaceDisk {
+        path: path.to_path_buf(),
+        size_bytes: device_bytes,
+        status,
+        backing: Backing::Device,
+    })
+}
+
+/// What to do with a device that holds `fs_type`, given whether formatting was
+/// asked for. Split out so the policy is testable without a block device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeviceAction {
+    Reuse,
+    Format,
+}
+
+pub(crate) fn plan_device(fs_type: &str, format: bool, path: &Path) -> Result<DeviceAction> {
+    match (fs_type, format) {
+        ("btrfs", _) => Ok(DeviceAction::Reuse),
+        ("", false) => bail!(
+            "block device '{}' is empty; pass --workspace-format to format it with btrfs, or \
+             format it yourself and point --workspace-disk at it again",
+            path.display()
+        ),
+        ("", true) => Ok(DeviceAction::Format),
+        (_, false) => bail!(
+            "block device '{}' holds filesystem type '{}', expected btrfs; cang never \
+             reformats a host device it did not create - format it yourself, or point \
+             --workspace-disk at another disk",
+            path.display(),
+            fs_type
+        ),
+        (_, true) => bail!(
+            "block device '{}' already holds filesystem type '{}'; --workspace-format only \
+             formats a device with no filesystem on it, and cang will not overwrite one",
+            path.display(),
+            fs_type
+        ),
+    }
 }
 
 /// Validate an image that must already exist, for a command that must never create
@@ -209,6 +396,9 @@ pub(crate) fn validate_existing_with_runner(
     path: &Path,
     runner: &impl RawImageCommandRunner,
 ) -> Result<WorkspaceDisk> {
+    if let Some(device_bytes) = block_device_size(path)? {
+        return prepare_device(path, device_bytes, WorkspaceRequest::default(), runner);
+    }
     let Some(existing_len) = inspect_existing_regular_file(path, &SPEC)? else {
         bail!(
             "no cang workspace disk at '{}': --workspace-disk names an image a launch created, and cang nix gc does not create one",
@@ -252,6 +442,7 @@ fn validate_existing(
         path: path.to_path_buf(),
         size_bytes: existing_len,
         status: WorkspaceDiskStatus::Reused,
+        backing: Backing::Image,
     })
 }
 
@@ -270,6 +461,18 @@ pub(crate) fn env_pairs(_disk: &WorkspaceDisk) -> [(String, String); 2] {
     ]
 }
 
+fn human_bytes(bytes: u64) -> String {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= GIB {
+        format!("{:.1} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
 fn size_hint_for(size_bytes: u64) -> String {
     const GIB: u64 = 1024 * 1024 * 1024;
     if size_bytes.is_multiple_of(GIB) {
@@ -285,6 +488,61 @@ mod tests {
     use crate::runtime::launch::components::persistent_disks::raw_btrfs::test_support::FakeRunner;
     use std::fs;
 
+    fn request(size_bytes: u64) -> WorkspaceRequest {
+        WorkspaceRequest {
+            size_bytes: Some(size_bytes),
+            format: false,
+        }
+    }
+
+    #[test]
+    fn a_device_with_btrfs_is_reused_without_being_touched() {
+        let path = Path::new("/dev/loop9");
+        for format in [false, true] {
+            assert_eq!(
+                plan_device("btrfs", format, path).expect("btrfs is reused"),
+                DeviceAction::Reuse,
+                "--workspace-format on a device that already holds btrfs must not reformat it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_device_holding_another_filesystem_is_refused_by_name() {
+        let path = Path::new("/dev/sdz");
+        let err = plan_device("ext4", false, path).expect_err("ext4 on a device");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("holds filesystem type 'ext4'"),
+            "{message}"
+        );
+        assert!(
+            message.contains("never reformats a host device"),
+            "{message}"
+        );
+
+        let err = plan_device("ext4", true, path).expect_err("ext4 with --workspace-format");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("already holds filesystem type 'ext4'"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_empty_device_is_formatted_only_when_asked() {
+        let path = Path::new("/dev/loop9");
+        let err = plan_device("", false, path).expect_err("an empty device needs the flag");
+        assert!(
+            format!("{err:#}").contains("pass --workspace-format"),
+            "{err:#}"
+        );
+        assert_eq!(
+            plan_device("", true, path).expect("empty device with the flag"),
+            DeviceAction::Format
+        );
+    }
+
     #[test]
     fn creates_a_new_image_and_formats_it_once() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -292,7 +550,7 @@ mod tests {
         let runner = FakeRunner::default();
 
         let disk =
-            prepare_with_runner(&path, Some(1024), &runner).expect("image should be created");
+            prepare_with_runner(&path, request(1024), &runner).expect("image should be created");
 
         assert_eq!(disk.status, WorkspaceDiskStatus::Created);
         assert_eq!(disk.size_bytes, 1024);
@@ -310,7 +568,8 @@ mod tests {
         fs::write(&path, vec![0u8; 4096]).expect("image");
         let runner = FakeRunner::with_probe("btrfs");
 
-        let disk = prepare_with_runner(&path, Some(1024), &runner).expect("image should be reused");
+        let disk =
+            prepare_with_runner(&path, request(1024), &runner).expect("image should be reused");
 
         assert_eq!(disk.status, WorkspaceDiskStatus::Reused);
         assert_eq!(disk.size_bytes, 4096);
@@ -324,7 +583,8 @@ mod tests {
         fs::write(&path, vec![0u8; 4096]).expect("image");
         let runner = FakeRunner::with_probe("btrfs");
 
-        let disk = prepare_with_runner(&path, None, &runner).expect("image should be reused");
+        let disk = prepare_with_runner(&path, WorkspaceRequest::default(), &runner)
+            .expect("image should be reused");
 
         assert_eq!(disk.status, WorkspaceDiskStatus::Reused);
         assert_eq!(disk.size_bytes, 4096);
@@ -339,7 +599,7 @@ mod tests {
         let runner = FakeRunner::with_probe("ext4");
 
         let err =
-            prepare_with_runner(&path, Some(1024), &runner).expect_err("ext4 must be refused");
+            prepare_with_runner(&path, request(1024), &runner).expect_err("ext4 must be refused");
 
         let message = format!("{err:#}");
         assert!(message.contains("expected btrfs"), "{message}");
@@ -353,7 +613,7 @@ mod tests {
         fs::write(&path, vec![0u8; 1024]).expect("image");
         let runner = FakeRunner::with_probe("btrfs");
 
-        let err = prepare_with_runner(&path, Some(4096), &runner).expect_err("too small");
+        let err = prepare_with_runner(&path, request(4096), &runner).expect_err("too small");
 
         assert!(format!("{err:#}").contains("below the requested"));
         assert_eq!(runner.mkfs_call_count(), 0);
@@ -364,8 +624,8 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let dir = temp.path().join("work.raw");
         fs::create_dir(&dir).expect("directory");
-        let err =
-            prepare_with_runner(&dir, Some(1024), &FakeRunner::default()).expect_err("directory");
+        let err = prepare_with_runner(&dir, request(1024), &FakeRunner::default())
+            .expect_err("directory");
         assert!(format!("{err:#}").contains("not a regular file"));
 
         let target = temp.path().join("real.raw");
@@ -373,7 +633,7 @@ mod tests {
         let link = temp.path().join("link.raw");
         std::os::unix::fs::symlink(&target, &link).expect("symlink");
         let err =
-            prepare_with_runner(&link, Some(1024), &FakeRunner::default()).expect_err("symlink");
+            prepare_with_runner(&link, request(1024), &FakeRunner::default()).expect_err("symlink");
         assert!(format!("{err:#}").contains("symlink"));
     }
 
@@ -384,7 +644,8 @@ mod tests {
         let runner = FakeRunner::default();
         runner.push_mkfs_error("mkfs.btrfs is not installed");
 
-        let err = prepare_with_runner(&path, Some(1024), &runner).expect_err("format should fail");
+        let err =
+            prepare_with_runner(&path, request(1024), &runner).expect_err("format should fail");
 
         assert!(format!("{err:#}").contains("mkfs.btrfs is not installed"));
         assert!(!path.exists());
@@ -530,6 +791,7 @@ mod tests {
     fn env_and_attachment_name_the_disk() {
         let disk = WorkspaceDisk {
             path: PathBuf::from("/tmp/work.raw"),
+            backing: Backing::Image,
             size_bytes: 1024,
             status: WorkspaceDiskStatus::Created,
         };

@@ -124,10 +124,17 @@ pub(crate) fn check_fits(tree_bytes: u64, image_bytes: u64) -> Result<()> {
 /// The image size a seed would get: the existing file's length, else the size the
 /// launch would create it at.
 pub(crate) fn image_bytes(disk: &Path, requested: Option<u64>) -> Result<u64> {
+    // A block device is as big as its owner made it, so its own size answers the
+    // fits check without the flag.
+    if let Some(size) =
+        super::super::launch::components::persistent_disks::workspace::size_for(disk, requested)?
+    {
+        return Ok(size);
+    }
     match std::fs::symlink_metadata(disk) {
-        Ok(metadata) if metadata.is_file() => Ok(metadata.len()),
+        Ok(metadata) if metadata.file_type().is_file() => Ok(metadata.len()),
         Ok(_) => bail!(
-            "'{}' exists and is not a regular file; a workspace image is a file",
+            "'{}' exists and is neither a file nor a block device; a workspace disk is one of those",
             disk.display()
         ),
         Err(_) => Ok(requested.unwrap_or(DEFAULT_IMAGE_BYTES)),
@@ -222,8 +229,10 @@ mod tests {
 
         let directory = temp.path().join("a-directory");
         std::fs::create_dir(&directory).expect("directory");
-        let err = image_bytes(&directory, None).expect_err("a directory is not an image");
-        assert!(format!("{err:#}").contains("not a regular file"));
+        // A directory is neither a file nor a device, and `size_for` answers `None`
+        // for it, so the disk path itself is what refuses it.
+        let err = image_bytes(&directory, None).expect_err("a directory is not a disk");
+        assert!(format!("{err:#}").contains("neither a file nor a block device"));
     }
 
     #[test]

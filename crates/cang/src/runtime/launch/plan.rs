@@ -44,6 +44,9 @@ pub(crate) struct LaunchPlan {
     /// The creation size for a missing image; `None` means the caller did not
     /// ask, so an existing image of any size is accepted.
     pub(crate) workspace_disk_size_bytes: Option<u64>,
+    /// `--workspace-format`: format a block device cang found empty. Only ever set
+    /// with a device; the prepare path refuses it for an image.
+    pub(crate) workspace_disk_format: bool,
     /// Whether this launch also mounts the launch directory on the host, served
     /// by the guest's `/workspace` tree (`--workspace-relay`).
     pub(crate) workspace_relay: bool,
@@ -127,6 +130,7 @@ impl LaunchPlan {
             options.workspace_disk.as_deref(),
             options.workspace_size.as_deref(),
             &workspace_dir,
+            options.workspace_format,
         )?;
         let workspace_server = options.workspace_serve;
         let workspace_relay = resolve_workspace_relay(
@@ -177,6 +181,7 @@ impl LaunchPlan {
             guest_init: options.guest_init,
             workspace_disk: workspace_disk.as_ref().map(|(path, _)| path.clone()),
             workspace_disk_size_bytes: workspace_disk.as_ref().and_then(|(_, size)| *size),
+            workspace_disk_format: options.workspace_format,
             workspace_relay,
             workspace_server,
             mem_gib: options.mem_gib,
@@ -226,13 +231,19 @@ fn resolve_workspace_disk(
     path: Option<&Path>,
     size: Option<&str>,
     workspace_dir: &Path,
+    format: bool,
 ) -> Result<Option<(PathBuf, Option<u64>)>> {
+    if size.is_some() && path.is_none() {
+        anyhow::bail!(
+            "--workspace-size needs --workspace-disk: it sizes the image that flag names"
+        );
+    }
+    if format && path.is_none() {
+        anyhow::bail!(
+            "--workspace-format needs --workspace-disk: it formats the block device that flag names"
+        );
+    }
     let Some(path) = path else {
-        if size.is_some() {
-            anyhow::bail!(
-                "--workspace-size needs --workspace-disk: it sizes the image that flag names"
-            );
-        }
         return Ok(None);
     };
     let path = if path.is_absolute() {
@@ -497,6 +508,7 @@ mod tests {
             preserve_debug: false,
             workspace_disk: None,
             workspace_size: None,
+            workspace_format: false,
             workspace_relay: false,
             workspace_serve: false,
             mem_gib: None,

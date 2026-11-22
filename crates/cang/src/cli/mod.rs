@@ -249,6 +249,13 @@ pub(crate) struct Cli {
     workspace_size: Option<String>,
 
     #[arg(
+        long = "workspace-format",
+        help = "Format the block device --workspace-disk names with btrfs, if it holds no filesystem",
+        long_help = "Format the block device --workspace-disk names with btrfs.\n\nOnly meaningful for a block device that holds **no filesystem**: cang never reformats a host device that already carries one, and never resizes one at all - a device has the size its owner gave it, so --workspace-size is refused with a device. A device that already holds btrfs is attached as it is, without this flag and without being modified."
+    )]
+    workspace_format: bool,
+
+    #[arg(
         long = "guest-init",
         value_name = "PATH",
         help = "Override cang-guest-init in the microvm image"
@@ -945,6 +952,7 @@ impl Cli {
             workspace_disk: self.workspace_disk,
             workspace_relay: self.workspace_relay,
             workspace_size: self.workspace_size,
+            workspace_format: self.workspace_format,
             workspace_serve: false,
 
             mem_gib: self.mem_gib,
@@ -1008,6 +1016,7 @@ pub(crate) struct RuntimeOptions {
     pub(crate) workspace_disk: Option<PathBuf>,
     pub(crate) workspace_relay: bool,
     pub(crate) workspace_size: Option<String>,
+    pub(crate) workspace_format: bool,
     /// `cang workspace serve`: the same launch with the server's lifetime, its
     /// exclusive image lease and its mount ownership. The disk is
     /// `workspace_disk` and the mount point is `workspace`, exactly as for a

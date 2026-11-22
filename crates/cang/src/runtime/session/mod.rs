@@ -331,13 +331,26 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                     plan.workspace_disk.as_ref().map_or(Ok(None), |path| {
                         workspace::prepare_with_runner(
                             path,
-                            plan.workspace_disk_size_bytes,
+                            workspace::WorkspaceRequest {
+                                size_bytes: plan.workspace_disk_size_bytes,
+                                format: plan.workspace_disk_format,
+                            },
                             &HostRawImageCommandRunner,
                         )
                         .map(Some)
                     })
                 })
                 .context("failed to prepare the cang workspace disk")?;
+            // A block device is the host's, not cang's: say so once, because every
+            // other disk cang attaches is one it created, formatted and grows.
+            if let Some(disk) = workspace_disk.as_ref().filter(|disk| disk.is_device()) {
+                eprintln!(
+                    "cang: serving the host block device '{}' ({}); cang will not format it \
+                     or grow it, and it must not be mounted on the host while the guest has it",
+                    disk.path.display(),
+                    disk.size_bytes
+                );
+            }
             match &workspace_disk {
                 Some(disk) => profiler.record_metadata(
                     "workspace_disk_status",
@@ -993,6 +1006,7 @@ mod tests {
             workspace_disk: None,
             workspace_relay: false,
             workspace_size: None,
+            workspace_format: false,
             workspace_serve: false,
             mem_gib: None,
             network_mode: config::NetworkMode::Tsi,

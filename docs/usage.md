@@ -268,6 +268,34 @@ coalescing within one inotify drain, so a `target/` write storm costs at most on
 extraction produces, and a flood of them does not slow the mount (~5 000
 notifications/s delivered, `git status` unchanged).
 
+### A block device instead of an image
+
+`--workspace-disk` also takes a **block device**, and that changes what cang is
+allowed to do with it: a device belongs to the host, so cang attaches it and does
+nothing else.
+
+```bash
+./result/bin/cang --workspace-disk /dev/sdb1 -- bash -lc 'make'
+./result/bin/cang --workspace-disk /dev/sdb1 --workspace-format -- bash -lc 'make'   # empty device only
+```
+
+- a device that already holds **btrfs** is attached as it is - never formatted,
+  never modified;
+- a device holding **any other filesystem** is refused by name (cang does not
+  reformat a host device it did not create);
+- an **empty** device is refused unless `--workspace-format` is passed, and that
+  flag only ever formats a device with no filesystem on it;
+- `--workspace-size` is refused with a device (it has the size its owner gave it),
+  `cang disk resize --workspace-disk <device>` is refused for the same reason, and
+  auto-grow never runs on one - so the guest's btrfs expands to the device's size
+  on its next mount instead;
+- the launch prints one line naming the device, because this is the one disk cang
+  attaches without having created it; the host must not mount it while the guest
+  has it, and nothing stops a second agent session from doing so.
+
+`cang workspace init`, `workspace serve` and `nix gc` accept a device too: a seed
+sizes the fits check from the device, a serve mounts it, and gc only reads it.
+
 ### Seeding a new image from a tree you already have
 
 An image is authoritative and starts empty, so the first step for an existing
