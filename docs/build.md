@@ -32,6 +32,14 @@ against fenix's nixpkgs. A very recent fenix revision may not be published to th
 cache yet; the fetch of the Rust release tarballs from `static.rust-lang.org`
 happens either way, and nothing is ever compiled from source.
 
+The guest image's own `/etc/nix/nix.conf` (`nix/image/nix-config.nix`) trusts
+both of those caches too, with their own public keys, so a `nix build` inside a
+cang task substitutes a fenix-derived derivation instead of building it. The
+settings live in that file rather than in the image's `NIX_CONFIG` variable
+because the guest runs a multi-user store: `cang-guest-init` starts `nix-daemon`
+as root, that daemon reads `/etc/nix/nix.conf` as the system configuration, and
+`NIX_CONFIG` keeps only the `experimental-features` line.
+
 `cargoDeps` stays on nixpkgs' `rustPlatform.fetchCargoVendor` on purpose: the
 vendor hash is a function of the lock file and the crate sources, so vendoring
 with a fixed cargo means a toolchain bump (`nix flake update fenix`) does not

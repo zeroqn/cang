@@ -128,7 +128,7 @@ let
       EOF_CONTAINERS_CONF
       chmod 0644 ./etc/containers/containers.conf
       cat > ./etc/nix/nix.conf <<'EOF_NIX_CONF'
-      ${nixConfig}
+      ${nixConfig.file}
       EOF_NIX_CONF
       chmod 0644 ./etc/nix/nix.conf
       cat > ./etc/rmux.conf <<'EOF_RMUX_CONF'

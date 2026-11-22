@@ -11,6 +11,7 @@ const DEVSHELL_NIX: &str = include_str!("../../../nix/shell/devshell.nix");
 const LAYERS: &str = include_str!("../../../nix/image/layers.nix");
 const CONTAINER_NIX: &str = include_str!("../../../nix/image/container.nix");
 const IMAGE_CONFIG_NIX: &str = include_str!("../../../nix/image/config.nix");
+const NIX_CONFIG_NIX: &str = include_str!("../../../nix/image/nix-config.nix");
 const IMAGE_CHECKS_NIX: &str = include_str!("../../../nix/image/checks.nix");
 const NIX_STORE_DB_CHECK_NIX: &str = include_str!("../../../nix/image/nix-store-db-check.nix");
 const NIX_STORE_REPAIR_NIX: &str = include_str!("../../../nix/image/nix-store-repair.nix");
@@ -895,6 +896,40 @@ fn image_layers_include_guest_init_config_payloads() {
     assert!(LAYERS.contains("fishConfig"));
     assert!(LAYERS.contains("starshipConfig"));
     assert!(LAYERS.contains("cangMuslPackage"));
+}
+
+/// The guest's `/etc/nix/nix.conf` trusts the fenix cache the flake's own
+/// `nixConfig` adds, so a guest `nix build` of a fenix-derived derivation (the
+/// Rust toolchain above all) substitutes instead of building. A `substituters`
+/// line replaces the default set, so `cache.nixos.org` is restated beside it,
+/// and the signing key is fenix's own - the cache's value from
+/// `https://fenix.cachix.org/api/v1/cache/fenix`.
+#[test]
+fn guest_nix_conf_trusts_the_fenix_cache() {
+    let fenix_key = "fenix.cachix.org-1:ecJhr+RdYEdcVgUkjruiYhjbBloIEGov7bos90cZi0Q=";
+    let nix_community_key = "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=";
+    for required in [
+        "substituters = https://cache.nixos.org https://fenix.cachix.org https://nix-community.cachix.org",
+        "trusted-substituters = https://fenix.cachix.org https://nix-community.cachix.org",
+        "trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= fenix.cachix.org-1:ecJhr+RdYEdcVgUkjruiYhjbBloIEGov7bos90cZi0Q= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=",
+    ] {
+        assert!(NIX_CONFIG_NIX.contains(required), "missing {required}");
+    }
+    // One payload reaches the file the guest's `nix-daemon` reads as root and
+    // one reaches the image environment; the two are not interchangeable.
+    assert!(CONTAINER_NIX.contains("cat > ./etc/nix/nix.conf <<'EOF_NIX_CONF'"));
+    assert!(CONTAINER_NIX.contains("${nixConfig.file}"));
+    assert!(IMAGE_CONFIG_NIX.contains(r#""NIX_CONFIG=${nixConfig.env}""#));
+    assert!(
+        NIX_CONFIG_NIX.contains(r#"env = "experimental-features = nix-command flakes";"#),
+        "NIX_CONFIG must stay the single experimental-features line"
+    );
+    for key in [fenix_key, nix_community_key] {
+        assert!(
+            FLAKE_NIX.contains(key),
+            "both guest cache keys have to be the keys the flake's nixConfig trusts"
+        );
+    }
 }
 
 #[test]
