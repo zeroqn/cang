@@ -689,13 +689,15 @@ of every request to zero.
   harness defect fixed.
 
 - [Accept a real host block device as the workspace backing](tickets/28-real-block-device-backing.md):
-  **implemented** (bob's "decide" answer), with the live arm handed over as one root
-  command. `--workspace-disk` now takes a device as well as an image; btrfs is reused
-  untouched, another filesystem is refused by name, an empty one is formatted only
-  with `--workspace-format`, and `--workspace-size`, `disk resize` and auto-grow all
-  refuse a device (its size is its owner's). The decision policy is unit-tested;
-  the ioctl path and any live arm are not, because no unprivileged test can reach a
-  block device - `/home/dev/disp/ticket28-dev.sh setup 4G` is the missing step.
+  **implemented and proven on hardware** (bob's 32 GiB `/dev/sdc`). `--workspace-disk`
+  takes a device as well as an image; btrfs is reused untouched, another filesystem
+  is refused by name, an empty one is formatted only with `--workspace-format`, and
+  `--workspace-size`, `disk resize` and auto-grow all refuse a device (its size is
+  its owner's). Eight live arms - refusals, format+mount at 32 G, unformatted reuse,
+  a seed, a serve, and an ext4 device refused twice and left untouched - and two bugs
+  a test could not have caught: `BLKGETSIZE64` was `0x80087212` instead of
+  `_IOC(_IOC_READ,0x12,114,8)` = `0x80081272`, and `blkid`'s exit 2 ("nothing
+  detected") was treated as a failure instead of "this device is empty".
 
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 

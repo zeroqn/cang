@@ -83,6 +83,13 @@ impl RawImageCommandRunner for HostRawImageCommandRunner {
             })
             .with_context(|| format!("failed to run blkid for '{}'", path.display()))?;
 
+        // `blkid` exits 2 when it finds nothing, which for a *device* is the
+        // ordinary "this disk is empty" answer, not a failure: the workspace device
+        // path has to tell "empty" apart from "holds ext4" to refuse the second by
+        // name and format the first only on request.
+        if output.status.code() == Some(2) {
+            return Ok(String::new());
+        }
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
             if stderr.is_empty() {

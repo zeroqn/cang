@@ -59,20 +59,37 @@ needs root**, so it is handed to bob as one command.
    `--workspace-format`. Documented in `docs/usage.md` §"A block device instead of an
    image", including the "the host must not mount it while the guest has it" rule
    and that nothing stops a second session from doing so.
-4. **The honest check, split**:
-   - **done**: the refusals and the reuse policy, unit-tested; `cargo test`, clippy
-     `-D warnings`, `fmt`, and the whole suite green;
-   - **not done**: any live arm on a real device. Reading a device's size needs
-     `BLKGETSIZE64` and attaching one needs `losetup`, both of which need root, so
-     bob runs `sudo sh /home/dev/disp/ticket28-dev.sh setup 4G` (creates a 4 GiB
-     btrfs loopback at `/dev/loop12` and hands it to the running user - the device
-     is `root:disk` 660 by default, and an unprivileged open fails `EACCES` with a
-     refusal that now says exactly that), and the arms are then:
-     `cang --workspace-disk /dev/loop12 -- bash -lc 'stat -f -c %T /workspace'`,
-     a seed into it, a `workspace serve` on it, and
-     `cang disk resize --workspace-disk /dev/loop12 8G` (must refuse).
+4. **The live arms, on real hardware** (bob attached a **32 GiB real disk,
+   `/dev/sdc`**, 2026-11-22; `lsblk` showed one whole disk, no partitions, no
+   filesystem, unmounted, not swap before anything was done to it). All eight arms
+   below ran on that device with `cang` from `result`:
 
-**Left unverified on purpose**: the ioctl path itself (no block device is reachable
-from an unprivileged test), and a device that is a host root or swap - the review
-call is that `blkid`'s type plus "never format without the flag" already covers the
-danger, and an explicit deny-list would be guesswork until someone names a device.
+   | arm | result |
+   | --- | --- |
+   | `--workspace-size 4G` with the device | refused: `a block device has the size its owner gave it … (it is 32.0 GiB)` |
+   | bare `--workspace-disk`, device empty | refused: `is empty; pass --workspace-format to format it with btrfs` |
+   | `disk resize --workspace-disk /dev/sdc 40G` | refused: `'…' is a block device (34359738368), and cang does not resize a host device` |
+   | `--workspace-format` on the empty device | formatted btrfs, guest saw `/workspace /dev/vdb btrfs` and `df` **32 G** |
+   | second launch, no flag | reused it: the file written by the previous launch was still there, `fs=btrfs` |
+   | `workspace init /dev/sdc --from tools/` | `cang: seeded 56 entries` |
+   | `workspace serve /dev/sdc` | mount up, host read the guest-written `reuse-proof.txt`, `stop` unmounted it 3 s later |
+   | `mkfs.ext4` on the device, then both spellings | refused twice by name (`holds filesystem type 'ext4'` / `already holds … will not overwrite one`), and `blkid` still read **ext4** afterwards - the device was untouched |
+
+   Two bugs the real device found, both fixed before the commit that recorded them:
+   - **`BLKGETSIZE64` was wrong**: I had `0x80087212`; `_IOC(_IOC_READ, 0x12, 114, 8)`
+     is **`0x80081272`**. Every device arm failed with `failed to read the size of
+     block device`, which a unit test could never have caught (no device in a test).
+   - **`blkid` exit 2 was an error**: `probe_fs_type` treated "nothing detected" as a
+     failure, so an *empty* device refused with `failed to detect filesystem type`
+     instead of the named "this disk is empty" answer. Exit 2 now returns an empty
+     type.
+
+   Afterwards the device was left formatted **btrfs and empty**, so bob can use it
+   (`--workspace-disk /dev/sdc`) or clear it with
+   `sudo sh /home/dev/disp/ticket28-dev.sh wipe /dev/sdc`.
+
+**Left open**: a device that is a host root or swap - the call is that `blkid`'s
+type plus "never format without the flag" already covers the danger, and an explicit
+deny-list would be guesswork until someone names a device; and the *loop-device*
+variant (`ticket28-dev.sh loop 4G`) is no longer on the critical path now that real
+hardware ran.

@@ -312,8 +312,9 @@ fn block_device_size(path: &Path) -> Result<Option<u64>> {
     Ok(Some(size))
 }
 
-/// `_IOR(0x12, 114, size_t)` from `linux/fs.h`: the whole device in bytes.
-const BLKGETSIZE64: libc::c_ulong = 0x8008_7212;
+/// `_IOR(0x12, 114, size_t)` from `linux/fs.h`, i.e.
+/// `_IOC(_IOC_READ, 0x12, 114, 8)` = `0x80081272`: the whole device in bytes.
+const BLKGETSIZE64: libc::c_ulong = 0x8008_1272;
 
 /// Prepare a host block device: reuse it when it already holds btrfs, format it only
 /// when asked and only when it holds nothing, and refuse everything else by name.
