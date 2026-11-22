@@ -631,6 +631,13 @@ of every request to zero.
   the workspace image **grows itself on `workspace serve`** when the guest-recorded
   marker says free < 10 % with 2x host headroom (2 GiB -> 20 GiB measured).
 
+- [How does an existing host tree get into a workspace image, once?](tickets/25-seed-image-from-host-tree.md):
+  **`cang workspace init <disk> --from DIR`** (`5175b4ef`) - one task VM with the
+  source mounted read-only at `/mnt/seed`, `tar` with `target/`/`.scratch/`/`.cang/`
+  excluded, marker written last, host-side size refusal at 85 % fill, refused on a
+  second run. Proven on this repo: 50 471 entries seeded, the guest's `git status`
+  matching the host's exactly.
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)

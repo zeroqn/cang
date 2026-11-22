@@ -1,7 +1,7 @@
 ---
 label: wayfinder:task
 title: Seed the first workspace image from the host tree, once, without a hand-written copy script
-status: open
+status: closed
 blocked_by: [18]
 claimed_by: ""
 ---
@@ -30,4 +30,22 @@ Do:
 
 ## Resolution
 
-(to follow)
+Shipped 2026-11-21, commit `5175b4ef`, verified live
+([note 69](../notes/69-seeding-from-a-host-tree.md)).
+
+1. **Copy semantics**: everything except `target/`, `.scratch/` and the tree's own
+   `.cang/`; `tar` rather than `cp -a` (the latter aborts on the first socket);
+   `.git/objects/info/alternates` detected and warned about (absolute host paths).
+2. **Trigger and idempotence**: explicit `cang workspace init <disk> --from DIR`
+   (nothing seeds implicitly - a `--workspace-disk` launch must never copy gigabytes
+   before the user's command). Re-running it on a seeded image is refused by name.
+3. **Size**: the fits check is host-side, before any VM boots - the tree may fill at
+   most 85 % of the image, and the refusal names both sizes. The marker
+   `.cang/seed-complete` is written last, so an interrupted seed is still acceptable
+   to a later one.
+4. **The honest check**, on this repository: 50 471 entries seeded into a 16 GiB
+   image; booting it with `--workspace-disk` reproduces the host's own
+   `git status` (three edited files, dirty submodule, `?? .cang/`) and the same
+   `HEAD` via `git log`, and `cargo check -p cang-guest-relay` finishes inside the
+   guest. A whole-workspace build needs the `nix develop` devshell, on either side of
+   the VM - that is a property of the repo, not of the seed.
