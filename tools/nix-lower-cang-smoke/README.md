@@ -1,9 +1,10 @@
-# /nix Block-Lower Cang Live Smoke
+# /nix Mode Cang Live Smoke
 
-A live smoke for **the `/nix` block lower**: that a launch serves `/nix` from the
-read-only btrfs image on virtio-blk, that the guest mounts it
-force, that cold reads lose no page, and that `CANG_NIX_LOWER_BLOCK=0` still keeps
-the host-composed overlay.
+A live smoke for **the two `/nix` modes a launch can get**: that a
+`--workspace-disk` launch serves `/nix` from the read-only btrfs image on
+virtio-blk with the guest composing the overlay over it, that cold reads lose no
+page, and that a launch with no workspace disk keeps the host-composed overlay
+over virtio-fs and is not silently the same slow path.
 
 ## The failures this exists for
 
@@ -20,11 +21,24 @@ Two, both quiet.
    folios, merged scatter-gather entries); the split is fixed in
    `deps/libkrun`'s `descriptor_utils`, and this smoke does the cold reads that
    used to fail at the disk's own default request size.
-2. **The block lower silently not engaged.** The host falls back to the
-   host-composed overlay when it cannot build or lock the image, and the launch
-   never fails because of it. Without an assertion the run looks clean and is
-   simply the slow path: the last check compares the two boots so a silent
-   regression cannot pass as "no lost pages".
+2. **The block pair silently not engaged.** A launch that cannot build the lower
+   keeps the host-composed overlay and names the reason on stderr instead of
+   failing, because there is no flag left to ask for a refusal (the `--nix` axis
+   was removed: `--workspace-disk` derives the block lower). Without an assertion
+   the run looks clean and is simply the slow path: the last check compares the
+   two boots, so a silent regression cannot pass as "no lost pages".
+
+## The two arms
+
+| arm | launch | expected `/nix` |
+|---|---|---|
+| `block` | `--workspace-disk <out>/workspaces/block.raw --workspace-size 16G` | the guest's overlay, `lowerdir=/run/cang/nix-lower`, upper in `/workspace/.cang/nix/<digest>/` |
+| `host` | no workspace disk | the host-composed overlay, `/nix` on virtio-fs, no block pair |
+
+The guest probe is passed to the guest inline (base64) rather than as a file in
+`/workspace`, and it prints its results as `RESULT key=value` lines on the
+console: a block launch's `/workspace` is the disk image, so a file written there
+is invisible to the host, and the host is what scores the run.
 
 ## Recreate
 
@@ -36,24 +50,25 @@ nix develop --command tools/nix-lower-cang-smoke/nix-lower-smoke.sh \
 
 # reuse an image that is already loaded (the load is the slow part):
 CONTAINERS_STORAGE_CONF=/path/to/store/storage.conf \
-  nix develop --command tools/nix-lower-cang-smoke/nix-lower-smoke.sh \
+nix develop --command tools/nix-lower-cang-smoke/nix-lower-smoke.sh \
   --container localhost/cang:latest --out-dir /home/dev/disp/nix-lower-smoke/run2
 ```
 
 Everything else is resolved from the flake (`.#cang`, `.#cang-musl`'s
-guest-init). `--no-opt-out` skips the second boot; the release driver takes that
-path when it only needs the engagement and no-loss checks.
+guest-init). `--no-host-arm` skips the second boot.
 
 ## Score
 
 | check | what it means |
 |---|---|
-| `block-vm-exit` | the guest ran to completion |
-| `nix-lower-engaged` | `/nix` is an overlay over `/run/cang/nix-lower` |
-| `no-lost-pages` | cold reads of 40 store files logged no new `csum failed` |
-| `no-read-errors` | both sweeps finished without `Input/output error` |
-| `opt-out-keeps-host-overlay` | `CANG_NIX_LOWER_BLOCK=0` leaves `/nix` on virtio-fs |
-| `block-lower-is-faster` | `find /nix/store` is at least 2x faster on the block lower |
+| `block-vm-exit` | the `--workspace-disk` guest ran to completion |
+| `block-lower-engaged` | `/nix` is an overlay over `/run/cang/nix-lower`, and the lower is mounted |
+| `block-prep-ready` | the guest's `/nix` prep worker wrote `state=ready` |
+| `block-no-lost-pages` | cold reads of 40 store files logged no new `csum failed` and no `EIO` |
+| `host-vm-exit` | the no-workspace-disk guest ran to completion |
+| `host-keeps-host-overlay` | with no workspace disk `/nix` is on virtio-fs and the block pair is not engaged |
+| `host-no-lost-pages` | cold reads on the host path logged no new `csum failed` and no `EIO` |
+| `block-lower-is-faster` | `du -s /nix/store` is at least 1.3x faster on the block lower |
 
 A run prints `VERDICT: PASS` or `VERDICT: FAIL` and exits 0/1.
 

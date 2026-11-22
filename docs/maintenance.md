@@ -183,9 +183,10 @@ A libkrun update is therefore:
    qwen3-embedding-0.6b GGUF on the guest's venus device, scored on device,
    fallback, retrieval and throughput: a venus memory-window regression falls
    back to the CPU silently and only this smoke sees it),
-   `tools/nix-lower-cang-smoke` (the `/nix` read-only block lower: engagement, the
-   cold-read page loss, the explicit-fallback
-   refusal and the speed the block lower exists for) and
+   `tools/nix-lower-cang-smoke` (the two `/nix` modes: the block pair a
+   `--workspace-disk` launch derives - engagement, the cold-read page loss and the
+   speed it exists for - and the host-composed overlay a launch with no workspace
+   disk keeps) and
    `tools/nix-generation-smoke` (a workspace `/nix` moving between two images:
    the generation is a btrfs subvolume, the move seeds it by snapshot, and the
    guest's DB merge keeps every store path valid). Chromium/venus being green

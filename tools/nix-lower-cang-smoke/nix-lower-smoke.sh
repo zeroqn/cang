@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Live smoke for the /nix block lower: that a launch serves /nix from the
-# read-only btrfs image on virtio-blk (with the guest's block lower in
-# force) and loses no pages, and that --nix=lower:virtiofs still keeps the
-# host-composed overlay. Two cold boots, scored on engagement, the cap, lost
-# pages and the speed the feature exists for.
+# Live smoke for the two /nix modes a launch can get. `--workspace-disk` derives
+# the block lower (the read-only btrfs image on virtio-blk, with the guest
+# composing /nix as an overlay over it), and a launch with no workspace disk keeps
+# the host-composed overlay on virtio-fs. Two cold boots, scored on which mode was
+# actually engaged, lost pages, and the speed the block lower exists for.
 #
 # The failure this exists for: btrfs on the 7.x guest kernel merges reads into
 # multi-extent bios whose device LBA can belong to another file, so a guest read
 # returns EIO (or SIGBUS for a mapping) on pages that are fine on disk. The guest
-# reads the store through it; if the block lower silently regresses, this smoke fails instead of a
-# user's chromium dying on SIGBUS.
+# reads the store through it; if the block lower silently regresses, this smoke
+# fails instead of a user's chromium dying on SIGBUS. The second failure is the
+# quiet one: a launch that cannot build the lower keeps the host-composed overlay
+# and names the reason on stderr instead of failing, so an unasserted run looks
+# clean and is simply the slow path - hence the two boots and the ratio between
+# them.
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -20,7 +24,7 @@ container_ref=""
 out_dir=""
 mem_gib=4
 timeout_seconds=600
-skip_opt_out=0
+skip_host_arm=0
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 say() { echo "== $*"; }
@@ -29,9 +33,9 @@ usage() {
   cat <<'USAGE'
 Usage: nix-lower-smoke.sh [OPTIONS]
 
-Boots one guest with the /nix block lower and one with --nix=lower:virtiofs,
-and scores engagement, lost pages and the speed
-difference between the two.
+Boots one guest with a --workspace-disk (which derives the /nix block lower) and
+one with no workspace disk (which keeps the host-composed overlay on virtio-fs),
+and scores which mode was engaged, lost pages, and the speed difference.
 
 Options:
   --cang <path>         cang binary, wrapper script, or package prefix
@@ -43,7 +47,7 @@ Options:
                         Must be on btrfs.
   --mem <gib>           guest memory (default: 4)
   --timeout <secs>      per-VM timeout (default: 600)
-  --no-opt-out          skip the --nix=lower:virtiofs boot
+  --no-host-arm         skip the no-workspace-disk boot (the block arm alone)
   -h, --help            show this help
 
 Prerequisites: /dev/kvm, podman/buildah, script (util-linux), nix, and a btrfs
@@ -60,7 +64,7 @@ while [ $# -gt 0 ]; do
     --out-dir) out_dir="${2:?missing value for --out-dir}"; shift 2 ;;
     --mem) mem_gib="${2:?missing value for --mem}"; shift 2 ;;
     --timeout) timeout_seconds="${2:?missing value for --timeout}"; shift 2 ;;
-    --no-opt-out) skip_opt_out=1; shift ;;
+    --no-host-arm) skip_host_arm=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -142,77 +146,66 @@ backend = "btrfs-snapshot"
 EOF
 
 # ---- the two boots --------------------------------------------------------
-# run_boot <label> [extra env assignment] [guest-init override] [extra cang arg]
+# The two modes a launch can end up in, and the only two the CLI still offers:
+#
+#   block  a --workspace-disk launch. `/nix` is derived from the workspace disk
+#          (34533096: the --nix axis is gone), so the host builds the read-only
+#          btrfs lower, attaches it on virtio-blk and the guest composes
+#          `/nix` as an overlay over it with its upper inside the tree.
+#   host   a launch with no workspace disk: the host composes the overlay itself
+#          and shares it, so the guest sees `/nix` on virtio-fs. This is the
+#          path every launch without a workspace image still takes.
+#
+# The guest probe is passed inline rather than as a file in /workspace, because
+# a block launch's /workspace is the disk image - a file beside the launch on the
+# host is not in it - and the block arm is the one under test. It prints its
+# results on stdout and the host scores the console; nothing is read back off the
+# guest's filesystem.
+probe_b64="$(base64 -w0 "$tool_dir/smoke/run-guest-nix-lower.sh")"
+probe_cmd="echo $probe_b64 | base64 -d | sh"
+
+# run_boot <label> [extra env assignment] [extra cang arg]...
 run_boot() {
-  local label="$1" extra_env="${2:-}" init_override="${3:-}" extra_arg="${4:-}" ws rc
+  local label="$1" extra_env="${2:-}" ws rc
+  shift 2
   ws="$out_dir/$label/workspace"
   rm -rf "$out_dir/$label"
-  mkdir -p "$ws/smoke" "$ws/evidence"
-  cp "$tool_dir/smoke/run-guest-nix-lower.sh" "$ws/smoke/run-guest-nix-lower.sh"
-  chmod +x "$ws/smoke/run-guest-nix-lower.sh"
-  # A refusal boots nothing, so its workspace has no evidence to score.
-  [ -n "$init_override" ] && cp "$init_override" "$ws/evidence/.stale-guest-init" 2>/dev/null
+  mkdir -p "$ws" "$out_dir/workspaces" "$out_dir/logs"
 
-  local init="$guest_init"
-  [ -n "$init_override" ] && init="$init_override"
   local args=(--mem "$mem_gib" --alloc hardened --seccomp=off --landlock=off --root)
-  [ -n "$init" ] && args+=(--guest-init "$init")
-  [ -n "$extra_arg" ] && args+=("$extra_arg")
+  [ -n "$guest_init" ] && args+=(--guest-init "$guest_init")
+  # Extra args are appended one at a time: a block arm needs `--workspace-disk`
+  # and its creation size as two words, and an image inside the launch directory
+  # would be hidden by the reverse share, so every image lives beside it.
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      WSIMG) args+=(--workspace-disk "$out_dir/workspaces/$label.raw" --workspace-size 16G); shift ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  # `%q` so the command survives being joined into script(1)'s `-c` string:
+  # without it the shell running that string would split the probe on its
+  # own `|` characters and pipe cang's console into the host's base64.
+  args+=(-- sh -c "$(printf %q "$probe_cmd")")
 
   say "boot $label"
   if ( cd "$ws" && env XDG_CONFIG_HOME="$out_dir/config" XDG_STATE_HOME="$out_dir/state" \
         CANG_IMAGE="$container_ref" $extra_env \
         timeout "$timeout_seconds" \
-        script -q -e -c "$cang_bin ${args[*]} -- sh /workspace/smoke/run-guest-nix-lower.sh" /dev/null ) \
+        script -q -e -c "$cang_bin ${args[*]}" /dev/null ) \
       >"$out_dir/logs/cang-$label.console" 2>&1; then
     rc=0
   else
     rc=$?
   fi
   echo "$rc" > "$out_dir/logs/$label.rc"
-  echo "vm exit ($label): $rc (console: $out_dir/logs/cang-$label.console)"
+  say "vm exit ($label): $rc (console: $out_dir/logs/cang-$label.console)"
   return 0
 }
 
-run_boot "block"
-# The block lower is refused while it has no matching block upper: the mixed
-# pairing (block lower, host-share upper) is the one under diagnosis, so a
-# `--nix=lower:blk` launch exits before booting. That is the code doing what it
-# was told, not a failure of this smoke - report it as skipped and score only
-# the arms that ran.
-block_rc="$(cat "$out_dir/logs/block.rc" 2>/dev/null || echo 1)"
-block_skipped=0
-if [ "$block_rc" -ne 0 ] && grep -q 'cannot run yet' "$out_dir/logs/cang-block.console" 2>/dev/null; then
-  block_skipped=1
-  say "the block lower is currently refused (it needs a block upper); skipping the engagement arms"
-fi
-if [ "$skip_opt_out" -eq 0 ]; then
-  run_boot "opt-out" "" "" "--nix=lower:virtiofs"
-fi
-
-# A guest-init that predates block mode must be refused, not quietly served the
-# slow path. The stale binary is made here by renaming the marker in a copy,
-# which keeps the ELF intact and is the only part of the binary the host's
-# capability gate reads.
-stale_init=""
-if [ -n "$guest_init" ] && [ -r "$guest_init" ]; then
-  stale_init="$out_dir/stale-cang-guest-init"
-  cp "$guest_init" "$stale_init" && chmod 755 "$stale_init"
-  if command -v perl >/dev/null 2>&1; then
-    perl -0pi -e 's/CANG_NIX_LOWER_BLOCK/XXXXXXXXXXXXXXXXXXXX/' "$stale_init"
-  else
-    sed -i 's/CANG_NIX_LOWER_BLOCK/XXXXXXXXXXXXXXXXXXXX/' "$stale_init"
-  fi
-fi
-if [ "$block_skipped" -eq 1 ]; then
-  say "skipping the stale-guest-init arms: every block-mode launch is refused while the upper is missing"
-elif [ -n "$stale_init" ] && ! grep -qa 'CANG_NIX_LOWER_BLOCK' "$stale_init"; then
-  # Strict mode refuses; auto keeps the launch and names why. Same binary,
-  # so the mode is the only difference.
-  run_boot "refuse-stale" "" "$stale_init" "--nix=lower:blk"
-  run_boot "auto-fallback" "" "$stale_init" "--nix=lower:auto"
-else
-  say "no readable guest-init to derive a stale one from; skipping the refusal arm"
+run_boot "block" "" WSIMG
+if [ "$skip_host_arm" -eq 0 ]; then
+  run_boot "host" ""
 fi
 
 # ---- scoring ---------------------------------------------------------------
@@ -225,119 +218,89 @@ require() { # require <name> <ok 0|1> <desc> [detail]
     fail=1
   fi
 }
-value() { cat "$1" 2>/dev/null || true; }
-
-echo
-if [ "$block_skipped" -eq 1 ]; then
-  echo "VERDICT: SKIPPED"
-  echo "  this cang refuses --nix=lower:blk while the writable upper has no block disk:"
-  echo "  a block lower beside a host-share upper is the mixed pair it refuses."
-  echo "  the opt-out arm still booted, so the host-composed path is untouched."
-  echo "  evidence: $out_dir"
-  exit 0
-fi
-echo "== checks"
-
-block_ev="$out_dir/block/workspace/evidence"
-optout_ev="$out_dir/opt-out/workspace/evidence"
-
-require block-vm-exit "$([ "$(value "$out_dir/logs/block.rc")" = 0 ] && echo 0 || echo 1)" \
-  "the block-lower guest ran to completion" "$out_dir/logs/cang-block.console"
-
-require nix-lower-engaged \
-  "$(grep -q '^engaged=yes' "$block_ev/engaged.txt" 2>/dev/null && echo 0 || echo 1)" \
-  "/nix is an overlay over the read-only block lower ($(value "$block_ev/engaged.txt"))" \
-  "$(value "$block_ev/mounts.txt") $(value "$block_ev/nix-prep.log")"
-
-# Lost pages: the guest kernel logs `csum failed`, and a reader sees EIO.
-csum_summary="$(value "$block_ev/csum.txt")"
-csum_before="$(printf '%s' "$csum_summary" | sed -n 's/.*csum_before=\([0-9]*\).*/\1/p')"
-csum_after="$(printf '%s' "$csum_summary" | sed -n 's/.*csum_after=\([0-9]*\).*/\1/p')"
-files="$(printf '%s' "$csum_summary" | sed -n 's/.*files=\([0-9]*\).*/\1/p')"
+# Read one `RESULT key=value` line out of an arm's console, with the tty escapes
+# script(1) records stripped first. The guest prints its own evidence because a
+# block launch's /workspace is the disk image, not a host directory.
+value() { # value <label> <key>
+  sed 's/\x1b\[[0-9;?]*[a-zA-Z]/ /g' "$out_dir/logs/cang-$1.console" 2>/dev/null |
+    tr -d '\r' | grep -m1 "^RESULT $2=" | sed "s|^RESULT $2=||" || true
+}
+arm_rc() { cat "$out_dir/logs/$1.rc" 2>/dev/null || echo 1; }
 # A lost page is a defect in the runtime, not in the launch being scored, so
 # CANG_LENIENT_NIX_LOWER_LOSS=1 records the loss as KNOWN instead of failing, for a
 # caller that must not be blocked by it (see docs/images-and-storage.md). It never
 # hides the count.
-lost_ok=1
-if [ -n "$files" ] && [ "${files:-0}" -gt 8 ] && [ "${csum_after:-1}" = "${csum_before:-0}" ]; then
-  lost_ok=0
-fi
-if [ "$lost_ok" -eq 0 ]; then
-  require no-lost-pages 0 \
-    "cold reads of ${files:-0} store files lost no page ($csum_summary)"
-elif [ "${CANG_LENIENT_NIX_LOWER_LOSS:-0}" = 1 ]; then
-  echo "KNOWN cold reads of ${files:-0} store files lost a page ($csum_summary);"
-  echo "      recorded as KNOWN because CANG_LENIENT_NIX_LOWER_LOSS=1 (guest-kernel read-merge bug, block mode stays opt-in)"
-else
-  require no-lost-pages 1 \
-    "cold reads of ${files:-0} store files lost a page ($csum_summary)" \
-    "$(value "$block_ev/csum-lines.txt")"
-fi
+lost_check() { # lost_check <name> <label> <desc-prefix>
+  local name="$1" label="$2" desc="$3" files csum_before csum_after eio1 eio2
+  files="$(value "$label" files)"
+  csum_before="$(value "$label" csum_before)"
+  csum_after="$(value "$label" csum_after)"
+  eio1="$(value "$label" eio1)"
+  eio2="$(value "$label" eio2)"
+  local summary="files=${files:-?} csum_before=${csum_before:-?} csum_after=${csum_after:-?} eio=${eio1:-?}/${eio2:-?}"
+  if [ -n "$files" ] && [ "${files:-0}" -gt 8 ] &&
+    [ "${csum_after:-1}" = "${csum_before:-0}" ] &&
+    [ "${eio1:-1}" -eq 0 ] && [ "${eio2:-1}" -eq 0 ]; then
+    require "$name" 0 "$desc ($summary)"
+  elif [ "${CANG_LENIENT_NIX_LOWER_LOSS:-0}" = 1 ] && [ -n "$files" ] && [ "${files:-0}" -gt 8 ]; then
+    echo "KNOWN $name: $desc lost a page or saw EIO ($summary);"
+    echo "      recorded as KNOWN because CANG_LENIENT_NIX_LOWER_LOSS=1 (guest-kernel read-merge bug)"
+  else
+    require "$name" 1 "$desc ($summary)"
+  fi
+}
 
-# `state=ready` is the guest's own verdict on composing /nix, installing the
-# image's Nix DB and reconciling the store. Reading only the mount table scores a
-# prep worker that mounted the overlay and then failed as a pass.
-prep_state="$(grep -m1 '^state=' "$block_ev/nix-prep.status" 2>/dev/null || true)"
-prep_error="$(grep -m1 '^error=' "$block_ev/nix-prep.status" 2>/dev/null || true)"
-require nix-prep-ready "$([ "$prep_state" = "state=ready" ] && echo 0 || echo 1)" \
-  "/nix prep finished cleanly (${prep_state:-no status} ${prep_error:-})" \
-  "$(tail -3 "$block_ev/nix-prep.log" 2>/dev/null | tr '\n' ' ')"
-eio="$(cat "$block_ev/eio.txt" 2>/dev/null | grep -c ':0$' || true)"
-require no-read-errors "$([ "$eio" -ge 2 ] && echo 0 || echo 1)" \
-  "both cold sweeps completed without EIO" "$(value "$block_ev/eio.txt")"
+echo "== checks"
+require block-vm-exit "$([ "$(arm_rc block)" = 0 ] && echo 0 || echo 1)" \
+  "the --workspace-disk guest ran to completion" "exit $(arm_rc block), $out_dir/logs/cang-block.console"
 
-# The reason the block lower exists: faster metadata work on the store.
-# The reason the block lower exists: the same store, served off a block device
-# instead of virtio-fs. The metric is `du -s`, which walks the store's metadata and
-# block counts: it is the per-node cost that virtio-fs pays a round trip for, and
-# it stays meaningful when the host page cache is warm (a cold data read does not -
-# both sides are then cached on the host). A plain `find` is dominated by how many
-# entries the image carries and can invert on a big store, so it is reported, not
-# required.
-find_block="$(value "$block_ev/find-ms.txt")"
-du_block="$(value "$block_ev/du-ms.txt")"
-read_block="$(value "$block_ev/read-ms.txt")"
-read_files="$(value "$block_ev/read-count.txt")"
-if [ "$skip_opt_out" -eq 0 ]; then
-  find_opt="$(value "$optout_ev/find-ms.txt")"
-  du_opt="$(value "$optout_ev/du-ms.txt")"
-  read_opt="$(value "$optout_ev/read-ms.txt")"
-  require opt-out-keeps-host-overlay \
-    "$(grep -q 'virtiofs /nix\| /nix virtiofs' "$optout_ev/mounts.txt" 2>/dev/null && echo 0 || echo 1)" \
-    "--nix=lower:virtiofs keeps the host-composed overlay" "$(value "$optout_ev/mounts.txt")"
-  # A regression that silently turns the block lower off would look "clean"; the
-  # speed difference is what distinguishes the two paths. The bar is 1.3x, not the
-  # 4-10x a cold read can show: a busy host or a warm page cache shrinks the gap,
-  # and this check only has to tell "on the block device" from "on virtio-fs".
+block_nix="$(value block nix_mount)"
+block_lower="$(value block lower_mount)"
+require block-lower-engaged \
+  "$(printf '%s' "$block_nix" | grep -q 'lowerdir=/run/cang/nix-lower' &&
+     printf '%s' "$block_lower" | grep -q ' /run/cang/nix-lower ' && echo 0 || echo 1)" \
+  "/nix is an overlay over the read-only block lower (engaged=$(value block engaged))" \
+  "$block_lower $block_nix"
+require block-prep-ready "$([ "$(value block prep)" = state=ready ] && echo 0 || echo 1)" \
+  "/nix prep finished cleanly ($(value block prep) after $(value block prep_wait_s)s)" \
+  "$(value block prep_log | tr '|' ' ')"
+
+lost_check block-no-lost-pages block "cold reads of the block arm's store files"
+
+if [ "$skip_host_arm" -eq 0 ]; then
+  host_nix="$(value host nix_mount)"
+  require host-vm-exit "$([ "$(arm_rc host)" = 0 ] && echo 0 || echo 1)" \
+    "the launch without a workspace disk ran to completion" "exit $(arm_rc host), $out_dir/logs/cang-host.console"
+  require host-keeps-host-overlay \
+    "$(printf '%s' "$host_nix" | grep -q 'virtiofs' &&
+       [ "$(value host engaged)" = no ] && echo 0 || echo 1)" \
+    "with no workspace disk /nix is the host-composed overlay, and the block pair is not engaged" \
+    "$host_nix"
+  lost_check host-no-lost-pages host "cold reads of the host arm's store files"
+
+  # The reason the block lower exists: the same store served off a block device
+  # instead of virtio-fs. `du -s` walks the store's metadata and block counts -
+  # the per-node cost virtio-fs pays a round trip for - and stays meaningful when
+  # the host page cache is warm, where a cold data read does not. The bar is
+  # 1.3x, not the 4-10x a cold read can show: a busy host shrinks the gap, and
+  # this check only has to tell "on the block device" from "on virtio-fs".
+  du_block="$(value block du_ms)"
+  du_host="$(value host du_ms)"
+  find_block="$(value block find_ms)"
+  find_host="$(value host find_ms)"
+  read_block="$(value block read_ms)"
+  read_host="$(value host read_ms)"
   faster=1
   ratio="?"
-  if [ "${du_block:-0}" -gt 0 ] && [ "${du_opt:-0}" -gt 0 ]; then
-    hundredths=$(( du_opt * 100 / du_block ))
+  if [ "${du_block:-0}" -gt 0 ] && [ "${du_host:-0}" -gt 0 ]; then
+    hundredths=$(( du_host * 100 / du_block ))
     ratio="$(( hundredths / 100 )).$(( (hundredths % 100) / 10 ))x"
-    if [ $(( du_block * 13 )) -le $(( du_opt * 10 )) ]; then
+    if [ $(( du_block * 13 )) -le $(( du_host * 10 )) ]; then
       faster=0
     fi
   fi
   require block-lower-is-faster "$faster" \
-    "walking the store is faster on the block lower ($ratio: du ${du_block:-?} ms vs ${du_opt:-?} ms; cold read of ${read_files:-?} files ${read_block:-?} vs ${read_opt:-?} ms; find ${find_block:-?} vs ${find_opt:-?} ms)"
-fi
-
-# The two strict-ness contracts: blk refuses a launch it cannot serve, auto keeps
-# it and names the reason, so nobody silently gets the slower overlay.
-if [ -s "$out_dir/logs/refuse-stale.rc" ]; then
-  refuse_rc="$(value "$out_dir/logs/refuse-stale.rc")"
-  refuse_msg="$(sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$out_dir/logs/cang-refuse-stale.console" 2>/dev/null | tr -d '\r')"
-  require refuses-a-stale-guest "$([ "$refuse_rc" != 0 ] && echo 0 || echo 1)" \
-    "a guest-init without block mode refuses the launch instead of falling back (exit $refuse_rc)" \
-    "$(printf '%s' "$refuse_msg" | grep -m2 'block lower\|nix=lower:virtiofs')"
-  require refusal-names-the-way-out \
-    "$(printf '%s' "$refuse_msg" | grep -q 'nix=lower:virtiofs' && echo 0 || echo 1)" \
-    "the refusal names --nix=lower:virtiofs"
-  auto_rc="$(value "$out_dir/logs/auto-fallback.rc" 2>/dev/null)"
-  auto_msg="$(sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$out_dir/logs/cang-auto-fallback.console" 2>/dev/null | tr -d '\r')"
-  require auto-keeps-the-launch "$([ "$auto_rc" = 0 ] && echo 0 || echo 1)" \
-    "--nix=lower:auto keeps the host-composed overlay and the launch runs (exit ${auto_rc:-?})" \
-    "$(printf '%s' "$auto_msg" | grep -m2 'block lower unavailable\|--nix=lower:auto')"
+    "walking the store is faster on the block lower ($ratio: du ${du_block:-?} ms vs ${du_host:-?} ms; cold read ${read_block:-?} vs ${read_host:-?} ms; find ${find_block:-?} vs ${find_host:-?} ms)"
 fi
 
 echo
@@ -348,5 +311,5 @@ if [ "$fail" -eq 0 ]; then
 fi
 echo "VERDICT: FAIL"
 echo "  evidence: $out_dir"
-echo "  logs: $out_dir/logs/cang-block.console $out_dir/logs/cang-opt-out.console"
+echo "  logs: $out_dir/logs/cang-block.console${skip_host_arm:+ }$( [ "$skip_host_arm" -eq 0 ] && echo "$out_dir/logs/cang-host.console")"
 exit 1
