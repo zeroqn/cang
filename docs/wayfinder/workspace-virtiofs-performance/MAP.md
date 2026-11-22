@@ -722,6 +722,16 @@ of every request to zero.
   `_IOC(_IOC_READ,0x12,114,8)` = `0x80081272`, and `blkid`'s exit 2 ("nothing
   detected") was treated as a failure instead of "this device is empty".
 
+- **`/workspace` on virtio-blk measured, raw image vs the real device** (2026-11-22
+  evening, [note 73](notes/73-workspace-on-block-measured.md)): the same cold
+  2401-crate build inside `/workspace` (2401 `Compiling` every run, cargo's own
+  `./target`) took **median 48.1 s** on a 24 GiB sparse image and **median 49.9 s** on
+  the real 32 GiB `/dev/sdc` - **indistinguishable**, as the design predicted (both
+  are virtio-blk over a guest-owned btrfs). Against the same day's `guest-virtiofs`
+  arm (median 149.2 s) that is **~3x**, stated as approximate because it is
+  cross-window: both arms' own runs span 2-2.3x (note 72 §7), and one arm went
+  48.0 s -> 21.8 s in ten minutes on the same image.
+
   build arm (needs a warm registry and host headroom). [note 59](notes/59-workspace-on-block-verification.md).
 
 ## Awaiting bob (answered 2026-10-26, except where noted)
