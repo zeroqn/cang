@@ -3,11 +3,6 @@
   pins,
   libkrunfw ? null,
   renderServerEnv,
-  # `cang-relay-pump` built from this tree (nix/pkgs/cang-rust.nix). Required,
-  # because the published asset is the single `cang` ELF and nothing else here
-  # can produce the workspace relay's host half: a missing helper resolves to
-  # the bare name and `--workspace-relay` fails to start it.
-  relayPump,
 }:
 let
   cangVersion = pins.cangVersion;
@@ -19,6 +14,11 @@ if builtins.hasAttr prebuiltSystem cangPrebuiltRelease.systems then
   let
     assetInfo = builtins.getAttr prebuiltSystem cangPrebuiltRelease.systems;
     legacyFlakeLockedAsset = pkgs.lib.hasSuffix "-linux-flake-locked" assetInfo.asset;
+    # The workspace reverse share's host half travels with the same pin: one
+    # release publishes the `cang` ELF and the `relay-pump` ELF from the same
+    # build, and scripts/update-cang-prebuilt.sh writes both or neither.
+    relayPumpAsset = assetInfo.relayPumpAsset or null;
+    relayPumpHash = assetInfo.relayPumpHash or null;
   in
   if legacyFlakeLockedAsset then
     throw ''
@@ -26,9 +26,65 @@ if builtins.hasAttr prebuiltSystem cangPrebuiltRelease.systems then
       Legacy pre-rename `*-linux-flake-locked` assets embed release-builder /nix/store references and are intentionally unsupported.
       Publish a neutral cang-<arch>-unknown-linux-gnu sha-* release asset, then rerun scripts/update-cang-prebuilt.sh.
     ''
+  else if relayPumpAsset == null || relayPumpHash == null then
+    throw ''
+      cang-prebuilt is pinned to ${cangPrebuiltRelease.tag}, which carries no relay-pump asset for ${prebuiltSystem}.
+      Every cang release publishes cang-relay-pump-<tag>-<arch>-unknown-linux-gnu next to the cang ELF, and
+      `--workspace-relay`/`cang workspace serve` cannot start without it. Rerun scripts/update-cang-prebuilt.sh
+      against that release; it pins both assets or neither.
+    ''
   else
     let
       releaseUrl = "https://github.com/${cangPrebuiltRelease.owner}/${cangPrebuiltRelease.repo}/releases/download/${cangPrebuiltRelease.tag}/${assetInfo.asset}";
+      relayPumpReleaseUrl = "https://github.com/${cangPrebuiltRelease.owner}/${cangPrebuiltRelease.repo}/releases/download/${cangPrebuiltRelease.tag}/${relayPumpAsset}";
+      # The pump is a cang binary and the `cang` ELF cannot carry it, so it is a
+      # second release asset reconstructed the same way: neutral raw ELF in,
+      # ordinary ELF dependencies rebound to this evaluation, helper layout out.
+      relayPump = pkgs.stdenvNoCC.mkDerivation {
+        pname = "cang-relay-pump";
+        version = "${cangVersion}-prebuilt-${cangPrebuiltRelease.tag}";
+        src = pkgs.fetchurl {
+          url = relayPumpReleaseUrl;
+          hash = relayPumpHash;
+        };
+        dontUnpack = true;
+
+        nativeBuildInputs = [
+          pkgs.autoPatchelfHook
+          pkgs.binutils
+        ];
+
+        # `relay-pump` is a Rust binary with no cang or libkrun in it: its whole
+        # NEEDED set is the C runtime (`libc.so.6`, `libgcc_s.so.1`).
+        buildInputs = [
+          pkgs.stdenv.cc.cc.lib
+          pkgs.stdenv.cc.libc
+        ];
+
+        installPhase = ''
+          runHook preInstall
+
+          magic="$(dd if="$src" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+          if [ "$magic" != "7f454c46" ]; then
+            echo "cang-relay-pump expected a neutral raw ELF payload, but ${relayPumpAsset} from ${cangPrebuiltRelease.tag} is not ELF" >&2
+            echo "Rerun scripts/update-cang-prebuilt.sh after a neutral release is published." >&2
+            exit 1
+          fi
+          readelf -h "$src" >/dev/null
+          install -Dm755 "$src" "$out/bin/relay-pump"
+
+          runHook postInstall
+        '';
+
+        meta = {
+          description = "Prebuilt workspace relay pump (the host half of cang's reverse share)";
+          homepage = "https://github.com/${cangPrebuiltRelease.owner}/${cangPrebuiltRelease.repo}";
+          license = pkgs.lib.licenses.mit;
+          mainProgram = "relay-pump";
+          platforms = supportedSystems;
+          sourceProvenance = [ pkgs.lib.sourceTypes.binaryNativeCode ];
+        };
+      };
       runtimeTools = [
         pkgs.buildah
         pkgs.btrfs-progs

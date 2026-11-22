@@ -54,8 +54,10 @@ rootless Podman tooling for development.
   and `nix develop` environments.
 - `relay-pump`, the host half of the workspace reverse share that
   `--workspace-relay` and `cang workspace serve` mount through, in the same
-  `.#cang` helper dir; `.#cang-prebuilt` builds it from this tree's source
-  because the published release asset is the single `cang` ELF.
+  `.#cang` helper dir. It is a cang binary, so a release publishes it as its own
+  neutral asset (`cang-relay-pump-<arch>-unknown-linux-gnu`) and
+  `.#cang-prebuilt` fetches it next to the `cang` ELF instead of compiling it
+  from this tree.
 - Optional `cang --pulse=tcp:IP:PORT` audio requires a host Pulse-compatible
   TCP listener, typically provided by `pipewire-pulse`. Cang exports the
   endpoint to guest PulseAudio-compatible clients but does not configure or

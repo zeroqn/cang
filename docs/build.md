@@ -118,7 +118,9 @@ goes to the input instead of the checkout:
 - `.#cang-prebuilt`: install a pinned published neutral dynamic Linux `cang`
   asset as raw `$out/bin/cang`, patch ordinary ELF runtime dependencies with
   Nix, and provide the same package-relative helper and `$out/lib/cang`
-  library layout as source-built `.#cang`. Assets published before cang linked
+  library layout as source-built `.#cang`. Its `relay-pump` helper is the
+  release's second neutral asset (`cang-relay-pump-*`), fetched from the same
+  pin instead of compiled from this tree. Assets published before cang linked
   libkrun still need `libkrun*.so` from the pinned `libkrun` package, which is
   why this packager keeps that wiring.
 - `.#cang-render-server-env`: the host render-server environment

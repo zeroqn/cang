@@ -8,6 +8,7 @@ const MAINTENANCE_MD: &str = include_str!("../../../docs/maintenance.md");
 const JUSTFILE: &str = include_str!("../../../Justfile");
 const CANG_RELEASE_SH: &str = include_str!("../../../scripts/cang-release.sh");
 const UPDATE_CANG_PREBUILT_SH: &str = include_str!("../../../scripts/update-cang-prebuilt.sh");
+const README_ROOT: &str = include_str!("../../../README.md");
 const DEVSHELL_NIX: &str = include_str!("../../../nix/shell/devshell.nix");
 const LAYERS: &str = include_str!("../../../nix/image/layers.nix");
 const CONTAINER_NIX: &str = include_str!("../../../nix/image/container.nix");
@@ -842,32 +843,70 @@ fn cang_prebuilt_package_pins_and_patches_neutral_elf() {
     }
 }
 
-/// The workspace relay's host half (`relay-pump`) is not in the published
-/// release asset - that asset is the single `cang` ELF - so `.#cang-prebuilt`
-/// has to build it from this tree and install it where
-/// `runtime/host_tools.rs` looks. v0.23.0 shipped without it and
-/// `--workspace-relay` failed to start a bare `relay-pump` at all.
+/// The workspace relay's host half (`relay-pump`) is a cang binary that the single
+/// `cang` ELF cannot carry, so the release publishes it as its own neutral asset
+/// and `.#cang-prebuilt` fetches it from the same pin. A downstream flake
+/// consuming `.#cang-prebuilt` must not compile it - and the rest of the workspace
+/// - from this tree.
 #[test]
-fn cang_prebuilt_ships_the_workspace_relay_pump_helper() {
+fn cang_prebuilt_fetches_the_published_relay_pump_asset() {
     for required in [
-        "relayPump,",
+        "relayPumpAsset = assetInfo.relayPumpAsset or null;",
+        "relayPumpHash = assetInfo.relayPumpHash or null;",
+        "carries no relay-pump asset for ${prebuiltSystem}",
+        "pname = \"cang-relay-pump\";",
+        "relayPumpReleaseUrl = ",
+        r#"install -Dm755 "$src" "$out/bin/relay-pump""#,
         r#"ln -s ${relayPump}/bin/relay-pump "$out/libexec/cang-helpers/relay-pump""#,
+        r#"mainProgram = "relay-pump";"#,
+        "sourceProvenance = [ pkgs.lib.sourceTypes.binaryNativeCode ];",
     ] {
         assert!(CANG_PREBUILT_NIX.contains(required), "missing {required}");
     }
 
+    // The pin names both assets of one release, so the pump it fetches was built
+    // from the same source as the `cang` ELF it accompanies.
     for required in [
-        "relayPumpPackage = rustToolchain.rustPlatform.buildRustPackage {",
-        r#""cang-relay-pump""#,
-        "inherit rustPackage cangMuslPackage relayPumpPackage;",
+        r#"relayPumpAsset = "cang-relay-pump-"#,
+        r#"relayPumpHash = "sha256-"#,
     ] {
-        assert!(CANG_RUST_NIX.contains(required), "missing {required}");
+        assert!(
+            PINS_NIX.contains(required),
+            "nix/pins.nix missing {required}"
+        );
     }
 
-    assert!(
-        FLAKE_NIX.contains("relayPump = rustPackages.relayPumpPackage;"),
-        "flake.nix must hand the source-built relay pump to .#cang-prebuilt"
-    );
+    // Nothing hands a source build of the pump to the package any more: the
+    // prebuilt path would be pointless if the flake still compiled it.
+    for (label, source, absent) in [
+        (
+            "nix/pkgs/cang-prebuilt.nix",
+            CANG_PREBUILT_NIX,
+            "  relayPump,",
+        ),
+        ("nix/pkgs/cang-rust.nix", CANG_RUST_NIX, "relayPumpPackage"),
+        (
+            "flake.nix",
+            FLAKE_NIX,
+            "relayPump = rustPackages.relayPumpPackage;",
+        ),
+    ] {
+        assert!(
+            !source.contains(absent),
+            "{label} should not carry a source-built relay pump: found {absent}"
+        );
+    }
+
+    for (label, source) in [
+        ("README.md", README_ROOT),
+        ("docs/maintenance.md", MAINTENANCE_MD),
+        ("docs/build.md", BUILD_MD),
+    ] {
+        assert!(
+            source.contains("cang-relay-pump-"),
+            "{label} should document the relay pump release asset"
+        );
+    }
 }
 
 #[test]
