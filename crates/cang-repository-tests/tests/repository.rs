@@ -907,7 +907,8 @@ fn image_layers_include_guest_init_config_payloads() {
 #[test]
 fn guest_nix_conf_trusts_the_fenix_cache() {
     let fenix_key = "fenix.cachix.org-1:ecJhr+RdYEdcVgUkjruiYhjbBloIEGov7bos90cZi0Q=";
-    let nix_community_key = "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=";
+    let nix_community_key =
+        "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=";
     for required in [
         "substituters = https://cache.nixos.org https://fenix.cachix.org https://nix-community.cachix.org",
         "trusted-substituters = https://fenix.cachix.org https://nix-community.cachix.org",
