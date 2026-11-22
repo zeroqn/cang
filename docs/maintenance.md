@@ -162,7 +162,13 @@ A libkrun update is therefore:
 
 1. Move the pointer (`git -C deps/libkrun fetch` + `checkout`, or a fork branch
    update), then `git add deps/libkrun` here - flake builds only see tracked
-   files.
+   files. **Publish the fork commit before cang's CI builds it**: both references
+   resolve a SHA on `zeroqn/libkrun`, so a commit checked out locally but never
+   pushed fails CI's `git submodule update` ("Fetched in submodule path
+   'deps/libkrun', but it did not contain <sha>") and every Nix build that
+   fetches `libkrun-src`, while the local tree builds fine. Push the fork's
+   `cang` branch (and its `v<BASE>-cang.<n>` tag when that revision is a release
+   tip) first, in that order.
 2. Point the input at the same revision: `nix flake update libkrun-src`, then
    compare `flake.lock`'s `libkrun-src` rev with
    `git submodule status deps/libkrun`. A mismatch means Nix builds and in-tree
