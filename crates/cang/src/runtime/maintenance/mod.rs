@@ -3,6 +3,7 @@ pub(crate) mod disk_resize;
 pub(crate) mod namespace;
 pub(crate) mod nix_gc;
 pub(crate) mod workspace_grow;
+pub(crate) mod workspace_seed;
 
 use anyhow::Result;
 use std::path::Path;

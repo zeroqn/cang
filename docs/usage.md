@@ -259,6 +259,39 @@ coalescing within one inotify drain, so a `target/` write storm costs at most on
 extraction produces, and a flood of them does not slow the mount (~5 000
 notifications/s delivered, `git status` unchanged).
 
+### Seeding a new image from a tree you already have
+
+An image is authoritative and starts empty, so the first step for an existing
+checkout is one shot that copies it in:
+
+```bash
+./result/bin/cang workspace init /tmp/work.raw --from . --workspace-size 32G
+cang: seeded 50471 entries into the workspace image
+```
+
+The copy runs inside one task VM with the source tree mounted read-only at
+`/mnt/seed`, so it needs no root on the host. What it does **not** copy: `target/`,
+`.scratch/`, and the tree's own `.cang/` bookkeeping; `tar` skips sockets and
+FIFOs (with a warning) rather than failing the copy, and a
+`.git/objects/info/alternates` that names paths outside the tree is reported, since
+those objects may not exist inside the guest.
+
+Three refusals, all before anything is written:
+- the tree does not fit — it may fill at most 85% of the image, and the refusal
+  names both sizes and points at `--workspace-size`;
+- the image is already seeded (`.cang/seed-complete`) — a seed is a one-time act,
+  not a sync, so use a different image;
+- the image's tree already holds something the seed did not put there.
+
+The marker is written **last**, so an interrupted seed leaves an image a later
+seed still accepts instead of one that looks complete and is missing files.
+
+Proven on this repository: 50 471 entries seeded into a 16 GiB image, then booted
+with `--workspace-disk` — `git status` inside the guest reports the same working
+tree the host has (`git log` shows the same `HEAD`), and `cargo check -p
+cang-guest-relay` finishes there. (A `cargo check` of the whole workspace needs the
+`nix develop` devshell, same as on the host.)
+
 ### A workspace server: the host's view between launches
 
 `cang workspace serve PATH` starts one long-lived VM that mounts the image at

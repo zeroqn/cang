@@ -649,6 +649,32 @@ pub(crate) enum WorkspaceCommand {
     },
 
     #[command(
+        name = "init",
+        about = "Fill a new workspace image with an existing host tree, once"
+    )]
+    Init {
+        #[arg(
+            value_name = "DISK",
+            help = "The btrfs workspace image to fill; created at --workspace-size when absent"
+        )]
+        disk: PathBuf,
+
+        #[arg(
+            long = "from",
+            value_name = "DIR",
+            help = "The host tree to copy in (default: the current directory)"
+        )]
+        from: Option<PathBuf>,
+
+        #[arg(
+            long = "workspace-size",
+            value_name = "SIZE",
+            help = "Creation size for a new image, for example 64G (default 64G)"
+        )]
+        workspace_size: Option<String>,
+    },
+
+    #[command(
         name = "stop",
         about = "Stop the workspace server serving one image and unmount its host view"
     )]
@@ -786,6 +812,71 @@ impl Cli {
                         disk,
                         log_settings: LogSettings::from_process_env(self.log_level, self.debug),
                     },
+                    WorkspaceCommand::Init {
+                        disk,
+                        from,
+                        workspace_size,
+                    } => {
+                        let mut options = self.try_into_runtime_options()?;
+                        if options.daemon {
+                            anyhow::bail!(
+                                "--daemon cannot be used with 'cang workspace init': the seed runs one VM and its exit status is the answer"
+                            );
+                        }
+                        let from = match from {
+                            Some(path) => path,
+                            None => anyhow::Context::context(
+                                std::env::current_dir(),
+                                "'cang workspace init' needs a tree to seed from; pass --from DIR",
+                            )?,
+                        };
+                        let from = std::fs::canonicalize(&from).map_err(|err| {
+                            anyhow::anyhow!(
+                                "failed to resolve the tree to seed from '{}': {err}",
+                                from.display()
+                            )
+                        })?;
+                        if !from.is_dir() {
+                            anyhow::bail!(
+                                "'{}' is not a directory; --from names the host tree a seed copies",
+                                from.display()
+                            );
+                        }
+                        // Refuse before booting rather than halfway through the copy.
+                        let requested = match workspace_size.as_deref() {
+                            Some(size) => Some(
+                                crate::runtime::maintenance::disk_resize::parse_size_bytes_for_label(
+                                    size,
+                                    "cang workspace image size",
+                                )?,
+                            ),
+                            None => None,
+                        };
+                        let disk = if disk.is_absolute() {
+                            disk
+                        } else {
+                            std::env::current_dir()?.join(disk)
+                        };
+                        let tree =
+                            crate::runtime::maintenance::workspace_seed::source_bytes(&from)?;
+                        let image = crate::runtime::maintenance::workspace_seed::image_bytes(
+                            &disk, requested,
+                        )?;
+                        crate::runtime::maintenance::workspace_seed::check_fits(tree, image)?;
+
+                        options.workspace = Some(from.clone());
+                        options.workspace_disk = Some(disk);
+                        options.workspace_size = workspace_size;
+                        options.volumes = vec![VolumeSpec {
+                            source: from,
+                            target: crate::runtime::maintenance::workspace_seed::SEED_SOURCE_TARGET
+                                .to_owned(),
+                            read_only: true,
+                        }];
+                        options.guest_command =
+                            crate::runtime::maintenance::workspace_seed::seed_command();
+                        CliAction::Run(Box::new(options))
+                    }
                     WorkspaceCommand::Serve {
                         disk,
                         mount_at,
