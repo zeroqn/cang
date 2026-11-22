@@ -290,7 +290,9 @@ in
     repo = "cang";
     # Pinned by scripts/update-cang-prebuilt.sh, which rejects wrapper-script,
     # legacy flake-locked, and concrete /nix/store/<hash>-referencing cang
-    # release payloads.
+    # release payloads. Each system entry carries the release's two assets: the
+    # `cang` ELF and `relayPumpAsset`/`relayPumpHash`, the workspace relay's host
+    # half (`cang-relay-pump-*`). The updater pins them together or not at all.
     tag = "v0.23.1";
     systems = {
       x86_64-linux = {

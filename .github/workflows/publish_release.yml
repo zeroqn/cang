@@ -92,32 +92,24 @@ jobs:
 
           # `cang-*` is the current asset name. Releases published before the
           # rename are still resolvable under their historical `loftd-*` name.
+          # One build publishes two assets: the host `cang` ELF, and the
+          # workspace reverse share's host half (`relay-pump`), which `.#cang`
+          # installs under `libexec/cang-helpers` and `.#cang-prebuilt` would
+          # otherwise have to compile from the workspace tree.
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             release_version="${GITHUB_REF_NAME}"
             cang_asset_name="cang-${release_version}-${arch}-unknown-linux-gnu"
+            relay_pump_asset_name="cang-relay-pump-${release_version}-${arch}-unknown-linux-gnu"
           else
             release_version=""
             cang_asset_name="cang-${arch}-unknown-linux-gnu"
+            relay_pump_asset_name="cang-relay-pump-${arch}-unknown-linux-gnu"
           fi
 
           if [[ "${cang_asset_name}" == *-linux-flake-locked ]]; then
             echo "refusing legacy cang flake-locked asset name: ${cang_asset_name}" >&2
             exit 1
           fi
-
-          mkdir -p dist
-          raw_cang_path="result-cang/bin/cang"
-          test -x "${raw_cang_path}"
-          if [ "$(dd if="${raw_cang_path}" bs=2 count=1 2>/dev/null)" = "#!" ]; then
-            echo "refusing to publish cang wrapper script as ${cang_asset_name}" >&2
-            exit 1
-          fi
-          if [ "$(dd if="${raw_cang_path}" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" != "7f454c46" ]; then
-            echo "refusing to publish non-ELF cang asset ${cang_asset_name}" >&2
-            exit 1
-          fi
-          readelf -h "${raw_cang_path}" > /dev/null
-          install -m 0755 "${raw_cang_path}" "dist/${cang_asset_name}"
 
           case "${arch}" in
             x86_64)
@@ -132,23 +124,51 @@ jobs:
               ;;
           esac
 
-          nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#patchelf -c \
-            patchelf --set-interpreter "${neutral_loader}" --set-rpath "" "dist/${cang_asset_name}"
-          readelf -h "dist/${cang_asset_name}" > /dev/null
+          mkdir -p dist
 
-          if LC_ALL=C grep -aEq '/nix/store/[0-9a-df-np-sv-z]{32}-' "dist/${cang_asset_name}"; then
-            echo "refusing to publish cang asset ${cang_asset_name}: neutral asset still contains concrete /nix/store/<hash>- references" >&2
-            exit 1
-          fi
+          # Both assets are neutral packaging inputs (docs/adr/0005-neutral-cang-prebuilt-assets.md),
+          # so both get the same checks: the payload has to be a raw ELF, and the
+          # uploaded bytes have to carry no concrete store reference.
+          publish_neutral_elf() {
+            local raw_path="$1" asset_name="$2" smoke="$3"
+            test -x "${raw_path}"
+            if [ "$(dd if="${raw_path}" bs=2 count=1 2>/dev/null)" = "#!" ]; then
+              echo "refusing to publish wrapper script as ${asset_name}" >&2
+              exit 1
+            fi
+            if [ "$(dd if="${raw_path}" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" != "7f454c46" ]; then
+              echo "refusing to publish non-ELF asset ${asset_name}" >&2
+              exit 1
+            fi
+            readelf -h "${raw_path}" > /dev/null
+            install -m 0755 "${raw_path}" "dist/${asset_name}"
 
-          result-cang/bin/cang --help > /dev/null
+            nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#patchelf -c \
+              patchelf --set-interpreter "${neutral_loader}" --set-rpath "" "dist/${asset_name}"
+            readelf -h "dist/${asset_name}" > /dev/null
 
-          sha256sum "dist/${cang_asset_name}" > "dist/${cang_asset_name}.sha256"
+            if LC_ALL=C grep -aEq '/nix/store/[0-9a-df-np-sv-z]{32}-' "dist/${asset_name}"; then
+              echo "refusing to publish ${asset_name}: neutral asset still contains concrete /nix/store/<hash>- references" >&2
+              exit 1
+            fi
+
+            # Smoke the packaged payload, not the normalized copy: the neutral
+            # asset targets the consuming flake's loader, not the runner's glibc.
+            "${raw_path}" ${smoke} > /dev/null
+
+            sha256sum "dist/${asset_name}" > "dist/${asset_name}.sha256"
+          }
+
+          publish_neutral_elf "result-cang/bin/cang" "${cang_asset_name}" "--help"
+          publish_neutral_elf "result-cang/libexec/cang-helpers/relay-pump" "${relay_pump_asset_name}" "--version"
 
           {
             echo "cang_asset_name=${cang_asset_name}"
             echo "cang_asset_path=dist/${cang_asset_name}"
             echo "cang_checksum_path=dist/${cang_asset_name}.sha256"
+            echo "relay_pump_asset_name=${relay_pump_asset_name}"
+            echo "relay_pump_asset_path=dist/${relay_pump_asset_name}"
+            echo "relay_pump_checksum_path=dist/${relay_pump_asset_name}.sha256"
             echo "sha_tag=${sha_tag}"
             echo "release_version=${release_version}"
           } >> "${GITHUB_OUTPUT}"
@@ -156,7 +176,9 @@ jobs:
       - name: Attest release binaries
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: ${{ steps.prep.outputs.cang_asset_path }}
+          subject-path: |
+            ${{ steps.prep.outputs.cang_asset_path }}
+            ${{ steps.prep.outputs.relay_pump_asset_path }}
 
       - name: Write release notes
         run: |
@@ -174,6 +196,7 @@ jobs:
 
           Assets:
           - \`${{ steps.prep.outputs.cang_asset_name }}\`: neutral dynamically linked cang ELF packaging input. It is not a standalone portable binary: since cang links libkrun's Rust API it needs \`libvirglrenderer.so.1\` at run time (\`libkrunfw.so.5\` for the firmware), so Nix packaging patches ordinary ELF runtime dependencies and wires libkrunfw/runtime-tool dependencies. Prefer \`nix build .#cang\`, \`nix build .#cang-prebuilt\` once pinned, or the published \`ghcr.io/<repo-owner>/cang\` image for ordinary use.
+          - \`${{ steps.prep.outputs.relay_pump_asset_name }}\`: the workspace reverse share's host half (\`relay-pump\`) as the same neutral ELF, so \`.#cang-prebuilt\` fetches it instead of compiling it from the workspace tree.
 
           The versioned image \`ghcr.io/<repo-owner>/cang:${GITHUB_REF_NAME}\` is published by the image workflow on tag push.
           The matching \`${{ steps.prep.outputs.sha_tag }}\` prerelease is the revision-addressed binary set for this exact revision.
@@ -188,6 +211,7 @@ jobs:
 
           Assets:
           - \`${{ steps.prep.outputs.cang_asset_name }}\`: neutral dynamically linked cang ELF packaging input. It is not a standalone portable binary: since cang links libkrun's Rust API it needs \`libvirglrenderer.so.1\` at run time (\`libkrunfw.so.5\` for the firmware), so Nix packaging patches ordinary ELF runtime dependencies and wires libkrunfw/runtime-tool dependencies. Prefer \`nix build .#cang\`, \`nix build .#cang-prebuilt\` once pinned, or the published \`ghcr.io/<repo-owner>/cang\` image for ordinary use.
+          - \`${{ steps.prep.outputs.relay_pump_asset_name }}\`: the workspace reverse share's host half (\`relay-pump\`) as the same neutral ELF, so \`.#cang-prebuilt\` fetches it instead of compiling it from the workspace tree.
 
           The \`alpha\` prerelease is reused on every push to main.
           The matching \`${{ steps.prep.outputs.sha_tag }}\` prerelease is the revision-addressed binary set for this exact revision.
@@ -247,12 +271,13 @@ jobs:
               --target "${GITHUB_SHA}"
           fi
 
-
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
           CANG_ASSET_PATH: ${{ steps.prep.outputs.cang_asset_path }}
           CANG_CHECKSUM_PATH: ${{ steps.prep.outputs.cang_checksum_path }}
+          RELAY_PUMP_ASSET_PATH: ${{ steps.prep.outputs.relay_pump_asset_path }}
+          RELAY_PUMP_CHECKSUM_PATH: ${{ steps.prep.outputs.relay_pump_checksum_path }}
           RELEASE_VERSION: ${{ steps.prep.outputs.release_version }}
           SHA_TAG: ${{ steps.prep.outputs.sha_tag }}
         run: |
@@ -262,17 +287,23 @@ jobs:
             gh release upload alpha \
               "${CANG_ASSET_PATH}" \
               "${CANG_CHECKSUM_PATH}" \
+              "${RELAY_PUMP_ASSET_PATH}" \
+              "${RELAY_PUMP_CHECKSUM_PATH}" \
               --clobber
           else
             gh release upload "${RELEASE_VERSION}" \
               "${CANG_ASSET_PATH}" \
               "${CANG_CHECKSUM_PATH}" \
+              "${RELAY_PUMP_ASSET_PATH}" \
+              "${RELAY_PUMP_CHECKSUM_PATH}" \
               --clobber
           fi
 
           gh release upload "${SHA_TAG}" \
             "${CANG_ASSET_PATH}" \
             "${CANG_CHECKSUM_PATH}" \
+            "${RELAY_PUMP_ASSET_PATH}" \
+            "${RELAY_PUMP_CHECKSUM_PATH}" \
             --clobber
 
       - name: Prune old sha releases

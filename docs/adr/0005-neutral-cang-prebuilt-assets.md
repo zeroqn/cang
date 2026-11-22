@@ -33,6 +33,12 @@ neutral upstream asset plus Nix-side patching in the package that consumes it.
   `/nix/store/<hash>-...` references.
 - Use `autoPatchelfHook` in `.#cang-prebuilt` for ordinary ELF runtime
   dependencies.
+- Publish the workspace reverse share's host half as a second neutral ELF,
+  `cang-relay-pump-<arch>-unknown-linux-gnu`, in the same release as
+  `cang-<arch>-unknown-linux-gnu`. A `cang` asset cannot carry another binary,
+  so `.#cang-prebuilt` fetches both from one pin instead of compiling the pump
+  from the workspace tree - which is a Rust build of the whole workspace's
+  vendored inputs on the consumer's machine.
 - Keep `libkrun` and `libkrunfw` runtime-loaded through package-relative
   lookup semantics instead of making them required ELF `NEEDED` dependencies.
   (Amended 2026-09: cang now links libkrun's Rust API into the binary, so libkrun
@@ -44,6 +50,11 @@ neutral upstream asset plus Nix-side patching in the package that consumes it.
 
 Existing legacy pins fail early until a new neutral `sha-*` release asset is
 published and pinned.
+
+A pin carries both assets or neither: `scripts/update-cang-prebuilt.sh` validates
+the `cang` ELF and its `relay-pump` partner before it writes anything, so
+`.#cang-prebuilt` can never be pinned to a `cang` binary whose matching pump was
+not published with it.
 
 Cutting a release that produces such an asset follows
 [the cang release scheme](../maintenance.md#cang-release-scheme): the pin is

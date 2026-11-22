@@ -2,20 +2,24 @@
 # cang release driver: the phases of docs/maintenance.md's "cang release scheme"
 # as one command, so a release cannot skip a step or guess a value.
 #
-# The asset SRI is never computed locally. Which patchelf normalizes the release
+# The asset SRIs are never computed locally. Which patchelf normalizes a release
 # asset depends on the host's flake registry (patchelf 0.18 moved where
 # --set-interpreter places .interp), so a locally normalized asset is a different
 # byte stream from CI's and a pin cut from it silently misses - v0.15.1 shipped
-# that way. The driver takes the SRI from the cang CI run that built the same
-# source instead: a branch push publishes the alpha asset (byte-identical to the
-# versioned one, only the upload name differs), and its `.sha256` is the hash the
-# tag push will publish.
+# that way. The driver takes the SRIs from the cang CI run that built the same
+# source instead: a branch push publishes the alpha assets (byte-identical to the
+# versioned ones, only the upload names differ), and their `.sha256` files are
+# what the tag push publishes.
+#
+# One release publishes two assets and one pin carries both: the host `cang` ELF
+# and the workspace relay's host half `relay-pump` (cang-relay-pump-*), which
+# `.#cang-prebuilt` fetches instead of compiling it from this tree.
 #
 #   scripts/cang-release.sh plan   <version>
 #   scripts/cang-release.sh all    <version>   gates, bump, pin, tag, verify
 #   scripts/cang-release.sh gate               the static gates a release passes
 #   scripts/cang-release.sh bump   <version>   version + cargoDeps hash + commit
-#   scripts/cang-release.sh pin    <version>   SRI from CI's alpha asset + commit
+#   scripts/cang-release.sh pin    <version>   SRIs from CI's alpha assets + commit
 #   scripts/cang-release.sh push               push main, wait for its CI run
 #   scripts/cang-release.sh tag    <version>   tag HEAD, push it, wait for its run
 #   scripts/cang-release.sh verify <version>   published asset == pin, prebuilt runs
@@ -112,6 +116,31 @@ pinned_sri() {
   nix eval --raw --impure --expr "(import $repo_root/nix/pins.nix).cangPrebuiltRelease.systems.\"$(asset_system)\".hash"
 }
 
+# A pin carries the cang ELF and the workspace relay's host half together: one
+# release publishes both, and .#cang-prebuilt fetches both.
+pinned_pump_sri() {
+  nix eval --raw --impure --expr "(import $repo_root/nix/pins.nix).cangPrebuiltRelease.systems.\"$(asset_system)\".relayPumpHash"
+}
+
+# Asset names as publish_release.yml writes them: a branch push publishes the
+# unversioned pair on the rolling `alpha` prerelease, a tag push the versioned
+# pair on its own release.
+cang_asset_name() {
+  printf 'cang-%s-unknown-linux-gnu' "$(asset_arch)"
+}
+
+relay_pump_asset_name() {
+  printf 'cang-relay-pump-%s-unknown-linux-gnu' "$(asset_arch)"
+}
+
+versioned_cang_asset_name() {
+  printf 'cang-v%s-%s-unknown-linux-gnu' "$1" "$(asset_arch)"
+}
+
+versioned_relay_pump_asset_name() {
+  printf 'cang-relay-pump-v%s-%s-unknown-linux-gnu' "$1" "$(asset_arch)"
+}
+
 asset_system() {
   case "$(asset_arch)" in
     x86_64) printf 'x86_64-linux' ;;
@@ -129,12 +158,14 @@ gh_api() {
   fi
 }
 
-# The alpha release is rewritten by every main push, so only read it once the
-# run for the revision under test has finished - and read it a few times before
+# Read the `.sha256` a CI run published for one asset, as an SRI. The rolling
+# `alpha` release is rewritten by every main push, so only read it once the run
+# for the revision under test has finished - and read it a few times before
 # giving up, because the read can race the release update.
-alpha_asset_sri() {
+release_asset_sri() {
+  local tag="$1" asset="$2"
   local url payload code hex attempt
-  url="https://github.com/$slug/releases/download/alpha/cang-$(asset_arch)-unknown-linux-gnu.sha256"
+  url="https://github.com/$slug/releases/download/$tag/$asset.sha256"
   for attempt in 1 2 3 4 5; do
     payload="$(curl -sSL -w $'\n%{http_code}' "$url" 2>/dev/null || true)"
     code="${payload##*$'\n'}"
@@ -145,7 +176,7 @@ alpha_asset_sri() {
         *) nix hash convert --hash-algo sha256 --to sri "$hex" && return 0 ;;
       esac
     fi
-    say "alpha asset fetch returned HTTP $code, retrying ($attempt/5): $url"
+    say "$asset.sha256 fetch returned HTTP $code, retrying ($attempt/5): $url"
     sleep 10
   done
   die "could not read $url (last HTTP $code)"
@@ -337,15 +368,18 @@ cmd_plan() {
   phase 2  bump       Cargo.toml + Cargo.lock workspace members -> $version,
                       cargoDeps.hash from the fakeHash build, commit
   phase 3  push       git push origin main, wait for the "$workflow" run
-  phase 4  pin        SRI = CI's alpha asset .sha256 for phase 3's revision,
-                      scripts/update-cang-prebuilt.sh --tag v$version --hash <sri>, commit
+  phase 4  pin        SRIs = CI's alpha asset .sha256 files (cang and cang-relay-pump)
+                      for phase 3's revision, scripts/update-cang-prebuilt.sh
+                      --tag v$version --hash <cang-sri> --pump-hash <pump-sri>, commit
   phase 5  push       git push origin main, wait for the pin commit's run and
-                      re-check its alpha .sha256 against the pin
+                      re-check both alpha .sha256 files against the pin
   phase 6  tag        git tag v$version on the pin commit, git push origin v$version,
                       wait for the tag run
-  phase 7  verify     published cang-v$version-$(asset_arch)-unknown-linux-gnu.sha256 == pin,
-                      scripts/update-cang-prebuilt.sh --tag v$version is a no-op,
-                      nix build .#cang-prebuilt and \`cang --version\` report $version
+  phase 7  verify     the published cang-v$version-$(asset_arch)-unknown-linux-gnu and
+                      cang-relay-pump-v$version-$(asset_arch)-unknown-linux-gnu .sha256
+                      files == pin, scripts/update-cang-prebuilt.sh --tag v$version is a
+                      no-op, nix build .#cang-prebuilt reports $version from \`cang
+                      --version\` and from the pinned helper's \`relay-pump --version\`
 PLAN
   if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
     say "note: tag v$version already exists locally"
@@ -386,14 +420,17 @@ cmd_push() {
 }
 
 cmd_pin() {
-  local version="$1" sri
+  local version="$1" sri pump_sri
   require_version_arg "$version"
   require_clean_tree
-  sri="$(alpha_asset_sri)"
-  say "pin: CI alpha asset SRI = $sri"
-  ./scripts/update-cang-prebuilt.sh --tag "v$version" --hash "$sri" >/dev/null
+  sri="$(release_asset_sri alpha "$(cang_asset_name)")"
+  pump_sri="$(release_asset_sri alpha "$(relay_pump_asset_name)")"
+  say "pin: CI alpha asset SRIs = $sri (cang), $pump_sri (relay-pump)"
+  ./scripts/update-cang-prebuilt.sh --tag "v$version" \
+    --hash "$sri" --pump-hash "$pump_sri" >/dev/null
   [ "$(pinned_tag)" = "v$version" ] || die "pins.nix was not updated to v$version"
-  [ "$(pinned_sri)" = "$sri" ] || die "pins.nix does not carry $sri"
+  [ "$(pinned_sri)" = "$sri" ] || die "pins.nix does not carry the cang asset $sri"
+  [ "$(pinned_pump_sri)" = "$pump_sri" ] || die "pins.nix does not carry the relay-pump asset $pump_sri"
   git add nix/pins.nix
   git commit -q -m "pins: pin the cang v$version prebuilt at the CI-published bytes"
   say "pin: committed $(git rev-parse --short HEAD)"
@@ -427,28 +464,49 @@ cmd_wait() {
 }
 
 cmd_verify() {
-  local version="$1" pin_sri pin_hex published_hex target output
+  local version="$1"
+  local pin_sri pin_hex published_hex
+  local pump_pin_sri pump_pin_hex pump_published_hex
+  local target output helper_target pump_output
   require_version_arg "$version"
+
   pin_sri="$(pinned_sri)"
   pin_hex="$(nix hash convert --to base16 "$pin_sri")"
-  published_hex="$(curl -fsSL "https://github.com/$slug/releases/download/v$version/cang-v$version-$(asset_arch)-unknown-linux-gnu.sha256" | awk '{print $1}')"
+  published_hex="$(nix hash convert --to base16 "$(release_asset_sri "v$version" "$(versioned_cang_asset_name "$version")")")"
   [ "$pin_hex" = "$published_hex" ] ||
-    die "pin $pin_hex != published $published_hex"
+    die "cang pin $pin_hex != published $published_hex"
 
-  say "verify: re-deriving the pin from the published asset"
+  pump_pin_sri="$(pinned_pump_sri)"
+  pump_pin_hex="$(nix hash convert --to base16 "$pump_pin_sri")"
+  pump_published_hex="$(nix hash convert --to base16 "$(release_asset_sri "v$version" "$(versioned_relay_pump_asset_name "$version")")")"
+  [ "$pump_pin_hex" = "$pump_published_hex" ] ||
+    die "relay-pump pin $pump_pin_hex != published $pump_published_hex"
+
+  say "verify: re-deriving the pin from the published assets"
   ./scripts/update-cang-prebuilt.sh --tag "v$version" >/dev/null
   git diff --exit-code -- nix/pins.nix >/dev/null ||
-    die "nix/pins.nix does not match the published v$version asset; the pin is stale or the asset was rebuilt"
+    die "nix/pins.nix does not match the published v$version assets; the pin is stale or an asset was rebuilt"
 
   say "verify: nix build .#cang-prebuilt"
   target="$(nix build .#cang-prebuilt -o "$repo_root/result-cang-prebuilt-release" --print-out-paths)"
   output="$("$target/bin/cang" --version)"
   [ "$output" = "cang $version" ] || die "the prebuilt reports '$output'"
-  say "verify: v$version is published and pinned (asset $published_hex)"
+
+  # The workspace relay's host half has to be the release asset, not a build from
+  # this tree's source: publishing it is the whole point.
+  helper_target="$(readlink -f "$target/libexec/cang-helpers/relay-pump")"
+  case "$helper_target" in
+    *"-cang-relay-pump-$version-prebuilt-v$version/bin/relay-pump") ;;
+    *) die "the prebuilt's relay-pump is not the pinned v$version asset: $helper_target" ;;
+  esac
+  pump_output="$("$target/libexec/cang-helpers/relay-pump" --version)"
+  [ "$pump_output" = "relay-pump $version" ] || die "the prebuilt's relay-pump reports '$pump_output'"
+
+  say "verify: v$version is published and pinned (cang $published_hex, relay-pump $pump_published_hex)"
 }
 
 cmd_all() {
-  local version="$1" hash_before hash_after attempt
+  local version="$1" hash_after pump_after attempt converged
   require_version_arg "$version"
   cmd_plan "$version"
   require_clean_tree
@@ -462,18 +520,29 @@ cmd_all() {
 
   cmd_bump "$version"
   cmd_push
-  hash_before="$(alpha_asset_sri)"
-  say "CI built $hash_before for $(git rev-parse --short HEAD)"
+  say "CI built $(release_asset_sri alpha "$(cang_asset_name)") (cang) and $(release_asset_sri alpha "$(relay_pump_asset_name)") (relay-pump) for $(git rev-parse --short HEAD)"
 
   cmd_pin "$version"
-  for attempt in 1 2 3; do
+  # The pin commit is itself a new push, so its own CI run has to reproduce the
+  # pinned bytes before the tag can name them - and each re-pin is another push.
+  # Every revision is measured against the pin it carries, never against a
+  # previous hash, and the loop is bounded.
+  converged=0
+  attempt=0
+  while [ "$attempt" -lt 3 ]; do
+    attempt=$((attempt + 1))
     cmd_push
-    hash_after="$(alpha_asset_sri)"
-    [ "$hash_after" = "$(pinned_sri)" ] && break
-    say "CI built $hash_after for the pin commit; re-pinning to that"
+    hash_after="$(release_asset_sri alpha "$(cang_asset_name)")"
+    pump_after="$(release_asset_sri alpha "$(relay_pump_asset_name)")"
+    if [ "$hash_after" = "$(pinned_sri)" ] && [ "$pump_after" = "$(pinned_pump_sri)" ]; then
+      converged=1
+      break
+    fi
+    say "CI built $hash_after / $pump_after for the pin commit; re-pinning to that"
     cmd_pin "$version"
   done
-  [ "$attempt" -lt 4 ] || die "the asset hash keeps moving across pin commits; the build is not reproducible"
+  [ "$converged" = 1 ] ||
+    die "the asset hashes still move after $attempt pin commits; the build is not reproducible"
 
   cmd_tag "$version"
   cmd_verify "$version"

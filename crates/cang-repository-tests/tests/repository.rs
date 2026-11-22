@@ -7,6 +7,7 @@ const GLOSSARY_MD: &str = include_str!("../../../GLOSSARY.md");
 const MAINTENANCE_MD: &str = include_str!("../../../docs/maintenance.md");
 const JUSTFILE: &str = include_str!("../../../Justfile");
 const CANG_RELEASE_SH: &str = include_str!("../../../scripts/cang-release.sh");
+const UPDATE_CANG_PREBUILT_SH: &str = include_str!("../../../scripts/update-cang-prebuilt.sh");
 const DEVSHELL_NIX: &str = include_str!("../../../nix/shell/devshell.nix");
 const LAYERS: &str = include_str!("../../../nix/image/layers.nix");
 const CONTAINER_NIX: &str = include_str!("../../../nix/image/container.nix");
@@ -327,26 +328,53 @@ fn publish_image_workflows_publish_only_cang() {
     }
 }
 
+/// One release publishes two neutral ELFs from one build: the host `cang` binary
+/// and the workspace reverse share's host half `relay-pump`. A downstream flake
+/// that consumes `.#cang-prebuilt` must not have to compile the pump out of the
+/// workspace tree, so it is published next to `cang` on the same releases.
 #[test]
-fn publish_release_uploads_only_neutral_cang_assets() {
+fn publish_release_publishes_the_neutral_cang_and_relay_pump_assets() {
+    // One payload contract for both assets: raw ELF in, neutral interpreter and
+    // RPATH, no concrete store reference, smoke-tested before upload.
     for required in [
         "uses: actions/cache@v6",
         "path: /tmp/cang-ci-sccache-release",
         "nix build --option extra-sandbox-paths \"${sccache_sandbox_path}\" .#cang-ci-sccache -o result-cang",
         "cang_asset_name=\"cang-${arch}-unknown-linux-gnu\"",
-        "raw_cang_path=\"result-cang/bin/cang\"",
-        "readelf -h \"${raw_cang_path}\" > /dev/null",
-        "refusing to publish cang wrapper script",
-        "refusing to publish non-ELF cang asset",
+        "relay_pump_asset_name=\"cang-relay-pump-${arch}-unknown-linux-gnu\"",
+        "cang_asset_name=\"cang-${release_version}-${arch}-unknown-linux-gnu\"",
+        "relay_pump_asset_name=\"cang-relay-pump-${release_version}-${arch}-unknown-linux-gnu\"",
+        "publish_neutral_elf() {",
+        "refusing to publish wrapper script as ${asset_name}",
+        "refusing to publish non-ELF asset ${asset_name}",
         "patchelf --set-interpreter",
         "grep -aEq '/nix/store/[0-9a-df-np-sv-z]{32}-'",
-        "result-cang/bin/cang --help > /dev/null",
+        "publish_neutral_elf \"result-cang/bin/cang\" \"${cang_asset_name}\" \"--help\"",
+        "publish_neutral_elf \"result-cang/libexec/cang-helpers/relay-pump\" \"${relay_pump_asset_name}\" \"--version\"",
         "CANG_ASSET_PATH",
         "CANG_CHECKSUM_PATH",
+        "RELAY_PUMP_ASSET_PATH",
+        "RELAY_PUMP_CHECKSUM_PATH",
         "neutral dynamically linked cang ELF packaging input",
     ] {
         assert!(PUBLISH_RELEASE_YML.contains(required), "missing {required}");
     }
+
+    // Both assets reach every release kind and the attestation, not just alpha.
+    assert_eq!(
+        PUBLISH_RELEASE_YML
+            .matches("\"${RELAY_PUMP_ASSET_PATH}\"")
+            .count(),
+        3,
+        "the relay pump asset should be uploaded to alpha, the versioned and the sha release"
+    );
+    assert_eq!(
+        PUBLISH_RELEASE_YML
+            .matches("${{ steps.prep.outputs.relay_pump_asset_path }}")
+            .count(),
+        2,
+        "the relay pump asset has to be an attestation subject and the upload env value"
+    );
 }
 
 #[test]
@@ -512,6 +540,7 @@ fn publish_release_notes_escape_markdown_backticks_for_shell_heredoc() {
     assert_no_unescaped_backticks(&combined);
     for required in [
         r"\`${{ steps.prep.outputs.cang_asset_name }}\`",
+        r"\`${{ steps.prep.outputs.relay_pump_asset_name }}\`",
         r"\`nix build .#cang\`",
         r"\`nix build .#cang-prebuilt\`",
         r"\`ghcr.io/<repo-owner>/cang\`",
@@ -847,6 +876,8 @@ fn cang_prebuilt_adr_records_neutral_asset_decision() {
         "# Neutral cang prebuilt release assets",
         "Status: accepted",
         "cang-<arch>-unknown-linux-gnu",
+        "cang-relay-pump-<arch>-unknown-linux-gnu",
+        "fetches both from one pin",
         "not standalone portable executables",
         "autoPatchelfHook",
         "concrete
@@ -2296,8 +2327,14 @@ fn cang_release_driver_pins_the_sri_ci_published() {
         );
     }
     for required in [
-        "releases/download/alpha",
+        "releases/download/$tag",
+        "release_asset_sri alpha",
+        "release_asset_sri \"v$version\"",
         "--hash \"$sri\"",
+        "--pump-hash \"$pump_sri\"",
+        "pinned_pump_sri",
+        "relay_pump_asset_name",
+        "is not the pinned v$version asset",
         "update-cang-prebuilt.sh",
         "Publish release binaries",
         "wait_run",
@@ -2333,6 +2370,142 @@ fn cang_release_driver_pins_the_sri_ci_published() {
             "docs/maintenance.md missing {required}"
         );
     }
+}
+
+/// The cang prebuilt pin carries two release assets - the host `cang` ELF and the
+/// workspace relay's host half `relay-pump` - and the updater writes both or
+/// neither. Exercised against a copy of the pin so the check runs offline: the
+/// payloads only have to be raw ELF magic with no concrete store reference, and
+/// nothing in them is executed.
+#[test]
+fn update_cang_prebuilt_pins_both_assets_or_neither() {
+    for required in [
+        "cang-relay-pump-$asset_arch-unknown-linux-gnu",
+        "cang-relay-pump-$release_tag-$asset_arch-unknown-linux-gnu",
+        "--pump-hash",
+        "--pump-asset-path",
+        "--pins-file",
+        "relayPumpAsset = ",
+        "relayPumpHash = ",
+        "one pin carries the cang ELF and its relay pump",
+        "relay pump asset path does not exist",
+    ] {
+        assert!(
+            UPDATE_CANG_PREBUILT_SH.contains(required),
+            "missing {required}"
+        );
+    }
+
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir =
+        std::env::temp_dir().join(format!("cang-update-cang-prebuilt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create the updater temp dir");
+    let pins = dir.join("pins.nix");
+    std::fs::write(&pins, PINS_NIX).expect("write the pins copy");
+
+    let asset = |name: &str, body: &[u8]| {
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write the fake asset");
+        path
+    };
+    let raw_elf = |name: &str| {
+        let mut bytes = vec![0x7f, b'E', b'L', b'F'];
+        bytes.resize(4096, 0);
+        asset(name, &bytes)
+    };
+    let cang_asset = raw_elf("cang-v9.9.9-x86_64-unknown-linux-gnu");
+    let pump_asset = raw_elf("cang-relay-pump-v9.9.9-x86_64-unknown-linux-gnu");
+
+    let run = |args: &[&std::ffi::OsStr]| {
+        std::process::Command::new("bash")
+            .arg(repo_root.join("scripts/update-cang-prebuilt.sh"))
+            .args(args)
+            .arg("--pins-file")
+            .arg(&pins)
+            .output()
+            .expect("run the updater")
+    };
+    let as_os = |path: &std::path::Path| path.as_os_str().to_owned();
+
+    // Paired success: one write carries the tag and both assets.
+    let output = run(&[
+        std::ffi::OsStr::new("--tag"),
+        std::ffi::OsStr::new("v9.9.9"),
+        std::ffi::OsStr::new("--asset-path"),
+        &as_os(&cang_asset),
+        std::ffi::OsStr::new("--pump-asset-path"),
+        &as_os(&pump_asset),
+    ]);
+    assert!(
+        output.status.success(),
+        "the paired updater run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let updated = std::fs::read_to_string(&pins).expect("read the updated pins copy");
+    assert!(
+        updated.contains(r#"tag = "v9.9.9";"#),
+        "the pin tag was not updated"
+    );
+    assert!(
+        updated.contains(r#"asset = "cang-v9.9.9-x86_64-unknown-linux-gnu";"#),
+        "the cang asset was not updated: {updated}"
+    );
+    assert!(
+        updated.contains(r#"relayPumpAsset = "cang-relay-pump-v9.9.9-x86_64-unknown-linux-gnu";"#),
+        "the relay pump asset was not written: {updated}"
+    );
+    assert!(
+        updated.contains(r#"relayPumpHash = "sha256-"#),
+        "the relay pump hash was not written: {updated}"
+    );
+    assert!(
+        !updated.contains("cang-v0.23.1-x86_64-unknown-linux-gnu"),
+        "the previous cang asset name should be gone"
+    );
+
+    // A missing pump leaves the pin exactly as it was.
+    let before = std::fs::read(&pins).expect("read the pinned copy");
+    let missing = dir.join("missing-relay-pump");
+    let output = run(&[
+        std::ffi::OsStr::new("--tag"),
+        std::ffi::OsStr::new("v9.9.9"),
+        std::ffi::OsStr::new("--asset-path"),
+        &as_os(&cang_asset),
+        std::ffi::OsStr::new("--pump-asset-path"),
+        &as_os(&missing),
+    ]);
+    assert!(
+        !output.status.success(),
+        "a missing relay pump must fail the pin"
+    );
+    assert_eq!(
+        std::fs::read(&pins).expect("read the pinned copy"),
+        before,
+        "a failed pin must not touch nix/pins.nix"
+    );
+
+    // A pump payload that is not a raw ELF is refused before any write.
+    let not_elf = asset("not-an-elf", b"#!/bin/sh\nexec relay-pump \"$@\"\n");
+    let output = run(&[
+        std::ffi::OsStr::new("--tag"),
+        std::ffi::OsStr::new("v9.9.9"),
+        std::ffi::OsStr::new("--asset-path"),
+        &as_os(&cang_asset),
+        std::ffi::OsStr::new("--pump-asset-path"),
+        &as_os(&not_elf),
+    ]);
+    assert!(
+        !output.status.success(),
+        "a wrapper-script pump must fail the pin"
+    );
+    assert_eq!(
+        std::fs::read(&pins).expect("read the pinned copy"),
+        before,
+        "a refused relay pump must not touch nix/pins.nix"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// One Rust toolchain for everything: fenix's stable release, wired into the

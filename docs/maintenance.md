@@ -8,6 +8,12 @@ raw-ELF release. The updater rejects wrapper-script assets, legacy
 flake-locked names, and payloads containing concrete
 `/nix/store/<hash>-...` references.
 
+A cang release publishes two such assets - `cang-<arch>-unknown-linux-gnu` and
+`cang-relay-pump-<arch>-unknown-linux-gnu`, the workspace reverse share's host
+half - and the updater pins them together: it validates both payloads first and
+writes both or neither, so `.#cang-prebuilt` can never be pinned to a cang ELF
+whose matching pump was not published.
+
 `sha-*` releases are rolling dev artifacts: the release workflow keeps the 20
 newest and never deletes versioned releases, so re-run this updater before a
 pinned `sha-*` release ages out. A permanent `v<version>` release is never
@@ -452,16 +458,19 @@ refuses to run while `libkrunfwRelease.tag` is still a rolling tag.
 `tags: "*"` (and on every `main` push, for the rolling alpha), so releasing needs
 no `gh` authentication and no `workflow_dispatch`. A **tag push** publishes
 
-- the permanent `v<version>` release, carrying the neutral asset
-  `cang-v<version>-<arch>-unknown-linux-gnu` and its `.sha256`;
+- the permanent `v<version>` release, carrying the neutral assets
+  `cang-v<version>-<arch>-unknown-linux-gnu` and
+  `cang-relay-pump-v<version>-<arch>-unknown-linux-gnu` (the workspace relay's
+  host half) with their `.sha256` files;
 - the same asset on the immutable `sha-<short-sha>` prerelease of that revision;
 - a build-provenance attestation
   (`gh attestation verify <asset> --repo zeroqn/cang`);
 - and, from `publish_image.yml`, the image `ghcr.io/zeroqn/cang:<tag>`.
 
-A **branch push** names the asset `cang-<arch>-unknown-linux-gnu` instead and only
-touches the rolling releases, which keep the 20 newest `sha-*` prereleases; pin a
-`v<version>` release.
+A **branch push** names the assets `cang-<arch>-unknown-linux-gnu` and
+`cang-relay-pump-<arch>-unknown-linux-gnu` instead and only touches the rolling
+releases, which keep the 20 newest `sha-*` prereleases; pin a `v<version>`
+release.
 
 `publish_release.yml` serializes both ref types in one
 `rolling-alpha-release` concurrency group with `cancel-in-progress: true`, so the
@@ -575,7 +584,10 @@ Release a version in this order:
    `RUSTC_WRAPPER` set the binary comes out un-LTO'd (about 10 MB), while a plain
    `nix build .#cang` links with `lto = "thin"` (about 4.6 MB).
 3. Commit the pin in `nix/pins.nix`: `cangPrebuiltRelease.tag = "v<version>"`, the
-   versioned `asset` name from step 2, and that SRI.
+   versioned `asset` name from step 2 and that SRI, plus the per-system
+   `relayPumpAsset`/`relayPumpHash` for the pump asset published by the same run.
+   One pin carries both assets; `scripts/update-cang-prebuilt.sh` writes them
+   together (`--hash` and `--pump-hash` from the same CI run).
 4. Tag **the pin commit** — not the version bump — and push branch and tag, with
    the branch push's run finished before the tag goes out (v0.7.2 and v0.8.0 are
    both lightweight tags):
