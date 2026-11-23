@@ -374,16 +374,16 @@ in
     owner = "zeroqn";
     repo = "cang";
     tag = "alpha";
-    version = "0.3.0";
-    revision = "e7ab89394e917ae5746ccdda813f882cd53c9797";
+    version = "0.3.1";
+    revision = "40b6005bd9adc784cf24c41afd2e753c883e44d4";
     # The Vulkan build (`nix/pkgs/patches/zvec-grep-vulkan-backend.patch`), whose
     # asset is ~2x the non-Vulkan one: llama.cpp's 155 shaders are compiled to
     # SPIR-V at build time and embedded. `build-zg.yml` rebuilt and uploaded it
     # under the same name; these are its bytes.
     systems = {
       x86_64-linux = {
-        asset = "zg-0.3.0-e7ab8939-x86_64-linux.tar.gz";
-        hash = "sha256-dJ46sCHAYJ38KiHHnm7QF6CvTMgCKKecoLVmu15l0J0=";
+        asset = "zg-0.3.1-40b6005b-x86_64-linux.tar.gz";
+        hash = "sha256-0dx3JtF/9Uqr1k+AgecX0Drwt6ZnoRlIOxFaTNp/Hcw=";
       };
     };
   };
