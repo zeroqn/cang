@@ -308,7 +308,7 @@ fn run_internal(args: Vec<OsString>) -> Result<ExitCode> {
 
 #[cfg(test)]
 mod tests {
-    use clap::{CommandFactory, Parser};
+    use clap::CommandFactory;
 
     use crate::cli::Cli;
 
@@ -333,8 +333,18 @@ mod tests {
 
     #[test]
     fn top_level_cli_does_not_accept_microvm_subcommand() {
-        let err = Cli::try_parse_from(["cang", "microvm"]).expect_err("microvm is not a command");
+        // A bare word is the positional workspace disk (`cang work.raw`), so the
+        // invariant this guards is the subcommand surface itself: `microvm` is
+        // not one of cang's commands.
+        let command = Cli::command();
+        let names: Vec<&str> = command
+            .get_subcommands()
+            .map(|sub| sub.get_name())
+            .collect();
 
-        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+        assert!(
+            !names.contains(&"microvm"),
+            "microvm is not a cang command: {names:?}"
+        );
     }
 }

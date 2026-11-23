@@ -136,6 +136,7 @@ impl LaunchPlan {
         let workspace_relay = resolve_workspace_relay(
             options.workspace_relay,
             options.daemon,
+            options.guest_command.is_empty(),
             workspace_disk.as_ref().map(|(path, _)| path.as_path()),
             &workspace_dir,
             workspace_server,
@@ -264,9 +265,15 @@ fn resolve_workspace_disk(
 }
 
 /// Decide whether this launch mounts the launch directory on the host through
-/// the guest's relay, and refuse by name when it cannot.
+/// the guest's relay.
 ///
-/// Three refusals, each for a reason the launch cannot fix itself:
+/// `requested` is the flag's own surface: `Some(true)` is `--workspace-relay`,
+/// `Some(false)` is `--no-workspace-relay`, and `None` is cang's default for a
+/// `--workspace-disk` launch - mount whenever the launch can carry the mount, and
+/// say why it does not otherwise.
+///
+/// An explicitly requested mount is refused by name, because the launch cannot
+/// fix any of these itself:
 ///
 /// * `--workspace-relay` without `--workspace-disk`: the tree the relay serves
 ///   is the disk's, and a launch that serves `/workspace` from the host
@@ -280,32 +287,64 @@ fn resolve_workspace_disk(
 ///   while the host directory is still visible, it holds the lease file
 ///   descriptor open across the mount, and `cang workspace serve work.raw` from
 ///   inside the served directory is the natural spelling.
+///
+/// The default skips the same two cases with a printed reason instead, and also
+/// skips a launch that runs a trailing command without saying anything: its
+/// process ends with that command, so a mount appearing mid-run is not the host's
+/// view of a tree it can use - `--workspace-relay` is how that launch asks for
+/// it anyway. `cang workspace init` is such a launch, and seeding must not carry
+/// a line about a mount it never wanted.
 fn resolve_workspace_relay(
-    requested: bool,
+    requested: Option<bool>,
     daemon: bool,
+    interactive: bool,
     workspace_disk: Option<&Path>,
     workspace_dir: &Path,
     serve: bool,
 ) -> Result<bool> {
-    if !requested {
+    let forced = requested == Some(true);
+    if requested == Some(false) {
         return Ok(false);
     }
     let Some(disk) = workspace_disk else {
-        anyhow::bail!(
-            "--workspace-relay requires --workspace-disk: the relay serves the guest's /workspace btrfs tree, and a launch without that disk already shares the host directory over virtio-fs"
-        );
+        if forced {
+            anyhow::bail!(
+                "--workspace-relay requires --workspace-disk: the relay serves the guest's /workspace btrfs tree, and a launch without that disk already shares the host directory over virtio-fs"
+            );
+        }
+        return Ok(false);
     };
+    // Only an interactive launch has a default at all: a launch that runs a
+    // trailing command ends with it (`cang workspace init` among them), so it is
+    // neither mounted nor told why.
+    if !forced && !interactive {
+        return Ok(false);
+    }
     if daemon {
-        anyhow::bail!(
-            "--workspace-relay cannot be used with --daemon: the host mount lives as long as the cang process, and a daemon launch returns while the task keeps running"
+        if forced {
+            anyhow::bail!(
+                "--workspace-relay cannot be used with --daemon: the host mount lives as long as the cang process, and a daemon launch returns while the task keeps running"
+            );
+        }
+        eprintln!(
+            "cang: not mounting the guest workspace on the host: a --daemon launch returns while the task keeps running, and this mount lives exactly as long as this cang process"
         );
+        return Ok(false);
     }
     if !serve && disk.starts_with(workspace_dir) {
-        anyhow::bail!(
-            "--workspace-relay refuses a workspace disk image inside the launch directory: '{}' is under '{}', and the mount lands on that directory, which would hide the image file the VM attaches; move the image outside the tree",
+        if forced {
+            anyhow::bail!(
+                "--workspace-relay refuses a workspace disk image inside the launch directory: '{}' is under '{}', and the mount lands on that directory, which would hide the image file the VM attaches; move the image outside the tree",
+                disk.display(),
+                workspace_dir.display()
+            );
+        }
+        eprintln!(
+            "cang: not mounting the guest workspace on the host: the image '{}' is inside the launch directory '{}', which the mount would hide; move the image outside the tree, or pass --workspace-relay to be told so as an error",
             disk.display(),
             workspace_dir.display()
         );
+        return Ok(false);
     }
     Ok(true)
 }
@@ -482,7 +521,7 @@ mod tests {
     use crate::runtime::launch::config::{AllocatorMode, BindMountSourceKind, NetworkMode};
     use crate::runtime::launch::plan::{
         ImageSelection, LaunchPlan, resolve_normal_launch_landlock,
-        resolve_normal_launch_seccomp_with,
+        resolve_normal_launch_seccomp_with, resolve_workspace_relay,
     };
     use crate::runtime::seccomp::{AuditMode, SeccompMode};
     use crate::task_rootfs::TaskRootfsBackend;
@@ -509,7 +548,7 @@ mod tests {
             workspace_disk: None,
             workspace_size: None,
             workspace_format: false,
-            workspace_relay: false,
+            workspace_relay: None,
             workspace_serve: false,
             mem_gib: None,
             network_mode: NetworkMode::Tsi,
@@ -540,6 +579,66 @@ mod tests {
             Some(dir.path().join("home").as_path()),
         )
         .expect("plan should build")
+    }
+
+    #[test]
+    fn the_relay_default_mounts_an_interactive_disk_launch_and_names_what_it_cannot() {
+        let dir = Path::new("/tmp/example-project");
+        let outside = Path::new("/tmp/work.raw");
+        let inside = Path::new("/tmp/example-project/work.raw");
+
+        assert!(
+            resolve_workspace_relay(None, false, true, Some(outside), dir, false)
+                .expect("a plain disk launch resolves"),
+            "an interactive launch mounts the tree on the host by default"
+        );
+        assert!(
+            !resolve_workspace_relay(None, false, false, Some(outside), dir, false)
+                .expect("a command launch resolves"),
+            "a launch that runs a trailing command ends with it, so the default skips the mount"
+        );
+        assert!(
+            !resolve_workspace_relay(None, false, false, Some(inside), dir, false)
+                .expect("a seed launch resolves"),
+            "a command launch with an in-tree image is skipped without a reason line"
+        );
+        assert!(
+            resolve_workspace_relay(Some(true), false, false, Some(outside), dir, false)
+                .expect("a forced mount resolves"),
+            "a command launch that asks for the mount gets it"
+        );
+        assert!(
+            !resolve_workspace_relay(None, true, true, Some(outside), dir, false)
+                .expect("a daemon launch resolves"),
+            "a daemon launch returns before the mount's lifetime ends"
+        );
+        assert!(
+            !resolve_workspace_relay(None, false, true, Some(inside), dir, false)
+                .expect("an in-tree image resolves"),
+            "the mount would hide the image the VM attaches"
+        );
+        assert!(
+            !resolve_workspace_relay(None, false, true, None, dir, false)
+                .expect("a host-directory launch resolves"),
+            "there is no disk tree to serve"
+        );
+        assert!(
+            resolve_workspace_relay(None, false, true, Some(inside), dir, true)
+                .expect("a workspace server resolves"),
+            "a server opens the image while the host directory is still visible"
+        );
+
+        for (daemon, disk) in [(true, Some(outside)), (false, Some(inside)), (false, None)] {
+            assert!(
+                resolve_workspace_relay(Some(true), daemon, true, disk, dir, false).is_err(),
+                "a forced mount refuses a launch that cannot carry it"
+            );
+        }
+        assert!(
+            !resolve_workspace_relay(Some(false), false, true, Some(outside), dir, false)
+                .expect("an opt-out resolves"),
+            "--no-workspace-relay wins over the default"
+        );
     }
 
     #[test]

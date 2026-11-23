@@ -1004,7 +1004,7 @@ mod tests {
             guest_init: None,
             preserve_debug: false,
             workspace_disk: None,
-            workspace_relay: false,
+            workspace_relay: None,
             workspace_size: None,
             workspace_format: false,
             workspace_serve: false,

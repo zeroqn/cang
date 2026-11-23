@@ -86,7 +86,7 @@ impl PtyOptions {
     name = "cang",
     version,
     about = "Launch a direct-libkrun microvm shell with the current directory mounted at /workspace",
-    after_help = "Examples:\n  cang\n  cang --mem 8\n  cang --alloc glibc\n  cang --rootfs-backend btrfs-snapshot\n  cang --rootfs-backend fuse-overlay\n  cang --container-store raw-disk\n  cang --guest-init ./cang-guest-init\n  cang --profile\n  cang --root\n  cang --image ghcr.io/example/cang:dev\n  CANG_IMAGE=ghcr.io/example/cang:dev cang\n  cang -- bash -lc 'echo ok'\n  cang decode-launch-conf .cang/.../launch.conf
+    after_help = "Examples:\n  cang\n  cang --mem 8\n  cang --alloc glibc\n  cang --rootfs-backend btrfs-snapshot\n  cang --rootfs-backend fuse-overlay\n  cang --container-store raw-disk\n  cang --guest-init ./cang-guest-init\n  cang --profile\n  cang --root\n  cang --image ghcr.io/example/cang:dev\n  CANG_IMAGE=ghcr.io/example/cang:dev cang\n  cang /tmp/work.raw\n  cang ../work.raw -- bash -lc 'echo ok'\n  cang -- bash -lc 'echo ok'\n  cang decode-launch-conf .cang/.../launch.conf
   cang --daemon
   cang --landlock=all -- bash -lc 'echo ok'
   cang --landlock=best-effort -- bash -lc 'echo ok'
@@ -229,17 +229,32 @@ pub(crate) struct Cli {
     #[arg(
         long = "workspace-disk",
         value_name = "PATH",
+        conflicts_with = "workspace_disk_path",
         help = "Serve /workspace from a btrfs disk image or block device instead of the host directory",
-        long_help = "Serve /workspace from a btrfs disk image (created on first use at --workspace-size) or a block device, instead of the host directory over virtio-fs.\n\nThe guest mounts it at /workspace and everything a build writes stays on it: sources, cargo's own ./target and the cargo home (a directory inside the tree, bind mounted at ~/.cargo in the guest). The host-directory /workspace bind mount and the ~/.cargo bind mount are dropped for such a launch, as is the build disk - nothing is left for it to hold.\n\nA path holding a filesystem other than btrfs is refused rather than reformatted, and so is one smaller than the requested size. The host's view of the guest tree is the reverse share: `--workspace-relay` mounts it for the life of one launch, and `cang workspace serve PATH` keeps it up between launches from a long-lived workspace server VM."
+        long_help = "Serve /workspace from a btrfs disk image (created on first use at --workspace-size) or a block device, instead of the host directory over virtio-fs. A bare positional argument means the same thing: `cang ./work.raw` is `cang --workspace-disk ./work.raw`.\n\nThe guest mounts it at /workspace and everything a build writes stays on it: sources, cargo's own ./target and the cargo home (a directory inside the tree, bind mounted at ~/.cargo in the guest). The host-directory /workspace bind mount and the ~/.cargo bind mount are dropped for such a launch, as is the build disk - nothing is left for it to hold.\n\nA path holding a filesystem other than btrfs is refused rather than reformatted, and so is one smaller than the requested size. An interactive launch also mounts the launch directory on the host, served by the guest's tree - the reverse share is on by default (see --workspace-relay and --no-workspace-relay): `cang workspace serve PATH` keeps that mount up between launches from a long-lived workspace server VM."
     )]
     workspace_disk: Option<PathBuf>,
 
     #[arg(
+        value_name = "DISK",
+        help = "Serve /workspace from this btrfs disk image or block device: shorthand for --workspace-disk PATH"
+    )]
+    workspace_disk_path: Option<PathBuf>,
+
+    #[arg(
         long = "workspace-relay",
-        help = "Mount the launch directory on the host, served by the guest's /workspace tree",
-        long_help = "Mount the launch directory on the host, served by the guest's /workspace tree over a FUSE relay (the reverse share).\n\nThe mount is there only while this cang process runs, it is read-write, and nothing invalidates the host's caches when the guest writes unless the guest-side watcher is on: CANG_WORKSPACE_RELAY_WATCH=1 makes the relay invalidate the host's cached pages for a file the guest rewrote, so a host descriptor that is already open refreshes in about a millisecond instead of after its 5 s attribute timeout (it invalidates cache and never synthesises a host inotify event). It needs --workspace-disk, because the tree being served is the disk's, not the host directory's. For a host view that outlives the launch, use `cang workspace serve PATH`: a long-lived workspace server VM owns the image between launches and holds the same mount up.\n\nThe mount is at the launch directory, which is where the host's view belongs: the host copy of the tree is shadowed for the life of the launch. If the guest stops answering, every host syscall fails with EIO and the mount stays until cang exits (it never silently reverts to the host tree). A host process whose working directory is inside the mount keeps it busy, so `fusermount3 -u` from another directory is what clears a mount left behind.\n\nWhile a workspace server holds the image, a --workspace-disk launch naming the same image is refused by name: only one guest may mount it at a time, and `cang workspace stop PATH` is how the server is stopped.\n\nRefused with --daemon (a daemon launch returns while the task keeps running, and the mount's lifetime is this process's) and with a --workspace-disk image inside the launch directory itself (mounting the guest tree over that directory would hide the image file the VM attaches)."
+        help = "Force the launch directory to be mounted on the host, served by the guest's /workspace tree",
+        long_help = "Mount the launch directory on the host, served by the guest's /workspace tree over a FUSE relay (the reverse share).\n\nA --workspace-disk launch mounts it by default (an interactive one: a launch that runs a trailing command does not, and neither does one that cannot carry the mount - a --daemon launch, or a launch whose image sits inside the launch directory). This flag forces the mount instead, and refuses by name when the launch cannot carry it.\n\nThe mount is there only while this cang process runs, it is read-write, and nothing invalidates the host's caches when the guest writes unless the guest-side watcher is on: CANG_WORKSPACE_RELAY_WATCH=1 makes the relay invalidate the host's cached pages for a file the guest rewrote, so a host descriptor that is already open refreshes in about a millisecond instead of after its 5 s attribute timeout (it invalidates cache and never synthesises a host inotify event). For a host view that outlives the launch, use `cang workspace serve PATH`: a long-lived workspace server VM owns the image between launches and holds the same mount up.\n\nThe mount is at the launch directory, which is where the host's view belongs: the host copy of the tree is shadowed for the life of the launch. If the guest stops answering, every host syscall fails with EIO and the mount stays until cang exits (it never silently reverts to the host tree). A host process whose working directory is inside the mount keeps it busy, so `fusermount3 -u` from another directory is what clears a mount left behind.\n\nWhile a workspace server holds the image, a --workspace-disk launch naming the same image is refused by name: only one guest may mount it at a time, and `cang workspace stop PATH` is how the server is stopped.\n\nRefused with --daemon (a daemon launch returns while the task keeps running, and the mount's lifetime is this process's) and with a --workspace-disk image inside the launch directory itself (mounting the guest tree over that directory would hide the image file the VM attaches)."
     )]
     workspace_relay: bool,
+
+    #[arg(
+        long = "no-workspace-relay",
+        conflicts_with = "workspace_relay",
+        help = "Do not mount the launch directory on the host for a --workspace-disk launch",
+        long_help = "Do not mount the launch directory on the host for a --workspace-disk launch, which mounts it by default. Use it for a launch whose host directory must keep showing the host's own copy of the tree - cang's own working directory moves out of the launch directory while a mount is up, and the host copy is shadowed for the launch's lifetime."
+    )]
+    no_workspace_relay: bool,
 
     #[arg(
         long = "workspace-size",
@@ -905,7 +920,7 @@ impl Cli {
                         options.workspace = Some(mount_at.clone());
                         options.workspace_disk = Some(disk.clone());
                         options.workspace_size = workspace_size;
-                        options.workspace_relay = true;
+                        options.workspace_relay = Some(true);
                         options.guest_command = WORKSPACE_SERVER_COMMAND
                             .iter()
                             .map(|arg| (*arg).to_owned())
@@ -949,8 +964,14 @@ impl Cli {
             container_store_backend: self.container_store_backend,
             guest_init: self.guest_init,
             preserve_debug: self.preserve_debug,
-            workspace_disk: self.workspace_disk,
-            workspace_relay: self.workspace_relay,
+            workspace_disk: self.workspace_disk.or(self.workspace_disk_path),
+            workspace_relay: if self.no_workspace_relay {
+                Some(false)
+            } else if self.workspace_relay {
+                Some(true)
+            } else {
+                None
+            },
             workspace_size: self.workspace_size,
             workspace_format: self.workspace_format,
             workspace_serve: false,
@@ -1014,7 +1035,10 @@ pub(crate) struct RuntimeOptions {
     pub(crate) guest_init: Option<PathBuf>,
     pub(crate) preserve_debug: bool,
     pub(crate) workspace_disk: Option<PathBuf>,
-    pub(crate) workspace_relay: bool,
+    /// `--workspace-relay` (`Some(true)`), `--no-workspace-relay`
+    /// (`Some(false)`), or cang's default (`None`): mount the launch directory on
+    /// the host whenever the launch can carry it.
+    pub(crate) workspace_relay: Option<bool>,
     pub(crate) workspace_size: Option<String>,
     pub(crate) workspace_format: bool,
     /// `cang workspace serve`: the same launch with the server's lifetime, its
@@ -2569,11 +2593,18 @@ fn decode_launch_conf_is_not_confused_with_guest_command() {
 }
 
 #[test]
-fn bare_words_are_not_guest_commands() {
-    let err = Cli::try_parse_from(["cang", "microvm"])
-        .expect_err("guest commands must use an explicit delimiter");
+fn a_bare_word_is_the_workspace_disk_not_a_guest_command() {
+    let options = Cli::try_parse_from(["cang", "microvm"])
+        .expect("a bare word is the positional workspace disk")
+        .try_into_runtime_options()
+        .expect("valid options");
 
-    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    assert_eq!(options.workspace_disk, Some(PathBuf::from("microvm")));
+    assert_eq!(
+        options.guest_command,
+        Vec::<String>::new(),
+        "guest commands still need an explicit delimiter"
+    );
 }
 
 #[test]
@@ -3028,7 +3059,11 @@ fn workspace_serve_is_the_normal_launch_with_the_server_marker() {
         crate::cli::CliAction::Run(options) => {
             assert!(options.workspace_serve, "serve must mark the launch");
             assert_eq!(options.workspace_disk, Some(PathBuf::from("/tmp/ws.raw")));
-            assert!(options.workspace_relay, "the server always mounts the tree");
+            assert_eq!(
+                options.workspace_relay,
+                Some(true),
+                "the server always mounts the tree"
+            );
             assert!(!options.daemon);
             assert_eq!(
                 options.workspace,
@@ -3134,7 +3169,75 @@ fn a_plain_launch_has_no_workspace_server_marker() {
         .expect("valid options");
 
     assert!(!options.workspace_serve);
-    assert!(!options.workspace_relay);
+    assert_eq!(
+        options.workspace_relay, None,
+        "no flag is cang's own default"
+    );
+}
+
+#[test]
+fn a_bare_positional_argument_is_the_workspace_disk() {
+    let options = Cli::try_parse_from(["cang", "/tmp/work.raw", "--", "true"])
+        .expect("a positional workspace disk should parse")
+        .try_into_runtime_options()
+        .expect("valid options");
+    assert_eq!(options.workspace_disk, Some(PathBuf::from("/tmp/work.raw")));
+    assert_eq!(options.guest_command, vec!["true".to_owned()]);
+
+    let options = Cli::try_parse_from(["cang", "--workspace-disk", "/tmp/other.raw"])
+        .expect("the flag should parse")
+        .try_into_runtime_options()
+        .expect("valid options");
+    assert_eq!(
+        options.workspace_disk,
+        Some(PathBuf::from("/tmp/other.raw"))
+    );
+
+    assert!(
+        Cli::try_parse_from(["cang", "--workspace-disk", "/tmp/a.raw", "/tmp/b.raw"]).is_err(),
+        "the shorthand and the flag are one setting, not two"
+    );
+}
+
+#[test]
+fn workspace_relay_is_auto_by_default_with_both_explicit_spellings() {
+    let options = Cli::try_parse_from(["cang", "--workspace-disk", "/tmp/work.raw"])
+        .expect("a disk launch should parse")
+        .try_into_runtime_options()
+        .expect("valid options");
+    assert_eq!(
+        options.workspace_relay, None,
+        "no flag means cang's default, which the plan resolves per launch"
+    );
+
+    let options = Cli::try_parse_from([
+        "cang",
+        "--workspace-disk",
+        "/tmp/work.raw",
+        "--workspace-relay",
+    ])
+    .expect("a forced mount should parse")
+    .try_into_runtime_options()
+    .expect("valid options");
+    assert_eq!(options.workspace_relay, Some(true));
+
+    let options = Cli::try_parse_from(["cang", "/tmp/work.raw", "--no-workspace-relay"])
+        .expect("an opt-out should parse")
+        .try_into_runtime_options()
+        .expect("valid options");
+    assert_eq!(options.workspace_relay, Some(false));
+
+    assert!(
+        Cli::try_parse_from([
+            "cang",
+            "--workspace-disk",
+            "/tmp/work.raw",
+            "--workspace-relay",
+            "--no-workspace-relay",
+        ])
+        .is_err(),
+        "one mount request has two spellings, not two settings"
+    );
 }
 
 #[test]

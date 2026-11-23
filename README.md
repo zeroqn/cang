@@ -52,8 +52,8 @@ rootless Podman tooling for development.
 - `pasta`/`passt` for host-alias networking in both default passt and opt-in
   `--tsi` mode; included in the Nix `.#cang` helper dir, `.#cang-prebuilt`,
   and `nix develop` environments.
-- `relay-pump`, the host half of the workspace reverse share that
-  `--workspace-relay` and `cang workspace serve` mount through, in the same
+- `relay-pump`, the host half of the workspace reverse share that a
+  `--workspace-disk` launch and `cang workspace serve` mount through, in the same
   `.#cang` helper dir. It is a cang binary, so a release publishes it as its own
   neutral asset (`cang-relay-pump-<arch>-unknown-linux-gnu`) and
   `.#cang-prebuilt` fetches it next to the `cang` ELF instead of compiling it
@@ -471,7 +471,9 @@ matching the task-volume contract.
 
 `--workspace-disk PATH` takes `/workspace` off the share: the tree becomes a
 btrfs filesystem on a raw image (created on first use at `--workspace-size`,
-default `64G`) or a block device, which the guest mounts itself. Sources,
+default `64G`) or a block device, which the guest mounts itself. A bare
+positional argument is that same setting, so `cang ./work.raw` is `cang
+--workspace-disk ./work.raw`. Sources,
 cargo's own `./target`, the cargo home and the writable `/nix` upper all live
 inside it, and the retired build disk (`cang-build.raw`) is neither created nor
 attached. The image grows itself before a `cang workspace serve` mounts it; a
@@ -480,11 +482,14 @@ one-shot launch leaves that to `cang disk resize --workspace-disk PATH SIZE`
 
 Writing a 342 MB / 2136-entry source tree into the same `/workspace` took
 **0.50 s** on the disk against **14.3 s** over the share (warm, same archive,
-measured 2026-11-20). The host's view of that tree is the reverse share:
-`--workspace-relay` mounts it for the life of one launch, and
-`cang workspace serve PATH` keeps it up between launches from a long-lived
-workspace server VM that holds the image exclusively (a second guest that names
-the same image is refused by name). `docs/usage.md` states what the view
+measured 2026-11-20). The host's view of that tree is the reverse share, and an
+interactive `--workspace-disk` launch mounts it on the launch directory **by
+default** for the life of that launch (`--no-workspace-relay` opts out;
+`--workspace-relay` forces it for a launch that runs a trailing command, which
+does not get the mount by default). `cang workspace serve PATH` keeps that view
+up between launches from a long-lived workspace server VM that holds the image
+exclusively, and `cang exec` is how commands run inside it (a second guest that
+names the same image is refused by name). `docs/usage.md` states what the view
 promises.
 
 ### Host write visibility from inside the guest

@@ -141,8 +141,10 @@ kill` returns a visible error and leaves or restores the active record so rerun
 
 ## A workspace on its own disk
 
-`--workspace-disk PATH` serve `/workspace` from a btrfs filesystem on a raw image
-or a block device instead of the host directory over virtio-fs. `PATH` is
+`--workspace-disk PATH` serves `/workspace` from a btrfs filesystem on a raw image
+or a block device instead of the host directory over virtio-fs. A bare positional
+argument is the same setting - `cang ./work.raw` is `cang --workspace-disk
+./work.raw` - and the guest command still needs its `--` delimiter. `PATH` is
 created on first use (`--workspace-size`, default `64G`) and validated on reuse:
 a file holding anything other than btrfs, a symlink, or a directory is refused
 rather than reformatted, and so is an image smaller than a size you asked for
@@ -150,7 +152,8 @@ explicitly. `--workspace-size` is a *creation* size: an image first made at
 32G stays usable without passing the flag again.
 
 ```bash
-./result/bin/cang --workspace-disk ./work.raw --workspace-size 32G -- bash -lc 'findmnt /workspace'
+./result/bin/cang ./work.raw --workspace-size 32G
+./result/bin/cang --workspace-disk ./work.raw -- bash -lc 'findmnt /workspace'
 ```
 
 Cang grows that image itself, but only where growing it pays for itself. The
@@ -188,9 +191,10 @@ tree as `cargo/` and is bound at `~/.cargo` (seeded once from the registry the
 launch mounted there, then kept on the disk). Three consequences:
 
 - the host-directory `/workspace` bind mount and the `~/.cargo` mount are dropped
-  for such a launch, so the guest's tree is the only copy - `--workspace-relay`
-  is what shows it back on the host, and without it the launch directory keeps
-  showing its own contents;
+  for such a launch, so the guest's tree is the only copy: an interactive launch
+  shows it back on the host through the reverse share, which is on by default
+  (next section), and `--no-workspace-relay` leaves the launch directory showing
+  its own contents;
 - the build disk is neither created nor attached: with `target/` and the registry
   inside the tree it has nothing left to hold;
 - `/nix` follows the disk: the launch serves it from the read-only btrfs
@@ -204,13 +208,34 @@ launch mounted there, then kept on the disk). Three consequences:
 
 ### Seeing the guest's tree on the host
 
-`--workspace-relay` (only valid with `--workspace-disk`) mounts the guest's tree
-on the launch directory for the duration of the task, so `git`, an editor and the
+An interactive `--workspace-disk` launch mounts the guest's tree on the launch
+directory by default, for the duration of the task, so `git`, an editor and the
 agent harness itself keep working on the real files:
 
 ```bash
-./result/bin/cang --workspace-disk ./work.raw --workspace-relay -- bash -lc 'cargo build'
+cd /tmp/serve-here
+./result/bin/cang ../work.raw          # the image outside the launch directory
 ```
+
+`--workspace-relay` *forces* that mount instead of taking the default, and
+`--no-workspace-relay` turns it off. The default skips it, naming the reason on
+one line, in three cases:
+
+- **the launch runs a trailing command** (`cang work.raw -- make`): its process
+  ends with that command, so a mount that appears mid-run is not the host's view
+  of a tree it can use. Pass `--workspace-relay` when a long command's tree is
+  worth watching from the host;
+- **`--daemon`**: the mount lives exactly as long as the cang process, and a
+  daemon launch returns while the task keeps running;
+- **the image sits inside the launch directory** (`cang work.raw` in the very
+  directory the mount would land on): the mount would hide the image file the VM
+  attaches. Move the image outside the tree, or pass `--workspace-relay` to be
+  told so as an error instead of a line.
+
+When it is forced, each of those is a named refusal rather than a skip.
+`--workspace-relay` is also refused without `--workspace-disk` - a launch that
+serves `/workspace` from the host directory already gives the host that tree -
+while `--no-workspace-relay` has nothing to suppress there.
 
 The mount is a FUSE filesystem served by the guest over vsock: every host
 operation is a round trip to the VM (measured ~143 us, so `git status` on this
@@ -243,9 +268,9 @@ What it promises, and what it does not:
   stays up between launches, run a workspace server (next section);
 - while the guest is gone, requests are answered `-EIO` rather than hanging.
 
-`--workspace-relay` does not arbitrate a concurrent host write and guest write to
-one file: it is the flag for a launch whose tree the host reads, not one it
-writes at the same time.
+The mount does not arbitrate a concurrent host write and guest write to one
+file: it is for a launch whose tree the host reads, not one it writes at the same
+time.
 
 **The invalidation watcher** (`CANG_WORKSPACE_RELAY_WATCH=1` on the `cang`
 command, forwarded into the guest environment; off by default) closes the
