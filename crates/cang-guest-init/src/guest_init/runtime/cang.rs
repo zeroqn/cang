@@ -37,7 +37,7 @@ pub(in crate::guest_init) enum CangEnterOperation {
     ReadEnv,
     ValidatePreparedRootPaths,
     EnsureTmpTmpfs,
-    EnsureGuestSwap,
+    StartGuestSwap,
     EnsureTunDevice,
     EnsureLoopback,
     ResolveIdentity,
@@ -65,7 +65,6 @@ pub(in crate::guest_init) fn planned_enter_operations() -> Vec<CangEnterOperatio
         CangEnterOperation::ReadEnv,
         CangEnterOperation::ValidatePreparedRootPaths,
         CangEnterOperation::EnsureTmpTmpfs,
-        CangEnterOperation::EnsureGuestSwap,
         CangEnterOperation::EnsureTunDevice,
         CangEnterOperation::EnsureLoopback,
         CangEnterOperation::ResolveIdentity,
@@ -81,6 +80,7 @@ pub(in crate::guest_init) fn planned_enter_operations() -> Vec<CangEnterOperatio
         CangEnterOperation::ExportNixRemote,
         CangEnterOperation::StartWaylandProxy,
         CangEnterOperation::EnsureNofileFloor,
+        CangEnterOperation::StartGuestSwap,
         CangEnterOperation::ClearProfileEnvBeforeExec,
         CangEnterOperation::ReportProfileBeforeExec,
         CangEnterOperation::DropAndExec,
@@ -130,14 +130,6 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     })?;
     debug_breadcrumb("validate-prepared-root complete");
     profiler.measure_result("ensure-tmp-tmpfs", ensure_tmp_tmpfs_mounted)?;
-    profiler.measure_result("ensure-guest-swap", || {
-        // Guest swap is optional by design: it never fails the session, it only
-        // decides whether memory pressure degrades or kills the workload.
-        if process::is_root() {
-            crate::guest_init::components::swap::zram::ensure();
-        }
-        Ok(())
-    })?;
     profiler.measure_result("ensure-user-namespaces", || {
         // Synchronously, before the command is exec'd: the compatibility
         // wrappers around `rustc`/`rust-analyzer` run their tool under `bwrap`,
@@ -333,6 +325,29 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         )
     })?;
     profiler.measure_result("ensure-nofile-floor", process::ensure_nofile_floor)?;
+    let swap_gate = profiler.measure_result("start-guest-swap", || {
+        // Guest swap is optional by design: it never fails the session, it only
+        // decides whether memory pressure degrades or kills the workload.
+        // Activating the zram device costs 0.6-1.4 s of this boot (the sizing is
+        // CPU-bound: zram allocates metadata for the whole capacity), so it
+        // happens in a detached worker instead of here - and the worker waits
+        // until this process `exec`s, because measured beside the enter path its
+        // sizing slowed that path by its own cost one-for-one on four vCPUs.
+        // Started last on purpose: the worker's own startup is another ~0.2 s of
+        // CPU and page-ins, and everything before this point would show it.
+        // A worker that cannot be spawned is reported and the session continues,
+        // because a guest without swap must still boot.
+        if !process::is_root() {
+            return Ok(None);
+        }
+        match crate::guest_init::components::swap::zram::start_background_ensure() {
+            Ok(hold) => Ok(Some(hold)),
+            Err(err) => {
+                eprintln!("cang-guest-init: guest swap worker not started: {err:#}");
+                Ok(None)
+            }
+        }
+    })?;
 
     profile::clear_guest_profile_env();
     profiler.report_before_exec()?;
@@ -367,6 +382,12 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     let drop_to_identity = should_drop_to_identity(process::is_root(), env_contract.enter_as_root);
     if let Some(managed_session) = env_contract.managed_session {
         debug_breadcrumb("managed session starting");
+        // This path never `exec`s, so the worker's `CLOEXEC` gate does not fire
+        // on its own: release it here, at the hand-off, exactly as the exec path
+        // releases it by `exec`ing.
+        if let Some(gate) = swap_gate {
+            gate.release();
+        }
         return session::run(
             &command,
             &identity,
@@ -376,6 +397,12 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         );
     }
     debug_breadcrumb("final exec handoff starting");
+    // The exec path releases the worker by `exec`ing: the hold is `CLOEXEC`, so
+    // the descriptor closes and the worker's read sees EOF. Leaked rather than
+    // dropped, or the worker would start inside the hand-off.
+    if let Some(gate) = swap_gate {
+        std::mem::forget(gate);
+    }
     if drop_to_identity {
         process::drop_to_identity_and_exec(&identity, env_contract.cang.permissions, &command)
     } else {
@@ -769,8 +796,11 @@ mod tests {
         assert!(pos(CangEnterOperation::EnsureLoopback) < pos(CangEnterOperation::StartNixPrep));
     }
 
+    /// The swap *worker* is started before the workload, not its activation:
+    /// `ensure-guest-swap` used to block exec for 0.6-1.2 s, and the device is
+    /// only needed once something asks the kernel for memory.
     #[test]
-    fn planned_cang_enter_adds_swap_before_the_workload_starts() {
+    fn planned_cang_enter_starts_the_swap_worker_before_the_workload_starts() {
         let operations = planned_enter_operations();
         let pos = |op| {
             operations
@@ -779,10 +809,13 @@ mod tests {
                 .expect("operation should exist")
         };
 
-        assert!(pos(CangEnterOperation::EnsureGuestSwap) < pos(CangEnterOperation::StartNixPrep));
-        assert!(pos(CangEnterOperation::EnsureGuestSwap) < pos(CangEnterOperation::DropAndExec));
+        assert!(pos(CangEnterOperation::StartGuestSwap) < pos(CangEnterOperation::DropAndExec));
         assert!(
-            pos(CangEnterOperation::EnsureGuestSwap) < pos(CangEnterOperation::RunManagedSession)
+            pos(CangEnterOperation::StartGuestSwap) < pos(CangEnterOperation::RunManagedSession)
+        );
+        assert!(
+            pos(CangEnterOperation::StartNixPrep) < pos(CangEnterOperation::StartGuestSwap),
+            "the worker is started last: its own startup would otherwise show up in the stages before it"
         );
     }
 

@@ -1,5 +1,6 @@
 use super::*;
 use std::cell::RefCell;
+use std::time::Duration;
 
 const MEMINFO_8_GIB: &str = "MemTotal:        8388608 kB\nMemFree:         1048576 kB\n";
 const EIGHT_GIB: u64 = 8 * 1024 * 1024 * 1024;
@@ -107,11 +108,65 @@ fn activation_reports_the_active_device_without_resizing_it() {
     );
 }
 
+/// The worker must not size the device while the enter path is still running:
+/// measured beside it, the CPU-bound sizing slowed that path by its own cost
+/// one-for-one. `--after-exec` is a gate, so the very first thing the activation
+/// does is wait.
+/// The gate is the change's whole mechanism: the worker is spawned during
+/// `enter` and must not act until the enter process lets it.
+#[test]
+fn the_exec_gate_blocks_the_worker_until_the_hold_is_released() {
+    let ExecGate {
+        worker_end,
+        enter_end,
+    } = exec_gate_pipe().expect("the gate pipe should be creatable");
+    let reader = std::thread::spawn(move || read_to_eof(worker_end));
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !reader.is_finished(),
+        "the worker must stay blocked while the enter process holds the gate"
+    );
+    drop(enter_end);
+    assert!(
+        reader.join().is_ok(),
+        "closing the hold must let the worker read its EOF and continue"
+    );
+}
+
+fn read_to_eof(mut file: std::fs::File) -> usize {
+    let mut byte = [0u8; 1];
+    let mut read_bytes = 0usize;
+    while let Ok(read) = file.read(&mut byte) {
+        if read == 0 {
+            break;
+        }
+        read_bytes += read;
+    }
+    read_bytes
+}
+
+#[test]
+fn activation_waits_for_the_enter_process_to_exec_first() {
+    let backend = FakeSwapBackend::new();
+    ensure_gated(&backend, || {
+        backend.record("gate: wait for the enter process to exec")
+    });
+
+    let operations = backend.operations();
+    assert_eq!(
+        operations.first().map(String::as_str),
+        Some("gate: wait for the enter process to exec"),
+        "waiting is the first thing the worker does: {operations:?}"
+    );
+    assert_eq!(backend.status().lines().next(), Some("state=ready"));
+}
+
 #[test]
 fn ensure_records_a_ready_device_in_the_status_file() {
     let backend = FakeSwapBackend::new();
 
-    ensure_with(&backend);
+    ensure_gated(&backend, || {});
 
     assert_eq!(
         backend.status(),
@@ -126,7 +181,7 @@ fn ensure_records_a_ready_device_in_the_status_file() {
 fn ensure_treats_a_kernel_without_zram_as_unavailable_and_boots_anyway() {
     let backend = FakeSwapBackend::without_zram();
 
-    ensure_with(&backend);
+    ensure_gated(&backend, || {});
 
     assert_eq!(
         backend.status(),
@@ -145,7 +200,7 @@ fn ensure_treats_a_kernel_without_zram_as_unavailable_and_boots_anyway() {
 fn ensure_records_a_failed_activation_without_failing_the_session() {
     let backend = FakeSwapBackend::failing_on("mkswap");
 
-    ensure_with(&backend);
+    ensure_gated(&backend, || {});
 
     let status = backend.status();
     assert!(status.contains("state=failed\n"), "status was: {status}");

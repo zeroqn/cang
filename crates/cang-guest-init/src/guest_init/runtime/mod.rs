@@ -59,6 +59,16 @@ pub(in crate::guest_init) fn run(command: GuestInitCommand) -> Result<()> {
                     crate::guest_init::components::podman::user::wait_for_service()
                 }
             },
+            InternalSubcommand::Swap(swap) => match swap.command {
+                crate::guest_init::cli::SwapSubcommand::Ensure { after_exec } => {
+                    if after_exec {
+                        crate::guest_init::components::swap::zram::ensure_after_exec();
+                    } else {
+                        crate::guest_init::components::swap::zram::ensure();
+                    }
+                    Ok(())
+                }
+            },
             InternalSubcommand::Pulse(pulse) => {
                 crate::guest_init::components::pulse::run(pulse.port, pulse.uid, pulse.gid)
             }

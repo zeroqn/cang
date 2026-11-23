@@ -281,8 +281,7 @@ default 1) and `CANG_MEMORY_RECLAIM_SWAP_OUT` (4 KiB pages per second, default
 how the release path is verified on a host under no pressure.
 
 Guest RAM is fixed for the life of the microVM, so the guest also gets zram
-swap: during `enter`, before the shell or any background preparation starts,
-`cang-guest-init` sets the device capacity in `/sys/block/zram0/disksize`,
+swap: `cang-guest-init` sets the device capacity in `/sys/block/zram0/disksize`,
 bounds what the device may spend in `/sys/block/zram0/mem_limit`, signs it with
 `mkswap`, and activates it with `swapon -p 100`. The capacity equals guest RAM
 and the memory budget is a quarter of it. Capacity counts uncompressed bytes
@@ -294,6 +293,21 @@ anonymous pages reclaimable, which turns memory pressure into slower progress
 instead of a guest OOM kill; it does not add memory, and a kernel without zram
 records `state=unavailable` in `/run/cang/swap.status` rather than failing the
 session.
+
+Activation is the guest's slowest boot step (measured 0.6-1.3 s of the 1.8 s
+`cang enter` path), and writing the capacity is nearly all of it: zram
+allocates metadata for the whole device, so the cost is CPU-bound and scales
+with guest RAM (1.41 s of `disksize`, 0.18 s of `mem_limit`, 0.10 s of `mkswap`,
+0.20 s of `swapon` in a 12.7 GiB guest). `cang enter` therefore does not do it:
+it starts a detached worker (`cang-guest-init internal swap ensure
+--after-exec`) as its last step and hands it a pipe whose write end closes when
+`enter` execs (or, on the managed-session path, when it hands the terminal to
+the shell). The worker blocks until that happens, so no part of the enter path
+waits for the swap device or competes with it - measured beside the enter path,
+the sizing slowed that path by its own cost one-for-one. The device is active
+within about a second of the shell starting; a workload that allocates
+everything it can in that first second runs without swap, which is the same
+resilience it had before the first `swapon`.
 
 ## Launch config
 

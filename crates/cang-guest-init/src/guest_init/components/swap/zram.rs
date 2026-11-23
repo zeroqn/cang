@@ -15,15 +15,40 @@
 //! A kernel without them reports `state=unavailable` and leaves the guest
 //! alone, because guest swap is a resilience feature rather than a boot
 //! requirement.
+//!
+//! Activation costs 0.6-1.2 s of the guest's own boot: writing the device size
+//! makes zram allocate metadata for the whole capacity (measured in a 12.7 GiB
+//! guest: 1.41 s for `disksize`, 0.18 s for `mem_limit`, 0.10 s for `mkswap`,
+//! 0.20 s for `swapon`). `cang enter` therefore does not do it: it starts this
+//! module's worker (`cang-guest-init internal swap ensure --after-exec`), then
+//! execs the workload.
+//!
+//! The worker does not start working at the spawn: it waits on the pipe `cang
+//! enter` gave it, whose write end closes when the enter process `exec`s
+//! (`--after-exec`). That is the whole point - the sizing is CPU-bound, and
+//! measured beside the enter path it slowed that path by its own 0.9 s
+//! one-for-one (four vCPUs, two CPU-bound threads). After the exec the enter
+//! path is over: the shell or command runs and the worker takes a vCPU it is
+//! not competing for.
+//!
+//! [`ensure`] stays idempotent - a second boot of the same guest, or a second
+//! `enter`, reads the active device back instead of resizing it.
 
 use anyhow::{Context, Result, anyhow};
 use std::fmt::Write as _;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read as _, stdin};
+use std::os::unix::io::FromRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use crate::guest_init::command;
 use crate::guest_init::components::env::SWAP_STATUS_PATH;
 use crate::guest_init::fs as guest_fs;
+
+/// The worker's log, beside the status file it writes.
+pub(in crate::guest_init) const SWAP_LOG_PATH: &str = "/run/cang/swap.log";
 
 /// Swap device the zram driver exposes once the kernel has it built in.
 const DEVICE: &str = "/dev/zram0";
@@ -81,16 +106,131 @@ struct GuestSwapReport {
     error: Option<String>,
 }
 
+/// Start the swap worker and return immediately.
+///
+/// The worker is this same executable (`internal swap ensure`), detached in its
+/// own session so it survives `exec`, with its diagnostics in
+/// [`SWAP_LOG_PATH`]. It writes [`SWAP_STATUS_PATH`] itself, exactly as the
+/// in-process [`ensure`] does, so a guest whose swap failed says so on stderr
+/// and in the status file either way.
+pub(in crate::guest_init) fn start_background_ensure() -> Result<ExecGateHold> {
+    let log_path = Path::new(SWAP_LOG_PATH);
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let current_exe = std::env::current_exe()
+        .context("failed to resolve the guest-init executable for the swap worker")?;
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .with_context(|| format!("failed to open {}", log_path.display()))?;
+    let log_err = log.try_clone()?;
+    let exec_gate = exec_gate_pipe().context("failed to create the swap worker's exec gate")?;
+    // SAFETY: `pre_exec` runs between `fork` and `exec` in the child, where the
+    // only async-signal-safe work available is what it does: one `setsid` call.
+    let _child = unsafe {
+        Command::new(current_exe)
+            .args(["internal", "swap", "ensure", "--after-exec"])
+            .stdin(Stdio::from(exec_gate.worker_end))
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(log_err))
+            .pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            })
+            .spawn()
+    }
+    .context("failed to spawn the guest swap worker")?;
+    // Returning the write end is the whole contract: the worker stays blocked
+    // while `cang enter` holds it, and `cang enter` must hold it until its own
+    // work is done. The exec path needs no release at all - the descriptor is
+    // `CLOEXEC`, so the `exec` closes it - while the managed-session path never
+    // execs, and has to drop the hold at its own hand-off
+    // ([`ExecGateHold::release`]).
+    Ok(ExecGateHold {
+        enter_end: exec_gate.enter_end,
+    })
+}
+
+/// The enter process's end of the swap worker's gate.
+///
+/// Dropping it (or [`ExecGateHold::release`]) lets the worker size the zram
+/// device. Until then the worker is blocked, which is what keeps its CPU-bound
+/// sizing off the enter path.
+pub(in crate::guest_init) struct ExecGateHold {
+    enter_end: File,
+}
+
+impl ExecGateHold {
+    /// Release the worker. The managed-session path calls this at its hand-off
+    /// because it never execs, so no `CLOEXEC` fires.
+    pub(in crate::guest_init) fn release(self) {
+        drop(self.enter_end);
+    }
+}
+
+/// The pipe that keeps the worker idle until this process `exec`s.
+struct ExecGate {
+    /// Read end, handed to the worker as its stdin.
+    worker_end: File,
+    /// Write end, held (never written) by this process until it `exec`s.
+    enter_end: File,
+}
+
+fn exec_gate_pipe() -> Result<ExecGate> {
+    let mut fds = [0i32; 2];
+    // SAFETY: `pipe2` writes two descriptors into the array it is given, and the
+    // flags it is passed only set `CLOEXEC`, so both ends close at `exec`
+    // instead of being inherited by the guest command.
+    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to create a pipe");
+    }
+    // SAFETY: both descriptors are just returned by `pipe2`, are owned by nobody
+    // else, and are not `CLOEXEC` where it matters: the worker's ends are
+    // duplicated onto its stdio in the child, which clears that flag on the new
+    // descriptor.
+    Ok(unsafe {
+        ExecGate {
+            worker_end: File::from_raw_fd(fds[0]),
+            enter_end: File::from_raw_fd(fds[1]),
+        }
+    })
+}
+
+/// Block until the enter process closes the gate (it `exec`s, or it dies).
+fn wait_for_parent_exec() {
+    // A read returning 0 is EOF; a read returning an error is a descriptor the
+    // worker never got, and proceeding without swap is better than hanging.
+    let mut stdin = stdin();
+    let mut byte = [0u8; 1];
+    while let Ok(read) = stdin.read(&mut byte) {
+        if read == 0 {
+            break;
+        }
+    }
+}
+
 /// Adds guest swap if the booted kernel offers a zram device.
 ///
 /// Never fails the session: swap is worth having, but a guest without it must
 /// still boot. The outcome is recorded in `SWAP_STATUS_PATH` and, when the
 /// device could not be activated, written to guest-init stderr.
 pub(in crate::guest_init) fn ensure() {
-    ensure_with(&SystemSwapBackend);
+    ensure_gated(&SystemSwapBackend, || {});
 }
 
-fn ensure_with(backend: &impl SwapBackend) {
+/// Activate swap only once the enter process has `exec`ed, which is what
+/// `--after-exec` means: the worker this module spawns is released by
+/// [`wait_for_parent_exec`], not by the spawn.
+pub(in crate::guest_init) fn ensure_after_exec() {
+    ensure_gated(&SystemSwapBackend, wait_for_parent_exec);
+}
+
+fn ensure_gated(backend: &impl SwapBackend, before_activation: impl FnOnce()) {
+    before_activation();
     let report = match activate_with(backend) {
         Ok(report) => report,
         Err(err) => {

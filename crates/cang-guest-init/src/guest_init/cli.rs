@@ -80,7 +80,31 @@ pub(in crate::guest_init) enum InternalSubcommand {
     Podman(PodmanCommand),
     Pulse(PulseCommand),
     Resize(ResizeCommand),
+    Swap(SwapCommand),
     Workspace(WorkspaceCommand),
+}
+
+/// `cang-guest-init internal swap ...`: the guest swap worker `cang enter`
+/// starts detached, so the workload does not wait 0.6-1.2 s for the zram device
+/// to be sized, signed and activated.
+#[derive(Debug, Args, Clone, PartialEq, Eq)]
+pub(in crate::guest_init) struct SwapCommand {
+    #[command(subcommand)]
+    pub(in crate::guest_init) command: SwapSubcommand,
+}
+
+#[derive(Debug, Subcommand, Clone, PartialEq, Eq)]
+pub(in crate::guest_init) enum SwapSubcommand {
+    /// Activate the guest's zram swap device and record the outcome in
+    /// `/run/cang/swap.status`. Idempotent: an already active device is read
+    /// back, never resized.
+    Ensure {
+        /// Wait for stdin to reach EOF before activating. `cang enter` passes
+        /// this and hands the worker a pipe whose write end closes when it
+        /// `exec`s, so the sizing does not compete with the enter path.
+        #[arg(long)]
+        after_exec: bool,
+    },
 }
 
 /// `cang-guest-init internal workspace ...`: one-shot reads of the workspace tree
@@ -180,6 +204,7 @@ mod tests {
 
     use crate::guest_init::cli::{
         GuestInitCli, GuestInitCommand, InternalSubcommand, NixSubcommand, PodmanSubcommand,
+        SwapSubcommand,
     };
 
     #[test]
@@ -286,6 +311,27 @@ mod tests {
             panic!("expected as-dev command");
         };
         assert_eq!(command.resolved_command(), ["bash", "-lc", "id -un"]);
+    }
+
+    /// `cang enter` starts the swap worker by re-executing this binary, so the
+    /// spelling it passes is a contract between the two halves of one process.
+    #[test]
+    fn parses_the_swap_worker_cang_enter_spawns() {
+        let cli = GuestInitCli::try_parse_from([
+            "cang-guest-init",
+            "internal",
+            "swap",
+            "ensure",
+            "--after-exec",
+        ])
+        .expect("internal swap ensure should parse");
+        let GuestInitCommand::Internal(internal) = cli.command else {
+            panic!("expected internal command");
+        };
+        let InternalSubcommand::Swap(swap) = internal.command else {
+            panic!("expected swap command");
+        };
+        assert_eq!(swap.command, SwapSubcommand::Ensure { after_exec: true });
     }
 
     #[test]
