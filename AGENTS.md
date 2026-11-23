@@ -69,6 +69,17 @@ the staged `.nix` files and stages the result, so a commit never carries
 unformatted Nix; a file `nixfmt` cannot parse fails the commit, and
 `git commit --no-verify` skips the hook.
 
+The `deps/libkrun` fork checkout is a submodule with its own history, so it
+needs the equivalent one-time setup of its own:
+`git -C deps/libkrun config core.hooksPath ../../.githooks/libkrun`. That hook
+runs `cargo fmt` over the Rust files staged in that checkout and stages the
+result, because the fork's `formatting.yml` workflow runs `cargo fmt -- --
+check` and nothing in cang's gates reaches it. A hook in *this* repo cannot do
+that job: it can only reformat the submodule's working tree, which leaves the
+checkout dirty (`git describe` then reports `-dirty`) and cannot be staged into
+this commit. The hook lives under this repo rather than in the fork so the fork
+tree stays upstream-shaped for its rebases.
+
 To run the CLI from a built artifact:
 
 ```bash

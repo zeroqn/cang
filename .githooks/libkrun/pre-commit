@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Format the Rust files in this commit with `cargo fmt`, for the libkrun fork.
+#
+# libkrun's own `formatting.yml` workflow runs `cargo fmt --all -- --check` in
+# `src/`, `examples/` and `tests/`, and nothing in cang's gates reaches this
+# checkout: a fork commit can therefore carry unformatted Rust that fails the
+# fork's CI on the next push (the pinned v2.0.0-cang.22 did exactly that, and the
+# fix sat uncommitted in this working tree). This hook is the local equivalent.
+#
+# It lives in cang's `.githooks/libkrun` because this checkout is a fork
+# submodule whose tree should stay upstream-shaped - a hook file of our own in
+# it would be one more hunk to carry through every rebase. Enable it once per
+# clone (see cang's AGENTS.md):
+#
+#   git -C deps/libkrun config core.hooksPath ../../.githooks/libkrun
+#
+# Only staged Rust is rewritten, and only into the index: a file whose working
+# tree copy held the staged content exactly is also written back, so the commit
+# and the checkout stay in step, while a file with unstaged edits keeps them -
+# cargo fmt rewrites those too, so this only warns about them. A Rust file
+# rustfmt cannot parse fails the commit. Bypass a run with `git commit --no-verify`.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+git diff --cached --name-only --diff-filter=ACMR -z -- '*.rs' > "$tmp/files"
+[ -s "$tmp/files" ] || exit 0
+
+# $1: the path to cargo, or nothing and a non-zero status.
+resolve_cargo() {
+  if command -v cargo >/dev/null 2>&1; then
+    command -v cargo
+    return 0
+  fi
+
+  cache="$(git rev-parse --absolute-git-dir)/cang-libkrun-cargo"
+  if [ -f "$cache" ] && [ -x "$(cat "$cache")" ]; then
+    cat "$cache"
+    return 0
+  fi
+
+  command -v nix >/dev/null 2>&1 || return 1
+  # The enclosing cang checkout carries the devshell with the toolchain. Its root
+  # is this hook's own `../..`, not `git -C ../..`: a hook inherits `GIT_DIR`, so
+  # git would answer for the submodule this hook is running in.
+  cang_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || return 1
+  resolved="$(nix develop "$cang_root" --command sh -c 'command -v cargo' 2>/dev/null)" || return 1
+  [ -x "$resolved" ] || return 1
+  printf '%s' "$resolved" > "$cache"
+  printf '%s' "$resolved"
+}
+
+if ! cargo_bin="$(resolve_cargo)"; then
+  echo "pre-commit: no cargo (not on PATH, not cached, and nix could not supply it); skipping Rust formatting" >&2
+  exit 0
+fi
+
+# A file with unstaged edits cannot be reformatted into the index safely: the
+# index gets the formatted version, the working tree keeps the edits, and the
+# two diverge. Record which staged files are safe before cargo fmt touches them.
+: > "$tmp/safe"
+: > "$tmp/unsafe"
+while IFS= read -r -d '' f; do
+  if git diff --quiet -- "$f"; then
+    printf '%s\0' "$f" >> "$tmp/safe"
+  else
+    printf '%s\n' "$f" >> "$tmp/unsafe"
+  fi
+done < "$tmp/files"
+
+: > "$tmp/hashes"
+while IFS= read -r -d '' f; do
+  printf '%s %s\n' "$(git ls-files -s -- "$f" | cut -d' ' -f2)" "$f" >> "$tmp/hashes"
+done < "$tmp/safe"
+
+# cargo finds `cargo-fmt` beside itself on PATH, and a hook run from a plain
+# shell has no toolchain there; the resolved `cargo` carries it in its own
+# directory.
+PATH="$(dirname "$cargo_bin"):$PATH" "$cargo_bin" fmt --all
+
+# Restage only files rustfmt actually changed: a staged file it left alone is
+# already in the index exactly as the commit wants it.
+restaged=0
+while read -r before_blob f; do
+  [ -f "$f" ] || continue
+  after_blob=$(git hash-object -- "$f")
+  [ "$after_blob" = "$before_blob" ] && continue
+  git add -- "$f"
+  restaged=$((restaged + 1))
+done < "$tmp/hashes"
+
+if [ -s "$tmp/unsafe" ]; then
+  echo "pre-commit: these staged files have unstaged edits; cargo fmt rewrote the working tree, so the staged blob may be unformatted:" >&2
+  sed 's/^/pre-commit:   /' "$tmp/unsafe" >&2
+fi
+
+if [ "$restaged" -gt 0 ]; then
+  echo "pre-commit: cargo fmt rewrote and staged $restaged Rust file(s)"
+fi
+exit 0
