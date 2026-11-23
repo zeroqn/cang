@@ -142,6 +142,18 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
     let maintenance_options = options.disk_maintenance_options();
     let plan =
         profiler.measure_result("launch_plan_build", || LaunchPlan::from_env(options, cwd))?;
+    // A `--gpu=drm` launch needs its render server, its sandbox policy and a loader
+    // path that can find its libraries. The render server is spawned by the helper
+    // long after the CLI has done its work, so a source-built cang that lacks the
+    // package wrapper's environment (or a render server whose RPATH does not cover
+    // its closure) used to boot a VM that then had no usable GPU path. Refused
+    // here - before the lease, the auto-grow VM, the task directory or a single
+    // byte of rootfs work.
+    if plan.gpu_mode == crate::runtime::vm::gpu::GpuMode::Drm {
+        profiler.measure_result("render_server_preflight", || {
+            crate::runtime::session::supervisor::render_server::preflight()
+        })?;
+    }
     // The single-writer rule on a workspace image (ticket 29): a workspace
     // server holds the image exclusively for its whole lifetime, and every
     // `--workspace-disk` launch holds it shared. Taken before the workspace task

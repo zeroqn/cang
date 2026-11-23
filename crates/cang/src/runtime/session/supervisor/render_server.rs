@@ -73,7 +73,7 @@ impl RenderServerEnv {
         let exec_path = PathBuf::from(runtime_tool_program(RuntimeTool::VirglRenderServer));
         if !exec_path.is_file() {
             bail!(
-                "render server executable '{}' does not exist; install cang's packaged virgl_render_server",
+                "render server executable '{}' does not exist: a `--gpu=drm` launch needs it. Run the packaged cang, point CANG_VIRGL_RENDER_SERVER at a virgl_render_server, or - in a `nix develop` shell - put one on PATH",
                 exec_path.display()
             );
         }
@@ -150,7 +150,7 @@ fn required_env_path(name: &str, description: &str) -> Result<PathBuf> {
         .map(PathBuf::from)
         .ok_or_else(|| {
             anyhow!(
-                "{description} is not set; expected environment variable {name} (set by the cang package wrapper)"
+                "{description} is not set; expected environment variable {name}. The packaged cang wrapper sets it; a source build gets it from `nix build .#cang-render-server-env` (a `--gpu=drm` launch needs the venus render server's mesa and vulkan-loader paths)"
             )
         })
 }
@@ -255,6 +255,92 @@ pub(crate) fn spawn_render_server(ready_fd: Option<RawFd>) -> Result<RenderServe
     })
 }
 
+/// What a `--gpu=drm` launch needs on the host before it may start any VM work.
+#[derive(Debug, Clone)]
+pub(crate) struct RenderServerPrereqs {
+    pub(crate) exec_path: PathBuf,
+    pub(crate) policy_path: PathBuf,
+    /// `ldd` lines that name a library the loader cannot find, for executables
+    /// whose loader lookup is checked (the render server, and cang itself).
+    pub(crate) unresolved_libraries: Vec<String>,
+}
+
+impl RenderServerPrereqs {
+    /// Resolve what the next `--gpu=drm` launch would need.
+    fn resolve() -> Result<Self> {
+        let env = RenderServerEnv::resolve()?;
+        Ok(Self {
+            exec_path: env.exec_path.clone(),
+            policy_path: render_server_policy_path()?,
+            unresolved_libraries: unresolved_libraries_of(&env.exec_path),
+        })
+    }
+
+    /// Refuse a launch whose render server cannot run, naming the remedy.
+    fn check_ready(&self) -> Result<()> {
+        if !self.exec_path.is_file() {
+            bail!(
+                "render server executable '{}' does not exist: a `--gpu=drm` launch needs cang's packaged virgl_render_server. Install the packaged cang, point CANG_VIRGL_RENDER_SERVER at one, or - in a `nix develop` shell - source `nix build .#cang-render-server-env` first",
+                self.exec_path.display()
+            );
+        }
+        if !self.policy_path.is_file() {
+            bail!(
+                "render-server seccomp policy '{}' does not exist: the packaged cang ships share/cang/seccomp/render-server.json, and a source build has to name one with CANG_RENDER_SERVER_POLICY=<policy.json>",
+                self.policy_path.display()
+            );
+        }
+        if !self.unresolved_libraries.is_empty() {
+            bail!(
+                "the render server '{}' cannot load {}; the launch is refused rather than booting a VM whose GPU path would fail: a packaged virgl_render_server carries its own RPATH, so a source-built one needs `patchelf --set-rpath` over its library closure, or run the packaged cang",
+                self.exec_path.display(),
+                self.unresolved_libraries.join(", ")
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Refuse a `--gpu=drm` launch before it creates a task directory, materializes a
+/// rootfs or boots anything.
+///
+/// The render server is spawned by the helper process, long after the CLI has
+/// done its work, and its failures there surface as a VM that booted and has no
+/// usable GPU path. A source-built cang gets none of the launcher environment the
+/// package wrapper sets, so this is the difference between "the launch is
+/// refused, and here is the flag to set" and a GPU guest that silently has no
+/// renderer.
+pub(crate) fn preflight() -> Result<()> {
+    RenderServerPrereqs::resolve()?.check_ready()
+}
+
+/// `ldd` lines naming a library the loader cannot find.
+///
+/// `LD_LIBRARY_PATH` is removed for the probe: the render server's own
+/// `LD_LIBRARY_PATH` is mesa's, so every other dependency has to resolve through
+/// its RPATH - which is exactly what a source-built render server lacks.
+fn unresolved_libraries_of(exec: &Path) -> Vec<String> {
+    let output = Command::new("ldd")
+        .arg(exec)
+        .env_remove("LD_LIBRARY_PATH")
+        .output();
+    let Ok(output) = output else {
+        // No `ldd` on this host (`ldd` is a shell script of the C library the
+        // binary was built against): nothing to check, and refusing a launch over
+        // a missing diagnostic tool would be worse than the check is worth.
+        return Vec::new();
+    };
+    unresolved_from_ldd(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn unresolved_from_ldd(ldd_stdout: &str) -> Vec<String> {
+    ldd_stdout
+        .lines()
+        .filter(|line| line.contains("not found"))
+        .map(|line| line.trim().to_string())
+        .collect()
+}
+
 fn render_server_policy_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os(RENDER_SERVER_POLICY_OVERRIDE_ENV)
         .map(PathBuf::from)
@@ -265,7 +351,11 @@ fn render_server_policy_path() -> Result<PathBuf> {
     std::env::current_exe()
         .ok()
         .and_then(|exe| package_render_server_seccomp_policy_path_for_exe(&exe))
-        .ok_or_else(|| anyhow!("cannot resolve the render-server seccomp policy path"))
+        .ok_or_else(|| {
+            anyhow!(
+                "cannot resolve the render-server seccomp policy path: the packaged cang ships share/cang/seccomp/render-server.json beside its binary, and a source build has to name one with CANG_RENDER_SERVER_POLICY=<policy.json>"
+            )
+        })
 }
 
 pub(crate) fn run_render_server_bootstrap(args: Vec<OsString>) -> Result<()> {
@@ -387,6 +477,97 @@ mod tests {
             vulkan_loader_lib_dir: PathBuf::from("/nix/store/vk-vulkan-loader-1.4.341.0/lib"),
             mimalloc_lib: None,
         }
+    }
+
+    fn prereqs(exec: PathBuf, policy: PathBuf, unresolved: Vec<String>) -> RenderServerPrereqs {
+        RenderServerPrereqs {
+            exec_path: exec,
+            policy_path: policy,
+            unresolved_libraries: unresolved,
+        }
+    }
+
+    #[test]
+    fn a_complete_render_server_chain_passes_the_launch_preflight() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let exec = temp.path().join("virgl_render_server");
+        let policy = temp.path().join("render-server.json");
+        std::fs::write(&exec, b"render server").expect("exec should be written");
+        std::fs::write(&policy, b"policy").expect("policy should be written");
+
+        prereqs(exec, policy, Vec::new())
+            .check_ready()
+            .expect("a complete render-server chain must not be refused");
+    }
+
+    #[test]
+    fn a_missing_render_server_executable_names_its_remedy() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let policy = temp.path().join("render-server.json");
+        std::fs::write(&policy, b"policy").expect("policy should be written");
+
+        let err = prereqs(temp.path().join("virgl_render_server"), policy, Vec::new())
+            .check_ready()
+            .expect_err("a missing render server executable has to be refused");
+        let message = format!("{err}");
+        assert!(message.contains("does not exist"), "{message}");
+        assert!(message.contains("CANG_VIRGL_RENDER_SERVER"), "{message}");
+        assert!(message.contains("cang-render-server-env"), "{message}");
+    }
+
+    #[test]
+    fn a_missing_render_server_policy_names_its_override() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let exec = temp.path().join("virgl_render_server");
+        std::fs::write(&exec, b"render server").expect("exec should be written");
+
+        let err = prereqs(exec, temp.path().join("render-server.json"), Vec::new())
+            .check_ready()
+            .expect_err("a missing render-server policy has to be refused");
+        let message = format!("{err}");
+        assert!(
+            message.contains("render-server seccomp policy"),
+            "{message}"
+        );
+        assert!(message.contains("CANG_RENDER_SERVER_POLICY"), "{message}");
+    }
+
+    #[test]
+    fn an_rpath_that_does_not_cover_the_closure_is_refused_before_boot() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let exec = temp.path().join("virgl_render_server");
+        let policy = temp.path().join("render-server.json");
+        std::fs::write(&exec, b"render server").expect("exec should be written");
+        std::fs::write(&policy, b"policy").expect("policy should be written");
+
+        let err = prereqs(
+            exec,
+            policy,
+            vec!["libvirglrenderer.so.1 => not found".to_owned()],
+        )
+        .check_ready()
+        .expect_err("an unresolvable library has to be refused");
+        let message = format!("{err}");
+        assert!(
+            message.contains("libvirglrenderer.so.1 => not found"),
+            "{message}"
+        );
+        assert!(message.contains("patchelf --set-rpath"), "{message}");
+    }
+
+    #[test]
+    fn ldd_output_is_read_for_unresolved_libraries_only() {
+        let resolved = "\tlinux-vdso.so.1 (0x00007ffd)\n\tlibvirglrenderer.so.1 => /nix/store/x/lib/libvirglrenderer.so.1 (0x00007f)\n";
+        assert!(unresolved_from_ldd(resolved).is_empty());
+
+        let broken = "\tlibvirglrenderer.so.1 => not found\n\tlibvulkan.so.1 => /nix/store/v/lib/libvulkan.so.1 (0x00007f)\n";
+        assert_eq!(
+            unresolved_from_ldd(broken),
+            vec!["libvirglrenderer.so.1 => not found".to_owned()]
+        );
+
+        assert!(unresolved_from_ldd("\tstatically linked\n").is_empty());
+        assert!(unresolved_from_ldd("\tnot a dynamic executable\n").is_empty());
     }
 
     #[test]
