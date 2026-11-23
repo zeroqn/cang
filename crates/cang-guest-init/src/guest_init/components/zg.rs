@@ -27,6 +27,14 @@ use crate::guest_init::components::home::identity::DevIdentity;
 use crate::guest_init::fs;
 
 pub(in crate::guest_init) const MODELS_DIR_ENV: &str = "CANG_ZG_MODELS_DIR";
+/// The guest-owned layer the image's models are linked into.
+///
+/// cang bind-mounts the host's `~/.zvec-grep` into the guest, and a model there is
+/// often a symlink into the *host's* store - a path a guest does not have. The
+/// image's own copies are linked into this directory and mounted over
+/// `~/.zvec-grep/models`, so the image's layer is what the guest resolves while the
+/// host's entries stay underneath and untouched.
+pub(in crate::guest_init) const MODELS_STAGING_DIR: &str = "/run/cang/zvec-grep/models";
 pub(in crate::guest_init) const EMBEDDING_ENV: &str = "ZVEC_GREP_EMBEDDING";
 pub(in crate::guest_init) const DEVICE_ENV: &str = "ZVEC_GREP_DEVICE";
 /// The CPU-side default: `zg`'s own out-of-the-box model, and one of the two the
@@ -138,21 +146,86 @@ pub(in crate::guest_init) fn seed_models_from(
     is_root: bool,
     identity: &DevIdentity,
 ) -> Result<()> {
+    seed_models_with(
+        source,
+        is_root,
+        identity,
+        Path::new(MODELS_STAGING_DIR),
+        &SystemZvecModelsOps,
+    )
+}
+
+/// Stack the image's models over the task user's model cache.
+///
+/// The cache path itself is cang's bind mount of the host's `~/.zvec-grep`, so
+/// linking the image's models *into* it would write into the host's home (and
+/// replace a host symlink with a link to a guest-only store path). Instead the
+/// links are made in a guest-owned directory and that directory is bound over the
+/// cache: the guest resolves the image's models, a host entry that does not
+/// resolve inside the guest cannot hide them, and the host's tree is never written.
+pub(in crate::guest_init) fn seed_models_with(
+    source: Option<&Path>,
+    is_root: bool,
+    identity: &DevIdentity,
+    staging: &Path,
+    ops: &impl ZvecModelsOps,
+) -> Result<()> {
     if !is_root {
         return Ok(());
     }
-    let Some(source) = source else {
-        return Ok(());
-    };
-    if !source.is_dir() {
+    let cache = model_cache_dir(identity);
+    // Even an image that ships no models gets the layer: the directory has to be
+    // writable by the task user for `zg`'s own downloads, and it must not be the
+    // host's tree those downloads land in.
+    ops.create_dir_all(staging)?;
+    if let Some(source) = source.filter(|source| source.is_dir()) {
+        link_tree(source, source, staging)?;
+    }
+    ops.chown_tree(staging, identity.uid, identity.gid)?;
+    // The mount point normally exists inside the host bind; created only when it
+    // does not, because a missing directory is a directory the host's `zg` cache
+    // never had.
+    ops.create_dir_all(&cache)?;
+    if ops.is_mounted(&cache)? {
         return Ok(());
     }
-    let cache = model_cache_dir(identity);
-    // The cache root has to exist even when the image ships no models, so `zg` can
-    // write its own downloads there.
-    fs::create_dir_all(&cache)?;
-    link_tree(source, source, &cache)?;
-    fs::chown_tree_skipping_symlinks(&cache, identity.uid, identity.gid)
+    ops.bind_mount(staging, &cache)
+        .context("failed to stack the image's zg models over the host's ~/.zvec-grep mount")
+}
+
+pub(in crate::guest_init) trait ZvecModelsOps {
+    fn create_dir_all(&self, path: &Path) -> Result<()>;
+    fn is_mounted(&self, path: &Path) -> Result<bool>;
+    fn bind_mount(&self, source: &Path, target: &Path) -> Result<()>;
+    fn chown_tree(&self, path: &Path, uid: u32, gid: u32) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SystemZvecModelsOps;
+
+impl ZvecModelsOps for SystemZvecModelsOps {
+    fn create_dir_all(&self, path: &Path) -> Result<()> {
+        fs::create_dir_all(path)
+    }
+
+    fn is_mounted(&self, path: &Path) -> Result<bool> {
+        // `findmnt -rn <path>` answers for an exact mountpoint only, so a directory
+        // inside the host's `.zvec-grep` mount does not read as already stacked.
+        crate::guest_init::command::status_ok("findmnt", &["-rn", path_str(path)?])
+    }
+
+    fn bind_mount(&self, source: &Path, target: &Path) -> Result<()> {
+        crate::guest_init::command::run("mount", &["--bind", path_str(source)?, path_str(target)?])
+    }
+
+    fn chown_tree(&self, path: &Path, uid: u32, gid: u32) -> Result<()> {
+        fs::chown_tree_skipping_symlinks(path, uid, gid)
+    }
+}
+
+fn path_str(path: &Path) -> Result<&str> {
+    path.to_str()
+        .ok_or_else(|| anyhow::anyhow!("path '{}' is not valid UTF-8", path.display()))
 }
 
 pub(in crate::guest_init) fn model_cache_dir(identity: &DevIdentity) -> PathBuf {

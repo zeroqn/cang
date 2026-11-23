@@ -229,9 +229,21 @@ reverse) reports `model references differ` and wants `zg --index --rebuild`.
 The models themselves are pre-installed, not downloaded at first use: the image
 ships `local/potion-code-16m-v2` (32 MB Model2Vec) and
 `local/qwen3-embedding-0.6b` (610 MiB GGUF, `nix/pkgs/zg-models.nix`), pinned by
-the digests from zg's own catalog. guest-init links them into
-`~/.zvec-grep/models`, which stays a writable directory — anything else the user
-indexes with still downloads there.
+the digests from zg's own catalog. guest-init links them into a guest-owned
+directory and mounts that layer over `~/.zvec-grep/models`, so the image's models
+are what the guest resolves and the directory stays writable — anything else the
+user indexes with still downloads there, into the guest's layer rather than into
+the host's tree.
+
+The stacking is what makes the host's `~/.zvec-grep` bind mount safe to keep
+(cang bind-mounts it into the guest by default). A model on the host is often a
+symlink into the *host's* `/nix/store`, which a guest does not have; without the
+layer over it, `zg` in the guest saw a destination it could not resolve, downloaded
+the 610 MiB again, and then refused to publish over the symlink
+(`destination must be a regular file, not a symlink or directory`). The image's
+layer wins, the host's entries stay untouched underneath, and a model the image
+does not ship is shadowed for the life of the task (add it to the image, or index
+with the models the image carries).
 
 Inside a `--gpu=drm` guest the ICD is mesa's **venus**, not a host driver: the
 device appears through virtio-gpu, and it reports `KHR_coopmat` without

@@ -19,6 +19,62 @@ fn identity_under(home: &Path) -> DevIdentity {
     }
 }
 
+/// Records what the stacking step asked the system for, so a test never runs a
+/// real `mount` and can still see the order of the calls.
+#[derive(Default)]
+struct FakeModelsOps {
+    mounted: bool,
+    binds: Mutex<Vec<(PathBuf, PathBuf)>>,
+    chowns: Mutex<Vec<(PathBuf, u32, u32)>>,
+}
+
+impl FakeModelsOps {
+    fn already_stacked() -> Self {
+        Self {
+            mounted: true,
+            ..Self::default()
+        }
+    }
+
+    fn binds(&self) -> Vec<(PathBuf, PathBuf)> {
+        self.binds.lock().expect("bind lock").clone()
+    }
+
+    fn chowns(&self) -> Vec<(PathBuf, u32, u32)> {
+        self.chowns.lock().expect("chown lock").clone()
+    }
+}
+
+impl ZvecModelsOps for FakeModelsOps {
+    fn create_dir_all(&self, path: &Path) -> Result<()> {
+        std::fs::create_dir_all(path)?;
+        Ok(())
+    }
+
+    fn is_mounted(&self, _path: &Path) -> Result<bool> {
+        Ok(self.mounted)
+    }
+
+    fn bind_mount(&self, source: &Path, target: &Path) -> Result<()> {
+        self.binds
+            .lock()
+            .expect("bind lock")
+            .push((source.to_path_buf(), target.to_path_buf()));
+        Ok(())
+    }
+
+    fn chown_tree(&self, path: &Path, uid: u32, gid: u32) -> Result<()> {
+        self.chowns
+            .lock()
+            .expect("chown lock")
+            .push((path.to_path_buf(), uid, gid));
+        // The real implementation cannot chown to a foreign uid without root; the
+        // recorded call is what these tests assert.
+        let _ = (path, uid, gid);
+        Ok(())
+    }
+}
+
 #[test]
 fn gpu_guest_selects_the_gguf_model_and_auto_device() {
     let _guard = ENV_LOCK.lock().expect("env test lock");
@@ -60,16 +116,18 @@ fn seed_links_every_file_with_its_directories_into_the_cache() {
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("home should be created");
     let identity = identity_under(&home);
-    seed_models_from(Some(&models), true, &identity).expect("seeding should succeed");
+    let staging = temp.path().join("staging/models");
+    let ops = FakeModelsOps::default();
+    seed_models_with(Some(&models), true, &identity, &staging, &ops)
+        .expect("seeding should succeed");
 
-    let cache = model_cache_dir(&identity);
     for relative in [
         "model2vec/org--model/rev/model.safetensors",
         "model2vec/org--model/rev/tokenizer/tokenizer.json",
         "hf_model.gguf",
     ] {
-        let link = cache.join(relative);
-        let target = std::fs::read_link(&link).expect("cache entry should be a symlink");
+        let link = staging.join(relative);
+        let target = std::fs::read_link(&link).expect("staged entry should be a symlink");
         assert_eq!(target, models.join(relative));
         assert!(
             std::fs::metadata(&link)
@@ -78,10 +136,25 @@ fn seed_links_every_file_with_its_directories_into_the_cache() {
             "{relative} should resolve to a file"
         );
     }
+    let cache = model_cache_dir(&identity);
+    assert_eq!(
+        ops.binds(),
+        vec![(staging.clone(), cache)],
+        "the image's models have to be stacked over the task user's cache"
+    );
+    assert_eq!(
+        ops.chowns(),
+        vec![(staging, identity.uid, identity.gid)],
+        "the stacked directory is the task user's"
+    );
 }
 
 #[test]
-fn seed_keeps_a_model_the_user_already_downloaded() {
+fn seed_stacks_over_a_host_entry_the_guest_cannot_resolve() {
+    // This is the failure the stacking fixes: cang bind-mounts the host's
+    // `~/.zvec-grep`, a host model is often a symlink into the host's own store,
+    // and that store path does not exist inside a guest. The image's copy has to
+    // be what the guest resolves, and the host's tree must not be written to.
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let models = temp.path().join("image-models");
     std::fs::create_dir_all(&models).expect("source tree should be created");
@@ -92,24 +165,29 @@ fn seed_keeps_a_model_the_user_already_downloaded() {
     let identity = identity_under(&home);
     let cache = model_cache_dir(&identity);
     std::fs::create_dir_all(&cache).expect("cache should be created");
-    std::fs::write(cache.join("hf_model.gguf"), b"user copy").expect("user copy should be written");
+    let host_target = Path::new("/nix/store/host-only-cang-zg-models/models/hf_model.gguf");
+    std::os::unix::fs::symlink(host_target, cache.join("hf_model.gguf"))
+        .expect("the host's symlink should be created");
 
-    seed_models_from(Some(&models), true, &identity).expect("seeding should succeed");
+    let staging = temp.path().join("staging/models");
+    let ops = FakeModelsOps::default();
+    seed_models_with(Some(&models), true, &identity, &staging, &ops)
+        .expect("seeding should succeed");
 
-    let contents =
-        std::fs::read(cache.join("hf_model.gguf")).expect("cached model should be readable");
-    assert_eq!(contents, b"user copy");
-    assert!(
-        std::fs::symlink_metadata(cache.join("hf_model.gguf"))
-            .expect("cached model metadata should be readable")
-            .file_type()
-            .is_file(),
-        "the user's copy has to stay a regular file, not become a link"
+    assert_eq!(
+        std::fs::read_link(cache.join("hf_model.gguf")).expect("the host entry stays a symlink"),
+        host_target,
+        "the host's own tree is never rewritten"
     );
+    assert_eq!(
+        std::fs::read_link(staging.join("hf_model.gguf")).expect("the image's model is staged"),
+        models.join("hf_model.gguf")
+    );
+    assert_eq!(ops.binds(), vec![(staging, model_cache_dir(&identity))]);
 }
 
 #[test]
-fn seed_without_the_image_directory_leaves_the_cache_alone() {
+fn seed_without_the_image_directory_still_stacks_a_writable_layer() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("home should be created");
@@ -119,15 +197,41 @@ fn seed_without_the_image_directory_leaves_the_cache_alone() {
     std::fs::write(cache.join("own.gguf"), b"keep").expect("cache file should be written");
 
     let absent = temp.path().join("absent");
-    seed_models_from(Some(&absent), true, &identity)
+    let staging = temp.path().join("staging/models");
+    let ops = FakeModelsOps::default();
+    seed_models_with(Some(&absent), true, &identity, &staging, &ops)
         .expect("seeding without the image directory should succeed");
 
-    assert!(cache.join("own.gguf").is_file());
+    assert!(
+        staging.is_dir(),
+        "the task user still needs a writable models directory, and it must not be the host's"
+    );
     assert_eq!(
-        std::fs::read_dir(&cache)
-            .expect("cache should be readable")
+        std::fs::read_dir(&staging)
+            .expect("staging should be readable")
             .count(),
-        1
+        0
+    );
+    assert_eq!(ops.binds(), vec![(staging, model_cache_dir(&identity))]);
+    assert!(
+        cache.join("own.gguf").is_file(),
+        "the host's tree keeps its own files"
+    );
+}
+
+#[test]
+fn seed_does_not_stack_twice() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).expect("home should be created");
+    let identity = identity_under(&home);
+    let staging = temp.path().join("staging/models");
+
+    let ops = FakeModelsOps::already_stacked();
+    seed_models_with(None, true, &identity, &staging, &ops).expect("seeding should succeed");
+    assert!(
+        ops.binds().is_empty(),
+        "an already stacked cache must not get another mount on top"
     );
 }
 
@@ -137,8 +241,13 @@ fn seed_is_a_no_op_for_a_non_root_call() {
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("home should be created");
     let identity = identity_under(&home);
-    seed_models_from(Some(temp.path()), false, &identity).expect("non-root seeding should succeed");
+    let staging = temp.path().join("staging/models");
+    let ops = FakeModelsOps::default();
+    seed_models_with(Some(temp.path()), false, &identity, &staging, &ops)
+        .expect("non-root seeding should succeed");
+    assert!(!staging.exists());
     assert!(!model_cache_dir(&identity).exists());
+    assert!(ops.binds().is_empty());
 }
 
 // The identity's uid/gid are only used to chown the cache; a test that cannot
@@ -158,12 +267,16 @@ fn seeded_cache_is_owned_like_the_home() {
         shell: PathBuf::from("fish"),
     };
 
-    seed_models_from(Some(&models), true, &identity).expect("seeding should succeed");
+    let staging = temp.path().join("staging/models");
+    let ops = FakeModelsOps::default();
+    seed_models_with(Some(&models), true, &identity, &staging, &ops)
+        .expect("seeding should succeed");
 
-    let cache = model_cache_dir(&identity);
-    let owner = std::fs::metadata(&cache).expect("cache metadata should be readable");
-    assert_eq!(owner.uid(), metadata.uid());
-    assert_eq!(owner.gid(), metadata.gid());
+    assert_eq!(
+        ops.chowns(),
+        vec![(staging, identity.uid, identity.gid)],
+        "the stacked layer is owned like the task user's home"
+    );
 }
 
 #[test]
