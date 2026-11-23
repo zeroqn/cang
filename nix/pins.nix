@@ -328,21 +328,21 @@ in
   # consumers get as `zg`; upstream publishes no Rust binary (its release assets
   # and platform npm packages are the TypeScript build), so
   # nix/pkgs/zvec-grep.nix compiles it.
-  # The revision is the commit upstream's v0.3.0 tag names - the first release
+  # The revision is the commit upstream's v0.3.1 tag names - the release
   # whose workspace version is the port itself (`[workspace.package] version`),
   # so `version` normally matches it. The package still stamps `version` into
   # every `env!("CARGO_PKG_VERSION")` site, because that workspace version sat at
   # 0.0.1 through the whole rewrite and may drift again.
-  # The stamp also moves when cang carries its own patches: 0.3.0 is that tag plus
+  # The stamp also moves when cang carries its own patches: 0.3.1 is that tag plus
   # the ArkTS/GLSL format registration in nix/pkgs/zvec-grep.nix. `zvecRustLib`
   # below is pinned to the crate version the workspace's
   # `zvec-rust`/`zvec-rust-build` deps require.
   zvecGrep = {
-    version = "0.3.0";
+    version = "0.3.1";
     owner = "zvec-ai";
     repo = "zvec-grep";
-    rev = "e7ab89394e917ae5746ccdda813f882cd53c9797";
-    srcHash = "sha256-m+EshRJznj27l4wFh8CxKJVH5eaIJKUEZylDEKd0BuU=";
+    rev = "40b6005bd9adc784cf24c41afd2e753c883e44d4";
+    srcHash = "sha256-9Knxg5TEDpQj1iRViga/EkAKsrTJioBRj9TjkmWOTeA=";
   };
 
   # zvec's C API shared library (`libzvec_c_api.so` plus the jieba dictionary the
@@ -352,11 +352,11 @@ in
   # the C++ vector database, so pointing it here keeps the ABI matched and the Nix
   # build offline.
   zvecRustLib = {
-    version = "0.8.0";
+    version = "0.8.1";
     owner = "zvec-ai";
     repo = "zvec-rust";
     asset = "zvec-prebuilt-x86_64-unknown-linux-gnu.tar.gz";
-    hash = "sha256-Vlj5xuhrWlEcKmEU8UoUdeWuVMakvx2OD72jRIzZYBM=";
+    hash = "sha256-xnj0XbDeF2UHMLg1OQIZ8me1CPKOdykbOBE4v3TkVa0=";
   };
 
   # Prebuilt zg built from the zvecGrep revision above.

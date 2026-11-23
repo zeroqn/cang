@@ -80,8 +80,8 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
   cargoLock = {
     lockFile = "${finalAttrs.src}/rust/Cargo.lock";
     outputHashes = {
-      "llama-cpp-2-0.1.154" = "sha256-l7anKvQBgJVJ3jpn+83Ulp7ZxgbmQt2QH1ytfHx+E5o=";
-      "llama-cpp-sys-2-0.1.154" = "sha256-l7anKvQBgJVJ3jpn+83Ulp7ZxgbmQt2QH1ytfHx+E5o=";
+      "llama-cpp-2-0.1.154" = "sha256-x2+Ljs5eoMkg3Ex3PrnTvfAwI0JwJBqT0lgHedi3aVg=";
+      "llama-cpp-sys-2-0.1.154" = "sha256-x2+Ljs5eoMkg3Ex3PrnTvfAwI0JwJBqT0lgHedi3aVg=";
     };
   };
 
@@ -167,6 +167,20 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
   # says otherwise, and CARGO_HOME is the read-only vendor directory here.
   preBuild = ''
     export LLAMA_CPP_SOURCE_CACHE="$TMPDIR/llama-cpp-sources"
+    # nixpkgs' rust setup hook (cargoUseSystemLibs) exports
+    # AWS_LC_SYS_USE_SYSTEM=1 so `aws-lc-sys` links the system `aws-lc` that its
+    # crate override supplies. This derivation takes no such input - and must not
+    # grow one, or the published prebuilt would need that library in the guest -
+    # so the vendored AWS-LC is built from source instead. It has to happen here
+    # rather than `env.AWS_LC_SYS_USE_SYSTEM`: the hook re-exports it in
+    # preConfigure, after env is installed.
+    export AWS_LC_SYS_USE_SYSTEM=0
+    # The same hook exports LIBSQLITE3_SYS_USE_PKG_CONFIG=1 and
+    # ZSTD_SYS_USE_PKG_CONFIG=1; their crate overrides would supply `sqlite` and
+    # `zstd`, and this derivation has neither. `rusqlite`'s `bundled` feature
+    # compiles SQLite itself and `zstd-sys` vendors zstd, so reset those too.
+    export LIBSQLITE3_SYS_USE_PKG_CONFIG=0
+    export ZSTD_SYS_USE_PKG_CONFIG=0
   '';
 
   # The suite wants network and downloaded models; this package is the binary.

@@ -857,10 +857,10 @@ workflow; refresh it by hand to re-pin an already published asset:
 nix develop --command ./scripts/update-zg-prebuilt.sh
 ```
 
-The workspace pins dependencies exactly, and three of them reach into
+The workspace pins dependencies exactly, and four of them reach into
 `nix/pkgs/zvec-grep.nix`, so a revision bump can move more than `rev`/`srcHash`:
 
-- `zvec-rust`/`zvec-rust-build` (`=0.8.0` at the current revision) have to match
+- `zvec-rust`/`zvec-rust-build` (`=0.8.1` at the current revision) have to match
   `zvecRustLib` in `nix/pins.nix`; the updater refuses a mismatch rather than
   writing a pin whose build cannot resolve the C API it links.
 - `llama-cpp-2`/`llama-cpp-sys-2` come from zvec's llama.cpp fork as a git
@@ -870,6 +870,15 @@ The workspace pins dependencies exactly, and three of them reach into
   That tree is not vendored in the crate, so the derivation fetches the matching
   `ggml-org/llama.cpp` archive itself; when a bump moves the revision in that
   lock file, the `llamaCppSource` URL and hash move with it.
+- nixpkgs' Rust setup hook (`cargoUseSystemLibs`) exports system-library switches
+  for the crates its `defaultCrateOverrides` supply, and this derivation uses none
+  of those inputs: `preBuild` resets `AWS_LC_SYS_USE_SYSTEM`,
+  `LIBSQLITE3_SYS_USE_PKG_CONFIG` and `ZSTD_SYS_USE_PKG_CONFIG` so `aws-lc-sys`
+  builds its vendored AWS-LC and `rusqlite`/`zstd-sys` keep their bundled ones.
+  Taking the system libraries instead would put them in the published prebuilt's
+  `NEEDED` set and therefore in the guest image. v0.3.1 is the first revision that
+  pulls `aws-lc-rs` (through `reqwest`'s rustls), which is where the hook first
+  bit.
 - `ort` is built with `load-dynamic`: nothing links against ONNX Runtime, and
   `zg` resolves `lib/libonnxruntime.so.1` relative to its own executable (or
   `ORT_DYLIB_PATH`) at run time. The derivation installs that link, the prebuilt
