@@ -11,6 +11,7 @@ use crate::naming::derive_workspace_slug;
 use crate::runtime::host_tools;
 use crate::runtime::landlock::LandlockMode;
 use crate::runtime::launch::components::mounts;
+use crate::runtime::launch::components::persistent_disks::workspace;
 use crate::runtime::launch::config::{
     AllocatorMode, BindMount, BindMountSourceKind, GuestPermissions, NIX_TARGET, NetworkMode,
     PulseServer, canonical_mount_target,
@@ -283,7 +284,9 @@ fn resolve_workspace_disk(
 /// * with a workspace image *inside* the launch directory of a *task* launch:
 ///   the mount lands on that directory, so the image the VM attaches would be
 ///   hidden behind it (and, if it were opened after the mount, created inside
-///   the guest's tree). A workspace *server* is exempt: it opens the image
+///   the guest's tree). "Inside" is decided on the image's resolved path
+///   ([`workspace::canonical_disk_path`]), so `../work.raw` beside the directory
+///   is outside it. A workspace *server* is exempt: it opens the image
 ///   while the host directory is still visible, it holds the lease file
 ///   descriptor open across the mount, and `cang workspace serve work.raw` from
 ///   inside the served directory is the natural spelling.
@@ -331,17 +334,22 @@ fn resolve_workspace_relay(
         );
         return Ok(false);
     }
-    if !serve && disk.starts_with(workspace_dir) {
+    // The image's own path, not the spelling it arrived as: `cang ../work.raw`
+    // from the served directory is a file *beside* that directory, while
+    // `Path::starts_with` compares components and reads the `..` as the directory
+    // itself. The mount would hide nothing, so the check cannot use the raw spelling.
+    let disk_path = workspace::canonical_disk_path(disk);
+    if !serve && disk_path.starts_with(workspace_dir) {
         if forced {
             anyhow::bail!(
                 "--workspace-relay refuses a workspace disk image inside the launch directory: '{}' is under '{}', and the mount lands on that directory, which would hide the image file the VM attaches; move the image outside the tree",
-                disk.display(),
+                disk_path.display(),
                 workspace_dir.display()
             );
         }
         eprintln!(
             "cang: not mounting the guest workspace on the host: the image '{}' is inside the launch directory '{}', which the mount would hide; move the image outside the tree, or pass --workspace-relay to be told so as an error",
-            disk.display(),
+            disk_path.display(),
             workspace_dir.display()
         );
         return Ok(false);
@@ -617,6 +625,31 @@ mod tests {
                 .expect("an in-tree image resolves"),
             "the mount would hide the image the VM attaches"
         );
+
+        // A `..` spelling whose parent chain does not exist yet, resolved without
+        // the filesystem: still beside the launch directory, and still the refusal
+        // when the spelling resolves back into it.
+        let missing_beside = Path::new("/tmp/example-project-not-yet/../work.raw");
+        let missing_dir = Path::new("/tmp/example-project-not-yet");
+        assert!(
+            resolve_workspace_relay(None, false, true, Some(missing_beside), missing_dir, false)
+                .expect("a not-yet-created tree resolves"),
+            "`..` decides where the image is even when nothing below it exists yet"
+        );
+        assert!(
+            !resolve_workspace_relay(
+                None,
+                false,
+                true,
+                Some(Path::new(
+                    "/tmp/example-project-not-yet/../example-project-not-yet/work.raw"
+                )),
+                missing_dir,
+                false
+            )
+            .expect("an in-tree image resolves"),
+            "a spelling that resolves back into the tree is still refused"
+        );
         assert!(
             !resolve_workspace_relay(None, false, true, None, dir, false)
                 .expect("a host-directory launch resolves"),
@@ -638,6 +671,43 @@ mod tests {
             !resolve_workspace_relay(Some(false), false, true, Some(outside), dir, false)
                 .expect("an opt-out resolves"),
             "--no-workspace-relay wins over the default"
+        );
+    }
+
+    /// `cang ../work.raw` from the directory the mount lands on (the spelling
+    /// `docs/usage.md` documents): the image sits *beside* the tree, and the
+    /// component-wise `starts_with` the check used to apply read the `..` as the
+    /// directory itself, so the default skipped the mount and a forced one refused.
+    #[test]
+    fn a_disk_spelled_through_the_parent_directory_is_outside_the_launch_directory() {
+        let dir = tempfile::tempdir().expect("tempdir should exist");
+        let workspace = dir.path().join("serve-here");
+        fs::create_dir_all(&workspace).expect("workspace should exist");
+        let beside = workspace.join("..").join("work.raw");
+
+        assert!(
+            resolve_workspace_relay(None, false, true, Some(&beside), &workspace, false)
+                .expect("a disk beside the launch directory resolves"),
+            "an image spelled `../work.raw` is outside the tree the mount lands on"
+        );
+        assert!(
+            resolve_workspace_relay(Some(true), false, true, Some(&beside), &workspace, false)
+                .expect("a forced mount resolves"),
+            "--workspace-relay must not refuse a disk that only looks in-tree"
+        );
+
+        // The same spelling, resolving back into the tree, is still refused: the
+        // check follows the path, it does not just drop `..`.
+        let in_tree = workspace.join("..").join("serve-here").join("work.raw");
+        assert!(
+            !resolve_workspace_relay(None, false, true, Some(&in_tree), &workspace, false)
+                .expect("an in-tree image resolves"),
+            "a spelling that resolves back into the tree is inside it"
+        );
+        assert!(
+            resolve_workspace_relay(Some(true), false, true, Some(&in_tree), &workspace, false)
+                .is_err(),
+            "a forced mount refuses an image its mount would hide"
         );
     }
 

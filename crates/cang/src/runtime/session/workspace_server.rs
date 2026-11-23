@@ -58,6 +58,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::runtime::launch::components::persistent_disks::workspace::canonical_disk_path;
 use crate::runtime::session::task_control::{ActiveTaskStatus, ProcessInspector};
 use crate::runtime::session::task_control::{ProcessIdentity, ProcfsInspector};
 use crate::runtime::session::workspace_relay::{
@@ -265,28 +266,6 @@ fn disk_key(disk: &Path) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
-}
-
-fn canonical_disk_path(disk: &Path) -> PathBuf {
-    if let Ok(canonical) = fs::canonicalize(disk) {
-        return canonical;
-    }
-    // A launch may name an image that does not exist yet: then the parent
-    // directory still decides identity, and the two sides agree because both
-    // resolve the same way before and after creation.
-    let absolute = if disk.is_absolute() {
-        disk.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(disk))
-            .unwrap_or_else(|_| disk.to_path_buf())
-    };
-    match (absolute.parent(), absolute.file_name()) {
-        (Some(parent), Some(name)) => fs::canonicalize(parent)
-            .map(|parent| parent.join(name))
-            .unwrap_or(absolute),
-        _ => absolute,
-    }
 }
 
 fn current_uid() -> u32 {

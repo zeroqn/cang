@@ -9,7 +9,7 @@
 use anyhow::{Context, Result, bail};
 use std::fs::{self, File};
 use std::os::unix::fs::FileTypeExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::raw_btrfs::{
     RawDiskSpec, RawImageCommandRunner, extend_file, inspect_existing_regular_file,
@@ -35,6 +35,57 @@ const SPEC: RawDiskSpec = RawDiskSpec {
     size_hint: DEFAULT_SIZE_HINT,
     diagnostic_name: "cang workspace disk",
 };
+
+/// The image's own path, resolved as far as the filesystem lets it be.
+///
+/// Only identity uses this: the image lease keys on it, and the relay's mount
+/// refuses a disk it would hide by comparing it with the launch directory. Two
+/// spellings of one image have to agree there, and `Path::starts_with` compares
+/// components - it does not resolve `..`, so `work.raw` read as
+/// `<launch-dir>/../work.raw` would otherwise claim to be inside a directory it
+/// sits beside (`docs/usage.md` spells exactly that: `cang ../work.raw`).
+///
+/// The path cang opens is the one the user wrote, never this: a symlink spelling
+/// must still be refused as a symlink, and a missing image is still created at
+/// the spelling given. A missing image does have an identity - its parent
+/// directory decides it - and both sides agree before and after creation.
+pub(crate) fn canonical_disk_path(disk: &Path) -> PathBuf {
+    if let Ok(canonical) = fs::canonicalize(disk) {
+        return canonical;
+    }
+    let absolute = if disk.is_absolute() {
+        disk.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(disk))
+            .unwrap_or_else(|_| disk.to_path_buf())
+    };
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(parent), Some(name)) => fs::canonicalize(parent)
+            .map(|parent| parent.join(name))
+            // The parent is missing too (a first launch into a directory cang is
+            // about to create): then the spelling alone decides, and `..` is
+            // resolved as the kernel would, via the filesystem that would exist.
+            .unwrap_or_else(|_| resolve_lexically(&absolute)),
+        _ => absolute,
+    }
+}
+
+/// Resolve `.` and `..` components without touching the filesystem. A `..` at
+/// the root stays at the root, the way the kernel resolves it.
+fn resolve_lexically(path: &Path) -> PathBuf {
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            component => resolved.push(component.as_os_str()),
+        }
+    }
+    resolved
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkspaceDiskStatus {
