@@ -109,12 +109,6 @@
       # it is exported for downstream hosts as `packages.virglrenderer` /
       # `overlays.default`.
       virglrendererCang = pkgs: import ./nix/lib/virglrenderer-cang.nix { inherit pkgs pins; };
-      # nixpkgs-unstable's bun moved to the release whose embedded root store
-      # rejects the compromised emSign intermediates (CVE-2026-111943): the root
-      # store lives inside the binary, so the image's `bun` and the pi standalone
-      # binary have to be built from it. Exported for downstream hosts as
-      # `packages.bun`. See nix/lib/bun-cang.nix.
-      bunCang = pkgs: import ./nix/lib/bun-cang.nix { inherit pkgs pins; };
     in
     {
       # Apply to a host's nixpkgs to give *its* VA-API driver the same fix the guest
@@ -138,11 +132,12 @@
           ...
         }:
         let
-          # The image's `bun` and the toolchain that compiles pi: both from
-          # nixpkgs-unstable and both moved to the release with the fixed root
-          # store, because each of them carries that store. See
-          # nix/lib/bun-cang.nix.
-          bun = bunCang (import nixpkgs-unstable { inherit system; });
+          # The image's `bun`: the upstream canary that compiled its `pi`, from
+          # the paired assets of the zeroqn/pi release (nix/pkgs/bun-aot.nix).
+          bun = import ./nix/pkgs/bun-aot.nix {
+            pkgs = zgPkgs;
+            inherit pins;
+          };
           # The un-overridden nixpkgs. `nix/lib/systems.nix` replaces
           # `virglrenderer` with the prebuilt-or-source selector, which is what
           # consumers want but not what CI can build the asset from.
@@ -174,11 +169,14 @@
           # newest C++ runtime any consumer in the image needs, and that is
           # nixpkgs-unstable's gcc: `zg` links an ONNX Runtime built against
           # `GLIBCXX_3.4.35/36`, while the 26.05 input's gcc-15 stops at 3.4.34.
-          piCodingAgent = import ./nix/pkgs/pi-coding-agent.nix {
+          # The image's `pi`: the AOT host from that same release, wrapped with
+          # the native addon runtime directory and the ONNX Runtime shim
+          # (nix/pkgs/pi-aot.nix). Built with the unstable set because the shim
+          # it exposes is linked against that glibc.
+          piCodingAgent = import ./nix/pkgs/pi-aot.nix {
+            pkgs = zgPkgs;
             inherit
-              pkgs
               pins
-              bun
               onnxruntimeShim
               ;
             nativeAddonCxxRuntime = zgPkgs.stdenv.cc.cc.lib;
@@ -395,9 +393,9 @@
           # the prebuilt release asset when one is pinned for the system, otherwise
           # the same patches built from source.
           mesa-cang = mesaCang pkgs;
-          # The same bun the image ships and compiles pi with, for a downstream
-          # host whose own bun users need the fixed embedded root store before its
-          # nixpkgs carries it (NixOS/nixpkgs#577354).
+          # The same bun the image ships and compiled its `pi` with: the
+          # upstream canary that carries Bun's `--aot` compiler
+          # (nix/pkgs/bun-aot.nix).
           bun = bun;
           # The source build of the patches `.#virglrenderer` carries: what
           # `.github/workflows/build-virglrenderer.yml` builds, tars and publishes
@@ -433,9 +431,8 @@
         let
           unstablePkgs = import nixpkgs-unstable { inherit system; };
           packages = self.packages.${system};
-          # The checks must see the same bun the image does, patched root store
-          # included; taking it from the packages output is what keeps them in
-          # step.
+          # The checks must see the same bun the image does; taking it from the
+          # packages output is what keeps them in step.
           bun = packages.bun;
           # The image ships nixpkgs-unstable's cargo-deny and its wild linker,
           # so these contracts resolve the same packages (`wild-unwrapped`: the
@@ -471,17 +468,18 @@
         in
         {
           container-nix-db-metadata = cangImageChecks.imageConfigNixDbRefs;
-          # The image's bun (and the toolchain behind pi) has to be the pinned
-          # release: the fix is a root store compiled into the binary, so which
-          # release the binary came from is the only thing a build can assert
-          # about it.
-          bun-cang-version =
-            pkgs.runCommand "bun-cang-version"
+          # The image's bun has to be the canary the AOT host was compiled with.
+          # The archive's canary-date label says nothing about what the binary
+          # prints, so assert both of its own answers: the release line and the
+          # commit `--revision` names.
+          bun-aot-version =
+            pkgs.runCommand "bun-aot-version"
               {
                 bun = packages.bun;
               }
               ''
-                $bun/bin/bun --version | grep -Fx '${pins.bun.version}'
+                $bun/bin/bun --version | grep -Fx '${pins.piAotRelease.bunVersion}'
+                $bun/bin/bun --revision | grep -Fx '${pins.piAotRelease.bunRevision}'
                 touch $out
               '';
           # The shim's own loader check: builds the three consumer shapes (the

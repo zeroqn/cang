@@ -4,40 +4,46 @@ in
 {
   cangVersion = cargoToml.workspace.package.version;
 
-  piCodingAgent = {
-    version = "1.6.0";
-    owner = "earendil-works";
+  # The image's `pi` and its `bun` are the two artifacts zeroqn/pi publishes, as
+  # the per-system assets of one `pi-v<version>` release (that tree's
+  # `tui/nix/manifest.nix`): `pi` compiled ahead of time with Bun's `--aot`
+  # (`nix/pkgs/pi-aot.nix`), and the Bun canary that compiled it
+  # (`nix/pkgs/bun-aot.nix`). `tui/flake.nix` there is the source of both
+  # packages; the release copies their pinned bytes beside the host so neither a
+  # downstream build nor an old pin depends on oven-sh's movable `canary` tag.
+  # The host is stock upstream pi (no fork, no per-release patch), so what cang
+  # ships is exactly that release's executable and the assets beside it.
+  #
+  # `bunVersion`/`bunRevision` are the executable's own output (`bun --version`,
+  # `bun --revision`), not the archive's canary-date label; the image asserts
+  # both. Refreshed by scripts/update-pi-aot.sh.
+  piAotRelease = {
+    owner = "zeroqn";
     repo = "pi";
-    rev = "v1.6.0";
-    srcHash = "sha256-UVQnOMYikjxi7JREcxPZh/Uamy0l4rBvhawHR/MZZgo=";
-    # `nix/pkgs/pi-coding-agent.nix` builds with bun, not nixpkgs' node:
-    # `bunDepsHash` is the recursive hash of the `node_modules` tree
-    # `bun install --frozen-lockfile` produces from the generated
-    # `nix/pkgs/pi-coding-agent-bun.lock`, and `scripts/update-pi-coding-agent.sh`
-    # recomputes it with the pinned bun (the flake's `.#bun`).
-    bunDepsHash = "sha256-MZtXlRF+lWFWAI5/PbVejKnvhLQ2rJwFlaG+axLrWR4=";
-    aiNpmTarballHash = "sha256-1oMS7FdLyVnLf+4m2k9IdtBnrtm7vnbodjWeYNIpR0c=";
-  };
-
-  # Neither nixpkgs input carries a fixed bun yet - both pin 1.4.2, whose
-  # embedded root store trusts the compromised eMudhra/emSign intermediates
-  # (CVE-2026-111943) - so cang pins the release that rejects them.
-  # nix/lib/bun-cang.nix applies this and makes itself a no-op once an input's
-  # bun reaches `version`. The hashes are the published release assets, the same
-  # ones NixOS/nixpkgs#577354 carries; x86_64-linux is upstream's `baseline` zip,
-  # the variant nixpkgs packages, not the plain x64 build. To bump: change
-  # `version` and re-hash each asset with
-  # `nix store prefetch-file https://github.com/oven-sh/bun/releases/download/bun-v<version>/<asset>`.
-  bun = {
-    version = "1.4.4";
+    tag = "pi-v1.6.0";
+    version = "1.6.0";
+    bunVersion = "1.4.6";
+    bunRevision = "1.4.6-canary.1+dac8e3b0f";
     systems = {
       x86_64-linux = {
-        asset = "bun-linux-x64-baseline.zip";
-        hash = "sha256-4ERutVmVdy65iUvrrppr42jZhai5Jx7hJEhvmUbu3XY=";
+        piAot = {
+          asset = "pi-aot-1.6.0-x86_64-linux.tar.gz";
+          hash = "sha256-9r8zCI43/08wg6lYqW5Ayd/0jKgQn/ELkx251taRJdI=";
+        };
+        bunAot = {
+          asset = "bun-aot-canary-20261123-x86_64-linux.zip";
+          hash = "sha256-3hL0OfncyICCPyTcM8Cin2EkrmAwbScLBqzT6cBZwuo=";
+        };
       };
       aarch64-linux = {
-        asset = "bun-linux-aarch64.zip";
-        hash = "sha256-uqa7NvUdblhWHgK76oJQOKnfRU9nPW13bou/hvjHhQ4=";
+        piAot = {
+          asset = "pi-aot-1.6.0-aarch64-linux.tar.gz";
+          hash = "sha256-mKTy5damUHexmN9EQfIcRY2dkt/2XqXJHYX9e8LhC4A=";
+        };
+        bunAot = {
+          asset = "bun-aot-canary-20261123-aarch64-linux.zip";
+          hash = "sha256-YD0/K/PFNLjV869oToOgCqHkj+jBBzHkT1fMZ/T56e8=";
+        };
       };
     };
   };

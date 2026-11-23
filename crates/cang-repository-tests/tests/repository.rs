@@ -2183,48 +2183,102 @@ fn zg_ships_the_vulkan_backend_and_the_image_models() {
     );
 }
 
-/// The image's `pi` is built with bun, not with nixpkgs' node: the dependency
-/// tree is installed by `bun install` against a bun lockfile and the build runs
-/// pi's own `build:binary` (which compiles the standalone with
-/// `bun build --compile`) under bun, with no node or npm in the derivation.
+/// The image's `pi` is zeroqn/pi's AOT host - stock upstream pi compiled with
+/// Bun's `--aot`, published as the assets of a `pi-v<version>` release - and the
+/// image's `bun` is the canary archive from that same release that compiled it.
+/// cang packages both from the pinned release, not from pi's source tree and not
+/// from a nixpkgs bun, and the wrapper keeps carrying the native addon runtime
+/// directory (ADR 0009) around the released executable.
 #[test]
-fn pi_coding_agent_builds_with_bun_not_nixpkgs_node() {
-    const PI_NIX: &str = include_str!("../../../nix/pkgs/pi-coding-agent.nix");
-    const UPDATE_PI_SCRIPT: &str = include_str!("../../../scripts/update-pi-coding-agent.sh");
+fn pi_and_bun_are_the_paired_assets_of_one_pi_aot_release() {
+    const PI_AOT_NIX: &str = include_str!("../../../nix/pkgs/pi-aot.nix");
+    const BUN_AOT_NIX: &str = include_str!("../../../nix/pkgs/bun-aot.nix");
+    const UPDATE_PI_AOT_SCRIPT: &str = include_str!("../../../scripts/update-pi-aot.sh");
+
+    let pin = nix_top_level_attr_body(PINS_NIX, "piAotRelease");
+    for required in [
+        "owner = \"zeroqn\";",
+        "repo = \"pi\";",
+        "tag = \"pi-v",
+        "bunVersion",
+        "bunRevision",
+        "pi-aot-",
+        "bun-aot-canary-",
+    ] {
+        assert!(
+            pin.contains(required),
+            "the piAotRelease pin should carry {required}"
+        );
+    }
+    for system in ["x86_64-linux", "aarch64-linux"] {
+        assert!(
+            pin.contains(&format!("      {system} = {{"))
+                && pin.contains("piAot = {")
+                && pin.contains("bunAot = {"),
+            "the piAotRelease pin should carry both assets for {system}"
+        );
+    }
+    // Whatever built pi's source tree and its dependency lockfile is gone: the
+    // host is a released ELF, so there is no dependency tree to pin.
+    assert!(
+        !PINS_NIX.contains("bunDepsHash") && !PINS_NIX.contains("aiNpmTarballHash"),
+        "nix/pins.nix should not carry pi's source-build inputs any more"
+    );
 
     for required in [
-        "bun install --frozen-lockfile --ignore-scripts",
-        "bunDepsHash",
-        "pi-coding-agent-bun.lock",
-        "bun run --cwd packages/coding-agent build:binary",
-        "writeShellScriptBin \"node\"",
-        "writeShellScriptBin \"npm\"",
+        "pins.piAotRelease",
+        "piAot",
+        "autoPatchelfHook",
+        "makeWrapper $out/libexec/pi/pi $out/bin/pi",
+        "--set-default PI_PACKAGE_DIR $out/share/pi",
+        "nativeAddonRuntimeDir",
+        "onnxruntimeShim",
+        "LD_LIBRARY_PATH",
+        "ONNXRUNTIME_LIB_PATH",
+        "dontStrip = true",
     ] {
         assert!(
-            PI_NIX.contains(required),
-            "nix/pkgs/pi-coding-agent.nix should mention {required}"
+            PI_AOT_NIX.contains(required),
+            "nix/pkgs/pi-aot.nix should mention {required}"
         );
     }
-    for absent in ["buildNpmPackage", "npmDepsHash", "nodejs"] {
+    for absent in ["bun install", "build:binary", "bunDepsHash"] {
         assert!(
-            !PI_NIX.contains(absent),
-            "nix/pkgs/pi-coding-agent.nix should not use {absent}: the build is bun's"
+            !PI_AOT_NIX.contains(absent),
+            "nix/pkgs/pi-aot.nix should not mention {absent}: the host is a release artifact"
         );
     }
-    // The pin names the bun dependency tree, and the updater is what recomputes
-    // it - with the pinned bun, from the lockfile it commits.
+
+    for required in ["bunAot", "autoPatchelfHook", "dontStrip = true"] {
+        assert!(
+            BUN_AOT_NIX.contains(required),
+            "nix/pkgs/bun-aot.nix should mention {required}"
+        );
+    }
+
+    // The flake takes both from the pin, through the two packages, and the
+    // image keeps consuming the same attributes as before.
     assert!(
-        PINS_NIX.contains("bunDepsHash") && !PINS_NIX.contains("npmDepsHash"),
-        "nix/pins.nix should pin the bun dependency tree"
+        FLAKE_NIX.contains(
+            "bun = import ./nix/pkgs/bun-aot.nix {\n            pkgs = zgPkgs;\n            inherit pins;\n          };"
+        ) && FLAKE_NIX.contains("piCodingAgent = import ./nix/pkgs/pi-aot.nix {")
+            && FLAKE_NIX.contains("pi-coding-agent = piCodingAgent;"),
+        "the flake should package pi and bun from the pinned pi AOT release"
     );
+
+    // The updater refreshes both assets of the release, verifies each against
+    // the digest GitHub reports, and reads the built canary's own version.
     for required in [
+        "piAotRelease",
+        "pi-aot-",
+        "bun-aot-",
+        "digest",
         "nix build --no-link --print-out-paths .#bun",
-        "bun.lock",
-        "bunDepsHash",
+        "--revision",
     ] {
         assert!(
-            UPDATE_PI_SCRIPT.contains(required),
-            "scripts/update-pi-coding-agent.sh should mention {required}"
+            UPDATE_PI_AOT_SCRIPT.contains(required),
+            "scripts/update-pi-aot.sh should mention {required}"
         );
     }
 }
@@ -2686,40 +2740,25 @@ fn one_pinned_fenix_rust_toolchain_serves_builds_the_devshell_and_the_image() {
         DEVSHELL_NIX.contains("    cargoDeny\n"),
         "the dev shell's lint gate should use the unstable cargo-deny"
     );
-    // bun already came from that input; it and the two new packages must keep
-    // coming from it rather than from the 26.05 set - and bun goes through
-    // `nix/lib/bun-cang.nix`, which moves it to the release whose embedded root
-    // store rejects the compromised eMudhra intermediates (both inputs still
-    // pin 1.4.2). That helper is the only place the pin is applied, it is
-    // exported for downstream hosts, and the image checks read the same
-    // package, so an image cannot ship the input's unpatched bun unnoticed.
+    // bun is the canary that compiled the AOT host, so it comes from the same
+    // unstable set pi is patched against (pi's wrapper exposes an ONNX Runtime
+    // shim linked against that glibc); it is exported for downstream hosts and
+    // the image checks read the same package, so an image cannot ship a bun the
+    // pin does not name unnoticed.
     assert!(
-        FLAKE_NIX.contains("bun = bunCang (import nixpkgs-unstable { inherit system; });"),
-        "the image's bun has to come from the patch helper, not straight from the input"
-    );
-    assert!(
-        FLAKE_NIX.contains("./nix/lib/bun-cang.nix"),
-        "the flake has to take bun through nix/lib/bun-cang.nix"
+        FLAKE_NIX.contains(
+            "bun = import ./nix/pkgs/bun-aot.nix {\n            pkgs = zgPkgs;\n            inherit pins;\n          };"
+        ),
+        "the image's bun has to be the canary paired with the AOT host"
     );
     assert!(
         FLAKE_NIX.contains("\n          bun = bun;\n"),
-        "the patched bun has to be exported for downstream hosts"
+        "the canary bun has to be exported for downstream hosts"
     );
     assert!(
         FLAKE_NIX.contains("bun = packages.bun;"),
         "the image checks have to read the same bun the image ships"
     );
-    let bun_pin = nix_top_level_attr_body(PINS_NIX, "bun");
-    for required in [
-        "version = \"1.4.4\";",
-        "bun-linux-x64-baseline.zip",
-        "bun-linux-aarch64.zip",
-    ] {
-        assert!(
-            bun_pin.contains(required),
-            "the bun pin should carry {required} (it is the release with the fixed root store)"
-        );
-    }
     assert!(FLAKE_NIX.contains("cargoDeny = zgPkgs.cargo-deny;"));
     // `wild-unwrapped`, not `wild`: nixpkgs' `wild` is the same binary behind a
     // bintools wrapper whose flag expansion costs about a second per link, and

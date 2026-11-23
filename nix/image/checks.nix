@@ -148,9 +148,7 @@ let
   openglSourceFile = pkgs.writeText "cang-guest-init-opengl-source.txt" (
     builtins.readFile ../../crates/cang-guest-init/src/guest_init/components/opengl.rs
   );
-  piSourceFile = pkgs.writeText "cang-pi-coding-agent-nix-source.txt" (
-    builtins.readFile ../pkgs/pi-coding-agent.nix
-  );
+  piSourceFile = pkgs.writeText "cang-pi-aot-nix-source.txt" (builtins.readFile ../pkgs/pi-aot.nix);
   # The image-env allowlist the guest bootstrap filters the OCI image Env
   # through: an image variable that is not in it never reaches the guest.
   guestEnvModelFile = pkgs.writeText "cang-guest-env-model-rs.txt" (
@@ -331,15 +329,16 @@ let
     ''}
   '';
 
-  # The image's bun has to be the pinned release. bun embeds its own CA store
-  # instead of reading the system's, so a release that trusts a compromised CA
-  # cannot be repaired by configuration and every binary it compiles - the pi
-  # standalone binary among them - carries the same roots; which release the
-  # binary is (nix/lib/bun-cang.nix, nix/pins.nix) is what a build can assert
-  # about that store.
+  # The image's bun has to be the canary the AOT host was compiled with
+  # (nix/pkgs/bun-aot.nix, nix/pins.nix). The archive's canary-date label says
+  # nothing about what the binary prints, so assert the executable's own answers:
+  # the release line and the commit `--revision` names. It is also newer than
+  # every release whose embedded root store trusts the compromised eMudhra/emSign
+  # intermediates (CVE-2026-111943).
   bunContracts = ''
     test -x ${layers.toolingImageLayer}/bin/bun
     ${layers.toolingImageLayer}/bin/bun --version | grep -Fx '${bun.version}'
+    ${layers.toolingImageLayer}/bin/bun --revision | grep -Fx '${bun.bunRevision}'
   '';
 
   # Prebuilt addons that pi extensions install at runtime (magic-context's
@@ -354,11 +353,13 @@ let
   nativeAddonRuntimeContracts = ''
     grep -F 'nativeAddonRuntimeDir' ${piSourceFile}
     grep -F 'onnxruntimeShim' ${piSourceFile}
-    grep -F 'makeWrapper $out/lib/pi-coding-agent/pi $out/bin/pi' ${piSourceFile}
+    grep -F 'makeWrapper $out/libexec/pi/pi $out/bin/pi' ${piSourceFile}
+    grep -F -- '--set-default PI_PACKAGE_DIR $out/share/pi' ${piSourceFile}
     test -e ${nativeAddonRuntimeDir}/lib/libstdc++.so.6
     test -e ${nativeAddonRuntimeDir}/lib/libonnxruntime.so.1
     test -e ${nativeAddonRuntimeDir}/lib/libonnxrtabi24.so.1
-    test -x ${piCodingAgent}/lib/pi-coding-agent/pi
+    test -x ${piCodingAgent}/libexec/pi/pi
+    test -f ${piCodingAgent}/share/pi/package.json
     # The wrapper, not a symlink to the raw bun binary, is what the image runs.
     test ! -L ${piCodingAgent}/bin/pi
     grep -F '${nativeAddonRuntimeDir}/lib' ${piCodingAgent}/bin/pi

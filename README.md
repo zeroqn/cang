@@ -604,7 +604,8 @@ cang repos and containers.
 The container provides:
 
 - interactive `fish` + `starship`
-- bubblewrap (`bwrap`) and Pi (`pi`)
+- bubblewrap (`bwrap`) and Pi (`pi`: stock upstream pi, compiled ahead of time
+  with Bun's `--aot` and taken from the pinned zeroqn/pi release)
 - `zg` (zvec-grep's Rust build) with llama.cpp's Vulkan backend and the two
   embedding models it needs already installed, so a first `zg --index` works
   offline: `local/potion-code-16m-v2` on a CPU guest, `local/qwen3-embedding-0.6b`
@@ -616,10 +617,12 @@ The container provides:
   sandboxed Python kernel
 - cargo-deny and Symposium (`cargo-agents`, invoked as `cargo agents`)
 - Python 3 (`PyYAML`, Tree-sitter, Tree-sitter Rust parser), Node.js
-- `bun` 1.4.4, the release whose embedded root store rejects the compromised
-  eMudhra/emSign intermediates (`CVE-2026-111943`); both nixpkgs inputs still pin
-  1.4.2, so `nix/lib/bun-cang.nix` moves the package and the pi standalone binary
-  is compiled with the same one (a bun binary carries that root store inside it)
+- `bun` 1.4.6 (the upstream canary `1.4.6-canary.1+dac8e3b0f`), the release
+  whose embedded root store rejects the compromised eMudhra/emSign intermediates
+  (`CVE-2026-111943`); it is the archive the `pi` above was compiled with, so
+  the two are the paired assets of one pinned release (`nix/pins.nix`,
+  `nix/pkgs/bun-aot.nix`; a bun binary carries that root store inside it, and
+  so does the host it compiled)
 - Rust toolchain (`cargo`, `rustc`, `clippy`, `rustfmt` from fenix's current
   stable - the same one the repository's dev shell and `nix build` use -
   plus `rust-analyzer`, `sccache` and `wild`)
@@ -821,11 +824,12 @@ ships, so a host can install it as the matching client for `cang --waypipe`:
 cang.packages.${pkgs.system}.waypipe-bin
 ```
 
-The image's `bun` is a package output too. Both nixpkgs inputs still pin 1.4.2,
-whose embedded root store trusts the compromised eMudhra/emSign intermediates
-(`CVE-2026-111943`); the output is 1.4.4, the release that rejects them, so a
-host whose own bun users need the fix can take the same binary the image ships
-instead of waiting for its nixpkgs ([NixOS/nixpkgs#577354](https://github.com/NixOS/nixpkgs/pull/577354)):
+The image's `bun` is a package output too. It is the upstream canary that
+compiled the image's `pi` (`1.4.6-canary.1+dac8e3b0f`), which is both the only
+Bun line with `bun build --compile --aot` and newer than every release whose
+embedded root store trusts the compromised eMudhra/emSign intermediates
+(`CVE-2026-111943`), so a host can take the same binary the image ships instead
+of waiting for its nixpkgs ([NixOS/nixpkgs#577354](https://github.com/NixOS/nixpkgs/pull/577354)):
 
 ```nix
 cang.packages.${pkgs.system}.bun

@@ -102,26 +102,38 @@ bump moves the dev shell, `nix build .#cang` and the guest together; nothing els
 needs editing. `wild`, `cargo-deny`, `rust-analyzer` and `sccache` are separate
 nixpkgs(-unstable) packages and do not move with it.
 
-### bun's embedded root store
+### pi and bun: one AOT release
 
-bun ships its own CA bundle inside the binary and does not read the host's, so a
-release that trusts a compromised CA stays broken however the system trust store
-is configured (`--use-system-ca` included), and every binary *compiled* with that
-bun carries the same roots - the image's `bun` and the pi standalone binary both
-do. nixpkgs pinned 1.4.2 in both inputs while 1.4.4 rejected the compromised
-eMudhra/emSign intermediates ([CVE-2026-111943](https://github.com/oven-sh/bun/pull/46159),
-[NixOS/nixpkgs#577354](https://github.com/NixOS/nixpkgs/pull/577354)), so
-`nix/pins.nix` pins 1.4.4 and `nix/lib/bun-cang.nix` applies it to
-nixpkgs-unstable's package for the two consumers (the image's tooling layer and
-pi's build) and exports it as `packages.<system>.bun`.
+The image's `pi` is stock upstream pi compiled ahead of time (`bun build
+--compile --aot`), and the image's `bun` is the canary that compiled it. Both
+are per-system assets of one `pi-v<version>` release of
+`zeroqn/pi`, described by that repository's `tui/flake.nix` and its
+`tui/nix/manifest.nix`, so cang takes them as one pinned pair
+(`piAotRelease` in `nix/pins.nix`) rather than building pi from source:
 
-The override is guarded on the version: once the input's bun reaches the pinned
-version the helper returns the input's package unchanged, so the pin does not
-hold an update back and there is nothing to remove. To bump it, change `version`
-and re-hash each asset (`nix store prefetch-file`), noting that x86_64-linux takes
-upstream's `baseline` zip - the variant nixpkgs packages - not the plain x64
-build. `checks.<system>.bun-cang-version` fails when the image's bun is not the
-pinned release.
+- `nix/pkgs/pi-aot.nix` installs the released executable and the assets beside
+  it, and wraps it with `PI_PACKAGE_DIR` (pi's own escape hatch for where its
+  package directory is), the native addon runtime directory (`LD_LIBRARY_PATH`)
+  and the ONNX Runtime ABI shim (`ONNXRUNTIME_LIB_PATH`). See
+  [ADR 0009](adr/0009-pi-extension-cxx-runtime-delivery.md).
+- `nix/pkgs/bun-aot.nix` installs the canary archive. It is the only Bun line
+  with the AOT compiler, and it is newer than every release whose embedded root
+  store trusts the compromised eMudhra/emSign intermediates
+  ([CVE-2026-111943](https://github.com/oven-sh/bun/pull/46159),
+  [NixOS/nixpkgs#577354](https://github.com/NixOS/nixpkgs/pull/577354)) - a bun
+  binary carries that store inside it, and so does every binary compiled with it.
+
+Both packages are built with the flake's nixpkgs-unstable set, because the shim
+pi exposes is linked against that glibc.
+
+To move to a new release, run the updater described under "Refresh the pinned
+zeroqn/pi AOT host" above. It takes the newest `pi-v*` release (or `--tag <tag>`), pairs the `pi-aot-*` and
+`bun-aot-*` asset of each system, records their hashes after checking each
+against the digest GitHub reports for the asset, and then builds `.#bun` from
+the new pin to read the executable's own `--version` and `--revision` into
+`bunVersion`/`bunRevision` - the archive's canary-date label says nothing about
+either. `checks.<system>.bun-aot-version` and the image's `bunContracts` fail
+when the image's bun is not exactly that pair.
 
 ### The virglrenderer decode parameter buffers
 
@@ -793,18 +805,19 @@ its pin went in), so a freshly published `.sha256` that disagrees with this list
 the build inputs moved: check `cargoDeps.hash` and the `cang-ci-sccache`
 attribute first.
 
-Refresh pinned Pi coding agent source and dependency metadata in `nix/pins.nix`
-from `earendil-works/pi`:
+Refresh the pinned zeroqn/pi AOT host and the Bun canary it was compiled with
+(`piAotRelease` in `nix/pins.nix`: the release tag, the version its asset names
+carry, both per-system asset hashes and the canary's own `--version`/`--revision`).
+The updater checks each asset against the digest GitHub reports for it, and then
+builds `.#bun` from the new pin to read the canary's answers:
 
 ```bash
-nix develop --command ./scripts/update-pi-coding-agent.sh --tag v1.5.0
+nix develop --command ./scripts/update-pi-aot.sh --tag pi-v1.6.0
 ```
 
-The package builds with bun alone (`nix/pkgs/pi-coding-agent.nix`): the updater
-resolves the narrowed workspace closure with npm's lockfile, installs it with the
-pinned bun (it builds `.#bun` itself) and records both the resulting `bun.lock`'s
-dependency tree (`bunDepsHash`) and the `@earendil-works/pi-ai` tarball. `npm`
-has to be on `PATH` for the resolution step; nothing in the build uses node.
+Nothing is compiled from pi's source tree any more: the host is the released
+`pi-aot-*` tarball and the toolchain is the released `bun-aot-*` archive, both
+installed by `nix/pkgs/pi-aot.nix` and `nix/pkgs/bun-aot.nix`.
 
 Refresh pinned `herdrdev/herdr` prebuilt release metadata (tag and per-system
 asset hashes) in `nix/pins.nix`:
