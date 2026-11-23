@@ -364,13 +364,12 @@ fn default_selection_uses_localhost_with_pull_never_when_present() {
         commands.calls(),
         vec![
             vec!["--version"],
-            vec!["inspect", "--type", "image", DEFAULT_IMAGE],
             vec![
                 "inspect",
                 "--type",
                 "image",
                 "--format",
-                "{{.Digest}}",
+                "{{.FromImageDigest}}",
                 DEFAULT_IMAGE
             ],
             vec![
@@ -411,8 +410,7 @@ fn profile_records_miss_subphases_without_child_internals() {
         profile.labels(),
         vec![
             "task_rootfs_materialization:buildah_version",
-            "task_rootfs_materialization:select_image_attempt",
-            "task_rootfs_materialization:resolve_image_digest",
+            "task_rootfs_materialization:image_probe",
             "task_rootfs_materialization:cache_entry_read",
             "task_rootfs_materialization:buildah_materializer",
             "task_rootfs_materialization:cache_population",
@@ -440,6 +438,14 @@ fn default_selection_falls_back_to_canonical_with_pull_missing() {
         commands.calls(),
         vec![
             vec!["--version"],
+            vec![
+                "inspect",
+                "--type",
+                "image",
+                "--format",
+                "{{.FromImageDigest}}",
+                DEFAULT_IMAGE
+            ],
             vec!["inspect", "--type", "image", DEFAULT_IMAGE],
             vec![
                 "inspect",
@@ -679,8 +685,7 @@ fn profile_records_cache_hit_snapshot_without_materializer_or_population() {
         profile.labels(),
         vec![
             "task_rootfs_materialization:buildah_version",
-            "task_rootfs_materialization:select_image_attempt",
-            "task_rootfs_materialization:resolve_image_digest",
+            "task_rootfs_materialization:image_probe",
             "task_rootfs_materialization:cache_entry_read",
             "task_rootfs_materialization:cache_snapshot",
         ]

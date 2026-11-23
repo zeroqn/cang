@@ -49,8 +49,7 @@ known digest keys the cache entry, optional `task_rootfs_cache_path`, and
 profiling is enabled, subordinate rows such as
 `task_rootfs_materialization:reset_task_dir`,
 `task_rootfs_materialization:buildah_version`,
-`task_rootfs_materialization:select_image_attempt`,
-`task_rootfs_materialization:resolve_image_digest`,
+`task_rootfs_materialization:image_probe`,
 `task_rootfs_materialization:cache_entry_read`,
 `task_rootfs_materialization:cache_snapshot`,
 `task_rootfs_materialization:buildah_materializer`, and

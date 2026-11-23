@@ -253,8 +253,7 @@ fn manager_profile_starts_with_task_directory_reset() {
         vec![
             "task_rootfs_materialization:reset_task_dir",
             "task_rootfs_materialization:buildah_version",
-            "task_rootfs_materialization:select_image_attempt",
-            "task_rootfs_materialization:resolve_image_digest",
+            "task_rootfs_materialization:image_probe",
             "task_rootfs_materialization:cache_entry_read",
             "task_rootfs_materialization:buildah_materializer",
             "task_rootfs_materialization:cache_population",

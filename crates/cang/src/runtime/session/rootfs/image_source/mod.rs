@@ -238,14 +238,15 @@ pub(in crate::runtime::session) fn materialize_btrfs_source_rootfs_profiled(
         })
         .context("failed to verify buildah; btrfs-snapshot task rootfs requires buildah")?;
 
-    let attempt = profile
-        .measure_result("task_rootfs_materialization:select_image_attempt", || {
-            select_attempt(selection, commands)
-        })?;
-    let resolved_digest = profile
-        .measure_result("task_rootfs_materialization:resolve_image_digest", || {
-            resolve_attempt_digest(&attempt, commands)
-        })?;
+    // One round trip answers "is the image there" and "which digest" together
+    // on the cache-hit path; only a probe buildah cannot answer falls back to
+    // the presence-then-digest sequence below.
+    let SelectedImageSource {
+        attempt,
+        digest: resolved_digest,
+    } = profile.measure_result("task_rootfs_materialization:image_probe", || {
+        select_and_resolve(selection, commands)
+    })?;
     let mut invalid_cached_entry = false;
 
     if let Some(digest) = resolved_digest.as_deref() {
@@ -559,6 +560,94 @@ fn safe_digest_key(digest: &str) -> Result<String> {
         }
     }
     Ok(format!("{algorithm}-{value}"))
+}
+
+/// The image a launch serves, plus its local digest when the selection resolved
+/// one in the same round trip.
+struct SelectedImageSource {
+    attempt: ImageSourceAttempt,
+    digest: Option<String>,
+}
+
+/// What one `buildah inspect` managed to say about a reference.
+enum ImageProbe {
+    /// The reference is present in local storage and holds this digest; `None`
+    /// is "present, but buildah reports no digest for it", not a failure.
+    Present(Option<String>),
+    /// buildah did not answer: a storage object type whose template has no
+    /// `FromImageDigest` field, an absent image, or a failed exec. All three
+    /// exit non-zero with no way to tell them apart, so the caller keeps the
+    /// tested presence-then-digest sequence.
+    Unanswered,
+}
+
+/// Asks buildah one question instead of three: every launch pays for
+/// `buildah inspect` twice on the hit path - once to learn whether the local
+/// image is there, once to learn its digest - and the digest field answers both,
+/// because an image whose digest buildah reports is an image it also found.
+/// The field is `FromImageDigest` rather than `Digest` because cang's own local
+/// image is a `buildah.BuilderInfo`, whose template has no `Digest` field at all
+/// (that query fails and costs a second exec on every launch).
+fn probe_reference(reference: &str, commands: &impl BuildahCommands) -> ImageProbe {
+    let Ok(output) = commands.run(&[
+        "inspect",
+        "--type",
+        "image",
+        "--format",
+        "{{.FromImageDigest}}",
+        reference,
+    ]) else {
+        return ImageProbe::Unanswered;
+    };
+    ImageProbe::Present(optional_digest(output))
+}
+
+fn select_and_resolve(
+    selection: &ImageSelection,
+    commands: &impl BuildahCommands,
+) -> Result<SelectedImageSource> {
+    match selection {
+        // A refresh pulls first, so its digest query cannot be merged into a
+        // presence probe taken before the pull.
+        ImageSelection::CanonicalWithRefresh => {
+            let attempt = ImageSourceAttempt {
+                reference: DEFAULT_FALLBACK_IMAGE.to_owned(),
+                pull_policy: BuildahPullPolicy::Always,
+            };
+            let digest = resolve_attempt_digest(&attempt, commands)?;
+            Ok(SelectedImageSource { attempt, digest })
+        }
+        ImageSelection::Explicit { reference } => {
+            let attempt = ImageSourceAttempt {
+                reference: reference.clone(),
+                pull_policy: BuildahPullPolicy::Missing,
+            };
+            // A reference that names its own digest needs no query at all.
+            if let Some(digest) = digest_from_reference(reference) {
+                return Ok(SelectedImageSource {
+                    attempt,
+                    digest: Some(digest.to_owned()),
+                });
+            }
+            if let ImageProbe::Present(digest) = probe_reference(&attempt.reference, commands) {
+                return Ok(SelectedImageSource { attempt, digest });
+            }
+            let digest = resolve_attempt_digest(&attempt, commands)?;
+            Ok(SelectedImageSource { attempt, digest })
+        }
+        ImageSelection::PreferLocalhostThenCanonical => {
+            let attempt = ImageSourceAttempt {
+                reference: DEFAULT_IMAGE.to_owned(),
+                pull_policy: BuildahPullPolicy::Never,
+            };
+            if let ImageProbe::Present(digest) = probe_reference(&attempt.reference, commands) {
+                return Ok(SelectedImageSource { attempt, digest });
+            }
+            let attempt = select_attempt(selection, commands)?;
+            let digest = resolve_attempt_digest(&attempt, commands)?;
+            Ok(SelectedImageSource { attempt, digest })
+        }
+    }
 }
 
 fn select_attempt(
