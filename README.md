@@ -495,7 +495,8 @@ before the mount can appear. `cang workspace serve PATH` keeps that view
 up between launches from a long-lived workspace server VM that holds the image
 exclusively, and `cang exec` is how commands run inside it (a second guest that
 names the same image is refused by name). `docs/usage.md` states what the view
-promises.
+promises; the pump's own progress lines are debug-only diagnostics
+(`--log-level debug` or `CANG_RELAY_PUMP_DEBUG=1`, `docs/diagnostics.md`).
 
 ### Host write visibility from inside the guest
 

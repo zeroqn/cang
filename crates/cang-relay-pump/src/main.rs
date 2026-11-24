@@ -30,6 +30,17 @@ use cang_relay_pump::pump::{self, Stats};
 #[global_allocator]
 static ALLOC: rustfs_mimalloc::MiMalloc = rustfs_mimalloc::MiMalloc;
 
+/// The switch for the pump's own progress lines.
+///
+/// They are diagnostics - the mount, the negotiated INIT shape, the connection's
+/// death - and the pump's stderr *is* cang's launch output whenever cang starts
+/// it, so a plain launch prints none of them: the same line in the middle of a
+/// launch's output reads as a fault even when the mount is working. cang sets
+/// this from its own `--log-level` (`debug` and `trace`), and exporting it in the
+/// environment reaches the pump by inheritance, which is how one launch asks for
+/// the relay's side alone without turning on everything cang logs.
+const DEBUG_ENV: &str = "CANG_RELAY_PUMP_DEBUG";
+
 /// How long the transport gets to become usable. The guest's relay binds its
 /// vsock port during guest-init, a second or so after the VM starts; the
 /// deadline only has to be longer than a slow boot.
@@ -69,6 +80,7 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     pump::install_stop_handler()?;
+    let diagnostics = diagnostics_enabled(std::env::var(DEBUG_ENV).ok().as_deref());
     report(&args.state_file, "starting");
 
     let fusermount_program = fusermount::program();
@@ -102,13 +114,15 @@ fn main() -> Result<()> {
         &args.state_file,
         &format!("ready {}", args.mountpoint.display()),
     );
-    eprintln!(
-        "relay-pump: mounted '{}' (fuse_fd={}) through {:?}; relaying to '{}'",
-        args.mountpoint.display(),
-        mount.fd(),
-        fusermount_program,
-        args.socket.display()
-    );
+    if diagnostics {
+        eprintln!(
+            "relay-pump: mounted '{}' (fuse_fd={}) through {:?}; relaying to '{}'",
+            args.mountpoint.display(),
+            mount.fd(),
+            fusermount_program,
+            args.socket.display()
+        );
+    }
 
     let mut stats = match &args.stats {
         Some(path) => Stats::enabled(path)?,
@@ -116,8 +130,15 @@ fn main() -> Result<()> {
     };
     let fuse_fd = mount.into_fd();
     let outcome = {
+        // The relay's own lines (INIT, notifications, the death of the
+        // transport, protocol faults) are per-frame diagnostics: they reach the
+        // terminal only when they were asked for.
         let log: std::sync::Arc<dyn Fn(&str) + Send + Sync> =
-            std::sync::Arc::new(|line: &str| eprintln!("{line}"));
+            std::sync::Arc::new(move |line: &str| {
+                if diagnostics {
+                    eprintln!("{line}");
+                }
+            });
         pump::relay(fuse_fd, &mut transport, &mut stats, log).context("workspace relay stopped")?
     };
     stats.flush();
@@ -129,11 +150,13 @@ fn main() -> Result<()> {
         match fusermount::unmount(&fusermount_program, &args.mountpoint) {
             Ok(()) => {
                 report(&args.state_file, "unmounted");
-                eprintln!(
-                    "relay-pump: unmounted '{}' after {} requests",
-                    args.mountpoint.display(),
-                    outcome.requests
-                );
+                if diagnostics {
+                    eprintln!(
+                        "relay-pump: unmounted '{}' after {} requests",
+                        args.mountpoint.display(),
+                        outcome.requests
+                    );
+                }
             }
             Err(err) => {
                 report(&args.state_file, &format!("error unmount {err:#}"));
@@ -157,6 +180,17 @@ fn main() -> Result<()> {
         let _ = unsafe { libc::close(fuse_fd) };
     }
     Ok(())
+}
+
+/// Whether the pump's progress lines were asked for: `CANG_RELAY_PUMP_DEBUG`
+/// holds a truthy value (`1`, `true`, `yes` or `on`).
+fn diagnostics_enabled(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn report(path: &Option<PathBuf>, line: &str) {
@@ -281,6 +315,19 @@ mod tests {
             .expect_err("a closing peer must not be accepted");
         assert!(format!("{err:#}").contains("gave up"), "{err:#}");
         handle.join().expect("listener thread");
+    }
+
+    /// The progress lines are opt-in, so a launch that sets nothing prints
+    /// nothing: this is the gate the two mount lines and the relay's own lines
+    /// go through.
+    #[test]
+    fn the_diagnostic_switch_is_opt_in() {
+        assert!(!diagnostics_enabled(None));
+        assert!(!diagnostics_enabled(Some("")));
+        assert!(!diagnostics_enabled(Some("0")));
+        assert!(!diagnostics_enabled(Some("false")));
+        assert!(diagnostics_enabled(Some("1")));
+        assert!(diagnostics_enabled(Some(" ON ")));
     }
 
     #[test]

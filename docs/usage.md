@@ -284,6 +284,9 @@ What it promises, and what it does not:
   guest-side file is invisible on the host between launches. For a view that
   stays up between launches, run a workspace server (next section);
 - while the guest is gone, requests are answered `-EIO` rather than hanging.
+  That is the pump noticing the guest stopped serving - the guest exit path, not
+  a fault - and it names the transition only in its debug output
+  (`--log-level debug`, or `CANG_RELAY_PUMP_DEBUG=1`; `docs/diagnostics.md`).
 
 The mount does not arbitrate a concurrent host write and guest write to one
 file: it is for a launch whose tree the host reads, not one it writes at the same

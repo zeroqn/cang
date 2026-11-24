@@ -30,6 +30,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::logging::LogLevel;
 use crate::runtime::host_tools::{RuntimeTool, runtime_tool_program};
 
 /// The guest environment pair for [`WATCH_ENV`], when the host set it.
@@ -55,6 +56,14 @@ pub(in crate::runtime::session) fn guest_env_pair_from_value(
 pub(crate) const PUMP_STATE_FILE: &str = "relay-pump.state";
 /// Where the pump's own stderr goes when cang does not have a TTY for it.
 pub(crate) const PUMP_STATS_FILE: &str = "relay-pump.stats.tsv";
+/// The pump's switch for its own progress lines (`cang-relay-pump`'s
+/// `DEBUG_ENV`).
+///
+/// The pump's stderr is this launch's output, so its lines - the mount, the
+/// negotiated INIT shape, the transport's death - are diagnostics: cang sets
+/// this only when its own `--log-level` asks for debug, and a plain launch
+/// prints none of them.
+pub(crate) const PUMP_DEBUG_ENV: &str = "CANG_RELAY_PUMP_DEBUG";
 /// The host-side knob for the guest's invalidation watcher.
 ///
 /// The guest relay is what watches the served tree, so the decision has to
@@ -134,28 +143,13 @@ impl WorkspaceRelayGuard {
         mountpoint: &Path,
         socket: &Path,
         want_stats: bool,
+        log_level: LogLevel,
     ) -> Result<Self> {
         let state_file = task_dir.join(PUMP_STATE_FILE);
         let _ = std::fs::remove_file(&state_file);
-        let mut command = Command::new(&program);
-        command
-            .arg("--socket")
-            .arg(socket)
-            .arg("--mountpoint")
-            .arg(mountpoint)
-            .arg("--options")
-            .arg(MOUNT_OPTIONS)
-            .arg("--state-file")
-            .arg(&state_file)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            // The pump must not sit inside the tree it is about to mount over:
-            // a process whose cwd is on the mount keeps it busy at unmount time.
-            .current_dir("/");
-        if want_stats {
-            command.arg("--stats").arg(task_dir.join(PUMP_STATS_FILE));
-        }
+        let mut command = pump_command(
+            &program, task_dir, mountpoint, socket, want_stats, log_level,
+        );
         // SAFETY: `prctl` is async-signal-safe and only sets the parent-death
         // signal for the child that is about to exec.
         unsafe {
@@ -243,6 +237,42 @@ impl WorkspaceRelayGuard {
             ),
         }
     }
+}
+
+/// The pump's invocation, kept separate from [`WorkspaceRelayGuard::start`] so
+/// its shape - the flags and the one environment switch that turns the pump's
+/// own progress lines on - is testable without a mount.
+fn pump_command(
+    program: &OsString,
+    task_dir: &Path,
+    mountpoint: &Path,
+    socket: &Path,
+    want_stats: bool,
+    log_level: LogLevel,
+) -> Command {
+    let mut command = Command::new(program);
+    command
+        .arg("--socket")
+        .arg(socket)
+        .arg("--mountpoint")
+        .arg(mountpoint)
+        .arg("--options")
+        .arg(MOUNT_OPTIONS)
+        .arg("--state-file")
+        .arg(task_dir.join(PUMP_STATE_FILE))
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        // The pump must not sit inside the tree it is about to mount over:
+        // a process whose cwd is on the mount keeps it busy at unmount time.
+        .current_dir("/");
+    if want_stats {
+        command.arg("--stats").arg(task_dir.join(PUMP_STATS_FILE));
+    }
+    if log_level.enables_debug() {
+        command.env(PUMP_DEBUG_ENV, "1");
+    }
+    command
 }
 
 /// What became of the mount when the guard tore it down.
@@ -561,6 +591,7 @@ while true; do sleep 1; done"#,
             &mountpoint,
             &socket,
             false,
+            LogLevel::Off,
         )
         .expect("guard");
 
@@ -604,6 +635,7 @@ exit 1"#,
             &mountpoint,
             &socket,
             false,
+            LogLevel::Off,
         )
         .expect("guard");
         let _ = guard.child.try_wait();
@@ -637,6 +669,7 @@ exit 1"#,
             &mountpoint,
             &dir.path().join("relay.sock"),
             false,
+            LogLevel::Off,
         )
         .expect_err("a missing pump must fail by name");
         let message = format!("{err:#}");
@@ -680,6 +713,55 @@ exit 1"#,
         assert_eq!(
             guest_env_pair_from_value(Some(" ON ")),
             Some((WATCH_ENV.to_owned(), "1".to_owned()))
+        );
+    }
+
+    /// The pump's own progress lines are diagnostics: the switch reaches the
+    /// pump only when cang's log level asks for debug, so a plain launch's
+    /// output carries none of its lines.
+    #[test]
+    fn the_pump_progress_lines_follow_cang_log_level() {
+        let program = OsString::from("/libexec/cang-helpers/relay-pump");
+        let task = Path::new("/tmp/relay-task");
+        let mountpoint = Path::new("/tmp/relay-mnt");
+        let socket = Path::new("/tmp/relay.sock");
+
+        let quiet = pump_command(&program, task, mountpoint, socket, false, LogLevel::Off);
+        assert!(
+            quiet
+                .get_envs()
+                .all(|(key, _)| key.to_string_lossy() != PUMP_DEBUG_ENV),
+            "a plain launch must not ask for the pump's diagnostics"
+        );
+
+        let debug = pump_command(&program, task, mountpoint, socket, false, LogLevel::Debug);
+        let switch = debug
+            .get_envs()
+            .find(|(key, _)| key.to_string_lossy() == PUMP_DEBUG_ENV);
+        assert_eq!(
+            switch.map(|(_, value)| value.map(|value| value.to_string_lossy().into_owned())),
+            Some(Some("1".to_owned())),
+            "a debug launch must ask for the pump's diagnostics"
+        );
+
+        // And the switch is the only difference: the invocation itself is the
+        // pump's documented command line.
+        let args: Vec<String> = debug
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--socket",
+                "/tmp/relay.sock",
+                "--mountpoint",
+                "/tmp/relay-mnt",
+                "--options",
+                MOUNT_OPTIONS,
+                "--state-file",
+                "/tmp/relay-task/relay-pump.state",
+            ]
         );
     }
 

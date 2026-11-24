@@ -704,6 +704,7 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                     &plan.workspace_dir,
                                     &relay.socket,
                                     plan.profile,
+                                    plan.log_level,
                                 )?),
                                 None => None,
                             };

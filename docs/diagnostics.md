@@ -17,6 +17,16 @@ for `--log-level debug`; otherwise a scalar/global `RUST_LOG` value such as
 `debug` or `trace` can enable cang tracing. Target-specific `RUST_LOG` filters
 still drive Rust tracing, but are not guessed into a libkrun numeric level.
 
+The workspace relay's host pump (`relay-pump`) follows the same switch. Its
+progress lines - the mount, the negotiated INIT shape, and the transport's death
+(`the transport stopped while idle (...) -> EIO mode, mount kept`) - are
+diagnostics rather than launch output: its stderr is the launch's own output, so
+a launch prints none of them unless the level is `debug` or `trace`. cang sets
+`CANG_RELAY_PUMP_DEBUG=1` on the pump for those levels, and the pump also reads
+that variable from its inherited environment, so
+`CANG_RELAY_PUMP_DEBUG=1 cang ...` shows the relay's lines alone without turning
+on everything cang logs.
+
 ## File-descriptor pressure
 
 For guest-side file-descriptor pressure, `cang-guest-init fd-report` prints the
