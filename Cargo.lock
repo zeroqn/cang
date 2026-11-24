@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "cang"
-version = "0.23.5"
+version = "0.23.6"
 dependencies = [
  "anyhow",
  "cang-attach-protocol",
@@ -174,21 +174,21 @@ dependencies = [
 
 [[package]]
 name = "cang-attach-protocol"
-version = "0.23.5"
+version = "0.23.6"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "cang-exec-protocol"
-version = "0.23.5"
+version = "0.23.6"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "cang-guest-init"
-version = "0.23.5"
+version = "0.23.6"
 dependencies = [
  "anyhow",
  "cang-attach-protocol",
@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "cang-guest-relay"
-version = "0.23.5"
+version = "0.23.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "cang-libkrun"
-version = "0.23.5"
+version = "0.23.6"
 dependencies = [
  "anyhow",
  "krun-init-blob",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "cang-relay-pump"
-version = "0.23.5"
+version = "0.23.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "cang-repository-tests"
-version = "0.23.5"
+version = "0.23.6"
 
 [[package]]
 name = "caps"
