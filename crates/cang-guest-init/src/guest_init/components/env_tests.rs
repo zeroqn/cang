@@ -1,8 +1,9 @@
 use crate::guest_init::components::env::{
-    CONTAINERS_STORE_ENV, CangEnv, ContainerStoreBackend, ENTER_AS_ROOT_ENV, NIX_LOWER_BLOCK_ENV,
-    NIX_LOWER_DISK_ID_ENV, NIX_LOWER_DISK_LABEL_ENV, NIX_LOWER_UPPERDIR_ENV, NIX_LOWER_WORKDIR_ENV,
-    NixLowerContract, RAW_CONTAINER_DISK_ID, RAW_CONTAINER_DISK_LABEL, RAW_NIX_DISK_ID,
-    RAW_NIX_DISK_LABEL, RAW_NIX_LOWER_DISK_ID, RAW_NIX_LOWER_DISK_LABEL,
+    CONTAINERS_STORE_ENV, CangEnv, ContainerStoreBackend, ENTER_AS_ROOT_ENV, NIX_DAEMON_SOCKET_DIR,
+    NIX_DAEMON_SOCKET_PATH, NIX_LOWER_BLOCK_ENV, NIX_LOWER_DISK_ID_ENV, NIX_LOWER_DISK_LABEL_ENV,
+    NIX_LOWER_UPPERDIR_ENV, NIX_LOWER_WORKDIR_ENV, NixLowerContract, RAW_CONTAINER_DISK_ID,
+    RAW_CONTAINER_DISK_LABEL, RAW_NIX_DISK_ID, RAW_NIX_DISK_LABEL, RAW_NIX_LOWER_DISK_ID,
+    RAW_NIX_LOWER_DISK_LABEL, nix_remote_uri,
 };
 use std::sync::Mutex;
 
@@ -230,4 +231,28 @@ fn nix_lower_contract_takes_the_attached_disk_names() {
 
     assert_eq!(parsed.disk_id, "cang-nix-lower");
     assert_eq!(parsed.disk_label, "CANG_NIX_LOWER");
+}
+
+/// A unix socket bound on `/nix` can lose its path binding: `/nix` is a stacked
+/// filesystem in every launch (virtio-fs over the host's composed overlay by
+/// default, a kernel overlay over the block lower for `--workspace-disk`), and
+/// the path then resolves to an inode that is not the one the daemon bound, so
+/// clients get `ECONNREFUSED` while the daemon is alive. The socket therefore
+/// lives on the guest's own tmpfs, and the store URL is derived from that path.
+#[test]
+fn nix_daemon_socket_lives_off_the_stacked_nix_share() {
+    assert_eq!(
+        NIX_DAEMON_SOCKET_PATH,
+        format!("{NIX_DAEMON_SOCKET_DIR}/socket")
+    );
+    assert!(
+        NIX_DAEMON_SOCKET_DIR.starts_with("/run/"),
+        "the daemon socket belongs on the guest tmpfs, not on {}",
+        NIX_DAEMON_SOCKET_DIR
+    );
+    assert!(
+        !NIX_DAEMON_SOCKET_PATH.starts_with("/nix"),
+        "the daemon socket must stay off /nix"
+    );
+    assert_eq!(nix_remote_uri(), format!("unix://{NIX_DAEMON_SOCKET_PATH}"));
 }

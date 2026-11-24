@@ -2,6 +2,7 @@ use anyhow::bail;
 use std::cell::Cell;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::guest_init::components::nix::block_upper::{
     IMAGE_DB_DIR, PREVIOUS_DB_DIR, SEEDED_SENTINEL,
@@ -9,10 +10,10 @@ use crate::guest_init::components::nix::block_upper::{
 use crate::guest_init::components::nix::root::{
     BlockLowerFailure, NO_HOST_OVERLAY_REASON, NixOperation, PARKED_DB_DIR, PreseedState,
     STAGED_IMAGE_DB_DIR, attempt_marker, block_lower_failure_policy, classify_preseed_state,
-    completion_sentinel, ensure_host_overlay_nix_is_directory, overlay_options,
-    planned_block_lower_operations, planned_block_lower_profile_labels,
-    planned_host_overlay_operations, planned_operations, planned_profile_labels,
-    preseed_upper_with, store_reconcile_args,
+    completion_sentinel, ensure_host_overlay_nix_is_directory, handshake,
+    link_default_daemon_socket, overlay_options, planned_block_lower_operations,
+    planned_block_lower_profile_labels, planned_host_overlay_operations, planned_operations,
+    planned_profile_labels, preseed_upper_with, store_reconcile_args,
 };
 use crate::guest_init::components::nix::status::{self, NixPrepState, NixPrepStatus};
 
@@ -31,6 +32,7 @@ fn nix_prep_operation_order_marks_ready_without_socket_wait() {
             NixOperation::RepairStore,
             NixOperation::CreateSocketDir,
             NixOperation::StartDaemon,
+            NixOperation::CheckDaemon,
             NixOperation::WriteReadyStatus,
         ]
     );
@@ -38,7 +40,8 @@ fn nix_prep_operation_order_marks_ready_without_socket_wait() {
     assert!(pos(NixOperation::PreseedUpper) < pos(NixOperation::MountOverlay));
     assert!(pos(NixOperation::MountOverlay) < pos(NixOperation::RepairStore));
     assert!(pos(NixOperation::RepairStore) < pos(NixOperation::CreateSocketDir));
-    assert!(pos(NixOperation::StartDaemon) < pos(NixOperation::WriteReadyStatus));
+    assert!(pos(NixOperation::StartDaemon) < pos(NixOperation::CheckDaemon));
+    assert!(pos(NixOperation::CheckDaemon) < pos(NixOperation::WriteReadyStatus));
 }
 
 #[test]
@@ -52,6 +55,7 @@ fn host_overlay_nix_prep_skips_raw_disk_and_guest_overlay_operations() {
             NixOperation::RepairStore,
             NixOperation::CreateSocketDir,
             NixOperation::StartDaemon,
+            NixOperation::CheckDaemon,
             NixOperation::WriteReadyStatus,
         ]
     );
@@ -407,6 +411,7 @@ fn block_lower_nix_prep_mounts_the_disk_and_composes_the_overlay_first() {
             NixOperation::RepairStore,
             NixOperation::CreateSocketDir,
             NixOperation::StartDaemon,
+            NixOperation::CheckDaemon,
             NixOperation::WriteReadyStatus,
         ]
     );
@@ -426,7 +431,8 @@ fn block_lower_nix_prep_mounts_the_disk_and_composes_the_overlay_first() {
         pos(NixOperation::MountBlockOverlay) < pos(NixOperation::RepairStore),
         "the DB repair and the daemon must run on the composed /nix"
     );
-    assert!(pos(NixOperation::StartDaemon) < pos(NixOperation::WriteReadyStatus));
+    assert!(pos(NixOperation::StartDaemon) < pos(NixOperation::CheckDaemon));
+    assert!(pos(NixOperation::CheckDaemon) < pos(NixOperation::WriteReadyStatus));
 }
 
 #[test]
@@ -444,6 +450,7 @@ fn block_lower_prep_profiles_every_mount_step() {
             "nix-prep:repair-store",
             "nix-prep:create-socket-dir",
             "nix-prep:start-daemon",
+            "nix-prep:check-daemon",
         ]
     );
 }
@@ -531,4 +538,62 @@ fn the_seed_stages_where_the_guest_consumes_and_names_the_host_marker() {
         SEEDED_SENTINEL, ".cang-upper-seeded",
         "the host's GUEST_UPPER_MARKER is this literal"
     );
+}
+
+#[test]
+fn daemon_handshake_retries_until_the_daemon_answers() {
+    let attempts = Cell::new(0);
+    handshake(4, Duration::ZERO, || {
+        attempts.set(attempts.get() + 1);
+        if attempts.get() < 3 {
+            bail!("socket not bound yet");
+        }
+        Ok(())
+    })
+    .expect("third attempt answers");
+    assert_eq!(attempts.get(), 3);
+}
+
+#[test]
+fn daemon_handshake_gives_up_after_its_attempt_budget() {
+    let attempts = Cell::new(0);
+    let err = handshake(3, Duration::ZERO, || {
+        attempts.set(attempts.get() + 1);
+        bail!("connection refused")
+    })
+    .expect_err("a daemon that never answers is an error");
+    assert_eq!(attempts.get(), 3);
+    assert!(
+        format!("{err:#}").contains("connection refused"),
+        "the last failure is the one reported: {err:#}"
+    );
+}
+
+/// The default `/nix` socket path is what `--store daemon` means, so prep points
+/// it at the tmpfs socket instead of binding a socket there: a symlink has no
+/// binding to lose, and a stale node from an earlier boot is replaced.
+#[test]
+fn default_daemon_socket_path_is_linked_to_the_tmpfs_socket() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let link = tempdir.path().join("nix/var/nix/daemon-socket/socket");
+    let target = tempdir.path().join("run/nix-daemon/socket");
+    fs::create_dir_all(link.parent().expect("link parent")).expect("stale socket dir");
+    fs::write(&link, "stale socket node").expect("stale node");
+
+    link_default_daemon_socket(&link, &target).expect("link replaces the stale node");
+
+    let metadata = fs::symlink_metadata(&link).expect("link exists");
+    assert!(
+        metadata.file_type().is_symlink(),
+        "the default socket path must be a symlink, not a socket node"
+    );
+    assert_eq!(
+        fs::read_link(&link).expect("link target"),
+        target,
+        "the default path must resolve to the tmpfs socket"
+    );
+
+    // idempotent: a second boot repeats it without an error.
+    link_default_daemon_socket(&link, &target).expect("relinking an existing link is fine");
+    assert_eq!(fs::read_link(&link).expect("link target"), target);
 }

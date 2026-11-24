@@ -12,8 +12,22 @@ pub(in crate::guest_init) const SWAP_STATUS_PATH: &str = "/run/cang/swap.status"
 pub(in crate::guest_init) const NIX_STATUS_PATH: &str = "/run/cang/nix-prep.status";
 pub(in crate::guest_init) const NIX_LOG_PATH: &str = "/run/cang/nix-prep.log";
 pub(in crate::guest_init) const NIX_WAIT_TIMEOUT_SECS: u64 = 120;
-pub(in crate::guest_init) const NIX_DAEMON_SOCKET_PATH: &str = "/nix/var/nix/daemon-socket/socket";
-pub(in crate::guest_init) const NIX_REMOTE_URI: &str = "unix:///nix/var/nix/daemon-socket/socket";
+/// The daemon's socket lives on the guest's own tmpfs, never on `/nix`.
+///
+/// `/nix` is a stacked filesystem in every launch - virtio-fs over the host's
+/// composed overlay in the default one, a kernel overlay over the block lower in
+/// a `--workspace-disk` one - and a unix socket bound on such a layer can lose
+/// its path binding: the path then resolves to an inode that is not the one the
+/// daemon bound, so every client fails with `ECONNREFUSED` while the daemon is
+/// still alive and still listening. `/run/cang` has no layer under it.
+pub(in crate::guest_init) const NIX_DAEMON_SOCKET_DIR: &str = "/run/cang/nix-daemon";
+pub(in crate::guest_init) const NIX_DAEMON_SOCKET_PATH: &str = "/run/cang/nix-daemon/socket";
+
+/// One store URL for that socket: `NIX_REMOTE` for clients and the daemon's own
+/// `NIX_DAEMON_SOCKET_PATH` both come from here, so they cannot drift apart.
+pub(in crate::guest_init) fn nix_remote_uri() -> String {
+    format!("unix://{NIX_DAEMON_SOCKET_PATH}")
+}
 pub(in crate::guest_init) const PODMAN_STATUS_PATH: &str = "/run/cang/podman-prep.status";
 pub(in crate::guest_init) const PODMAN_LOG_PATH: &str = "/run/cang/podman-prep.log";
 pub(in crate::guest_init) const PODMAN_WAIT_TIMEOUT_SECS: u64 = 120;

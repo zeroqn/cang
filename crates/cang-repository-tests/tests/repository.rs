@@ -1465,6 +1465,9 @@ fn image_includes_nix_store_reconciler_that_restores_before_deregistering() {
         r#"const STAGED_IMAGE_DB_DIR: &str = "/nix/.cang-image-db";"#,
         "fn install_staged_image_db()",
         r#"for stale in ["daemon-socket", "temproots"]"#,
+        r#"const DAEMON_SOCKET_ENV: &str = "NIX_DAEMON_SOCKET_PATH";"#,
+        "fn verify_daemon_answers(",
+        "fn handshake(",
         r#"vec!["--import-db", PARKED_PREVIOUS_DB, "--purge-only"]"#,
     ] {
         assert!(
@@ -1483,11 +1486,15 @@ fn image_includes_nix_store_reconciler_that_restores_before_deregistering() {
         .find("    repair_store(profiler)?;")
         .expect("prep should reconcile the store");
     let daemon = GUEST_INIT_NIX_ROOT_RS
-        .find("command::spawn_background(\"nix-daemon\", &[\"--daemon\"])")
-        .expect("prep should start the daemon");
+        .find("profiler.measure_result(PROFILE_START_DAEMON, start_daemon)")
+        .expect("prep should start the daemon on the guest's own socket");
+    let check = GUEST_INIT_NIX_ROOT_RS
+        .find("profiler.measure_result(PROFILE_CHECK_DAEMON")
+        .expect("prep should make the daemon answer before the session starts");
     assert!(
-        mount < repair && repair < daemon,
-        "the store must be consistent before the daemon starts"
+        mount < repair && repair < daemon && daemon < check,
+        "the store must be consistent before the daemon starts, and the daemon must answer \
+         over its own protocol before the session does"
     );
 
     for (label, source) in [("README.md", README), ("docs/build.md", BUILD_MD)] {

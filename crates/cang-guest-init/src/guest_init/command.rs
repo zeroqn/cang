@@ -58,9 +58,17 @@ pub(in crate::guest_init) fn output_trimmed(
     Ok((!text.is_empty()).then_some(text))
 }
 
-pub(in crate::guest_init) fn spawn_background(program: &str, args: &[&str]) -> Result<Child> {
-    Command::new(program)
-        .args(args)
+pub(in crate::guest_init) fn spawn_background_with_env(
+    program: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<Child> {
+    let mut command = Command::new(program);
+    command.args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command
         .spawn()
         .with_context(|| format!("failed to spawn {program}"))
 }

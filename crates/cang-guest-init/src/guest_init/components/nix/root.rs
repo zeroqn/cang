@@ -4,11 +4,13 @@ use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::time::Duration;
 
 use crate::guest_init::command;
 use crate::guest_init::components::env::{
-    CangEnv, NIX_LOG_PATH, NIX_STATUS_PATH, NixLowerContract, RUN_DIR,
+    CangEnv, NIX_DAEMON_SOCKET_DIR, NIX_DAEMON_SOCKET_PATH, NIX_LOG_PATH, NIX_STATUS_PATH,
+    NixLowerContract, RUN_DIR, nix_remote_uri,
 };
 use crate::guest_init::components::nix::block_upper;
 use crate::guest_init::components::nix::status::{self, NixPrepState, NixPrepStatus};
@@ -42,6 +44,22 @@ const STAGED_IMAGE_DB: &str = "/nix/.cang-image-db/db.sqlite";
 const LIVE_DB_DIR: &str = "/nix/var/nix/db";
 const PROFILE_CREATE_SOCKET_DIR: &str = "nix-prep:create-socket-dir";
 const PROFILE_START_DAEMON: &str = "nix-prep:start-daemon";
+const PROFILE_CHECK_DAEMON: &str = "nix-prep:check-daemon";
+
+/// The name `nix-daemon` itself reads for its socket path, so the daemon binds
+/// the tmpfs path this contract names instead of `/nix/var/nix/daemon-socket`.
+const DAEMON_SOCKET_ENV: &str = "NIX_DAEMON_SOCKET_PATH";
+/// `nix-daemon`'s own default, and what `--store daemon` means. Prep links it to
+/// the tmpfs socket so both spellings reach the same daemon.
+const DEFAULT_DAEMON_SOCKET_PATH: &str = "/nix/var/nix/daemon-socket/socket";
+/// Upper bound for one handshake attempt. A client that connects to a daemon
+/// which then never answers does not return on its own, and prep must not hang.
+const DAEMON_CHECK_BOUND: &str = "5";
+/// How long prep waits for the daemon to answer over its own protocol: ten
+/// attempts half a second apart, which is far longer than a healthy daemon needs
+/// and still bounds a broken one.
+const DAEMON_CHECK_ATTEMPTS: usize = 10;
+const DAEMON_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 
 const PRESEED_COMPLETION_SENTINEL: &str = ".cang-nix-preseeded";
 const PRESEED_ATTEMPT_MARKER: &str = ".cang-nix-preseed-attempted";
@@ -62,6 +80,7 @@ pub(in crate::guest_init) enum NixOperation {
     MountBlockOverlay,
     CreateSocketDir,
     StartDaemon,
+    CheckDaemon,
     WriteReadyStatus,
 }
 
@@ -76,6 +95,7 @@ pub(in crate::guest_init) fn planned_operations() -> Vec<NixOperation> {
         NixOperation::RepairStore,
         NixOperation::CreateSocketDir,
         NixOperation::StartDaemon,
+        NixOperation::CheckDaemon,
         NixOperation::WriteReadyStatus,
     ]
 }
@@ -87,6 +107,7 @@ pub(in crate::guest_init) fn planned_host_overlay_operations() -> Vec<NixOperati
         NixOperation::RepairStore,
         NixOperation::CreateSocketDir,
         NixOperation::StartDaemon,
+        NixOperation::CheckDaemon,
         NixOperation::WriteReadyStatus,
     ]
 }
@@ -106,6 +127,7 @@ pub(in crate::guest_init) fn planned_block_lower_operations() -> Vec<NixOperatio
         NixOperation::RepairStore,
         NixOperation::CreateSocketDir,
         NixOperation::StartDaemon,
+        NixOperation::CheckDaemon,
         NixOperation::WriteReadyStatus,
     ]
 }
@@ -123,6 +145,7 @@ pub(in crate::guest_init) fn planned_block_lower_profile_labels() -> Vec<&'stati
         PROFILE_REPAIR_STORE,
         PROFILE_CREATE_SOCKET_DIR,
         PROFILE_START_DAEMON,
+        PROFILE_CHECK_DAEMON,
     ]
 }
 
@@ -279,14 +302,7 @@ pub(in crate::guest_init) fn run_prep(
         .context("failed to mount internal overlay at /nix")
     })?;
 
-    repair_store(profiler)?;
-    profiler.measure_result(PROFILE_CREATE_SOCKET_DIR, || {
-        fs::create_dir_all(Path::new("/nix/var/nix/daemon-socket"))
-    })?;
-    let _child = profiler.measure_result(PROFILE_START_DAEMON, || {
-        command::spawn_background("nix-daemon", &["--daemon"]).context("failed to start nix-daemon")
-    })?;
-    Ok(())
+    finish_prep(profiler)
 }
 
 // The merged /nix is an overlay whose upper outlives image generations while its
@@ -586,17 +602,138 @@ fn run_block_prep(
 }
 
 /// What every `/nix` path does once `/nix` is composed: reconcile the store
-/// against its DB, prepare the daemon's socket directory, start it.
+/// against its DB, prepare the daemon's socket directory on the guest's tmpfs,
+/// start the daemon on it, and then make it answer over its own protocol.
 fn finish_prep(profiler: &mut impl ProfileRecorder) -> Result<()> {
     repair_store(profiler)?;
-    profiler.measure_result(PROFILE_CREATE_SOCKET_DIR, || {
-        fs::create_dir_all(Path::new("/nix/var/nix/daemon-socket"))
-            .context("failed to create nix-daemon socket directory on /nix")
-    })?;
-    let _child = profiler.measure_result(PROFILE_START_DAEMON, || {
-        command::spawn_background("nix-daemon", &["--daemon"]).context("failed to start nix-daemon")
-    })?;
+    profiler.measure_result(PROFILE_CREATE_SOCKET_DIR, ensure_daemon_socket_dir)?;
+    let daemon = profiler.measure_result(PROFILE_START_DAEMON, start_daemon)?;
+    profiler.measure_result(PROFILE_CHECK_DAEMON, || verify_daemon_answers(daemon))?;
     Ok(())
+}
+
+fn ensure_daemon_socket_dir() -> Result<()> {
+    fs::create_dir_all(Path::new(NIX_DAEMON_SOCKET_DIR)).with_context(|| {
+        format!("failed to create the nix-daemon socket directory '{NIX_DAEMON_SOCKET_DIR}'")
+    })?;
+    // Clients that spell the store `--store daemon` (or anything built on
+    // `nix-daemon`'s own default) mean the `/nix` path, so that path has to
+    // resolve to the tmpfs socket. A symlink is not a socket and cannot lose a
+    // binding, so it is safe there. Best effort: a `/nix` that refuses the link
+    // only costs clients that spell the store that way.
+    if let Err(err) = link_default_daemon_socket(
+        Path::new(DEFAULT_DAEMON_SOCKET_PATH),
+        Path::new(NIX_DAEMON_SOCKET_PATH),
+    ) {
+        eprintln!(
+            "cang-guest-init: warning: {DEFAULT_DAEMON_SOCKET_PATH} does not resolve to \
+             {NIX_DAEMON_SOCKET_PATH} ({err:#}); clients using `--store daemon` will not \
+             reach the daemon"
+        );
+    }
+    Ok(())
+}
+
+/// Point the default socket path at the tmpfs socket, replacing whatever a
+/// previous boot left there (a socket node this guest no longer uses).
+pub(in crate::guest_init) fn link_default_daemon_socket(link: &Path, target: &Path) -> Result<()> {
+    if let Some(parent) = link.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match std::fs::remove_file(link) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed to replace the stale '{}'", link.display()));
+        }
+    }
+    std::os::unix::fs::symlink(target, link).with_context(|| {
+        format!(
+            "failed to link '{}' to '{}'",
+            link.display(),
+            target.display()
+        )
+    })
+}
+
+fn start_daemon() -> Result<Child> {
+    command::spawn_background_with_env(
+        "nix-daemon",
+        &["--daemon"],
+        &[(DAEMON_SOCKET_ENV, NIX_DAEMON_SOCKET_PATH)],
+    )
+    .context("failed to start nix-daemon")
+}
+
+/// A socket node is not a working daemon.
+///
+/// The session is gated on this prep reaching `ready`, so what "ready" must mean
+/// is that a client asking the daemon over its protocol gets an answer - not that
+/// a socket-shaped inode exists. Failing that, drop the stale node, restart the
+/// daemon once, and check again. A daemon that still does not answer is logged
+/// and the session continues: a broken daemon must not take a session down that
+/// never uses nix, and the next `nix` command reports it either way.
+fn verify_daemon_answers(mut daemon: Child) -> Result<()> {
+    match handshake(DAEMON_CHECK_ATTEMPTS, DAEMON_CHECK_INTERVAL, daemon_answers) {
+        Ok(()) => return Ok(()),
+        Err(err) => eprintln!(
+            "cang-guest-init: nix-daemon did not answer on {NIX_DAEMON_SOCKET_PATH} ({err:#}); \
+             restarting it once"
+        ),
+    }
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+    let _ = std::fs::remove_file(Path::new(NIX_DAEMON_SOCKET_PATH));
+    let _restarted = start_daemon()?;
+    if let Err(err) = handshake(DAEMON_CHECK_ATTEMPTS, DAEMON_CHECK_INTERVAL, daemon_answers) {
+        eprintln!(
+            "cang-guest-init: warning: nix-daemon does not answer on {NIX_DAEMON_SOCKET_PATH} \
+             after a restart ({err:#}); nix commands in this session will fail"
+        );
+    }
+    Ok(())
+}
+
+/// Retry a check that may legitimately fail while the daemon binds its socket,
+/// bounded in attempts so a dead daemon cannot hold prep.
+fn handshake(
+    attempts: usize,
+    interval: Duration,
+    mut answer: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let mut last = anyhow!("no nix-daemon check was attempted");
+    for attempt in 1..=attempts {
+        match answer() {
+            Ok(()) => return Ok(()),
+            Err(err) => last = err,
+        }
+        if attempt < attempts {
+            std::thread::sleep(interval);
+        }
+    }
+    Err(last)
+}
+
+fn daemon_answers() -> Result<()> {
+    let store = nix_remote_uri();
+    match command::output_trimmed(
+        "timeout",
+        &[
+            DAEMON_CHECK_BOUND,
+            "nix",
+            "store",
+            "info",
+            "--store",
+            store.as_str(),
+            "--json",
+        ],
+    )? {
+        Some(_) => Ok(()),
+        None => {
+            bail!("'nix store info --store {store}' did not answer within {DAEMON_CHECK_BOUND}s")
+        }
+    }
 }
 
 fn ensure_host_overlay_nix_is_directory(nix_dir: &Path) -> Result<()> {

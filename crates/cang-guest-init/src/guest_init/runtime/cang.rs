@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::guest_init::components::env::{
     CONTAINERS_STORE_ENV, CangEnv, ContainerStoreBackend, DEFAULT_SHELL, ENTER_AS_ROOT_ENV,
-    NIX_REMOTE_URI,
+    nix_remote_uri,
 };
 
 /// The host names the build disk's label and id together, so one of the two is
@@ -336,7 +336,7 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         if env_contract.cang.nix_overlay {
             // SAFETY: cang guest-init mutates the process environment during
             // single-threaded bootstrap before exec so the shell sees NIX_REMOTE.
-            unsafe { std::env::set_var("NIX_REMOTE", NIX_REMOTE_URI) };
+            unsafe { std::env::set_var("NIX_REMOTE", nix_remote_uri()) };
         }
     });
     profiler.measure_result("start-wayland-proxy", || {

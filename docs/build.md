@@ -422,6 +422,35 @@ The two staged DBs are the guest's half of the job, done in `nix prep` before
 Both steps are idempotent and best effort: a store problem never keeps the VM
 from booting.
 
+### The daemon's socket lives on the guest's tmpfs
+
+`nix-daemon` binds `/run/cang/nix-daemon/socket`, and `cang-guest-init` exports
+that path as the session's `NIX_REMOTE`, not
+`/nix/var/nix/daemon-socket/socket`. `/nix` is a stacked filesystem in every
+launch — virtio-fs over the host's composed overlay by default, a kernel overlay
+over the block lower for a `--workspace-disk` launch — and a unix socket bound on
+one can lose its path binding: the path then resolves to an inode that is not the
+one the daemon bound, so every client fails with `ECONNREFUSED` while the daemon
+is still alive and still listening, and it never recovers in that boot. `/run/cang`
+has no layer under it.
+
+The default path still has to work, because `--store daemon` (and anything built
+on `nix-daemon`'s own default) means `/nix/var/nix/daemon-socket/socket`. Prep
+replaces whatever a previous boot left there with a symlink to the tmpfs socket:
+a symlink is not a socket, so it has no binding to lose, and both spellings reach
+the same daemon.
+
+What "prep is ready" asserts changed with it. It used to be a socket *inode*,
+which a daemon whose binding is gone still satisfies. Prep now asks the daemon
+over its own protocol — `nix store info --store "$NIX_REMOTE" --json`, each
+attempt bounded by `timeout 5` so a daemon that accepts and then never answers
+cannot hold prep — up to ten attempts half a second apart, and on the first answer
+that never comes it drops the socket node, restarts the daemon once, and checks
+again. A daemon that still
+does not answer is logged in `/run/cang/nix-prep.log` (`cang-guest-init:
+warning: nix-daemon does not answer on ...`) and the session continues: a broken
+daemon must not take down a session that never uses nix.
+
 ### Reconciling a drifting store
 
 If the merged DB still names a path the merged store lacks — a store emptied by
