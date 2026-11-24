@@ -64,6 +64,18 @@ fn main() -> Result<()> {
     let _ = std::io::stdout().flush();
 
     let watch = watch::watch_enabled(args.watch, std::env::var(watch::WATCH_ENV).ok().as_deref());
+    // The policy is what decides whether the mount's descriptor count tracks the
+    // host's dcache or only its in-flight requests, so it is named in the log
+    // rather than left to be inferred from a measurement.
+    let config = cang_guest_relay::server::passthrough_config();
+    println!(
+        "relay: inodes stored as {}",
+        if config.inode_file_handles {
+            "file handles"
+        } else {
+            "O_PATH descriptors (no CAP_DAC_READ_SEARCH)"
+        }
+    );
     loop {
         let connection = listener
             .accept()
@@ -72,7 +84,7 @@ fn main() -> Result<()> {
         // the connection that opened its handles, and the host pump opening a new
         // one (after a restart) simply gets a fresh view. The host's own cache
         // timeouts make that invisible (note 62 §10).
-        let server = RelayServer::new(&args.root, fuse_backend_rs::passthrough::Config::default())?;
+        let server = RelayServer::new(&args.root, config.clone())?;
         // Reading and writing are separate handles onto one connection: a
         // notification must be able to go out while the serve loop is blocked
         // reading the next request, so the reader must not hold the writer's

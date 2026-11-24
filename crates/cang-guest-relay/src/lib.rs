@@ -17,7 +17,11 @@
 //! Two protocol facts cost the spike (note 62) most of its debugging time and
 //! are encoded here:
 //!
-//! * `FORGET`/`BATCH_FORGET` carry **no reply**, so nothing may wait for one;
+//! * `FORGET`/`BATCH_FORGET` carry **no reply**, so nothing may wait for one -
+//!   but they must still be dispatched: `PassthroughFs` keeps an `O_PATH`
+//!   descriptor per looked-up inode, and only `forget` drops it (a relay that
+//!   merely forwards the bytes leaks one guest descriptor per path the host
+//!   ever touched, which ends in `EMFILE` on a long-lived mount);
 //! * `FuseDevWriter::commit()` writes to its file descriptor, which
 //!   `READDIRPLUS` does while composing a split reply. The writer is given
 //!   `/dev/null`: the bytes are already aliased into the reply buffer, and the
@@ -32,10 +36,12 @@
 //! `--watch`; off by default).
 //!
 //! The INIT reply advertises `FUSE_BIG_WRITES | FUSE_MAX_PAGES`
-//! (`max_write = 1 MiB`, `max_pages = 256`): `fuse-backend-rs` 0.12.1 caps
-//! `max_write` at 4 KiB unless the *filesystem* asks for those flags, which
-//! `PassthroughFs::init` never did, so a 4 MiB write was 1 024 frames at
-//! ~10 MB/s (note 63).
+//! (`max_write = 1 MiB`, `max_pages = 256`). `fuse-backend-rs` composes that
+//! reply from what the *filesystem driver* asks for, and its `passthrough`
+//! driver asks for neither flag, so the reply would cap `max_write` at 4 KiB and
+//! a 4 MiB write would be 1 024 frames at ~10 MB/s (note 63). The relay states
+//! those limits on the reply it forwards ([`server::advertise_big_writes`]),
+//! which is the same negotiation without a patch to a third-party tree.
 
 pub mod inval;
 pub mod nodeids;

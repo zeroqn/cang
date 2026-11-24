@@ -140,6 +140,15 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     })?;
     debug_breadcrumb("validate-prepared-root complete");
     profiler.measure_result("ensure-tmp-tmpfs", ensure_tmp_tmpfs_mounted)?;
+    // Before anything long-lived is started, and not merely before the shell:
+    // libkrun's init leaves this process with the descriptor limits it inherited
+    // (soft 1024, hard 4096 in the guest), and every child it spawns keeps them.
+    // The workspace relay opens one `O_PATH` descriptor per inode the host's
+    // kernel looks up, so at 4096 it failed `EMFILE` after ~1 000 paths of a
+    // `git status` - and the nix and Podman prep workers open far more than the
+    // old value allows for their own work. Raising the ceiling here is what puts
+    // every later child on it, the exec'd shell included.
+    profiler.measure_result("ensure-nofile-floor", process::ensure_nofile_floor)?;
     profiler.measure_result("ensure-user-namespaces", || {
         // Synchronously, before the command is exec'd: the compatibility
         // wrappers around `rustc`/`rust-analyzer` run their tool under `bwrap`,
@@ -337,7 +346,6 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
             &identity,
         )
     })?;
-    profiler.measure_result("ensure-nofile-floor", process::ensure_nofile_floor)?;
     let swap_gate = profiler.measure_result("start-guest-swap", || {
         // Guest swap is optional by design: it never fails the session, it only
         // decides whether memory pressure degrades or kills the workload.

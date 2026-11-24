@@ -34,6 +34,28 @@ stderr (captured in the task's `helper.stderr.log`) when a process crosses
 50/75/90% of its soft `RLIMIT_NOFILE` or grows by 256 descriptors between
 samples, so pressure is visible before a command fails with `EMFILE`.
 
+The workspace relay's own descriptor population is what the ceiling has to
+cover, and that depends on one passthrough setting. By default an inode table
+entry holds an `O_PATH` descriptor, which only the *host's* kernel releases
+(forget), so the count tracks the host's dentry cache: a 10 000-path `git
+status` held 10 184 guest descriptors. `cang-guest-relay` asks for file handles
+instead whenever it has `CAP_DAC_READ_SEARCH` (it does as guest root), which
+replaces them with one shared descriptor per mount plus a per-request open -
+measured flat at 37 descriptors across the same walk, for +4.6 us per walked
+entry (find 167 -> 214 ms, git status 224 -> 274 ms on a 10 k-file tree). An
+unprivileged relay, or a served filesystem that cannot produce a handle for an
+inode, keeps the descriptor for that inode. Each task's own log names the policy
+(`relay: inodes stored as file handles` or `... O_PATH descriptors`).
+
+The floor is applied at the **start** of guest bootstrap, before the workspace
+relay and the nix/Podman prep workers are started, because every child inherits
+it: libkrun's init leaves the bootstrap process with the limits it inherited
+(soft 1024, hard 4096 in the guest). The relay opens one `O_PATH` descriptor per
+inode the host's kernel has looked up, so at the inherited hard limit it failed
+`EMFILE` after roughly 1 000 paths of a host walk (`git status` in a large repo,
+a browser tree), and the symptom appears on the host as
+`Too many open files`.
+
 ## Startup and lifecycle profiling
 
 For timing diagnostics, `cang --profile` emits `cang host profile` and

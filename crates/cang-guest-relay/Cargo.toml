@@ -13,11 +13,15 @@ anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true
 rustfs-mimalloc.workspace = true
-# The guest half of the reverse share, from crates.io 0.12.1 with the two INIT
-# flags this relay needs added (`vendor/`, `vendor/bigwrites.patch`). The
-# workspace `[patch.crates-io]` entry is what makes the vendored copy the one
-# that is compiled.
-fuse-backend-rs = { version = "0.12.1", default-features = false, features = ["fusedev"] }
+# The guest half of the reverse share, straight from upstream rather than the
+# crates.io release cang used to vendor: the git tree carries the `async-io`
+# path (and the `fusedev-uring` transport) the registered 0.12.1 does not, and
+# pinning a revision keeps the source reproducible while that work is
+# unreleased. `rev` is the whole pin - bumping it is the only way the guest
+# relay's FUSE implementation moves.
+fuse-backend-rs = { git = "https://github.com/cloud-hypervisor/fuse-backend-rs", rev = "506952b947cf4346d68550ebead4d244e2ad4a15", default-features = false, features = [
+  "fusedev",
+] }
 
 [dev-dependencies]
 tempfile.workspace = true
