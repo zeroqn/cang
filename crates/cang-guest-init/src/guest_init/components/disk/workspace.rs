@@ -82,6 +82,14 @@ fn ensure_ready_with(
         ops.resize_max(mount)
             .context("failed to grow the workspace btrfs filesystem to the disk's size")?;
     }
+    // The guest process's cwd was set to `/workspace` before this process started
+    // (the init chdirs to the launch's workdir), when the path was still an empty
+    // rootfs directory. Mounting the disk covers that directory, and a command
+    // that inherited the old cwd would read the covered one: an empty
+    // `/workspace` that is not the tree, even though `pwd` prints the same path.
+    // Entering the mount point again is what puts the command in the tree.
+    ops.enter_mount(mount)
+        .context("failed to enter the mounted workspace tree")?;
     ops.chown(mount, identity.uid, identity.gid)?;
 
     let cargo_home = Path::new(CARGO_HOME_DIR);
@@ -228,6 +236,9 @@ trait WorkspaceDiskOps {
     fn seed_cargo_home(&self, from: &Path, to: &Path) -> Result<()>;
     /// Expand the filesystem to the disk's current device size.
     fn resize_max(&self, mount: &Path) -> Result<()>;
+    /// Make this process's cwd the mounted tree, so the command it `exec`s (or
+    /// forks) runs in the tree rather than in the directory the mount covers.
+    fn enter_mount(&self, mount: &Path) -> Result<()>;
     /// Record what the mounted tree has free, for the host's next auto-grow.
     fn record_free_bytes(&self, mount: &Path, uid: u32, gid: u32) -> Result<()>;
 }
@@ -284,6 +295,10 @@ impl WorkspaceDiskOps for SystemWorkspaceDiskOps {
 
     fn resize_max(&self, mount: &Path) -> Result<()> {
         crate::guest_init::command::run("btrfs", &["filesystem", "resize", "max", path_str(mount)?])
+    }
+
+    fn enter_mount(&self, mount: &Path) -> Result<()> {
+        Ok(std::env::set_current_dir(mount)?)
     }
 
     fn record_free_bytes(&self, mount: &Path, uid: u32, gid: u32) -> Result<()> {
@@ -424,6 +439,13 @@ mod tests {
             Ok(())
         }
 
+        fn enter_mount(&self, mount: &Path) -> Result<()> {
+            self.operations
+                .borrow_mut()
+                .push(format!("chdir:{}", mount.display()));
+            Ok(())
+        }
+
         fn record_free_bytes(&self, mount: &Path, _uid: u32, _gid: u32) -> Result<()> {
             self.operations
                 .borrow_mut()
@@ -446,6 +468,7 @@ mod tests {
                 "findmnt:/workspace",
                 "mount:/dev/vdb:/workspace",
                 "resize-max:/workspace",
+                "chdir:/workspace",
                 "chown:/workspace:1000:1001",
                 "mkdir:/workspace/cargo",
                 "chown:/workspace/cargo:1000:1001",
@@ -512,6 +535,40 @@ mod tests {
                 .iter()
                 .any(|op| op == "bind:/workspace/cargo:/home/dev/.cargo")
         );
+    }
+
+    /// The mount covers the directory the guest's cwd was set to before this
+    /// process started, so entering the tree is a step of its own - and it happens
+    /// whether this mount did the mounting or found it already mounted.
+    #[test]
+    fn the_command_enters_the_mounted_tree_rather_than_the_covered_directory() {
+        for already_mounted in [false, true] {
+            let ops = FakeWorkspaceDiskOps::new();
+            if already_mounted {
+                ops.mounted.borrow_mut().push(MOUNT_POINT.to_owned());
+            }
+            ensure_ready_with(&contract(), &identity(), &ops).expect("should mount");
+
+            let operations = ops.operations.borrow();
+            assert_eq!(
+                operations
+                    .iter()
+                    .filter(|op| op.as_str() == "chdir:/workspace")
+                    .count(),
+                1,
+                "{operations:?}"
+            );
+            let enter = operations
+                .iter()
+                .position(|op| op == "chdir:/workspace")
+                .expect("the tree is entered");
+            if let Some(mount) = operations
+                .iter()
+                .position(|op| op == "mount:/dev/vdb:/workspace")
+            {
+                assert!(mount < enter, "the mount comes first: {operations:?}");
+            }
+        }
     }
 
     /// The marker is one line the host parses, and it carries the tree's real

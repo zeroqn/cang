@@ -188,7 +188,11 @@ space, not about the flag - and no `cang disk` subcommand deletes an image:
 The guest mounts the disk at `/workspace`, and everything a build writes stays
 there: sources, cargo's own `./target`, and the cargo home, which lives in the
 tree as `cargo/` and is bound at `~/.cargo` (seeded once from the registry the
-launch mounted there, then kept on the disk). Three consequences:
+launch mounted there, then kept on the disk). The command runs in that tree too:
+a shell starts on the mounted btrfs root, not on the empty rootfs directory the
+mount covers (`pwd` says `/workspace` either way, so `.` and `/workspace` are the
+same tree only because the guest enters the mount once it is up). Three
+consequences:
 
 - the host-directory `/workspace` bind mount and the `~/.cargo` mount are dropped
   for such a launch, so the guest's tree is the only copy: an interactive launch

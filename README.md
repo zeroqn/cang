@@ -471,7 +471,9 @@ matching the task-volume contract.
 
 `--workspace-disk PATH` takes `/workspace` off the share: the tree becomes a
 btrfs filesystem on a raw image (created on first use at `--workspace-size`,
-default `64G`) or a block device, which the guest mounts itself. A bare
+default `64G`) or a block device, which the guest mounts itself and runs the
+command in: the shell's working directory is the mounted btrfs root, so `.` is
+the tree rather than the empty rootfs directory the mount covers. A bare
 positional argument is that same setting, so `cang ./work.raw` is `cang
 --workspace-disk ./work.raw`. Sources,
 cargo's own `./target`, the cargo home and the writable `/nix` upper all live
