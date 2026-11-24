@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 pub(in crate::guest_init::runtime) const ATTACH_PROFILE_ENV: &str = "CANG_ATTACH_PROFILE";
@@ -15,6 +16,68 @@ pub(in crate::guest_init::runtime) fn env_value_enabled(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on" | "summary"
     )
+}
+
+/// Per-read accounting a dedicated PTY reader thread accumulates on its own.
+///
+/// The attached session reads the master on a reader thread, so the counters
+/// cannot live in the session-owned profiler; they are folded back into it with
+/// [`GuestAttachProfiler::merge_pty_reader`] when the session ends.
+#[derive(Debug, Default)]
+pub(in crate::guest_init::runtime) struct PtyReaderStats {
+    reads: AtomicU64,
+    bytes: AtomicU64,
+    read_max_bytes: AtomicU64,
+    read_total_nanos: AtomicU64,
+    read_max_nanos: AtomicU64,
+    saturated: AtomicU64,
+}
+
+/// A plain copy of [`PtyReaderStats`] for the single-threaded report.
+#[derive(Debug, Clone, Copy, Default)]
+pub(in crate::guest_init::runtime) struct PtyReaderSnapshot {
+    pub(in crate::guest_init::runtime) reads: u64,
+    pub(in crate::guest_init::runtime) bytes: u64,
+    pub(in crate::guest_init::runtime) read_max_bytes: usize,
+    pub(in crate::guest_init::runtime) read_total: Duration,
+    pub(in crate::guest_init::runtime) read_max: Duration,
+    pub(in crate::guest_init::runtime) saturated: u64,
+}
+
+impl PtyReaderStats {
+    pub(in crate::guest_init::runtime) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(in crate::guest_init::runtime) fn record_read(
+        &self,
+        bytes: usize,
+        duration: Duration,
+        buffer_size: usize,
+    ) {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        self.bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+        if bytes == buffer_size {
+            self.saturated.fetch_add(1, Ordering::Relaxed);
+        }
+        self.read_total_nanos
+            .fetch_add(duration.as_nanos() as u64, Ordering::Relaxed);
+        let nanos = duration.as_nanos() as u64;
+        self.read_max_nanos.fetch_max(nanos, Ordering::Relaxed);
+        self.read_max_bytes
+            .fetch_max(bytes as u64, Ordering::Relaxed);
+    }
+
+    pub(in crate::guest_init::runtime) fn snapshot(&self) -> PtyReaderSnapshot {
+        PtyReaderSnapshot {
+            reads: self.reads.load(Ordering::Relaxed),
+            bytes: self.bytes.load(Ordering::Relaxed),
+            read_max_bytes: self.read_max_bytes.load(Ordering::Relaxed) as usize,
+            read_total: Duration::from_nanos(self.read_total_nanos.load(Ordering::Relaxed)),
+            read_max: Duration::from_nanos(self.read_max_nanos.load(Ordering::Relaxed)),
+            saturated: self.saturated.load(Ordering::Relaxed),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -60,23 +123,22 @@ impl GuestAttachProfiler {
         }
     }
 
-    pub(in crate::guest_init::runtime) fn record_pty_read(
+    /// Fold the reader thread's counters into the per-read profile fields.
+    pub(in crate::guest_init::runtime) fn merge_pty_reader(
         &mut self,
-        bytes: usize,
-        duration: Duration,
-        buffer_size: usize,
+        snapshot: &PtyReaderSnapshot,
     ) {
         if !self.enabled {
             return;
         }
-        self.pty_reads += 1;
-        self.pty_bytes = self.pty_bytes.saturating_add(bytes as u64);
-        self.pty_read_max_bytes = self.pty_read_max_bytes.max(bytes);
-        if bytes == buffer_size {
-            self.pty_read_saturated_count += 1;
-        }
-        self.pty_read_total += duration;
-        self.pty_read_max = self.pty_read_max.max(duration);
+        self.pty_reads = self.pty_reads.saturating_add(snapshot.reads);
+        self.pty_bytes = self.pty_bytes.saturating_add(snapshot.bytes);
+        self.pty_read_saturated_count = self
+            .pty_read_saturated_count
+            .saturating_add(snapshot.saturated);
+        self.pty_read_max_bytes = self.pty_read_max_bytes.max(snapshot.read_max_bytes);
+        self.pty_read_total += snapshot.read_total;
+        self.pty_read_max = self.pty_read_max.max(snapshot.read_max);
     }
 
     pub(in crate::guest_init::runtime) fn record_pty_drain(
@@ -207,7 +269,9 @@ mod tests {
     fn guest_attach_profile_summary_has_required_fields() {
         let mut profiler = GuestAttachProfiler::new(true);
         profiler.record_pty_readable();
-        profiler.record_pty_read(16, Duration::from_micros(3), 16);
+        let reader_stats = PtyReaderStats::new();
+        reader_stats.record_read(16, Duration::from_micros(3), 16);
+        profiler.merge_pty_reader(&reader_stats.snapshot());
         profiler.record_pty_drain(3, true, false);
         profiler.record_pty_drain(2, false, true);
         profiler.record_terminal_processing(Duration::from_micros(2), Duration::from_micros(3));

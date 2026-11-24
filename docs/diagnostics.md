@@ -122,14 +122,16 @@ guest summary includes PTY readable events, PTY read sizes, full-buffer read
 count, attached-drain/coalescing counters, terminal normalize/parser time, and
 guest frame-write time. Guest summaries keep the compatibility
 `normalize_parse_total_us` and `normalize_parse_max_us` fields as combined
-terminal-processing timings for each forwarded burst. After attached-drain
-coalescing, one forwarded burst can contain multiple PTY reads, so these fields
-are no longer necessarily one original PTY read. Split `normalize_*` and
-`parser_*` fields use the same forwarded-burst basis for latency analysis.
-Nonzero `pty_drain_coalesced_*` counters show that immediately available PTY
-reads were combined before forwarding; `WouldBlock` is the expected normal
-attached-drain exit, and `pty_drain_bound_hit_count` shows when the conservative
-drain caps stopped a burst. Attaching to an already-running managed task
+terminal-processing timings for each forwarded burst. A dedicated reader thread
+owns the PTY master and reads it continuously, and the session loop coalesces
+whatever that thread has already queued into one forwarded frame, so a burst can
+contain several PTY reads; split `normalize_*` and `parser_*` fields use the same
+forwarded-burst basis. `pty_read_*` counters and timings come from the reader
+thread and are merged into the summary when the session ends.
+`pty_drain_events` counts coalesce rounds, `pty_drain_coalesced_*` show rounds
+that merged several queued reads, `pty_drain_would_block_count` is the normal
+round exit (nothing else was queued), and `pty_drain_bound_hit_count` counts
+rounds stopped by the 256 KiB coalesce bound. Attaching to an already-running managed task
 profiles the host attach path immediately, but guest-side attach metrics are
 available only if that task was originally launched with `CANG_ATTACH_PROFILE=1`.
 

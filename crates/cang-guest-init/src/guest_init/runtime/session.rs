@@ -27,8 +27,13 @@ use crate::guest_init::process;
 const IO_BUF_SIZE: usize = 16 * 1024;
 const POLL_TIMEOUT_MS: i32 = 100;
 const PTY_INPUT_WRITE_POLL_TIMEOUT_MS: i32 = 10;
-const ATTACHED_PTY_DRAIN_MAX_READS: usize = 4;
-const ATTACHED_PTY_DRAIN_MAX_BYTES: usize = 64 * 1024;
+/// How many read chunks the attached PTY reader thread may queue ahead of the
+/// session loop. Deep enough that the loop's normalize, parse and frame-write
+/// work overlaps the next read instead of leaving the master idle, shallow
+/// enough that a resize or detach never waits behind a large backlog.
+const ATTACHED_PTY_READER_QUEUE_DEPTH: usize = 4;
+/// How much queued output the session loop coalesces into one attach frame.
+const ATTACHED_PTY_COALESCE_MAX_BYTES: usize = 256 * 1024;
 
 /// How long the final drain keeps waiting for the line discipline to hand over
 /// the last bytes of a child's output before the `Exit` frame goes out.
@@ -39,7 +44,6 @@ const ATTACHED_PTY_DRAIN_MAX_BYTES: usize = 64 * 1024;
 /// a child's final line routinely arrives in a read of its own, and ending the
 /// drain there would let the `Exit` frame precede it and drop that line's ending.
 const FINAL_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
-const ATTACHED_PTY_DRAIN_MAX_ELAPSED: Duration = Duration::from_millis(1);
 const DEFAULT_TERMINAL_ROWS: u16 = 24;
 const DEFAULT_TERMINAL_COLS: u16 = 80;
 const MIN_TERMINAL_STATE_ROWS: u16 = 2;
@@ -889,9 +893,10 @@ fn serve_attached_client(
         Ok(())
     });
 
-    let mut pty_reader = duplicate_file(master)?;
-    let mut buf = [0u8; IO_BUF_SIZE];
-    let drain_limits = AttachedPtyDrainLimits::default();
+    let reader_stats = Arc::new(attach_profile::PtyReaderStats::new());
+    let (chunk_sender, chunk_receiver) = mpsc::sync_channel(ATTACHED_PTY_READER_QUEUE_DEPTH);
+    let reader =
+        AttachedPtyReader::spawn(duplicate_file(master)?, chunk_sender, reader_stats.clone())?;
     let fd_env = fdwatch::ProcFdEnv;
     let mut fd_watch = fdwatch::FdWatch::new(fdwatch::DEFAULT_WATCH_INTERVAL);
     while active.load(Ordering::SeqCst) {
@@ -899,34 +904,58 @@ fn serve_attached_client(
             fdwatch::record_and_warn(&tick);
         }
         apply_pending_resizes(&resize_rx, terminal_state);
+
+        let first_chunk =
+            match chunk_receiver.recv_timeout(Duration::from_millis(POLL_TIMEOUT_MS as u64)) {
+                Ok(chunk) => {
+                    profiler.record_pty_readable();
+                    Some(chunk)
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => Some(AttachedPtyChunk::Eof),
+            };
+        let batch = coalesce_attached_pty_output(
+            &chunk_receiver,
+            first_chunk,
+            ATTACHED_PTY_COALESCE_MAX_BYTES,
+        );
+        let drained = batch.chunks > 0;
+        if drained {
+            profiler.record_pty_drain(
+                batch.chunks,
+                batch.stop == AttachedPtyCoalesceStop::Empty,
+                batch.stop == AttachedPtyCoalesceStop::ByteBound,
+            );
+        }
+
         if let Some(code) = reap_child(child)? {
-            forward_final_attached_pty_output(
-                &mut pty_reader,
-                &mut buf,
+            forward_attached_pty_batch(
+                &batch,
                 &mut client,
                 terminal_state,
                 &mut profiler,
                 pty_forwarding_mode,
-            )?;
+            );
+            final_drain_attached_pty_output(
+                &chunk_receiver,
+                &mut client,
+                terminal_state,
+                &mut profiler,
+                pty_forwarding_mode,
+            );
             let _ = write_frame(&mut client, &Frame::Exit { code });
-            let _ = profiler.report_to(&mut std::io::stderr().lock());
+            finish_attach_profile(&mut profiler, &reader_stats);
             stop_client_input(&active, client.as_raw_fd(), input_thread);
+            reader.shutdown(chunk_receiver);
             return Ok(ClientResult::ChildExited(code));
         }
-        let mut fds = [
-            libc::pollfd {
-                fd: pty_reader.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: listener.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        let rc =
-            unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, POLL_TIMEOUT_MS) };
+
+        let mut listener_fds = [libc::pollfd {
+            fd: listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        }];
+        let rc = unsafe { libc::poll(listener_fds.as_mut_ptr(), 1, 0) };
         if rc < 0 {
             let err = std::io::Error::last_os_error();
             if err.kind() == std::io::ErrorKind::Interrupted {
@@ -934,56 +963,44 @@ fn serve_attached_client(
             }
             return Err(err).context("managed session client poll failed");
         }
-        if fds[1].revents & libc::POLLIN != 0
+        if rc > 0
+            && listener_fds[0].revents & libc::POLLIN != 0
             && let Ok(mut extra_client) = listener.accept()
         {
             let _ = write_frame(&mut extra_client, &Frame::Busy);
             if forced_takeover_requested(&mut extra_client)? {
                 trace_event_from_env("guest", "force-attach", "direction=host-to-guest-takeover");
                 let _ = write_frame(&mut client, &Frame::Detach);
+                forward_attached_pty_batch(
+                    &batch,
+                    &mut client,
+                    terminal_state,
+                    &mut profiler,
+                    pty_forwarding_mode,
+                );
                 apply_pending_resizes(&resize_rx, terminal_state);
-                let _ = profiler.report_to(&mut std::io::stderr().lock());
+                finish_attach_profile(&mut profiler, &reader_stats);
                 stop_client_input(&active, client.as_raw_fd(), input_thread);
+                reader.shutdown(chunk_receiver);
                 return Ok(ClientResult::Takeover(extra_client));
             }
         }
-        if fds[0].revents & libc::POLLIN == 0 {
-            continue;
-        }
-        profiler.record_pty_readable();
-        let burst = read_attached_pty_burst_with_restored_blocking(
-            &mut pty_reader,
-            &mut buf,
-            &mut profiler,
-            drain_limits,
-        )?;
-        if burst.bytes.is_empty() {
-            trace_event_from_env(
-                "guest",
-                "pty_burst",
-                &format!(
-                    "direction=pty-to-guest-init bytes=0 reads={} stop={}",
-                    burst.reads,
-                    burst.stop_reason.as_trace_value()
-                ),
-            );
-            if burst.stop_reason == AttachedPtyDrainStop::Eof {
-                thread::sleep(Duration::from_millis(10));
-            }
+
+        if !drained {
             continue;
         }
         trace_event_from_env(
             "guest",
             "pty_burst",
             &format!(
-                "direction=pty-to-guest-init bytes={} reads={} stop={}",
-                burst.bytes.len(),
-                burst.reads,
-                burst.stop_reason.as_trace_value()
+                "direction=pty-to-guest-init bytes={} chunks={} stop={}",
+                batch.bytes.len(),
+                batch.chunks,
+                batch.stop.as_trace_value()
             ),
         );
         if !forward_and_record_pty_output(
-            &burst.bytes,
+            &batch.bytes,
             &mut client,
             terminal_state,
             &mut profiler,
@@ -998,136 +1015,276 @@ fn serve_attached_client(
     Ok(ClientResult::Detached)
 }
 
-#[derive(Debug, Clone, Copy)]
-struct AttachedPtyDrainLimits {
-    max_reads: usize,
-    max_bytes: usize,
-    max_elapsed: Duration,
-}
-
-impl Default for AttachedPtyDrainLimits {
-    fn default() -> Self {
-        Self {
-            max_reads: ATTACHED_PTY_DRAIN_MAX_READS,
-            max_bytes: ATTACHED_PTY_DRAIN_MAX_BYTES,
-            max_elapsed: ATTACHED_PTY_DRAIN_MAX_ELAPSED,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AttachedPtyDrainStop {
-    WouldBlock,
-    ReadBound,
-    ByteBound,
-    ElapsedBound,
-    Eof,
-}
-
-impl AttachedPtyDrainStop {
-    fn as_trace_value(self) -> &'static str {
-        match self {
-            Self::WouldBlock => "would_block",
-            Self::ReadBound => "read_bound",
-            Self::ByteBound => "byte_bound",
-            Self::ElapsedBound => "elapsed_bound",
-            Self::Eof => "eof",
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct AttachedPtyBurst {
-    bytes: Vec<u8>,
-    reads: usize,
-    stop_reason: AttachedPtyDrainStop,
-}
-
-fn read_attached_pty_burst_with_restored_blocking(
-    reader: &mut File,
-    buf: &mut [u8; IO_BUF_SIZE],
-    profiler: &mut GuestAttachProfiler,
-    limits: AttachedPtyDrainLimits,
-) -> Result<AttachedPtyBurst> {
-    set_nonblocking(reader.as_raw_fd(), true)?;
-    let drain_result = read_attached_pty_burst(reader, buf, profiler, limits);
-    let restore_result = set_nonblocking(reader.as_raw_fd(), false);
-    match (drain_result, restore_result) {
-        (Ok(burst), Ok(())) => Ok(burst),
-        (Err(err), Ok(())) => Err(err),
-        (Ok(_), Err(err)) => Err(err).context("failed to restore attached PTY blocking mode"),
-        (Err(drain_err), Err(restore_err)) => Err(drain_err).with_context(|| {
-            format!("also failed to restore attached PTY blocking mode: {restore_err:#}")
-        }),
-    }
-}
-
-fn read_attached_pty_burst<R>(
-    reader: &mut R,
-    buf: &mut [u8; IO_BUF_SIZE],
-    profiler: &mut GuestAttachProfiler,
-    limits: AttachedPtyDrainLimits,
-) -> Result<AttachedPtyBurst>
-where
-    R: Read,
-{
-    let started = Instant::now();
-    let mut bytes = Vec::new();
-    let mut reads = 0;
-    let stop_reason = loop {
-        if reads >= limits.max_reads {
-            break AttachedPtyDrainStop::ReadBound;
-        }
-        if bytes.len() >= limits.max_bytes {
-            break AttachedPtyDrainStop::ByteBound;
-        }
-        let remaining = limits.max_bytes - bytes.len();
-        let read_len = buf.len().min(remaining);
-        let read_started = Instant::now();
-        match reader.read(&mut buf[..read_len]) {
-            Ok(0) => break AttachedPtyDrainStop::Eof,
-            Ok(n) => {
-                profiler.record_pty_read(n, read_started.elapsed(), IO_BUF_SIZE);
-                reads += 1;
-                bytes.extend_from_slice(&buf[..n]);
-                if reads >= limits.max_reads {
-                    break AttachedPtyDrainStop::ReadBound;
-                }
-                if bytes.len() >= limits.max_bytes {
-                    break AttachedPtyDrainStop::ByteBound;
-                }
-                if started.elapsed() >= limits.max_elapsed {
-                    break AttachedPtyDrainStop::ElapsedBound;
-                }
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                break AttachedPtyDrainStop::WouldBlock;
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(err) => return Err(err).context("failed to drain attached PTY output"),
-        }
-    };
-    profiler.record_pty_drain(
-        reads,
-        stop_reason == AttachedPtyDrainStop::WouldBlock,
-        matches!(
-            stop_reason,
-            AttachedPtyDrainStop::ReadBound
-                | AttachedPtyDrainStop::ByteBound
-                | AttachedPtyDrainStop::ElapsedBound
-        ),
-    );
-    Ok(AttachedPtyBurst {
-        bytes,
-        reads,
-        stop_reason,
-    })
-}
-
+/// PTY output that has been normalized and written to the attach client.
 struct ForwardedPtyOutput {
     parser_bytes: Vec<u8>,
     write_succeeded: bool,
     normalize_elapsed: Duration,
+}
+
+/// One chunk of PTY output handed from the reader thread to the session loop.
+#[derive(Debug)]
+enum AttachedPtyChunk {
+    Data(Vec<u8>),
+    Eof,
+    /// The reader could not continue; the reason is recorded as a trace event.
+    Failed,
+}
+
+/// Why the session loop stopped coalescing queued output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachedPtyCoalesceStop {
+    /// Nothing more was queued at that instant.
+    Empty,
+    /// The coalesce byte bound was reached; more output may still be queued.
+    ByteBound,
+    /// The reader thread reported the end of the PTY stream.
+    Ended,
+}
+
+impl AttachedPtyCoalesceStop {
+    fn as_trace_value(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::ByteBound => "byte_bound",
+            Self::Ended => "ended",
+        }
+    }
+}
+
+/// Output coalesced into one attach frame.
+#[derive(Debug)]
+struct AttachedPtyBatch {
+    bytes: Vec<u8>,
+    chunks: usize,
+    stop: AttachedPtyCoalesceStop,
+}
+
+/// A thread parked in `read(2)` on the PTY master, plus the pipe that stops it.
+///
+/// The session loop used to drain at most a few reads itself and then normalize,
+/// parse and write one frame before reading again, which left the master idle
+/// between reads. A reader thread that does nothing but read keeps the tty
+/// drained - a plain `script(1)` loop reads the same kernel PTY at several
+/// hundred MB/s - so the loop's per-byte work overlaps the next read instead of
+/// stalling it.
+struct AttachedPtyReader {
+    stop: Option<File>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl AttachedPtyReader {
+    fn spawn(
+        master: File,
+        chunks: mpsc::SyncSender<AttachedPtyChunk>,
+        stats: Arc<attach_profile::PtyReaderStats>,
+    ) -> Result<Self> {
+        let mut fds = [0; 2];
+        // SAFETY: `pipe2` fills two descriptor numbers that this call then owns.
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to create attached PTY reader stop pipe");
+        }
+        let stop_read = unsafe { File::from_raw_fd(fds[0]) };
+        let stop_write = unsafe { File::from_raw_fd(fds[1]) };
+        let handle = thread::Builder::new()
+            .name("cang-pty-reader".to_owned())
+            .spawn(move || attached_pty_reader_loop(master, stop_read, chunks, stats))
+            .context("failed to spawn attached PTY reader")?;
+        Ok(Self {
+            stop: Some(stop_write),
+            handle: Some(handle),
+        })
+    }
+
+    /// Stop the reader and wait for it.
+    ///
+    /// The queue is dropped first because the reader can be parked in
+    /// `Sender::send` when the session ends with a full queue, and only a
+    /// disconnected receiver wakes that; the stop pipe covers the case where it
+    /// is parked in `poll`.
+    fn shutdown(mut self, chunks: mpsc::Receiver<AttachedPtyChunk>) {
+        drop(chunks);
+        drop(self.stop.take());
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn attached_pty_reader_loop(
+    mut master: File,
+    stop: File,
+    chunks: mpsc::SyncSender<AttachedPtyChunk>,
+    stats: Arc<attach_profile::PtyReaderStats>,
+) {
+    let mut buf = [0u8; IO_BUF_SIZE];
+    loop {
+        let mut fds = [
+            libc::pollfd {
+                fd: master.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: stop.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+        if rc < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            trace_event_from_env("guest", "pty_reader_failed", &format!("reason={err}"));
+            let _ = chunks.send(AttachedPtyChunk::Failed);
+            return;
+        }
+        // The stop pipe is the only reason the session drops its write end, so
+        // any event on it means this reader is no longer wanted.
+        if fds[1].revents != 0 {
+            return;
+        }
+        if fds[0].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
+            continue;
+        }
+        let read_started = Instant::now();
+        match master.read(&mut buf) {
+            Ok(0) => {
+                let _ = chunks.send(AttachedPtyChunk::Eof);
+                return;
+            }
+            Ok(n) => {
+                stats.record_read(n, read_started.elapsed(), IO_BUF_SIZE);
+                if chunks
+                    .send(AttachedPtyChunk::Data(buf[..n].to_vec()))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            // A master whose slave side closed reports `EIO` in place of EOF.
+            Err(err) if err.raw_os_error() == Some(libc::EIO) => {
+                let _ = chunks.send(AttachedPtyChunk::Eof);
+                return;
+            }
+            Err(err) => {
+                trace_event_from_env("guest", "pty_reader_failed", &format!("reason={err}"));
+                let _ = chunks.send(AttachedPtyChunk::Failed);
+                return;
+            }
+        }
+    }
+}
+
+/// Coalesce whatever the reader thread has already queued into one frame.
+fn coalesce_attached_pty_output(
+    chunks: &mpsc::Receiver<AttachedPtyChunk>,
+    first: Option<AttachedPtyChunk>,
+    max_bytes: usize,
+) -> AttachedPtyBatch {
+    let mut bytes = Vec::new();
+    let mut coalesced = 0;
+    let mut stop = AttachedPtyCoalesceStop::Empty;
+    let mut pending = first;
+    loop {
+        let chunk = match pending.take() {
+            Some(chunk) => chunk,
+            None => match chunks.try_recv() {
+                Ok(chunk) => chunk,
+                // An empty queue ends one coalesce round; a disconnected one
+                // means the reader is gone and the child's last bytes are queued.
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    stop = AttachedPtyCoalesceStop::Ended;
+                    break;
+                }
+            },
+        };
+        match chunk {
+            AttachedPtyChunk::Data(data) => {
+                coalesced += 1;
+                bytes.extend_from_slice(&data);
+                if bytes.len() >= max_bytes {
+                    stop = AttachedPtyCoalesceStop::ByteBound;
+                    break;
+                }
+            }
+            AttachedPtyChunk::Eof | AttachedPtyChunk::Failed => {
+                stop = AttachedPtyCoalesceStop::Ended;
+                break;
+            }
+        }
+    }
+    AttachedPtyBatch {
+        bytes,
+        chunks: coalesced,
+        stop,
+    }
+}
+
+fn forward_attached_pty_batch(
+    batch: &AttachedPtyBatch,
+    client: &mut File,
+    terminal_state: &mut TerminalState,
+    profiler: &mut GuestAttachProfiler,
+    mode: PtyForwardingMode,
+) {
+    if batch.bytes.is_empty() {
+        return;
+    }
+    let _ = forward_and_record_pty_output(&batch.bytes, client, terminal_state, profiler, mode);
+}
+
+/// Forward whatever the reader thread still hands over once the child exited.
+///
+/// The child can exit between two reads with its last output still in the
+/// master, and the reader thread reports `EIO` in place of EOF, so this drains
+/// the queue until the reader reports the end or the bounded wait expires -
+/// before the `Exit` frame goes out.
+fn final_drain_attached_pty_output(
+    chunks: &mpsc::Receiver<AttachedPtyChunk>,
+    client: &mut File,
+    terminal_state: &mut TerminalState,
+    profiler: &mut GuestAttachProfiler,
+    mode: PtyForwardingMode,
+) {
+    let deadline = Instant::now() + FINAL_DRAIN_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        let first = match chunks.recv_timeout(remaining) {
+            Ok(chunk) => Some(chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => return,
+            Err(mpsc::RecvTimeoutError::Disconnected) => Some(AttachedPtyChunk::Eof),
+        };
+        let batch = coalesce_attached_pty_output(chunks, first, ATTACHED_PTY_COALESCE_MAX_BYTES);
+        if batch.chunks > 0 {
+            profiler.record_pty_drain(
+                batch.chunks,
+                batch.stop == AttachedPtyCoalesceStop::Empty,
+                batch.stop == AttachedPtyCoalesceStop::ByteBound,
+            );
+        }
+        forward_attached_pty_batch(&batch, client, terminal_state, profiler, mode);
+        if batch.stop == AttachedPtyCoalesceStop::Ended || batch.chunks == 0 {
+            return;
+        }
+    }
+}
+
+/// Merge the reader thread's counters into the profile and print it.
+fn finish_attach_profile(
+    profiler: &mut GuestAttachProfiler,
+    reader_stats: &Arc<attach_profile::PtyReaderStats>,
+) {
+    profiler.merge_pty_reader(&reader_stats.snapshot());
+    let _ = profiler.report_to(&mut std::io::stderr().lock());
 }
 
 fn forward_and_record_pty_output(
@@ -1244,100 +1401,6 @@ fn write_all_retrying_would_block(file: &mut File, mut data: &[u8]) -> Result<()
         }
     }
     Ok(())
-}
-
-/// Forward whatever the PTY master still holds once the child has exited.
-///
-/// The child can exit between two polls with its last output still buffered in
-/// the master, so the attached client has to be given that output before the
-/// `Exit` frame - otherwise a session that ends drops its final bytes. A master
-/// whose slave side has closed reports `EIO` in place of EOF, so any read that
-/// yields nothing ends the drain: the child is gone, and whatever was readable
-/// has already been forwarded.
-fn forward_final_attached_pty_output(
-    reader: &mut File,
-    buf: &mut [u8; IO_BUF_SIZE],
-    client: &mut File,
-    terminal_state: &mut TerminalState,
-    profiler: &mut GuestAttachProfiler,
-    mode: PtyForwardingMode,
-) -> Result<()> {
-    set_nonblocking(reader.as_raw_fd(), true)?;
-    let drain = forward_final_attached_pty_output_nonblocking(
-        reader,
-        buf,
-        client,
-        terminal_state,
-        profiler,
-        mode,
-    );
-    let restore = set_nonblocking(reader.as_raw_fd(), false);
-    drain.and(restore)
-}
-
-fn forward_final_attached_pty_output_nonblocking(
-    reader: &mut File,
-    buf: &mut [u8; IO_BUF_SIZE],
-    client: &mut File,
-    terminal_state: &mut TerminalState,
-    profiler: &mut GuestAttachProfiler,
-    mode: PtyForwardingMode,
-) -> Result<()> {
-    let deadline = Instant::now() + FINAL_DRAIN_TIMEOUT;
-    loop {
-        match reader.read(buf) {
-            Ok(0) => return Ok(()),
-            Ok(read) => {
-                if !forward_and_record_pty_output(
-                    &buf[..read],
-                    client,
-                    terminal_state,
-                    profiler,
-                    mode,
-                ) {
-                    return Ok(());
-                }
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-            // Nothing left *right now* is not the same as nothing left: the last
-            // bytes may still be in the line discipline. Wait a bounded while for
-            // the master to become readable again, or to report the hangup.
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() || !wait_for_pty_readable(reader.as_raw_fd(), remaining)? {
-                    return Ok(());
-                }
-            }
-            Err(_) => return Ok(()),
-        }
-    }
-}
-
-/// Wait for the PTY master to become readable again, or for the slave's hangup.
-///
-/// `true` tells the final drain to read again - a hangup shows up as `EIO` on
-/// that read, which ends the drain - and `false` means the timeout expired with
-/// nothing pending.
-fn wait_for_pty_readable(fd: RawFd, timeout: Duration) -> Result<bool> {
-    let mut pollfd = libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as libc::c_int;
-    loop {
-        let rc = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
-        if rc > 0 {
-            return Ok(true);
-        }
-        if rc == 0 {
-            return Ok(false);
-        }
-        let err = std::io::Error::last_os_error();
-        if err.kind() != std::io::ErrorKind::Interrupted {
-            return Err(err).context("final PTY drain poll failed");
-        }
-    }
 }
 
 fn drain_detached_pty_output(master_fd: RawFd, terminal_state: &mut TerminalState) -> Result<()> {
@@ -2105,160 +2168,6 @@ mod tests {
     }
 
     #[test]
-    fn attached_pty_burst_coalesces_ordered_chunks() {
-        let mut reader = ScriptedReader::new([
-            ReadStep::Data(b"\x1b("),
-            ReadStep::Data(b"0q"),
-            ReadStep::WouldBlock,
-        ]);
-        let mut buf = [0u8; IO_BUF_SIZE];
-        let mut profiler = GuestAttachProfiler::new(true);
-
-        let burst = read_attached_pty_burst(
-            &mut reader,
-            &mut buf,
-            &mut profiler,
-            AttachedPtyDrainLimits {
-                max_reads: 4,
-                max_bytes: 64,
-                max_elapsed: Duration::from_secs(1),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            burst,
-            AttachedPtyBurst {
-                bytes: b"\x1b(0q".to_vec(),
-                reads: 2,
-                stop_reason: AttachedPtyDrainStop::WouldBlock,
-            }
-        );
-
-        let mut terminal_state = TerminalState::new(PtySize::default());
-        let mut writer = Vec::new();
-        assert!(forward_and_record_pty_output(
-            &burst.bytes,
-            &mut writer,
-            &mut terminal_state,
-            &mut profiler,
-            PtyForwardingMode::Normalized,
-        ));
-        let mut cursor = std::io::Cursor::new(writer);
-        assert_eq!(
-            read_frame(&mut cursor).unwrap(),
-            Some(Frame::Data("─".as_bytes().to_vec()))
-        );
-        assert!(terminal_state.parser.screen().contents().contains("─"));
-
-        let mut profile_output = Vec::new();
-        profiler.report_to(&mut profile_output).unwrap();
-        let profile_output = String::from_utf8(profile_output).unwrap();
-        assert!(profile_output.contains("pty_drain_events=1"));
-        assert!(profile_output.contains("pty_drain_would_block_count=1"));
-        assert!(profile_output.contains("pty_drain_coalesced_events=1"));
-        assert!(profile_output.contains("pty_drain_coalesced_reads=1"));
-        assert!(profile_output.contains("frames=1"));
-    }
-
-    #[test]
-    fn attached_pty_burst_first_would_block_is_empty_success() {
-        let mut reader = ScriptedReader::new([ReadStep::WouldBlock]);
-        let mut buf = [0u8; IO_BUF_SIZE];
-        let mut profiler = GuestAttachProfiler::new(true);
-
-        let burst = read_attached_pty_burst(
-            &mut reader,
-            &mut buf,
-            &mut profiler,
-            AttachedPtyDrainLimits {
-                max_reads: 4,
-                max_bytes: 64,
-                max_elapsed: Duration::from_secs(1),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            burst,
-            AttachedPtyBurst {
-                bytes: Vec::new(),
-                reads: 0,
-                stop_reason: AttachedPtyDrainStop::WouldBlock,
-            }
-        );
-    }
-
-    #[test]
-    fn attached_pty_burst_stops_at_read_bound() {
-        let mut reader = ScriptedReader::new([
-            ReadStep::Data(b"a"),
-            ReadStep::Data(b"b"),
-            ReadStep::Data(b"c"),
-        ]);
-        let mut buf = [0u8; IO_BUF_SIZE];
-        let mut profiler = GuestAttachProfiler::new(true);
-
-        let burst = read_attached_pty_burst(
-            &mut reader,
-            &mut buf,
-            &mut profiler,
-            AttachedPtyDrainLimits {
-                max_reads: 2,
-                max_bytes: 64,
-                max_elapsed: Duration::from_secs(1),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            burst,
-            AttachedPtyBurst {
-                bytes: b"ab".to_vec(),
-                reads: 2,
-                stop_reason: AttachedPtyDrainStop::ReadBound,
-            }
-        );
-        let mut profile_output = Vec::new();
-        profiler.report_to(&mut profile_output).unwrap();
-        let profile_output = String::from_utf8(profile_output).unwrap();
-        assert!(profile_output.contains("pty_drain_bound_hit_count=1"));
-        assert!(profile_output.contains("pty_drain_reads_max=2"));
-    }
-
-    #[test]
-    fn attached_pty_burst_stops_at_byte_bound() {
-        let mut reader = ScriptedReader::new([
-            ReadStep::Data(b"ab"),
-            ReadStep::Data(b"cd"),
-            ReadStep::WouldBlock,
-        ]);
-        let mut buf = [0u8; IO_BUF_SIZE];
-        let mut profiler = GuestAttachProfiler::new(false);
-
-        let burst = read_attached_pty_burst(
-            &mut reader,
-            &mut buf,
-            &mut profiler,
-            AttachedPtyDrainLimits {
-                max_reads: 4,
-                max_bytes: 3,
-                max_elapsed: Duration::from_secs(1),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            burst,
-            AttachedPtyBurst {
-                bytes: b"abc".to_vec(),
-                reads: 2,
-                stop_reason: AttachedPtyDrainStop::ByteBound,
-            }
-        );
-    }
-
-    #[test]
     fn pty_input_write_retries_transient_would_block() {
         let mut fds = [0; 2];
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
@@ -2288,6 +2197,105 @@ mod tests {
         write_all_retrying_would_block(&mut write_file, b"x").unwrap();
 
         assert!(reader.join().unwrap() > 0);
+    }
+
+    #[test]
+    fn attached_pty_reader_thread_delivers_output_and_reports_eof() {
+        use std::io::Write as _;
+
+        let pty = Pty::open().unwrap();
+        let stats = Arc::new(attach_profile::PtyReaderStats::new());
+        let (sender, receiver) = mpsc::sync_channel(4);
+        let reader = AttachedPtyReader::spawn(pty.master, sender, stats.clone()).unwrap();
+        let mut slave = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&pty.slave_path)
+            .unwrap();
+        slave.write_all(b"hello\n").unwrap();
+        slave.flush().unwrap();
+
+        let mut collected = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !collected.windows(5).any(|window| window == b"hello") && Instant::now() < deadline {
+            match receiver.recv_timeout(Duration::from_millis(200)) {
+                Ok(AttachedPtyChunk::Data(data)) => collected.extend_from_slice(&data),
+                Ok(AttachedPtyChunk::Eof | AttachedPtyChunk::Failed) => break,
+                Err(_) => {}
+            }
+        }
+        assert!(
+            collected.windows(5).any(|window| window == b"hello"),
+            "reader thread should deliver the slave's output, saw {collected:?}"
+        );
+        assert!(stats.snapshot().reads > 0);
+
+        // Closing the slave makes the master report EIO, which the reader turns
+        // into the end of the stream, so a session never has to guess when the
+        // child's output stopped.
+        drop(slave);
+        let mut saw_end = false;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            match receiver.recv_timeout(Duration::from_millis(200)) {
+                Ok(AttachedPtyChunk::Data(data)) => collected.extend_from_slice(&data),
+                Ok(AttachedPtyChunk::Eof | AttachedPtyChunk::Failed) => {
+                    saw_end = true;
+                    break;
+                }
+                Err(_) => {}
+            }
+        }
+        assert!(saw_end, "reader thread should report the end of the stream");
+        // `shutdown` joins the thread, so a reader that never exits hangs this
+        // test instead of passing silently. It also proves a reader parked in
+        // `send` on a full queue wakes once the queue is dropped.
+        reader.shutdown(receiver);
+    }
+
+    #[test]
+    fn attached_pty_coalescing_stops_at_the_byte_bound() {
+        let (sender, receiver) = mpsc::sync_channel(8);
+        for _ in 0..3 {
+            sender
+                .send(AttachedPtyChunk::Data(b"abcd".to_vec()))
+                .unwrap();
+        }
+
+        let batch = coalesce_attached_pty_output(&receiver, None, 10);
+
+        assert_eq!(batch.bytes, b"abcdabcdabcd".to_vec());
+        assert_eq!(batch.chunks, 3);
+        assert_eq!(batch.stop, AttachedPtyCoalesceStop::ByteBound);
+        assert_eq!(batch.stop.as_trace_value(), "byte_bound");
+
+        let empty = coalesce_attached_pty_output(&receiver, None, 10);
+        assert!(empty.bytes.is_empty());
+        assert_eq!(empty.chunks, 0);
+        assert_eq!(empty.stop, AttachedPtyCoalesceStop::Empty);
+    }
+
+    #[test]
+    fn attached_pty_reader_stats_merge_into_the_profile() {
+        let stats = attach_profile::PtyReaderStats::new();
+        stats.record_read(8, Duration::from_micros(3), 16);
+        stats.record_read(16, Duration::from_micros(5), 16);
+        let mut profiler = GuestAttachProfiler::new(true);
+
+        profiler.record_pty_drain(2, true, false);
+        profiler.merge_pty_reader(&stats.snapshot());
+        let mut output = Vec::new();
+        profiler.report_to(&mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(output.contains("pty_reads=2"));
+        assert!(output.contains("pty_bytes=24"));
+        assert!(output.contains("pty_read_max_bytes=16"));
+        assert!(output.contains("pty_read_avg_bytes=12"));
+        assert!(output.contains("pty_read_saturated_count=1"));
+        assert!(output.contains("pty_read_total_us=8"));
+        assert!(output.contains("pty_read_max_us=5"));
+        assert!(output.contains("pty_drain_events=1"));
     }
 
     #[test]
@@ -2709,43 +2717,6 @@ mod tests {
 
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    enum ReadStep {
-        Data(&'static [u8]),
-        WouldBlock,
-    }
-
-    struct ScriptedReader {
-        steps: std::collections::VecDeque<ReadStep>,
-    }
-
-    impl ScriptedReader {
-        fn new<const N: usize>(steps: [ReadStep; N]) -> Self {
-            Self {
-                steps: steps.into(),
-            }
-        }
-    }
-
-    impl Read for ScriptedReader {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            match self.steps.pop_front() {
-                Some(ReadStep::Data(data)) => {
-                    let n = data.len().min(buf.len());
-                    buf[..n].copy_from_slice(&data[..n]);
-                    if n < data.len() {
-                        self.steps.push_front(ReadStep::Data(&data[n..]));
-                    }
-                    Ok(n)
-                }
-                Some(ReadStep::WouldBlock) | None => Err(std::io::Error::new(
-                    std::io::ErrorKind::WouldBlock,
-                    "scripted would block",
-                )),
-            }
         }
     }
 
