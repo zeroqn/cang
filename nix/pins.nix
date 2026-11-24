@@ -16,33 +16,29 @@ in
   #
   # `bunVersion`/`bunRevision` are the executable's own output (`bun --version`,
   # `bun --revision`), not the archive's canary-date label; the image asserts
-  # both. Refreshed by scripts/update-pi-aot.sh.
+  # both. Refreshed by scripts/update-pi-aot.sh from that `tui/nix/manifest.nix`.
+  #
+  # `systems` is exactly the manifest's per-system list, which is x86_64-linux
+  # alone for this release: zeroqn/pi publishes no aarch64 `pi-aot`/`bun-aot`
+  # asset for it (its manifest carries no aarch64 entry), so a system without an
+  # entry makes `nix/pkgs/pi-aot.nix` and `nix/pkgs/bun-aot.nix` refuse instead
+  # of building a pair the release does not ship.
   piAotRelease = {
     owner = "zeroqn";
     repo = "pi";
     tag = "pi-v1.6.0";
     version = "1.6.0";
     bunVersion = "1.4.6";
-    bunRevision = "1.4.6-canary.1+dac8e3b0f";
+    bunRevision = "1.4.6-canary.1+bd92f9bef";
     systems = {
       x86_64-linux = {
         piAot = {
           asset = "pi-aot-1.6.0-x86_64-linux.tar.gz";
-          hash = "sha256-9r8zCI43/08wg6lYqW5Ayd/0jKgQn/ELkx251taRJdI=";
+          hash = "sha256-cT8sBg1hKCYCmHodAMxVYsEvgFb7giNPNv3SRZmddqE=";
         };
         bunAot = {
-          asset = "bun-aot-canary-20261123-x86_64-linux.zip";
-          hash = "sha256-3hL0OfncyICCPyTcM8Cin2EkrmAwbScLBqzT6cBZwuo=";
-        };
-      };
-      aarch64-linux = {
-        piAot = {
-          asset = "pi-aot-1.6.0-aarch64-linux.tar.gz";
-          hash = "sha256-mKTy5damUHexmN9EQfIcRY2dkt/2XqXJHYX9e8LhC4A=";
-        };
-        bunAot = {
-          asset = "bun-aot-canary-20261123-aarch64-linux.zip";
-          hash = "sha256-YD0/K/PFNLjV869oToOgCqHkj+jBBzHkT1fMZ/T56e8=";
+          asset = "bun-aot-canary-20261124-x86_64-linux.zip";
+          hash = "sha256-S1LWNwfyYaqu8rGfPXzept5sHucg6G9zfl6UzrIqDIs=";
         };
       };
     };

@@ -2217,14 +2217,27 @@ fn pi_and_bun_are_the_paired_assets_of_one_pi_aot_release() {
             "the piAotRelease pin should carry {required}"
         );
     }
-    for system in ["x86_64-linux", "aarch64-linux"] {
-        assert!(
-            pin.contains(&format!("      {system} = {{"))
-                && pin.contains("piAot = {")
-                && pin.contains("bunAot = {"),
-            "the piAotRelease pin should carry both assets for {system}"
-        );
-    }
+    // The pin mirrors that release's `tui/nix/manifest.nix`, which lists
+    // x86_64-linux alone: a system the pin does not list has no `pi-aot` tarball
+    // or `bun-aot` archive, so both derivations refuse rather than build a pair
+    // the release does not ship, and the flake generates the bun check only for
+    // a system the pin covers.
+    assert!(
+        pin.contains("      x86_64-linux = {")
+            && pin.contains("piAot = {")
+            && pin.contains("bunAot = {"),
+        "the piAotRelease pin should carry both assets for x86_64-linux"
+    );
+    assert!(
+        !pin.contains("      aarch64-linux = {"),
+        "the piAotRelease pin should list only the systems upstream publishes an asset for"
+    );
+    assert!(
+        FLAKE_NIX.contains(
+            "pkgs.lib.optionalAttrs (builtins.hasAttr system pins.piAotRelease.systems) {"
+        ),
+        "the flake should generate the bun check only for a pinned system"
+    );
     // Whatever built pi's source tree and its dependency lockfile is gone: the
     // host is a released ELF, so there is no dependency tree to pin.
     assert!(

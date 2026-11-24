@@ -109,7 +109,11 @@ The image's `pi` is stock upstream pi compiled ahead of time (`bun build
 are per-system assets of one `pi-v<version>` release of
 `zeroqn/pi`, described by that repository's `tui/flake.nix` and its
 `tui/nix/manifest.nix`, so cang takes them as one pinned pair
-(`piAotRelease` in `nix/pins.nix`) rather than building pi from source:
+(`piAotRelease` in `nix/pins.nix`) rather than building pi from source. The pin
+lists exactly the systems that manifest lists - x86_64-linux alone for
+`pi-v1.6.0`, which publishes no aarch64 asset - and a system without an entry
+makes `pi`/`bun` refuse to build instead of pairing artifacts the release does
+not ship:
 
 - `nix/pkgs/pi-aot.nix` installs the released executable and the assets beside
   it, and wraps it with `PI_PACKAGE_DIR` (pi's own escape hatch for where its
@@ -127,13 +131,16 @@ Both packages are built with the flake's nixpkgs-unstable set, because the shim
 pi exposes is linked against that glibc.
 
 To move to a new release, run the updater described under "Refresh the pinned
-zeroqn/pi AOT host" above. It takes the newest `pi-v*` release (or `--tag <tag>`), pairs the `pi-aot-*` and
-`bun-aot-*` asset of each system, records their hashes after checking each
-against the digest GitHub reports for the asset, and then builds `.#bun` from
-the new pin to read the executable's own `--version` and `--revision` into
+zeroqn/pi AOT host" above. It reads the per-system `pi-aot`/`bun-aot` entries of
+that release's `tui/nix/manifest.nix` (the file its flake publishes, which is
+also what decides that two x86_64 canaries the same release carries), records
+each hash after checking the download against both the manifest's hash and the
+digest GitHub reports for the asset, and then builds `.#bun` from the new pin to
+read the executable's own `--version` and `--revision` into
 `bunVersion`/`bunRevision` - the archive's canary-date label says nothing about
-either. `checks.<system>.bun-aot-version` and the image's `bunContracts` fail
-when the image's bun is not exactly that pair.
+either. `checks.<system>.bun-aot-version` (generated for the systems the pin
+lists) and the image's `bunContracts` fail when the image's bun is not exactly
+that pair.
 
 ### The virglrenderer decode parameter buffers
 
@@ -807,9 +814,11 @@ attribute first.
 
 Refresh the pinned zeroqn/pi AOT host and the Bun canary it was compiled with
 (`piAotRelease` in `nix/pins.nix`: the release tag, the version its asset names
-carry, both per-system asset hashes and the canary's own `--version`/`--revision`).
-The updater checks each asset against the digest GitHub reports for it, and then
-builds `.#bun` from the new pin to read the canary's answers:
+carry, the per-system asset hashes and the canary's own
+`--version`/`--revision`). The updater takes the per-system entries of that
+release's `tui/nix/manifest.nix`, checks each download against the manifest's
+hash and the digest GitHub reports for the asset, and then builds `.#bun` from
+the new pin to read the canary's answers:
 
 ```bash
 nix develop --command ./scripts/update-pi-aot.sh --tag pi-v1.6.0

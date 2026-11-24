@@ -466,8 +466,10 @@
             cangMuslPackage = packages.cang-musl;
           };
         in
-        {
-          container-nix-db-metadata = cangImageChecks.imageConfigNixDbRefs;
+        # The AOT release publishes `pi-aot`/`bun-aot` per system (its
+        # `tui/nix/manifest.nix`), so a system the pin does not list has no bun
+        # to assert - and no `pi-aot` tarball either.
+        pkgs.lib.optionalAttrs (builtins.hasAttr system pins.piAotRelease.systems) {
           # The image's bun has to be the canary the AOT host was compiled with.
           # The archive's canary-date label says nothing about what the binary
           # prints, so assert both of its own answers: the release line and the
@@ -482,6 +484,9 @@
                 $bun/bin/bun --revision | grep -Fx '${pins.piAotRelease.bunRevision}'
                 touch $out
               '';
+        }
+        // {
+          container-nix-db-metadata = cangImageChecks.imageConfigNixDbRefs;
           # The shim's own loader check: builds the three consumer shapes (the
           # binding's node and name, `zg`'s node, and a patched binding's name)
           # and runs each against the real ONNX Runtime, including the

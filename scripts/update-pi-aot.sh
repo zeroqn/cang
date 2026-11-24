@@ -22,22 +22,29 @@ usage() {
 Usage: update-pi-aot.sh [--tag <pi-release-tag>]
 
 Refresh the pinned zeroqn/pi AOT host and the Bun canary it was compiled with
-(nix/pins.nix `piAotRelease`) from a `pi-v<version>` release of
-https://github.com/zeroqn/pi. That release carries the two per-system assets
-`tui/flake.nix` publishes (`tui/nix/manifest.nix` there):
+(nix/pins.nix `piAotRelease`) from the per-system entries of that repository's
+`tui/nix/manifest.nix`, which is what its `tui/flake.nix` publishes:
 
-  pi-aot-<version>-<system>.tar.gz    the host, compiled with `bun --aot`
-  bun-aot-canary-<date>-<system>.zip  the canary that compiled it
+  pi-aot-<version>-<system>.tar.gz     the host, compiled with `bun --aot`
+  bun-aot-canary-<date>-<system>.zip   the canary that compiled it
 
-The script records the release tag, the version the asset names carry, the
-per-system asset hashes (checked against the digest GitHub reports for each
-asset), and then builds `.#bun` from the new pin to read the executable's own
-`--version` and `--revision` - the archive's canary-date label says nothing
+The manifest is what picks the bytes: a release accumulates assets, so its own
+asset list cannot say which canary pairs with which `pi-aot` (pi-v1.6.0 carries
+two x86_64 canaries, 20261123 and 20261124). The script records the release tag,
+the version the `pi-aot` asset names carry, the per-system asset hashes - each
+download checked against the manifest's SRI hash *and* the digest GitHub reports
+for the asset - and then builds `.#bun` from the new pin to read the executable's
+own `--version` and `--revision`; the archive's canary-date label says nothing
 about either.
 
+A system the manifest lists is a system the pin lists. The manifest currently
+carries x86_64-linux alone, so the pin does too, and `pi`/`bun` refuse to build
+for a system without an entry.
+
 Defaults:
-  --tag     newest `pi-v*` release of the repository above (the latest release
-            overall may be a client release, `tui-v*`)
+  --tag     the `pi-v*` release the manifest's asset URLs name. Passing another
+            tag is refused: the manifest lives on `main`, so it describes the
+            newest release, not an older one.
 USAGE
 }
 
@@ -59,28 +66,50 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-for cmd in curl jq nix python3; do
+for cmd in curl nix python3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "missing required command: $cmd" >&2
     exit 1
   fi
 done
 
-if [ -z "$release_tag" ]; then
-  release_tag="$(
-    curl -fsSL "https://api.github.com/repos/$owner/$repo/releases?per_page=100" |
-      jq -r '[.[] | select(.tag_name | startswith("pi-v"))][0].tag_name // empty'
-  )"
-fi
+# The manifest is a plain attrset, so `import` of the fetched file is the parse:
+# nothing here reads Nix source by hand. It is on `main` rather than at the
+# release tag, because a release's own tree still carries the empty stub.
+manifest_json="$(
+  nix eval --impure --json --expr \
+    "import (builtins.fetchurl { url = \"https://raw.githubusercontent.com/$owner/$repo/main/tui/nix/manifest.nix\"; })"
+)"
+
+manifest_tag="$(
+  MANIFEST_JSON="$manifest_json" python3 - <<'PY' || exit 1
+import json
+import os
+
+manifest = json.loads(os.environ["MANIFEST_JSON"])
+if not manifest:
+    raise SystemExit("the repository's tui/nix/manifest.nix is empty: no AOT asset is published yet")
+tags = {
+    entry[artifact]["url"].split("/download/")[1].split("/")[0]
+    for entry in manifest.values()
+    for artifact in ("piAot", "bunAot")
+}
+if len(tags) != 1:
+    raise SystemExit(f"the manifest's assets disagree about their release: {sorted(tags)}")
+print(tags.pop())
+PY
+)"
 
 if [ -z "$release_tag" ]; then
-  echo "failed to determine a pi release tag; pass --tag explicitly" >&2
+  release_tag="$manifest_tag"
+elif [ "$release_tag" != "$manifest_tag" ]; then
+  echo "the manifest on main describes $manifest_tag, not $release_tag: it is rewritten at each release, so an older release cannot be pinned from it" >&2
   exit 1
 fi
 
 release_json="$(curl -fsSL "https://api.github.com/repos/$owner/$repo/releases/tags/$release_tag")"
 
-RELEASE_JSON="$release_json" python3 - "$pins_file" "$release_tag" <<'PY'
+MANIFEST_JSON="$manifest_json" RELEASE_JSON="$release_json" python3 - "$pins_file" "$release_tag" <<'PY'
 import base64
 import hashlib
 import json
@@ -92,52 +121,45 @@ from pathlib import Path
 
 pins_path = Path(sys.argv[1])
 release_tag = sys.argv[2]
+manifest = json.loads(os.environ["MANIFEST_JSON"])
 release = json.loads(os.environ["RELEASE_JSON"])
-systems = ["x86_64-linux", "aarch64-linux"]
 
 
-def sri_hash(url, expected_digest):
+def sha256_of(url):
     with urllib.request.urlopen(url) as response:
-        digest = hashlib.sha256(response.read()).hexdigest()
-    # GitHub reports the asset's own sha256; a mismatch means the download this
-    # script hashed is not the bytes the release describes.
-    if expected_digest and expected_digest.removeprefix("sha256:") != digest:
-        raise SystemExit(f"{url}: sha256 {digest} does not match the release digest {expected_digest}")
-    return "sha256-" + base64.b64encode(bytes.fromhex(digest)).decode()
+        return hashlib.sha256(response.read()).hexdigest()
 
 
 assets = {asset["name"]: asset for asset in release.get("assets", [])}
-versions = set()
-lines = [
-    "  piAotRelease = {",
-    '    owner = "zeroqn";',
-    '    repo = "pi";',
-    f'    tag = "{release_tag}";',
-]
-
 per_system = {}
-for system in systems:
-    pi_asset = f"pi-aot-{system}"
-    found = [name for name in assets if name.startswith("pi-aot-") and name.endswith(f"-{system}.tar.gz")]
-    if len(found) != 1:
-        raise SystemExit(f"expected one pi-aot tarball for {system} in {release_tag}, found {found}")
-    match = re.fullmatch(r"pi-aot-(.+)-" + re.escape(system) + r"\.tar\.gz", found[0])
-    if not match:
-        raise SystemExit(f"cannot read the version from {found[0]}")
-    version = match.group(1)
-    versions.add(version)
+versions = set()
+for system, entry in manifest.items():
+    pinned = {}
+    for artifact in ("piAot", "bunAot"):
+        url = entry.get(artifact, {}).get("url")
+        if not url:
+            raise SystemExit(f"the manifest's {system} entry has no {artifact}")
+        # The manifest is the authority for which bytes pair with which: a
+        # release's asset list keeps every version it ever published.
+        asset = url.rsplit("/", 1)[1]
+        if f"/download/{release_tag}/" not in url:
+            raise SystemExit(f"the manifest's {system} {artifact} is not an asset of {release_tag}: {url}")
+        if asset not in assets:
+            raise SystemExit(f"{release_tag} publishes no asset named {asset}")
+        digest = sha256_of(url)
+        sri = "sha256-" + base64.b64encode(bytes.fromhex(digest)).decode()
+        if sri != entry[artifact]["hash"]:
+            raise SystemExit(f"{url}: sha256 {digest} does not match the manifest hash {entry[artifact]['hash']}")
+        # GitHub's digest for that asset: the download is the bytes the release
+        # published, not a same-named replacement.
+        if assets[asset].get("digest") and assets[asset]["digest"].removeprefix("sha256:") != digest:
+            raise SystemExit(f"{url}: sha256 {digest} does not match the release digest {assets[asset]['digest']}")
+        pinned[artifact] = (asset, sri)
+    per_system[system] = pinned
+    versions.add(entry["piAot"].get("version") or "")
 
-    bun_found = [name for name in assets if name.startswith("bun-aot-") and name.endswith(f"-{system}.zip")]
-    if len(bun_found) != 1:
-        raise SystemExit(f"expected one bun-aot archive for {system} in {release_tag}, found {bun_found}")
-
-    per_system[system] = {
-        "piAot": (found[0], sri_hash(assets[found[0]]["browser_download_url"], assets[found[0]].get("digest"))),
-        "bunAot": (bun_found[0], sri_hash(assets[bun_found[0]]["browser_download_url"], assets[bun_found[0]].get("digest"))),
-    }
-
-if len(versions) != 1:
-    raise SystemExit(f"the release's pi assets disagree about the version: {sorted(versions)}")
+if "" in versions or len(versions) != 1:
+    raise SystemExit(f"the manifest's pi assets carry no single version: {sorted(versions)}")
 version = versions.pop()
 
 text = pins_path.read_text()
@@ -145,23 +167,27 @@ previous = re.search(r'    bunVersion = "(.*?)";\n    bunRevision = "(.*?)";', t
 if not previous:
     raise SystemExit("nix/pins.nix has no bunVersion/bunRevision to keep until the build runs")
 
-lines.extend([
+lines = [
+    "  piAotRelease = {",
+    '    owner = "zeroqn";',
+    '    repo = "pi";',
+    f'    tag = "{release_tag}";',
     f'    version = "{version}";',
     # Kept from the previous pin until the built canary answers below.
     f'    bunVersion = "{previous.group(1)}";',
     f'    bunRevision = "{previous.group(2)}";',
     "    systems = {",
-])
-for system in systems:
+]
+for system, pinned in per_system.items():
     lines.extend([
         f"      {system} = {{",
         "        piAot = {",
-        f'          asset = "{per_system[system]["piAot"][0]}";',
-        f'          hash = "{per_system[system]["piAot"][1]}";',
+        f'          asset = "{pinned["piAot"][0]}";',
+        f'          hash = "{pinned["piAot"][1]}";',
         "        };",
         "        bunAot = {",
-        f'          asset = "{per_system[system]["bunAot"][0]}";',
-        f'          hash = "{per_system[system]["bunAot"][1]}";',
+        f'          asset = "{pinned["bunAot"][0]}";',
+        f'          hash = "{pinned["bunAot"][1]}";',
         "        };",
         "      };",
     ])
@@ -175,11 +201,9 @@ pins_path.write_text(updated)
 print("updated nix/pins.nix:")
 print(f'  tag = "{release_tag}";')
 print(f'  version = "{version}";')
-for system in systems:
-    print(f"  {system}.piAot.asset = \"{per_system[system]['piAot'][0]}\";")
-    print(f"  {system}.piAot.hash = \"{per_system[system]['piAot'][1]}\";")
-    print(f"  {system}.bunAot.asset = \"{per_system[system]['bunAot'][0]}\";")
-    print(f"  {system}.bunAot.hash = \"{per_system[system]['bunAot'][1]}\";")
+for system, pinned in per_system.items():
+    print(f'  {system}.piAot = "{pinned["piAot"][0]}" {pinned["piAot"][1]}')
+    print(f'  {system}.bunAot = "{pinned["bunAot"][0]}" {pinned["bunAot"][1]}')
 PY
 
 # The canary's own version and revision are what the image asserts, and only the
