@@ -218,28 +218,41 @@ agent harness itself keep working on the real files:
 
 ```bash
 cd /tmp/serve-here
-./result/bin/cang ../work.raw          # the image outside the launch directory
+./result/bin/cang ../work.raw          # the image beside the launch directory
+./result/bin/cang work.raw             # the image inside the launch directory
 ```
 
+Both spellings mount the same tree at the same place. The second hides
+`work.raw`'s own pathname for as long as the launch lives, and cang can carry
+that because the VM has the image open before the mount can exist: the pump
+proves the guest's relay is listening before it calls `mount(2)`, and the guest
+starts that relay only after `mount-workspace-disk` and after booting. The file
+is not lost - it is visible at its path again once the launch ends and the mount
+goes away. While the mount is up that pathname belongs to the guest's tree: a
+second launch from the same directory is refused as a workspace that already runs
+one, and `cang disk resize work.raw` works only from outside it or after the
+launch has exited.
+
 `--workspace-relay` *forces* that mount instead of taking the default, and
-`--no-workspace-relay` turns it off. The default skips it, naming the reason on
-one line, in three cases:
+`--no-workspace-relay` turns it off. The default skips it in two cases:
 
 - **the launch runs a trailing command** (`cang work.raw -- make`): its process
   ends with that command, so a mount that appears mid-run is not the host's view
-  of a tree it can use. Pass `--workspace-relay` when a long command's tree is
-  worth watching from the host;
+  of a tree it can use. The skip says nothing, because a launch like
+  `cang workspace init` never wanted a line about a mount. Pass
+  `--workspace-relay` when a long command's tree is worth watching from the host;
 - **`--daemon`**: the mount lives exactly as long as the cang process, and a
-  daemon launch returns while the task keeps running;
-- **the image sits inside the launch directory** (`cang work.raw` in the very
-  directory the mount would land on): the mount would hide the image file the VM
-  attaches. Move the image outside the tree, or pass `--workspace-relay` to be
-  told so as an error instead of a line.
+  daemon launch returns while the task keeps running. This one names its reason
+  on one line.
 
-When it is forced, each of those is a named refusal rather than a skip.
-`--workspace-relay` is also refused without `--workspace-disk` - a launch that
-serves `/workspace` from the host directory already gives the host that tree -
-while `--no-workspace-relay` has nothing to suppress there.
+When it is forced, a launch that cannot carry the mount is a named refusal
+rather than a skip: `--daemon`, `--workspace-relay` without `--workspace-disk`
+(the host directory already *is* the tree), and a launch that runs a trailing
+command while the image sits inside the directory the mount would land on - that
+command lives exactly as long as the mount and may reopen the image by path
+itself (`cang workspace init` seeds *from* that very directory), so the refusal
+says to move the image outside the tree or launch interactively.
+`--no-workspace-relay` has nothing to suppress in a launch without a disk image.
 
 The mount is a FUSE filesystem served by the guest over vsock: every host
 operation is a round trip to the VM (measured ~143 us, so `git status` on this

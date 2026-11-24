@@ -281,22 +281,31 @@ fn resolve_workspace_disk(
 ///   directory already gives the host that tree;
 /// * with `--daemon`: a daemon launch returns while the task keeps running, and
 ///   the mount lives exactly as long as this cang process;
-/// * with a workspace image *inside* the launch directory of a *task* launch:
-///   the mount lands on that directory, so the image the VM attaches would be
-///   hidden behind it (and, if it were opened after the mount, created inside
-///   the guest's tree). "Inside" is decided on the image's resolved path
-///   ([`workspace::canonical_disk_path`]), so `../work.raw` beside the directory
-///   is outside it. A workspace *server* is exempt: it opens the image
-///   while the host directory is still visible, it holds the lease file
-///   descriptor open across the mount, and `cang workspace serve work.raw` from
-///   inside the served directory is the natural spelling.
+/// * with a workspace image *inside* the launch directory of a launch that
+///   runs a command: the mount lands on that directory and shadows it, so the
+///   image file the VM attaches disappears from its own pathname for as long as
+///   the mount lives. An interactive launch may mount over it regardless, because
+///   the VM has the image open before the mount can exist: `relay-pump` proves
+///   the guest's relay is listening before it calls `mount(2)`, and the guest
+///   starts that relay only after `mount-workspace-disk` and after booting - so
+///   after the worker's `block_device_new` opened the image. A command launch
+///   cannot lean on that: its command lives exactly as long as the mount and may
+///   reopen the image by path itself, and `cang workspace init` seeds *from* the
+///   directory the mount shadows. "Inside" is decided on the image's resolved
+///   path ([`workspace::canonical_disk_path`]), so `../work.raw` beside the
+///   directory is outside it. A workspace *server* is exempt in both cases: it
+///   opens the image while the host directory is still visible, it holds the
+///   lease file descriptor open across the mount, and `cang workspace serve
+///   work.raw` from inside the served directory is the natural spelling.
 ///
-/// The default skips the same two cases with a printed reason instead, and also
+/// The default skips the `--daemon` case with a printed reason instead, and also
 /// skips a launch that runs a trailing command without saying anything: its
 /// process ends with that command, so a mount appearing mid-run is not the host's
 /// view of a tree it can use - `--workspace-relay` is how that launch asks for
 /// it anyway. `cang workspace init` is such a launch, and seeding must not carry
-/// a line about a mount it never wanted.
+/// a line about a mount it never wanted. An in-tree image on an interactive
+/// launch is mounted like any other: the mount hides the image file, and the file
+/// is visible at its path again once the mount is gone.
 fn resolve_workspace_relay(
     requested: Option<bool>,
     daemon: bool,
@@ -339,20 +348,23 @@ fn resolve_workspace_relay(
     // `Path::starts_with` compares components and reads the `..` as the directory
     // itself. The mount would hide nothing, so the check cannot use the raw spelling.
     let disk_path = workspace::canonical_disk_path(disk);
-    if !serve && disk_path.starts_with(workspace_dir) {
-        if forced {
-            anyhow::bail!(
-                "--workspace-relay refuses a workspace disk image inside the launch directory: '{}' is under '{}', and the mount lands on that directory, which would hide the image file the VM attaches; move the image outside the tree",
-                disk_path.display(),
-                workspace_dir.display()
-            );
-        }
-        eprintln!(
-            "cang: not mounting the guest workspace on the host: the image '{}' is inside the launch directory '{}', which the mount would hide; move the image outside the tree, or pass --workspace-relay to be told so as an error",
+    // The one spelling the mount cannot carry is an in-tree image on a launch
+    // that runs a command: the command lives exactly as long as the mount and may
+    // reopen the image by path itself (`cang workspace init` reads its seed
+    // source from the directory the mount shadows). An interactive launch mounts
+    // over it safely, on an ordering cang already relies on: the pump proves the
+    // guest's relay is listening before it calls `mount(2)`, and the guest starts
+    // that relay after `mount-workspace-disk` and after booting, so the worker's
+    // `block_device_new` has opened the image before the mount exists - and cang
+    // never reopens it by path afterwards.
+    if !serve && !interactive && disk_path.starts_with(workspace_dir) {
+        // Only a forced mount reaches this line: the default returned above
+        // without a message, because a command launch never wanted a mount.
+        anyhow::bail!(
+            "--workspace-relay cannot carry a launch that runs a command when the workspace disk image '{}' is inside the launch directory '{}': the mount lands on that directory, so the image file would vanish from its own pathname for as long as the command runs; move the image outside the tree, or launch interactively",
             disk_path.display(),
             workspace_dir.display()
         );
-        return Ok(false);
     }
     Ok(true)
 }
@@ -621,9 +633,9 @@ mod tests {
             "a daemon launch returns before the mount's lifetime ends"
         );
         assert!(
-            !resolve_workspace_relay(None, false, true, Some(inside), dir, false)
+            resolve_workspace_relay(None, false, true, Some(inside), dir, false)
                 .expect("an in-tree image resolves"),
-            "the mount would hide the image the VM attaches"
+            "an interactive launch mounts over the image it has already opened"
         );
 
         // A `..` spelling whose parent chain does not exist yet, resolved without
@@ -637,7 +649,7 @@ mod tests {
             "`..` decides where the image is even when nothing below it exists yet"
         );
         assert!(
-            !resolve_workspace_relay(
+            resolve_workspace_relay(
                 None,
                 false,
                 true,
@@ -648,7 +660,21 @@ mod tests {
                 false
             )
             .expect("an in-tree image resolves"),
-            "a spelling that resolves back into the tree is still refused"
+            "a spelling that resolves back into the tree is inside it, and an interactive launch mounts it"
+        );
+        assert!(
+            resolve_workspace_relay(
+                Some(true),
+                false,
+                false,
+                Some(Path::new(
+                    "/tmp/example-project-not-yet/../example-project-not-yet/work.raw"
+                )),
+                missing_dir,
+                false
+            )
+            .is_err(),
+            "a forced mount refuses the same image when the launch runs a command"
         );
         assert!(
             !resolve_workspace_relay(None, false, true, None, dir, false)
@@ -661,12 +687,23 @@ mod tests {
             "a server opens the image while the host directory is still visible"
         );
 
-        for (daemon, disk) in [(true, Some(outside)), (false, Some(inside)), (false, None)] {
-            assert!(
-                resolve_workspace_relay(Some(true), daemon, true, disk, dir, false).is_err(),
-                "a forced mount refuses a launch that cannot carry it"
-            );
-        }
+        assert!(
+            resolve_workspace_relay(Some(true), true, true, Some(outside), dir, false).is_err(),
+            "a forced mount refuses a daemon launch"
+        );
+        assert!(
+            resolve_workspace_relay(Some(true), false, false, Some(inside), dir, false).is_err(),
+            "a forced mount refuses an in-tree image on a launch that runs a command"
+        );
+        assert!(
+            resolve_workspace_relay(Some(true), false, true, None, dir, false).is_err(),
+            "a forced mount refuses a launch without a disk"
+        );
+        assert!(
+            resolve_workspace_relay(Some(true), false, true, Some(inside), dir, false)
+                .expect("a forced in-tree mount resolves"),
+            "--workspace-relay may mount over an image the VM has already opened"
+        );
         assert!(
             !resolve_workspace_relay(Some(false), false, true, Some(outside), dir, false)
                 .expect("an opt-out resolves"),
@@ -700,14 +737,14 @@ mod tests {
         // check follows the path, it does not just drop `..`.
         let in_tree = workspace.join("..").join("serve-here").join("work.raw");
         assert!(
-            !resolve_workspace_relay(None, false, true, Some(&in_tree), &workspace, false)
+            resolve_workspace_relay(None, false, true, Some(&in_tree), &workspace, false)
                 .expect("an in-tree image resolves"),
-            "a spelling that resolves back into the tree is inside it"
+            "a spelling that resolves back into the tree is inside it, and an interactive launch mounts it"
         );
         assert!(
-            resolve_workspace_relay(Some(true), false, true, Some(&in_tree), &workspace, false)
+            resolve_workspace_relay(Some(true), false, false, Some(&in_tree), &workspace, false)
                 .is_err(),
-            "a forced mount refuses an image its mount would hide"
+            "a forced mount refuses the same image when the launch runs a command"
         );
     }
 

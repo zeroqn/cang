@@ -488,7 +488,10 @@ measured 2026-11-20). The host's view of that tree is the reverse share, and an
 interactive `--workspace-disk` launch mounts it on the launch directory **by
 default** for the life of that launch (`--no-workspace-relay` opts out;
 `--workspace-relay` forces it for a launch that runs a trailing command, which
-does not get the mount by default). `cang workspace serve PATH` keeps that view
+does not get the mount by default). The image may sit in that very directory -
+`cd work && cang work.raw` mounts the tree over `work`'s own `work.raw`, which is
+hidden for the launch and back afterwards, because the VM has the image open
+before the mount can appear. `cang workspace serve PATH` keeps that view
 up between launches from a long-lived workspace server VM that holds the image
 exclusively, and `cang exec` is how commands run inside it (a second guest that
 names the same image is refused by name). `docs/usage.md` states what the view
