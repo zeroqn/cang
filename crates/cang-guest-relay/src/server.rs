@@ -33,6 +33,13 @@ pub const BATCH_FORGET: u32 = 42;
 /// `FUSE_INIT`, the frame whose reply carries the connection's negotiated
 /// limits - see [`advertise_big_writes`].
 pub const INIT: u32 = 26;
+/// The opcodes whose handler impersonates the caller's uid/gid, and - by
+/// exclusion - the only requests [`stamp_create_identity`] has to touch.
+const SYMLINK: u32 = 6;
+const MKNOD: u32 = 8;
+const MKDIR: u32 = 9;
+const CREATE: u32 = 35;
+const CREATE_FAMILY: [u32; 4] = [SYMLINK, MKNOD, MKDIR, CREATE];
 
 /// The two INIT flags that decide whether a WRITE may be larger than 4 KiB, and
 /// the page count they carry.
@@ -58,6 +65,9 @@ const INIT_OUT_MAX_PAGES: usize = 44;
 /// `fuse_init_in.flags`, at 40 bytes of `in_header` plus `major`/`minor`/
 /// `max_readahead`.
 const INIT_IN_FLAGS: usize = IN_HEADER_LEN + 12;
+/// `fuse_in_header.uid` / `.gid`, at 24 and 28 bytes of the 40-byte header.
+const IN_UID: usize = 24;
+const IN_GID: usize = 28;
 
 /// Advertise large WRITE frames on an INIT reply, as far as the kernel offers
 /// them.
@@ -94,6 +104,34 @@ fn advertise_big_writes(request: &[u8], reply: &mut [u8]) {
         reply[INIT_OUT_MAX_WRITE..INIT_OUT_MAX_WRITE + 4].copy_from_slice(&max_write.to_le_bytes());
     }
     reply[INIT_OUT_FLAGS..INIT_OUT_FLAGS + 4].copy_from_slice(&flags.to_le_bytes());
+}
+
+/// Stamp the owner of the served tree on a create-family request's `uid`/`gid`.
+///
+/// The host's ids are not the guest's: a host tool creating through the mount
+/// sends *its* uid/gid in the header, and `fuse-backend-rs`'s passthrough runs
+/// the call as that user (`set_creds` -> `setresgid`/`setresuid`). When the
+/// guest cannot assume those ids, the switch fails `EPERM` and the host tool
+/// reports "cannot create ...: Operation not permitted" - while modifying an
+/// existing file still works, because every other handler runs as the relay's
+/// own identity. Rewriting the two fields makes a create execute as the user
+/// who owns the tree, which is the guest's dev identity in cang's shipped
+/// configuration: guest-init provisions it from `CANG_HOST_UID`/`CANG_HOST_GID`
+/// (`resolve_identity`), and the workspace image's root is chowned to it
+/// (`disk/workspace.rs::ensure_ready`). The aligned case is therefore a no-op,
+/// and a mismatch is repaired instead of refused.
+///
+/// Nothing else moves: length, opcode, unique, nodeid, pid and padding stay
+/// byte-identical, so the frame remains the one the host kernel issued.
+fn stamp_create_identity(request: &mut [u8], opcode: u32, owner: Option<(u32, u32)>) {
+    let Some((uid, gid)) = owner else {
+        return;
+    };
+    if request.len() < IN_HEADER_LEN || !CREATE_FAMILY.contains(&opcode) {
+        return;
+    }
+    request[IN_UID..IN_UID + 4].copy_from_slice(&uid.to_le_bytes());
+    request[IN_GID..IN_GID + 4].copy_from_slice(&gid.to_le_bytes());
 }
 
 /// The capability a file handle needs: `name_to_handle_at` with `AT_EMPTY_PATH`
@@ -281,6 +319,10 @@ pub struct RelayServer {
     /// What this connection's replies told the relay about the tree, so the
     /// watcher can name an invalidation by nodeid instead of by path.
     nodeids: NodeIds,
+    /// The uid/gid that owns the served tree, stamped on the create-family
+    /// requests ([`stamp_create_identity`]). `None` when the root could not be
+    /// stat'd, and those requests then keep the caller's own identity.
+    owner: Option<(u32, u32)>,
     pub ops: OpCounts,
 }
 
@@ -309,10 +351,17 @@ impl RelayServer {
         config.root_dir = root_dir.to_owned();
         let passthrough = PassthroughFs::new(config)
             .with_context(|| format!("failed to open the relay root '{root_dir}'"))?;
+        // The tree's owner, read once: what the guest's dev identity is in
+        // cang's shipped configuration, and the identity a create runs as.
+        let owner = std::fs::metadata(root_dir).ok().map(|metadata| {
+            use std::os::unix::fs::MetadataExt;
+            (metadata.uid(), metadata.gid())
+        });
         Ok(Self {
             server: Server::new(passthrough),
             devnull,
             nodeids: NodeIds::new(),
+            owner,
             ops: OpCounts::default(),
         })
     }
@@ -336,6 +385,9 @@ impl RelayServer {
             );
         }
         let opcode = u32::from_le_bytes([request[4], request[5], request[6], request[7]]);
+        // Before dispatch: the create-family handlers run as the caller's
+        // uid/gid, and a host caller's ids are not the guest's.
+        stamp_create_identity(request, opcode, self.owner);
         // `FORGET`/`BATCH_FORGET` are dispatched like every other frame: they take
         // no reply, but they are the *only* thing that drops an inode from
         // `PassthroughFs`'s table - and the table's entry is what holds the
@@ -658,6 +710,43 @@ mod tests {
         request
     }
 
+    /// A 40-byte `fuse_in_header` for a request the host kernel issued as `uid`:`gid`.
+    fn header(opcode: u32, total: usize, uid: u32, gid: u32) -> Vec<u8> {
+        let mut request = vec![0u8; total];
+        request[0..4].copy_from_slice(&(total as u32).to_le_bytes());
+        request[4..8].copy_from_slice(&opcode.to_le_bytes());
+        request[8..16].copy_from_slice(&7u64.to_le_bytes()); // unique
+        request[16..24].copy_from_slice(&1u64.to_le_bytes()); // nodeid 1 = root
+        request[IN_UID..IN_UID + 4].copy_from_slice(&uid.to_le_bytes());
+        request[IN_GID..IN_GID + 4].copy_from_slice(&gid.to_le_bytes());
+        request[IN_GID + 4..IN_GID + 8].copy_from_slice(&4242u32.to_le_bytes()); // pid
+        request
+    }
+
+    /// A `FUSE_CREATE` of `name` under the root inode, `fuse_create_in { flags,
+    /// mode, umask, fuse_flags }` then the name, sent by a caller of `uid`:`gid`.
+    fn create_request(name: &[u8], uid: u32, gid: u32) -> Vec<u8> {
+        let body = 16 + name.len() + 1;
+        let mut request = header(CREATE, IN_HEADER_LEN + body, uid, gid);
+        request[IN_HEADER_LEN..IN_HEADER_LEN + 4]
+            .copy_from_slice(&((libc::O_WRONLY | libc::O_CREAT) as u32).to_le_bytes());
+        request[IN_HEADER_LEN + 4..IN_HEADER_LEN + 8].copy_from_slice(&0o644u32.to_le_bytes());
+        let name_at = IN_HEADER_LEN + 16;
+        request[name_at..name_at + name.len()].copy_from_slice(name);
+        request
+    }
+
+    /// A `FUSE_MKDIR` of `name` under the root inode: `fuse_mkdir_in { mode,
+    /// umask }` then the name.
+    fn mkdir_request(name: &[u8], uid: u32, gid: u32) -> Vec<u8> {
+        let body = 8 + name.len() + 1;
+        let mut request = header(MKDIR, IN_HEADER_LEN + body, uid, gid);
+        request[IN_HEADER_LEN..IN_HEADER_LEN + 4].copy_from_slice(&0o755u32.to_le_bytes());
+        let name_at = IN_HEADER_LEN + 8;
+        request[name_at..name_at + name.len()].copy_from_slice(name);
+        request
+    }
+
     /// A `FUSE_FORGET` naming `nodeid` as the host kernel sends it when it drops
     /// a dentry: `in_header` plus `fuse_forget_in { nlookup }`.
     fn forget_request(nodeid: u64, nlookup: u64) -> Vec<u8> {
@@ -681,6 +770,105 @@ mod tests {
             .filter_map(|entry| std::fs::read_link(entry.ok()?.path()).ok())
             .filter(|linked| linked == &target)
             .count()
+    }
+
+    /// The create-family handlers are the only ones `fuse-backend-rs` runs as the
+    /// *caller's* uid/gid (`passthrough`'s `mkdir`/`create`/`mknod`/`symlink` call
+    /// `set_creds`; `write`, `unlink`, `rename`, `setattr` do not), and a caller
+    /// whose ids the guest cannot assume makes those switches fail `EPERM` - the
+    /// host tool then reports "cannot create ...: Operation not permitted" while
+    /// still modifying existing files fine. The relay stamps the served tree's
+    /// owner on those four requests, so a create is executed as the user who owns
+    /// the tree. This test runs unprivileged, which is exactly the shape of the
+    /// fault: `set_creds(4242, 4243)` cannot succeed for it.
+    #[test]
+    fn a_create_from_a_foreign_uid_lands_owned_by_the_tree_owner() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let owner = std::fs::metadata(root).expect("root metadata");
+        let owner = (owner.uid(), owner.gid());
+        let server = RelayServer::new(root.to_str().expect("utf-8 path"), passthrough_config())
+            .expect("relay server");
+
+        let mut input = init_request(KERNEL_INIT_FLAGS);
+        input.extend_from_slice(&create_request(b"from-host.txt", 4242, 4243));
+        input.extend_from_slice(&mkdir_request(b"from-host-dir", 4242, 4243));
+        let mut output: Vec<u8> = Vec::new();
+        server
+            .serve(&mut Cursor::new(input), &mut output, |_| {})
+            .expect("connection should be served");
+
+        for name in ["from-host.txt", "from-host-dir"] {
+            let created = root.join(name);
+            let metadata = std::fs::metadata(&created)
+                .unwrap_or_else(|err| panic!("the create of '{name}' must have succeeded: {err}"));
+            assert_eq!(
+                (metadata.uid(), metadata.gid()),
+                owner,
+                "'{name}' must be owned by the tree's own user, not by the caller's ids"
+            );
+        }
+    }
+
+    /// Stamping rewrites exactly the two caller fields of the four opcodes that
+    /// impersonate, and leaves every other opcode - and every other byte of the
+    /// header - as the host kernel issued it.
+    #[test]
+    fn stamping_rewrites_only_the_create_family_caller_fields() {
+        let owner = Some((1000u32, 1001u32));
+
+        for opcode in CREATE_FAMILY {
+            let mut request = header(opcode, IN_HEADER_LEN, 4242, 4243);
+            let before = request.clone();
+            stamp_create_identity(&mut request, opcode, owner);
+            assert_eq!(
+                &request[IN_UID..IN_UID + 4],
+                &1000u32.to_le_bytes(),
+                "uid of opcode {opcode}"
+            );
+            assert_eq!(
+                &request[IN_GID..IN_GID + 4],
+                &1001u32.to_le_bytes(),
+                "gid of opcode {opcode}"
+            );
+            assert_eq!(
+                &request[..IN_UID],
+                &before[..IN_UID],
+                "length, opcode, unique and nodeid must not move"
+            );
+            assert_eq!(
+                &request[IN_GID + 4..],
+                &before[IN_GID + 4..],
+                "pid and padding must not move (opcode {opcode})"
+            );
+        }
+
+        for opcode in [INIT, 1, 10, 12, 14, 16] {
+            let mut request = header(opcode, IN_HEADER_LEN, 4242, 4243);
+            let before = request.clone();
+            stamp_create_identity(&mut request, opcode, owner);
+            assert_eq!(
+                request, before,
+                "opcode {opcode} keeps the caller's identity: its handler runs as the relay"
+            );
+        }
+    }
+
+    /// A frame shorter than its header, or a tree whose owner could not be read,
+    /// is left exactly as it arrived: the stamp must never be the thing that
+    /// fails a request.
+    #[test]
+    fn stamping_leaves_a_short_or_unowned_frame_alone() {
+        let mut short = vec![0u8; 8];
+        stamp_create_identity(&mut short, CREATE, Some((1, 2)));
+        assert_eq!(short.len(), 8);
+
+        let mut request = header(CREATE, IN_HEADER_LEN, 4242, 4243);
+        let before = request.clone();
+        stamp_create_identity(&mut request, CREATE, None);
+        assert_eq!(request, before);
     }
 
     /// `FORGET` must be **dispatched**, not merely forwarded: it is the only

@@ -301,6 +301,22 @@ The mount does not arbitrate a concurrent host write and guest write to one
 file: it is for a launch whose tree the host reads, not one it writes at the same
 time.
 
+One asymmetry is worth knowing, because it is what a host-side `cp`/`tar` into
+the mount runs into: a **create-family** request (`create`, `mkdir`, `mknod`,
+`symlink`) is executed inside the guest as the user who owns the tree - the
+guest's `dev` identity, which is your own uid:gid, since guest-init provisions it
+from `CANG_HOST_UID`/`CANG_HOST_GID` - while every other mutation (a write into
+an existing file, truncation, `unlink`, `rename`, `chmod`) runs as the relay's
+own identity. Those four are the only handlers that impersonate a caller, so a
+file created through the mount is owned by the tree's user and the mount stays
+usable for a file made by hand. It is not how a tree gets imported: a FUSE
+round trip per entry is the wrong price for bulk, and a host `uid` the guest
+cannot assume is still refused. Import with a copy inside the guest instead
+(`--volume`, below):
+
+    cang ./work.raw --volume /host/tree:/mnt/import:ro -- \
+      bash -lc 'tar -C /mnt/import -cf - . | tar -C /workspace -xf -'
+
 **The invalidation watcher** (`CANG_WORKSPACE_RELAY_WATCH=1` on the `cang`
 command, forwarded into the guest environment; off by default) closes the
 held-descriptor window from the guest side: the guest relay watches the tree it
