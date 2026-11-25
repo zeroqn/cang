@@ -162,6 +162,23 @@ failure. "Reached" means live guests, never a green `cargo test`.
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link for the detail the ticket holds -->
 
+- [The workload bounds are applied twice on the session payload](tickets/15-workload-bounds-applied-twice.md):
+  **closed, fixed and read back on three default launches.** The payload now reads
+  `Cpus_allowed_list 0-23` / `nproc 24` on a 26-vCPU guest (arm 14's `0-21` / 22 is
+  gone), in one mask value across 2 283 samples spanning the whole boot; the record
+  agrees with it (`state=on cpus=26 reserved=2 mask=0-23 cargo_build_jobs=24`, and
+  `CARGO_BUILD_JOBS=24` in a fresh `/bin/sh -lc`); the supervisor stays `0-25`
+  (2 283 samples), `cang exec` stays `0-23`/24, and the `nix-daemon` (adj `-1000`)
+  plus the builder it forks are `0-23` (848 samples, chain
+  `sh -> nix-daemon(build) -> nix-daemon -> init.krun`). A 30 s saturation window
+  leaves exactly cpu24/cpu25 near-idle (0.005 / 0.004 busy) with cpu0-cpu23 at
+  0.987-1.000 - two reserved, not four. The fix is the first candidate shape
+  (kernel CPU list instead of musl's affinity `sysconf`, plus an idempotent
+  `apply_workload_range`); the booted binary is byte-identical to a fresh checked
+  build (441 tests). Also recorded: the check phase failed on the two tests as
+  first written (the nix sandbox has no `/sys`), repaired by a fixture; and the
+  "one guest at a time" gate `pgrep -x libkrun-vm-work` matches nothing even with
+  a live guest. Detail: [notes/15-bound-applied-once.md](notes/15-bound-applied-once.md).
 - [nix build is inside the CPU bound](tickets/14-nix-build-inside-the-bound.md):
   proven on a default launch, five ON boots and one OFF control. `nix-daemon` reads
   `Cpus_allowed_list 0-23` with `oom_score_adj -1000` still on it, the builder the
