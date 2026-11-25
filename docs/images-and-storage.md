@@ -241,6 +241,25 @@ memory rounded down to whole GiB, matching the libkrun VM memory policy. Pass
 `SCCACHE_DIR=/home/dev/.cache/sccache`, backed by cang's shared state
 `sccache` bind mount.
 
+Guest bootstrap also reserves CPU cores for the session itself. The workload -
+the shell's children, every `cang exec` command, and every `rustc` they start -
+is confined to the first `N-2` vCPUs (`N` = the guest's vCPU count), and the shell
+gets `CARGO_BUILD_JOBS=N-2` when it has not set one; a two-vCPU guest reserves one
+core and a one-vCPU guest reserves none. Measured on a 26-vCPU guest: the workload
+reads `nproc` 24 and `Cpus_allowed_list 0-23`, the session supervisor keeps `0-25`
+(586/586 samples during a storm), and every `rustc` inherits the mask (4 426
+samples). The two reserved cores carry only the guest's own kernel threads (2% to
+18% busy depending on the arm) while the same build without the bound leaves its
+least-busy core at 87.8% - what the bound guarantees is that the *workload* never
+uses them. The bound cost the build nothing: it was 3.8% faster with 10.4% less
+CPU time and 13.2% less peak anonymous memory, because cargo's own job count
+follows the mask. It is an affinity mask rather than a cgroup CPU quota on
+purpose: a `cpu.max` quota caps throughput but leaves every CPU busy (least-busy
+73%), and a quota over the whole guest cost 2.15x the build's wall time.
+`/run/cang/responsive.status` records the decision (`state`, `cpus`, `reserved`,
+`mask`, `cargo_build_jobs`); `CANG_GUEST_RESPONSIVE=0` turns these levers off
+without touching the OOM protection below.
+
 cang also attaches the virtio-balloon device. libkrun implements only the
 balloon's free-page-reporting queue - the inflate/deflate queues are stubs that
 log and drop - so this does not make `--mem` elastic: the guest still sees the
@@ -308,6 +327,24 @@ the sizing slowed that path by its own cost one-for-one. The device is active
 within about a second of the shell starting; a workload that allocates
 everything it can in that first second runs without swap, which is the same
 resilience it had before the first `swapon`.
+
+What the two limits mean for a guest under pressure, measured on a 4 GiB guest
+([the responsiveness notes](wayfinder/guest-responsiveness/notes/01-memory-failure-ladder.md)):
+
+- The effective ceiling is `MemTotal * (1 + 0.25 * c)` for the compression ratio
+  `c` the guest actually achieves. A real build's pages compress 9-10x, so the
+  budget never binds there (9 MB of a 253 MB cap on a 1 GiB guest) and the device
+  capacity is the limit; incompressible pages get `c` about 1.2, so the budget
+  pins at exactly `mem_limit` after storing about 1.2 GB.
+- When the budget pins, the device refuses further stores (`failed_writes` in
+  `/sys/block/zram0/io_stat`) while its own address space still reports free swap
+  - 3738 MB of a 3932 MB device in use for 983 MB of stored pages - and the
+  kernel retries. That gap is why the guest runs an early responder: `earlyoom`
+  kills the largest consumer at 10% free memory, ignoring the swap condition
+  because this device's `SwapFree` falls as pages park in it. It skips any process
+  at `oom_score_adj` -1000, which is the same set the guest protects.
+- A build storm alone does not reach this: a full 26-job `cargo build` finished at
+  `--mem` 4, 2 and 1 GiB with the swap device untouched at 2 GiB.
 
 ## Launch config
 

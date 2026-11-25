@@ -79,8 +79,9 @@ pub(in crate::guest_init) fn run(
     }
     // A resident supervisor must outlive guest memory pressure: libkrun's init
     // reboots the guest when the image entrypoint exits, so an OOM kill of this
-    // process would look like the task finishing.
-    process::protect_session_supervisor();
+    // process would look like the task finishing. The detached workers protect
+    // themselves the same way (see `runtime::protected_worker_label`).
+    process::protect_from_oom("guest session supervisor");
     managed_debug(&format!("starting port={}", config.port));
     managed_debug("vsock bind begin");
     let listener = VsockListener::bind(config.port)?;

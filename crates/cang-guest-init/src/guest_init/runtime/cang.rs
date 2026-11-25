@@ -304,6 +304,24 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         }
         Ok(())
     })?;
+    profiler.measure_result("record-responsiveness-policy", || {
+        // One small file under /run/cang/, written before the workload exists so a
+        // later arm can read what the policy decided instead of inferring it from
+        // the mask. Best effort: the levers apply whether or not it can be written.
+        if process::is_root() {
+            crate::guest_init::components::responsive::write_status();
+        }
+        Ok(())
+    })?;
+    profiler.measure_result("start-early-oom-responder", || {
+        // Detached and idle until the guest is short of memory, so it costs one
+        // fork/exec on the enter path and nothing after that. Started as root
+        // because it raises its own OOM score and signals other users' processes.
+        if process::is_root() {
+            crate::guest_init::components::responsive::start_early_responder();
+        }
+        Ok(())
+    })?;
     profiler.measure_result("configure-perf", || {
         if process::is_root() {
             crate::guest_init::components::hardening::perf::configure(

@@ -123,3 +123,50 @@ fn internal_shell_environment_preserves_explicit_locale_vars() {
 
     assert!(vars.is_empty());
 }
+
+/// The build job count is derived from the same reserve the affinity mask
+/// applies, so a shell does not spawn more compilers than the cores it was left.
+#[test]
+fn the_shell_environment_carries_the_bounded_build_job_count() {
+    let identity = DevIdentity::new(1234, 1235, PathBuf::from("/nix/store/fish/bin/fish"));
+    let shell_env = derive(&identity, false, None);
+
+    let cpus = crate::guest_init::runtime::cpu_bound::guest_cpu_count();
+    let expected = crate::guest_init::runtime::cpu_bound::workload_job_count(cpus);
+    let jobs = shell_env
+        .vars
+        .iter()
+        .find(|(key, _)| key == "CARGO_BUILD_JOBS");
+
+    match expected {
+        // A one-core guest reserves nothing, so forcing a value would only
+        // overwrite what its own `nproc` already gives.
+        None => assert_eq!(jobs, None, "a one-core guest exports no job count"),
+        Some(jobs_expected) => assert_eq!(
+            jobs,
+            Some(&("CARGO_BUILD_JOBS".to_owned(), jobs_expected.to_string())),
+            "the export is the count of the cores the workload keeps"
+        ),
+    }
+}
+
+/// A user's own choice wins: the guest derives the default only when it has one.
+#[test]
+fn an_explicit_build_job_count_is_not_overwritten() {
+    use std::ffi::OsString;
+
+    assert_eq!(
+        super::bounded_job_count_default(Some(OsString::from("4")), 26),
+        None
+    );
+    assert_eq!(
+        super::bounded_job_count_default(None, 26),
+        Some("24".to_owned())
+    );
+    assert_eq!(
+        super::bounded_job_count_default(None, 2),
+        Some("1".to_owned())
+    );
+    // One vCPU reserves nothing, so there is no default to force.
+    assert_eq!(super::bounded_job_count_default(None, 1), None);
+}

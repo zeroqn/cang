@@ -15,6 +15,7 @@ pub(in crate::guest_init) enum AsDevOperation {
     ReadMaterializedDevAccount,
     DeriveShellEnvironment,
     ExportShellEnvironment,
+    AllowWorkloadKill,
     DropAndExec,
 }
 
@@ -25,6 +26,9 @@ pub(in crate::guest_init) fn planned_as_dev_operations() -> Vec<AsDevOperation> 
         AsDevOperation::ReadMaterializedDevAccount,
         AsDevOperation::DeriveShellEnvironment,
         AsDevOperation::ExportShellEnvironment,
+        // `as-dev` can be reached from a protected session process, so the command
+        // it execs must start killable (see `process::drop_to_identity_and_exec`).
+        AsDevOperation::AllowWorkloadKill,
         AsDevOperation::DropAndExec,
     ]
 }
@@ -150,7 +154,14 @@ mod tests {
         assert_eq!(operations.first(), Some(&AsDevOperation::RequireRoot));
         assert!(operations.contains(&AsDevOperation::ReadMaterializedDevAccount));
         assert!(operations.contains(&AsDevOperation::DropAndExec));
-        assert_eq!(operations.len(), 5);
+        assert_eq!(
+            operations
+                .iter()
+                .position(|operation| operation == &AsDevOperation::AllowWorkloadKill),
+            Some(operations.len() - 2),
+            "the workload must become killable before it execs"
+        );
+        assert_eq!(operations.len(), 6);
     }
 
     #[test]

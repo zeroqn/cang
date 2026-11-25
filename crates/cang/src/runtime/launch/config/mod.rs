@@ -63,6 +63,15 @@ impl LaunchConfig {
         if spec.log_level.enables_debug() {
             guest_env::insert_env(&mut guest_config_env, model::GUEST_DEBUG_ENV, "1");
         }
+        // The guest's levers are on unless the caller turns them off, so the
+        // disabling value is the only one that has to reach the guest.
+        if let Some((key, value)) = components::responsive::guest_env_pair(
+            std::env::var(components::responsive::ENABLE_ENV)
+                .ok()
+                .as_deref(),
+        ) {
+            guest_env::insert_env(&mut guest_config_env, key, value);
+        }
         guest_env::insert_env(
             &mut guest_config_env,
             model::NIX_ALLOCATOR_ENV,

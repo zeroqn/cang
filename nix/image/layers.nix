@@ -315,6 +315,10 @@ let
 
   toolingImagePackages = [
     bun
+    # The guest's early out-of-memory responder, started by `cang-guest-init`'s
+    # responsive component: the kernel's own killer acts only after reclaim has
+    # thrashed, and on zram that is millions of failed page scans first.
+    pkgs.earlyoom
     # nixpkgs-unstable's cargo-deny, the same one the dev shell's lint gate
     # runs and the same input the image's Rust zg comes from.
     cargoDeny

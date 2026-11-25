@@ -321,6 +321,11 @@ the launch path still consumes the encoded private handoff format.
   A managed task keeps its supervisor out of the guest OOM killer's reach
   (`oom_score_adj` of -1000) while the shell and its children stay killable, so
   a single runaway process is killed instead of ending the whole microVM. The
+  detached guest-init workers are protected the same way - the zram swap worker,
+  the `/nix` overlay and Podman prep workers, and the Pulse bridge - because a
+  worker killed part-way through leaves the guest with that state half-built
+  (no swap at all, an unseeded overlay) for the rest of its life. Nothing in the
+  workload subtree is covered, so the kernel always has a victim. The
   guest console also captures a kernel panic, which cang reports as
   `guest kernel found no killable task and panicked` when the OOM killer had no
   victim left. Without the console capture a guest death under memory pressure

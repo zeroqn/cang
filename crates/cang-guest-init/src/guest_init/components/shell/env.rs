@@ -54,12 +54,37 @@ pub(in crate::guest_init) fn derive(
     if let Some(pulse_server) = pulse_server {
         vars.push(("PULSE_SERVER".to_owned(), pulse_server.to_owned()));
     }
+    if let Some(jobs) = crate::guest_init::components::responsive::enabled()
+        .then(|| {
+            bounded_job_count_default(
+                env::var_os("CARGO_BUILD_JOBS"),
+                crate::guest_init::runtime::cpu_bound::guest_cpu_count(),
+            )
+        })
+        .flatten()
+    {
+        vars.push(("CARGO_BUILD_JOBS".to_owned(), jobs));
+    }
     append_utf8_locale_defaults(&mut vars, |key| env::var_os(key));
     ShellEnvironment {
         vars,
         tmpdir,
         runtime_dir,
     }
+}
+
+/// The build job count the guest gives a shell: one compiler per core the
+/// workload was left, so a build spawns no more compilers than the reserving mask
+/// allows - which is also what keeps its peak anonymous memory down.
+///
+/// `None` when the user already set it (the shell's own configuration is sourced
+/// after this and wins) or when the guest is too small to reserve a core, where
+/// the guest's own `nproc` is already the right answer.
+fn bounded_job_count_default(existing: Option<std::ffi::OsString>, cpus: usize) -> Option<String> {
+    if existing.is_some() {
+        return None;
+    }
+    crate::guest_init::runtime::cpu_bound::workload_job_count(cpus).map(|jobs| jobs.to_string())
 }
 
 fn append_utf8_locale_defaults<F>(vars: &mut Vec<(String, String)>, lookup: F)

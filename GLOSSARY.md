@@ -220,6 +220,26 @@ binary's own run path.
 _Avoid_: gcc library directory, compatibility library directory
 
 
+**guest memory budget**:
+The guest's `MemTotal`, fixed for the microVM's life by `--mem` (default: 80% of host RAM, rounded down to whole GiB). It is the denominator every zram figure is a fraction of.
+_Avoid_: guest RAM limit, VM memory ceiling
+
+**zram budget**:
+The compressed store the guest's swap device may spend, `/sys/block/zram0/mem_limit` - a quarter of the guest memory budget. It is RAM spent on freed pages, not additional memory.
+_Avoid_: swap size, swap capacity
+
+**effective anonymous ceiling**:
+What a guest can actually hold before its kernel runs out of victims: `MemTotal * (1 + 0.25 * c)`, where `c` is the compression ratio `/sys/block/zram0/mm_stat` reports (`orig_data_size / compr_data_size`). A build's pages reach 9-10x; incompressible pages about 1.2.
+_Avoid_: swap total, 1.25x RAM
+
+**responsiveness levers**:
+The guest policies that trade some build throughput for latency or survival: the reserved CPU cores and the derived build job count, and the early out-of-memory responder. `CANG_GUEST_RESPONSIVE=0` turns them off. The OOM protection of guest-init processes is not one of them - it only prevents a crash.
+_Avoid_: tuning knobs, responsiveness mode
+
+**early responder**:
+The guest's `earlyoom` process, which kills the largest memory consumer at 10% free memory, before the kernel's own killer acts. It ignores swap (this guest's swap is zram) and skips any process at `oom_score_adj` -1000, so it and the OOM guard share one protected set.
+_Avoid_: oom killer, early oom daemon
+
 ## Example dialogue
 
 Dev: Should this task use a named VM instance?

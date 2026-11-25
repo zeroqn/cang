@@ -98,6 +98,42 @@ fn read_request(client: &mut std::fs::File) -> Result<Option<(Vec<String>, Waypi
     }
 }
 
+/// Turns the forked child into the exec'd workload: its own process group, an
+/// ordinary nice level, a killable OOM score, and the caller's credentials.
+///
+/// The OOM score is the load-bearing one. This listener runs on a thread of the
+/// managed-session supervisor, which sits at `oom_score_adj` -1000 so it survives
+/// guest memory pressure; the `fork` inherits that, and an unkillable command is
+/// worse than a killed one - the kernel skips it, takes whatever else is at 0 (in
+/// the measured arm, the session's idle payload), and then panics with "System is
+/// deadlocked on memory" for want of any other victim (`oom_kill.c:1159-1166`).
+/// So the command starts at the same score the session's own PTY child gets
+/// (`runtime/session.rs`'s `allow_workload_kill`).
+fn prepare_exec_child(
+    identity: &DevIdentity,
+    permissions: GuestPermissions,
+) -> std::io::Result<()> {
+    // The same two bounds every workload seam takes, from one call (`pre_exec`
+    // allows only async-signal-safe work, which both writes are).
+    process::become_workload();
+    // SAFETY: the caller runs this between `fork` and `exec`, where these
+    // async-signal-safe calls are what the child is allowed to do at all.
+    unsafe {
+        if libc::setpgid(0, 0) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // The client thread runs at the interactive nice level; the command it
+        // starts is ordinary work and must not outrank the guest's own build.
+        if libc::setpriority(libc::PRIO_PROCESS, 0, 0) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    if process::is_root() {
+        process::apply_dev_credentials(identity, permissions)?;
+    }
+    Ok(())
+}
+
 fn handle_client(
     mut client: std::fs::File,
     identity: &DevIdentity,
@@ -149,20 +185,7 @@ fn handle_client(
         .stderr(Stdio::piped());
     let identity = identity.clone();
     unsafe {
-        command.pre_exec(move || {
-            if libc::setpgid(0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            // The client thread runs at the interactive nice level; the command it
-            // starts is ordinary work and must not outrank the guest's own build.
-            if libc::setpriority(libc::PRIO_PROCESS, 0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if process::is_root() {
-                process::apply_dev_credentials(&identity, permissions)?;
-            }
-            Ok(())
-        });
+        command.pre_exec(move || prepare_exec_child(&identity, permissions));
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -345,6 +368,62 @@ mod tests {
             unsafe { libc::getegid() },
             PathBuf::from("/bin/sh"),
         )
+    }
+
+    /// The inherited score is what made the defect: the listener's thread group
+    /// sits at -1000, so a forked command was unkillable and the guest lost its
+    /// OOM victim. Raising our own score first makes the reset observable - the
+    /// prepared child reports 0, the control child keeps what it inherited.
+    ///
+    /// No privilege is needed for either write: the kernel only refuses a value
+    /// below the one this process was last given `CAP_SYS_RESOURCE` at
+    /// (`fs/proc/base.c:1130-1136`), which for an unprivileged process is
+    /// `OOM_SCORE_ADJ_MIN`. The window where this test binary is +1000 lasts two
+    /// child spawns and is restored before any assertion runs.
+    #[test]
+    fn exec_child_does_not_inherit_a_protected_oom_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let inherited_path = dir.path().join("inherited");
+        let reset_path = dir.path().join("reset");
+
+        std::fs::write("/proc/self/oom_score_adj", "1000\n").unwrap();
+
+        let control = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!(
+                "cat /proc/self/oom_score_adj > {}",
+                inherited_path.display()
+            ))
+            .status();
+
+        let identity = identity();
+        let permissions = Default::default();
+        let mut prepared = Command::new("/bin/sh");
+        prepared.arg("-c").arg(format!(
+            "cat /proc/self/oom_score_adj > {}",
+            reset_path.display()
+        ));
+        unsafe {
+            prepared.pre_exec(move || prepare_exec_child(&identity, permissions));
+        }
+        let prepared_status = prepared.status();
+
+        let own = std::fs::read_to_string("/proc/self/oom_score_adj").unwrap();
+        std::fs::write("/proc/self/oom_score_adj", "0\n").unwrap();
+
+        assert!(control.unwrap().success());
+        assert!(prepared_status.unwrap().success());
+        assert_eq!(own.trim(), "1000", "the test process keeps its own score");
+        assert_eq!(
+            std::fs::read_to_string(&inherited_path).unwrap().trim(),
+            "1000",
+            "a child that is not prepared keeps the inherited score"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&reset_path).unwrap().trim(),
+            "0",
+            "the exec child starts killable, like the session's PTY child"
+        );
     }
 
     #[test]

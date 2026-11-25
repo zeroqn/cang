@@ -180,10 +180,25 @@ pub(in crate::guest_init) fn is_root() -> bool {
     uid() == 0
 }
 
+/// Turn this process into the workload: killable again, and off the cores the
+/// guest reserves for itself.
+///
+/// Every path that becomes a workload calls this - the raw `enter` exec, the
+/// managed session's PTY child, `as-dev`, and the exec listener's child - because
+/// a live arm found that a seam which applied one half and missed the other
+/// shipped a default launch with no CPU bound at all (`nproc 26`, no idle core,
+/// versus `nproc 24` and two idle cores on the `--root` launch; note 09 §1).
+/// Keeping both halves in one call is what makes the seam list auditable.
+pub(in crate::guest_init) fn become_workload() {
+    allow_workload_kill();
+    crate::guest_init::runtime::cpu_bound::confine_workload();
+}
+
 pub(in crate::guest_init) fn exec_command(command: &[String]) -> Result<()> {
     if command.is_empty() {
         return Err(anyhow!("cannot exec an empty command"));
     }
+    become_workload();
     execvp(command)
 }
 
@@ -195,6 +210,14 @@ pub(in crate::guest_init) fn drop_to_identity_and_exec(
     if command.is_empty() {
         return Err(anyhow!("cannot exec an empty command"));
     }
+
+    // The caller may be a process the guest protects - `as-dev` is reached from a
+    // session context whose score is -1000, and the managed session's child is forked
+    // from the supervisor - so the command it becomes must stay killable, or the
+    // kernel ends up with no victim and panics (`oom_kill.c:1159-1166`). Both bounds
+    // go on before the credentials drop, while the score write is still guaranteed
+    // to be allowed.
+    become_workload();
 
     apply_dev_credentials(identity, permissions)?;
 
@@ -346,30 +369,47 @@ fn plan_nofile_floor(current: NofileLimits) -> Result<NofileLimits> {
 
 /// `/proc/<pid>/oom_score_adj` value that puts a task outside the OOM
 /// killer's reach (`OOM_SCORE_ADJ_MIN` in the kernel).
-const SUPERVISOR_OOM_SCORE_ADJ: i32 = -1000;
+const PROTECTED_OOM_SCORE_ADJ: i32 = -1000;
 
 /// OOM score left on the workload subtree, which stays the guest's victim.
 const WORKLOAD_OOM_SCORE_ADJ: i32 = 0;
 
 const OOM_SCORE_ADJ_PATH: &str = "/proc/self/oom_score_adj";
 
-/// Takes the managed-session supervisor out of the guest OOM killer's reach.
+/// Takes a process the guest cannot afford to lose out of the OOM killer's reach.
 ///
-/// Losing this process ends the microVM rather than the workload: libkrun's
-/// init execs the image entrypoint as a child of the real PID 1 and reboots
-/// the guest when that child exits, so an OOM kill here is indistinguishable
-/// from the task finishing. The guest runs the session either way, so a failed
-/// adjustment is reported and ignored.
-pub(in crate::guest_init) fn protect_session_supervisor() {
-    if let Err(err) = set_oom_score_adj(OOM_SCORE_ADJ_PATH, SUPERVISOR_OOM_SCORE_ADJ) {
-        eprintln!("cang-guest-init: guest session is not protected from the OOM killer: {err:#}");
+/// Two classes qualify. The managed-session supervisor, because losing it ends
+/// the microVM rather than the workload: libkrun's init execs the image
+/// entrypoint as a child of the real PID 1 and reboots the guest when that
+/// child exits, so an OOM kill here is indistinguishable from the task finishing.
+/// And the detached `internal` workers that own state the session then depends
+/// on - the zram device, the `/nix` overlay seed, the Podman store, the Pulse
+/// bridge - because a worker killed mid-way leaves that state half-built for the
+/// life of the guest.
+///
+/// Nothing in the workload subtree is covered: the shell, `cargo` and `rustc`
+/// keep score [`WORKLOAD_OOM_SCORE_ADJ`] and stay the kernel's victim (see
+/// [`allow_workload_kill`]), or a guest that is out of memory has nobody left to
+/// kill and panics instead of reclaiming. A worker therefore calls this itself,
+/// as its first act, rather than the spawner writing the child's `/proc` entry:
+/// the score then holds from the worker's own first instruction with no window
+/// between `fork` and write. A failed adjustment is reported and ignored, because
+/// a guest that cannot raise its own score still works, only less safely.
+pub(in crate::guest_init) fn protect_from_oom(what: &str) {
+    if let Err(err) = protect_from_oom_at(OOM_SCORE_ADJ_PATH, what) {
+        eprintln!("cang-guest-init: {err:#}");
     }
+}
+
+fn protect_from_oom_at(path: &str, what: &str) -> Result<()> {
+    set_oom_score_adj(path, PROTECTED_OOM_SCORE_ADJ)
+        .with_context(|| format!("{what} is not protected from the OOM killer"))
 }
 
 /// Restores the default OOM score on a workload process.
 ///
 /// Called in the forked child before it drops privileges: a child inherits the
-/// supervisor's score, and an inherited [`SUPERVISOR_OOM_SCORE_ADJ`] would leave
+/// protected score, and an inherited [`PROTECTED_OOM_SCORE_ADJ`] would leave
 /// a memory-hungry workload as unkillable as the supervisor, which ends in the
 /// kernel's "no killable processes" panic.
 pub(in crate::guest_init) fn allow_workload_kill() {
@@ -755,9 +795,80 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("oom_score_adj");
 
-        set_oom_score_adj(path.to_str().unwrap(), SUPERVISOR_OOM_SCORE_ADJ).unwrap();
+        set_oom_score_adj(path.to_str().unwrap(), PROTECTED_OOM_SCORE_ADJ).unwrap();
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "-1000\n");
+    }
+
+    /// Every protected process writes the same score, whether it is the session
+    /// supervisor or a detached worker: one definition of "the guest cannot lose
+    /// this".
+    #[test]
+    fn a_detached_worker_protects_itself_with_the_same_score_as_the_supervisor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent_path = dir.path().join("supervisor");
+        let worker_path = dir.path().join("worker");
+
+        protect_from_oom_at(agent_path.to_str().unwrap(), "guest session supervisor").unwrap();
+        protect_from_oom_at(worker_path.to_str().unwrap(), "guest swap worker").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&agent_path).unwrap(), "-1000\n");
+        assert_eq!(std::fs::read_to_string(&worker_path).unwrap(), "-1000\n");
+    }
+
+    /// The guard reports rather than fails: a guest that cannot raise its own
+    /// score still boots, and the message names which piece is unprotected so a
+    /// guest console says what protection was lost.
+    #[test]
+    fn a_worker_that_cannot_be_protected_reports_itself_by_name() {
+        let err = protect_from_oom_at("/nonexistent-oom/oom_score_adj", "guest swap worker")
+            .expect_err("a missing path must fail");
+
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("guest swap worker is not protected"),
+            "unexpected error: {message}"
+        );
+    }
+
+    /// One call carries both halves of "this process is the workload", and a seam
+    /// that uses it cannot miss one. The live arm proved *that* matters: the
+    /// default launch shipped with the killable half and not the CPU half, `nproc
+    /// 26` and no idle core (note 09 §1).
+    #[test]
+    fn becoming_the_workload_applies_both_bounds() {
+        let cpus = crate::guest_init::runtime::cpu_bound::guest_cpu_count();
+        let size = std::mem::size_of::<libc::cpu_set_t>();
+        let mut before: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        // SAFETY: pid 0 is this process and the set is correctly sized.
+        unsafe { assert_eq!(libc::sched_getaffinity(0, size, &mut before), 0) };
+
+        // The score half writes `/proc/self/oom_score_adj` for real; 0 is always
+        // permitted, so this needs no privilege.
+        become_workload();
+
+        // On a one-vCPU host `workload_cpu_range` is `None` and only the score half
+        // applies, so the mask assertion is skipped rather than faked.
+        if let Some((start, end)) = crate::guest_init::runtime::cpu_bound::workload_cpu_range(cpus)
+        {
+            let mut after: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+            // SAFETY: as above.
+            unsafe { assert_eq!(libc::sched_getaffinity(0, size, &mut after), 0) };
+            for cpu in 0..libc::CPU_SETSIZE as usize {
+                // SAFETY: `CPU_ISSET` only reads the set.
+                let in_mask = unsafe { libc::CPU_ISSET(cpu, &after) };
+                assert_eq!(in_mask, cpu >= start && cpu < end, "cpu {cpu}");
+            }
+            // SAFETY: restore, so the rest of the suite is not confined.
+            unsafe { assert_eq!(libc::sched_setaffinity(0, size, &before), 0) };
+        }
+
+        let score = std::fs::read_to_string("/proc/self/oom_score_adj").expect("score");
+        assert_eq!(
+            score.trim(),
+            WORKLOAD_OOM_SCORE_ADJ.to_string(),
+            "the workload is killable again"
+        );
     }
 
     #[test]
@@ -775,12 +886,12 @@ mod tests {
         // The supervisor is exempt from the OOM killer, so the workload has to
         // remain the more killable of the two or the kernel runs out of
         // victims and panics instead of reclaiming.
-        const { assert!(WORKLOAD_OOM_SCORE_ADJ > SUPERVISOR_OOM_SCORE_ADJ) };
+        const { assert!(WORKLOAD_OOM_SCORE_ADJ > PROTECTED_OOM_SCORE_ADJ) };
     }
 
     #[test]
     fn oom_score_adjust_surfaces_write_failures() {
-        let err = set_oom_score_adj("/nonexistent-oom/oom_score_adj", SUPERVISOR_OOM_SCORE_ADJ)
+        let err = set_oom_score_adj("/nonexistent-oom/oom_score_adj", PROTECTED_OOM_SCORE_ADJ)
             .expect_err("a missing path must fail");
 
         assert!(format!("{err:#}").contains("oom_score_adj"));

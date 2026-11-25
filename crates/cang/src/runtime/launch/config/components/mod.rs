@@ -7,4 +7,5 @@ pub(super) mod mounts;
 pub(super) mod network;
 pub(super) mod process;
 pub(super) mod resources;
+pub(super) mod responsive;
 pub(super) mod rootfs;
