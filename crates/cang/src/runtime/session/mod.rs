@@ -22,6 +22,7 @@ mod profile;
 mod pty_raw_passthrough;
 mod pulse_bridge;
 pub(crate) mod rootfs;
+mod scx;
 pub(crate) mod supervisor;
 pub(crate) mod task_control;
 mod terminal_env;
@@ -608,6 +609,9 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
                                 {
                                     env.push(pair);
                                 }
+                                if let Some(pair) = scx::guest_env_pair(plan.scx_enabled) {
+                                    env.push(pair);
+                                }
                                 if let Some(pair) = pty_raw_passthrough::guest_env_pair(pty.mode) {
                                     env.push(pair);
                                 }
@@ -1029,6 +1033,7 @@ mod tests {
             zero_copy_shm: false,
             zero_message_open: None,
             no_flush: None,
+            scx_enabled: true,
             cache_symlinks: None,
             negative_entry_millis: None,
             wayland: false,

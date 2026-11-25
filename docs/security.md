@@ -218,3 +218,43 @@ per-user containers config to override it. To refresh the policy, update the
   particular, the packaged nested-container profile blocks io_uring syscalls,
   and selected guest capabilities are not automatically granted inside nested
   containers.
+
+## Guest kernel symbols the sched_ext scheduler needs
+
+The guest starts `scx_bpfland` by default (`--scx=off` keeps the fair
+scheduler). Three kernel symbols exist only to let it load, and each widens the
+guest kernel's surface:
+
+- `CONFIG_KALLSYMS_ALL=y`: `/proc/kallsyms` carries every kernel **data** symbol
+  (164,711 lines in the shipped kernel), not just text. `scx_bpfland` reads
+  `sd_llc_id`/`sd_llc_size`, which are per-CPU data symbols
+  (`kernel/sched/topology.c`); without them in kallsyms the verifier refuses the
+  program's `ldimm64` load with `-ENOENT`. Symbol addresses stay gated by
+  `kernel.kptr_restrict`, which cang's own `perf`/`strace` policy already sets to
+  `0` when perf support is enabled (see the profiling note above), so treat the
+  names and not just the addresses as the exposure.
+- `CONFIG_IKCONFIG=y` + `CONFIG_IKCONFIG_PROC=y`: the whole guest kernel config
+  is readable by any guest process at `/proc/config.gz`. The scheduler's eBPF
+  object declares kcfg externs; libbpf fails its skeleton load with "failed to
+  open system Kconfig" when that file is absent.
+- `CONFIG_FUNCTION_TRACER=y`: turns on the ftrace surface (`ftrace_enabled`,
+  `available_tracers`, the fentry attach points) and inserts an mcount NOP at
+  every function entry. `scx_utils` refuses to start without
+  `/proc/sys/kernel/ftrace_enabled`. With it comes `CONFIG_TRACING`, and with
+  `CONFIG_TRACING` comes `tracefs` itself (`fs/Makefile`: `obj-$(CONFIG_TRACING)
+  += tracefs/`): the pinned kernel had neither. The scheduler needs all three
+  (`FTRACE` -> `KPROBE_EVENTS` -> `BPF_EVENTS` for libbpf's helper probe,
+  `FUNCTION_TRACER` for its own start gate), so **tracefs is built into the guest
+  kernel**; accepted on 2026-11-26 rather than losing the scheduler. Nothing in
+  cang mounts it, and with `CONFIG_DEBUG_FS` off the deprecated
+  automount-on-debugfs option has no target, so the exposure is a registered
+  filesystem type any root process in the guest can mount.
+
+`CONFIG_DEBUG_FS` is deliberately **not** enabled: `scx_lavd` reads tracefs and
+falls back to a debugfs mount when tracefs is not mounted, and this guest mounts
+neither - `mount -t debugfs` fails with "unknown filesystem type" because the
+filesystem is not built in. A scheduler that depends on it is not supported.
+
+These symbols are compiled into the firmware libkrun loads on the host, so they
+also apply to a maintenance VM and to any guest booted from that firmware.
+`--scx=off` does not remove them; it only stops the scheduler from loading.

@@ -20,6 +20,10 @@
   lz4,
   ncurses,
   openssl,
+  # `CONFIG_DEBUG_INFO_BTF` (the shipped x86_64 configs) needs `pahole` while the
+  # kernel links its BTF, which is what lets the guest expose /sys/kernel/btf/vmlinux
+  # and load a sched_ext scheduler's bpf object.
+  pahole,
   patch,
   perl,
   pkg-config,
@@ -123,6 +127,7 @@ let
       lz4
       ncurses
       openssl
+      pahole
       patch
       perl
       pkg-config

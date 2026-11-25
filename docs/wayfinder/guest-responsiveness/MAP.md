@@ -346,6 +346,14 @@ failure. "Reached" means live guests, never a green `cargo test`.
   pin** (no `sched_latency_ns` et al. in 7.3.5; their replacement is debugfs-only
   and `CONFIG_DEBUG_FS` is off). Detail:
   [notes/02-kernel-knobs.md](notes/02-kernel-knobs.md).
+- **sched_ext ships, default on.** Bob reversed the 2026-11-25 refusal on
+  2026-11-26: `scx_bpfland` starts on every guest unless `--scx=off`, and the
+  three kernel symbols it needs (`KALLSYMS_ALL`, `IKCONFIG_PROC`,
+  `FUNCTION_TRACER`) are accepted and recorded in `docs/security.md`. What each
+  symbol buys, the four failed boots that found them, and the boot evidence:
+  [notes/16-sched-ext-in-the-guest.md](notes/16-sched-ext-in-the-guest.md).
+  Unmeasured and recorded as such: any latency win, `SCX_OPS_SWITCH_PARTIAL`, and
+  the interaction with the note-36 `-20` niceness.
 - [Ship the defaults, the docs, and the acceptance numbers](tickets/10-ship-and-docs.md):
   the map's destination, reached. One default-on component (`components/responsive.rs`)
   with one opt-out (`CANG_GUEST_RESPONSIVE=0`) carries the levers; the OOM guard stays
@@ -403,33 +411,17 @@ failure. "Reached" means live guests, never a green `cargo test`.
 - **`zswap`, zram writeback, a second compression algorithm.** Not in the pinned
   kernel (`CONFIG_ZSWAP` off, `ZRAM_WRITEBACK` off, zstd/lzo only); changing that
   is a `libkrunfw` firmware effort.
-- **sched_ext (scx) in the guest.** Decided out of scope by bob, 2026-11-25,
-  with the price recorded so it is not re-derived: the pinned
-  `config-libkrunfw_x86_64-kvm` has `CONFIG_BPF=y`/`CONFIG_BPF_SYSCALL=y` but
-  **`# CONFIG_BPF_JIT is not set`** (`:123`), no `BPF_JIT_ALWAYS_ON`/
-  `BPF_JIT_DEFAULT_ON`, no `CONFIG_DEBUG_INFO_BTF`, no `CONFIG_SCHED_CLASS_EXT`,
-  and **`CONFIG_DEBUG_INFO_NONE=y`** (`:3456`) - while
-  `kernel/Kconfig.preempt:173-176` makes `SCHED_CLASS_EXT` depend on
-  `BPF_SYSCALL && BPF_JIT && DEBUG_INFO_BTF`, and
-  `Documentation/scheduler/sched-ext.rst:26-35` asks for two more. BTF is
-  generated *from* DWARF (`scripts/link-vmlinux.sh:214-230`,
-  `scripts/Makefile.vmlinux:73-75`), so enabling it means compiling the whole
-  kernel with DWARF and adding pahole (nixpkgs `pahole-1.31`, absent from
-  `nix/pkgs/libkrunfw.nix`'s inputs): a firmware rebuild plus the fork
-  tag -> gitlink -> `flake.lock` pin cascade, a scheduler binary in an image
-  that ships none (`scx_full-1.1.4` and `libbpf-1.7.0` exist in nixpkgs, zero
-  hits for `scx`/`sched_ext`/`libbpf` in `nix/` and `crates/`), a boot-time
-  loader in `cang-guest-init` with a `/run/cang/` status file and ticket
-  [08](tickets/08-guard-guest-init-processes.md)'s OOM guard, and a host knob -
-  including the `SCX_OPS_SWITCH_PARTIAL` decision, where the global mode would
-  re-open the note-36 nice `-20` result from scratch. **Re-open only if** the
-  arms from tickets [04](tickets/04-workload-cpu-bound.md)/[09](tickets/09-rustc-job-cap.md)
-  show the residual latency is scheduler-shaped rather than process-creation
-  shaped; until then the kernel-side answer is "no" and the lever that exists is
-  the CPU bound. Safety fact worth keeping: a BPF scheduler that errors or stalls
-  a runnable task is reverted to the fair class by the kernel itself
-  (`sched-ext.rst:9-13,60-64`), so the failure mode is "back to CFS", not "wedged
-  guest".
+- **Choosing the scheduler for a workload.** sched_ext *is* shipped
+  ([16](notes/16-sched-ext-in-the-guest.md)): the default launch starts
+  `scx_bpfland` from the image, `--scx=off` keeps the fair class, and the guest
+  records what happened in `/run/cang/scx.status`. Out of scope is everything
+  the scheduler cannot settle here: a per-workload scheduler selection, tuning
+  `scx_bpfland`'s own flags (it switches globally, so `SCX_OPS_SWITCH_PARTIAL`
+  and the note-36 nice `-20` result interact), and proving the latency win the
+  map's 2026-11-25 refusal asked for. Safety fact worth keeping: a BPF scheduler
+  that errors or stalls a runnable task is reverted to the fair class by the
+  kernel itself (`Documentation/scheduler/sched-ext.rst:9-13,60-64`), so the
+  failure mode is "back to CFS", not "wedged guest".
 - **Host launch defaults as such.** `--mem` at 80% of host RAM, the host-derived
   vCPU count, and adding a `--cpus` flag are host policy; this map may report
   how they interact (see the first *Not yet specified* item) but does not change

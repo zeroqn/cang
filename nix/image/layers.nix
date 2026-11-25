@@ -512,6 +512,12 @@ let
       pkgs.fontconfig.out
       pkgs.perf
       pkgs.strace
+      # `scx_bpfland`, the sched_ext scheduler `cang-guest-init` starts by
+      # default (`--scx=off` keeps the fair scheduler). The guest only loads it
+      # when its firmware was built with CONFIG_SCHED_CLASS_EXT, and records the
+      # reason in /run/cang/scx.status otherwise, so an older pinned firmware
+      # still boots with this binary present.
+      pkgs.scx.full
       waypipe
       wl-cross-domain-proxy
     ];
@@ -530,6 +536,9 @@ let
       pkgs.vulkan-tools
       pkgs.perf
       pkgs.strace
+      # `scx_bpfland` is spawned by name, so the scheduler's `bin` has to be on
+      # the guest's PATH, not merely present in the image's store.
+      pkgs.scx.full
       waypipe
       wl-cross-domain-proxy
     ];

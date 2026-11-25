@@ -139,6 +139,17 @@ rootless Podman tooling for development.
   cargo's own job count follows the mask. `/run/cang/responsive.status` records
   what the guest applied; `CANG_GUEST_RESPONSIVE=0` disables these levers - it
   never disables the OOM protection below.
+- The guest's scheduler is `scx_bpfland` from the sched_ext class, started by
+  `cang-guest-init` before the workload exists: bpfland ranks runnable tasks by
+  their deadline instead of the stock fair scheduler's virtual runtime. It is on
+  by default; `--scx=off` keeps the fair scheduler. A guest whose firmware predates
+  `CONFIG_SCHED_CLASS_EXT`, or whose image has no `scx_bpfland`, boots either way
+  and records which happened in `/run/cang/scx.status` (`state=started pid=…`,
+  `skipped reason=…`, `off`, or `failed reason=…`); the scheduler's own output is
+  `/run/cang/scx.log`. A scheduler that dies is reverted to the fair class by the
+  kernel, so the failure mode is a slower guest, not a wedged one. The kernel
+  symbols this needs - `KALLSYMS_ALL`, `IKCONFIG_PROC`, `FUNCTION_TRACER` - are
+  recorded in [security](docs/security.md).
 - Guest-init processes the session cannot outlive are kept out of the guest OOM
   killer's reach (`oom_score_adj` -1000): the managed-session supervisor, the zram
   swap worker, the `/nix` overlay and Podman prep workers, the Pulse bridge, and

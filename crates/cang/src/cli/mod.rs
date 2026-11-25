@@ -335,6 +335,15 @@ pub(crate) struct Cli {
     wayland: bool,
 
     #[arg(
+        long = "scx",
+        value_name = "MODE",
+        value_parser = parse_scx_arg,
+        help = "Start the guest's sched_ext scheduler (on|off, default on)",
+        long_help = "Start the guest's sched_ext scheduler (on|off, default on). `on` lets cang-guest-init start `scx_bpfland` from the image before the workload exists, which trades the stock fair scheduler for bpfland's earlier-deadline policy; `off` keeps the fair scheduler. A guest whose firmware predates `CONFIG_SCHED_CLASS_EXT`, or whose image has no `scx_bpfland`, boots either way and records why in /run/cang/scx.status."
+    )]
+    scx: Option<bool>,
+
+    #[arg(
         long,
         value_name = "WORKSPACE",
         value_parser = parse_workspace_arg,
@@ -995,6 +1004,7 @@ impl Cli {
             cache_symlinks: virtiofs_cache_symlinks(&self.virtiofs),
             negative_entry_millis: virtiofs_negative_entry(&self.virtiofs),
             wayland: self.wayland,
+            scx_enabled: self.scx.unwrap_or(true),
             workspace: self.workspace,
             waypipe: self.waypipe,
             publish: self.publish,
@@ -1057,6 +1067,8 @@ pub(crate) struct RuntimeOptions {
     pub(crate) cache_symlinks: Option<bool>,
     pub(crate) negative_entry_millis: Option<u64>,
     pub(crate) wayland: bool,
+    /// `--scx`: whether the guest is asked for a sched_ext scheduler.
+    pub(crate) scx_enabled: bool,
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) waypipe: Option<Option<PathBuf>>,
     pub(crate) publish: Vec<String>,
@@ -1181,6 +1193,16 @@ fn virtiofs_zero_message_open(options: &[FsOption]) -> Option<bool> {
 
 fn parse_permissions_arg(value: &str) -> Result<GuestPermissions, String> {
     value.parse()
+}
+
+/// `--scx on|off`, with the spellings `parse_env_flag` already accepts elsewhere
+/// so a launch and a script can say the same thing.
+fn parse_scx_arg(value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "on" | "1" | "true" | "yes" => Ok(true),
+        "off" | "0" | "false" | "no" => Ok(false),
+        other => Err(format!("scx mode '{other}' is invalid; use on or off")),
+    }
 }
 
 pub(crate) fn parse_gpu_arg(value: &str) -> Result<CliGpu, String> {
@@ -1554,6 +1576,32 @@ mod tests {
         let options = cli.try_into_runtime_options().expect("valid options");
         assert_eq!(options.gpu_mode, crate::runtime::vm::gpu::GpuMode::Drm);
         assert_eq!(options.gpu_shm_bytes, Some(1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn parses_scx_mode_and_defaults_on() {
+        use crate::cli::parse_scx_arg;
+
+        assert!(parse_scx_arg("on").unwrap());
+        assert!(!parse_scx_arg("off").unwrap());
+        assert!(!parse_scx_arg(" OFF ").unwrap());
+        assert!(parse_scx_arg("maybe").is_err());
+        assert!(parse_scx_arg("").is_err());
+
+        let default = Cli::try_parse_from(["cang"]).expect("a bare launch parses");
+        assert!(
+            default
+                .try_into_runtime_options()
+                .expect("valid options")
+                .scx_enabled,
+            "the scheduler is on unless the caller says off"
+        );
+        let off = Cli::try_parse_from(["cang", "--scx=off"]).expect("off parses");
+        assert!(
+            !off.try_into_runtime_options()
+                .expect("valid options")
+                .scx_enabled
+        );
     }
 
     #[test]

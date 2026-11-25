@@ -13,6 +13,7 @@ pub(in crate::guest_init) mod relay;
 pub(in crate::guest_init) mod responsive;
 pub(in crate::guest_init) mod rootless;
 pub(in crate::guest_init) mod sccache;
+pub(in crate::guest_init) mod scx;
 pub(in crate::guest_init) mod shell;
 pub(in crate::guest_init) mod swap;
 pub(in crate::guest_init) mod wayland;

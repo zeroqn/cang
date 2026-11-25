@@ -66,6 +66,9 @@ pub(crate) struct LaunchPlan {
     pub(crate) cache_symlinks: Option<bool>,
     pub(crate) negative_entry_millis: Option<u64>,
     pub(crate) wayland: bool,
+    /// Whether this launch asks the guest for a sched_ext scheduler (`--scx`).
+    /// The guest starts one by default; only `--scx=off` changes its environment.
+    pub(crate) scx_enabled: bool,
     pub(crate) waypipe: bool,
     pub(crate) waypipe_socket: Option<PathBuf>,
     pub(crate) new_perms: GuestPermissions,
@@ -198,6 +201,7 @@ impl LaunchPlan {
             cache_symlinks: options.cache_symlinks,
             negative_entry_millis: options.negative_entry_millis,
             wayland: options.wayland,
+            scx_enabled: options.scx_enabled,
             waypipe,
             waypipe_socket,
             new_perms: options.new_perms,
@@ -598,6 +602,7 @@ mod tests {
             cache_symlinks: None,
             negative_entry_millis: None,
             wayland: false,
+            scx_enabled: true,
             workspace: None,
             waypipe: None,
             publish: Vec::new(),

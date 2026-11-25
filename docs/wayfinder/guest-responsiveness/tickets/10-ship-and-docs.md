@@ -80,7 +80,7 @@ answer as the adoptions):
 | earlyoom at 10 % of free memory, swap ignored | **shipped** | [11](11-earlyoom.md) |
 | `vm.overcommit_memory=2` | **refused** (counts the zram device as capacity; no path to kswapd) | [03](03-overcommit-mode-verdict.md) |
 | zram geometry, `swappiness`, watermark levers, MGLRU `min_ttl_ms` | **no change** (unearned by any arm) | [06](06-zram-and-swap-tunables.md), [02](02-kernel-knob-inventory.md) |
-| sched_ext / scx | **out of scope** (firmware rebuild: BPF-JIT + BTF over a DWARF build) | MAP |
+| sched_ext / scx | **shipped later, default on** (2026-11-26 reversal: firmware symbols + `--scx=off`) | [16](../notes/16-sched-ext-in-the-guest.md) |
 | kswapd/kcompactd placement, zstd `level` | **named, unearned** | [04](04-workload-cpu-bound.md), [06](06-zram-and-swap-tunables.md) |
 
 **What is still owed, and is not a defect in this map** (they are the map's

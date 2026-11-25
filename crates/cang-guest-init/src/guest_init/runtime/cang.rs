@@ -53,6 +53,7 @@ pub(in crate::guest_init) enum CangEnterOperation {
     MaterializeAllocatorPreload,
     RestrictDmesg,
     ConfigureIoUring,
+    StartSchedExtScheduler,
     StartNixPrep,
     StartPodmanPrep,
     ExportNixRemote,
@@ -80,6 +81,7 @@ pub(in crate::guest_init) fn planned_enter_operations() -> Vec<CangEnterOperatio
         CangEnterOperation::MaterializeAllocatorPreload,
         CangEnterOperation::RestrictDmesg,
         CangEnterOperation::ConfigureIoUring,
+        CangEnterOperation::StartSchedExtScheduler,
         CangEnterOperation::StartNixPrep,
         CangEnterOperation::StartPodmanPrep,
         CangEnterOperation::ExportNixRemote,
@@ -319,6 +321,17 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         // because it raises its own OOM score and signals other users' processes.
         if process::is_root() {
             crate::guest_init::components::responsive::start_early_responder();
+        }
+        Ok(())
+    })?;
+    profiler.measure_result("start-sched-ext-scheduler", || {
+        // Best effort and detached: the scheduler changes how the workload is
+        // scheduled from here on, and a guest whose firmware or image cannot serve
+        // one keeps the fair scheduler instead of failing the boot. Started as
+        // root because loading it is a BPF program load, and before the workload
+        // so its policy is in force for the workload's first wakeup.
+        if process::is_root() {
+            crate::guest_init::components::scx::start();
         }
         Ok(())
     })?;
@@ -834,6 +847,31 @@ mod tests {
             pos(CangEnterOperation::EnsureLoopback) < pos(CangEnterOperation::RunManagedSession)
         );
         assert!(pos(CangEnterOperation::EnsureLoopback) < pos(CangEnterOperation::StartNixPrep));
+    }
+
+    /// The scheduler has to be driving the guest before the workload's first
+    /// wakeup, and after the step that can still fail the session.
+    #[test]
+    fn planned_cang_enter_starts_the_scheduler_before_the_workload() {
+        let operations = planned_enter_operations();
+        let pos = |op| {
+            operations
+                .iter()
+                .position(|candidate| candidate == &op)
+                .expect("operation should exist")
+        };
+
+        assert!(
+            pos(CangEnterOperation::StartSchedExtScheduler) < pos(CangEnterOperation::DropAndExec)
+        );
+        assert!(
+            pos(CangEnterOperation::StartSchedExtScheduler)
+                < pos(CangEnterOperation::RunManagedSession)
+        );
+        assert!(
+            pos(CangEnterOperation::ConfigureIoUring)
+                < pos(CangEnterOperation::StartSchedExtScheduler)
+        );
     }
 
     /// The swap *worker* is started before the workload, not its activation:
