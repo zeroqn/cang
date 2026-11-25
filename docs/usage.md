@@ -309,9 +309,12 @@ from `CANG_HOST_UID`/`CANG_HOST_GID` - while every other mutation (a write into
 an existing file, truncation, `unlink`, `rename`, `chmod`) runs as the relay's
 own identity. Those four are the only handlers that impersonate a caller, so a
 file created through the mount is owned by the tree's user and the mount stays
-usable for a file made by hand. It is not how a tree gets imported: a FUSE
-round trip per entry is the wrong price for bulk, and a host `uid` the guest
-cannot assume is still refused. Import with a copy inside the guest instead
+usable for a file made by hand. The relay never assumes the host caller's ids:
+it rewrites those four requests to the tree's owner before dispatch, and each
+handler opens the parent inode before it impersonates, so a directory or symlink
+created through the mount also lands owned by the tree instead of answering
+`EPERM`. It is still not how a tree gets imported - a FUSE round trip per entry
+is the wrong price for bulk. Import with a copy inside the guest instead
 (`--volume`, below):
 
     cang ./work.raw --volume /host/tree:/mnt/import:ro -- \

@@ -19,7 +19,9 @@ ignore = true
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# `cang-guest-relay` takes `fuse-backend-rs` from its upstream git tree, pinned
-# by `rev` in that crate's manifest: the registered release does not carry the
-# `async-io` path cang wants.
-allow-git = ["https://github.com/cloud-hypervisor/fuse-backend-rs"]
+# `cang-guest-relay` takes `fuse-backend-rs` from a git tree, pinned by `rev` in
+# that crate's manifest: the registered release does not carry the `async-io`
+# path cang wants. The tree is `zeroqn/fuse-backend-rs` @ `cang`, which is
+# upstream plus one commit that opens the parent inode above the `set_creds`
+# scope in `mkdir`/`symlink` (see that crate's manifest for why).
+allow-git = ["https://github.com/zeroqn/fuse-backend-rs"]

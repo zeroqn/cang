@@ -46,7 +46,9 @@ let
   # the vendored set is what is left over from the registry, produced by
   # `fetchCargoVendor` running `cargo vendor` over this tree. A libkrun or
   # rutabaga bump refreshes this hash in the same commit as the submodule
-  # pointers and the matching flake inputs.
+  # pointers and the matching flake inputs, and so does a bump of the guest
+  # relay's git-pinned `fuse-backend-rs` (`crates/cang-guest-relay/Cargo.toml`),
+  # which is vendored like a registry crate.
   #
   # This deliberately stays on nixpkgs' `rustPlatform` and not the pinned
   # toolchain's: the hash is a function of the lock file and the crate sources,
@@ -54,7 +56,7 @@ let
   # (`nix flake update fenix`) from re-hashing it.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-PXk0NAQSDyNJMCQ+QvneQF6cCSDBHti5jtqCGkF6GfA=";
+    hash = "sha256-VN38UzwqNx486hCBhOraRG2rvOV9nCQnwXTpPXIMTp4=";
   };
 
   # Building libkrun is what needs clang/libclang (krun-display and krun-input

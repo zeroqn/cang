@@ -13,13 +13,21 @@ anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true
 rustfs-mimalloc.workspace = true
-# The guest half of the reverse share, straight from upstream rather than the
-# crates.io release cang used to vendor: the git tree carries the `async-io`
-# path (and the `fusedev-uring` transport) the registered 0.12.1 does not, and
-# pinning a revision keeps the source reproducible while that work is
-# unreleased. `rev` is the whole pin - bumping it is the only way the guest
-# relay's FUSE implementation moves.
-fuse-backend-rs = { git = "https://github.com/cloud-hypervisor/fuse-backend-rs", rev = "506952b947cf4346d68550ebead4d244e2ad4a15", default-features = false, features = [
+# The guest half of the reverse share, from a git tree rather than the crates.io
+# release cang used to vendor: the git tree carries the `async-io` path (and the
+# `fusedev-uring` transport) the registered 0.12.1 does not, and pinning a
+# revision keeps the source reproducible while that work is unreleased. `rev` is
+# the whole pin - bumping it is the only way the guest relay's FUSE
+# implementation moves.
+#
+# `zeroqn/fuse-backend-rs` @ `cang` is upstream `506952b9` plus one commit:
+# `passthrough: open the parent before impersonating it`. Upstream's `mkdir`
+# and `symlink` reopen the parent inode *inside* the `set_creds` scope, and a
+# handle-stored inode is reopened with `open_by_handle_at`, which needs
+# `CAP_DAC_READ_SEARCH` in the effective set that `set_creds` clears - so with
+# `inode_file_handles` on (the relay's shipped configuration) a directory or
+# symlink create through the mount failed `EPERM` while a file create worked.
+fuse-backend-rs = { git = "https://github.com/zeroqn/fuse-backend-rs", rev = "9c464cb0992dc271c477461656e2a8bd228458c1", default-features = false, features = [
   "fusedev",
 ] }
 
