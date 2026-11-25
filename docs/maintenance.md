@@ -695,6 +695,28 @@ nix build .#libkrunfw
 
 #### Released so far
 
+- `v0.24.1` (`8c7a912a`) - a hotfix for the host's reverse share into
+  `/workspace`: `mkdir` and `ln -s` through the mount answered "Operation not
+  permitted" while `touch`, writes into existing files, and the relay crate's
+  own CREATE/MKDIR test as a foreign identity all worked. The fault was in the
+  pinned `fuse-backend-rs`: its `mkdir` and `symlink` reopen the parent inode
+  *inside* the `set_creds` scope, and with `inode_file_handles` on - the
+  relay's shipped policy, since it is guest root with CAP_DAC_READ_SEARCH -
+  that reopen is `open_by_handle_at`, which needs the capability that scope has
+  just cleared by changing euid; `create` and `mknod` open their parent before
+  it. The pin moves to `zeroqn/fuse-backend-rs` `9c464cb0` (upstream `506952b9`
+  plus one commit hoisting both opens ahead of `set_creds`), which re-hashes the
+  vendored set and lets `deny.toml` allow the fork's git source; the live arm
+  shows `mkdir`, `ln -s` and `cp -a` succeeding with entries owned `1000:993`.
+  The `/nix` block-lower smoke now keeps nix's own output in
+  `logs/resolve-<attr>.log` instead of discarding it, so a build resolution
+  that fails for a reason names that reason instead of `could not resolve a
+  cang binary`. Cut as a hotfix with the live smokes skipped: no deps pin moved
+  since `v0.24.0`, and the only `/nix`-lower change since it is that smoke's
+  own diagnostics. cang asset sha256
+  `29dd5ba64e32e765c76dab42a52c803cb5a4af53707d99d457a751afcfe01a9a`,
+  relay-pump sha256
+  `601781eda201501e343b54d6cd0b8e0e9fa13638328373c86a2f6b62ed22347b`.
 - `v0.23.2` (`57235e65`) - a cang release publishes the workspace relay's host
   half `relay-pump` as a second neutral ELF
   (`cang-relay-pump-<arch>-unknown-linux-gnu`, under the same payload contract
