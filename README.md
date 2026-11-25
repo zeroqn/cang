@@ -125,6 +125,28 @@ rootless Podman tooling for development.
   the watcher; `CANG_MEMORY_RECLAIM_PSI_FULL` and
   `CANG_MEMORY_RECLAIM_SWAP_OUT` move the thresholds. Details in
   [Images and storage](docs/images-and-storage.md).
+- The guest keeps two of its vCPUs out of the workload's reach, so a build
+  cannot take every core: `cargo`, `rustc` and whatever a `cang exec` command
+  starts run on `0..N-3` while the interactive session keeps every vCPU
+  (measured `nproc` 24 of 26 vCPUs, and 4 426 `rustc` mask samples all inside the
+  bound while the supervisor kept the full set; the reserved cores carry only the
+  guest's own kernel threads - 2% to 18% busy depending on what the kernel
+  schedules there - against 87.8% on the control), and the shell gets
+  `CARGO_BUILD_JOBS=N-2` unless the guest sets it. A guest with two vCPUs
+  reserves one and a one-vCPU guest reserves none. The bound made the reference
+  build *faster* where it was measured
+  (59.64 s to 57.40 s wall, -10.4% CPU time, -13.2% peak anonymous memory), because
+  cargo's own job count follows the mask. `/run/cang/responsive.status` records
+  what the guest applied; `CANG_GUEST_RESPONSIVE=0` disables these levers - it
+  never disables the OOM protection below.
+- Guest-init processes the session cannot outlive are kept out of the guest OOM
+  killer's reach (`oom_score_adj` -1000): the managed-session supervisor, the zram
+  swap worker, the `/nix` overlay and Podman prep workers, the Pulse bridge, and
+  the early out-of-memory responder. The workload and everything it starts stay
+  killable, so the kernel always has a victim; `cang exec` commands included. The
+  guest also runs `earlyoom` (10% of free memory, swap ignored because the guest's
+  swap is zram), which kills the largest consumer before reclaim can thrash -
+  `/run/cang/earlyoom.log` names the victim.
 - `cang --wayland` enables guest Wayland passthrough through
   `wl-cross-domain-proxy` and libkrun virtio-gpu DRM. The cang image includes
   the guest proxy binary and guest-init exports `XDG_RUNTIME_DIR=/run/user/<uid>`

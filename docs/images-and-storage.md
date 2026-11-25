@@ -260,6 +260,18 @@ purpose: a `cpu.max` quota caps throughput but leaves every CPU busy (least-busy
 `mask`, `cargo_build_jobs`); `CANG_GUEST_RESPONSIVE=0` turns these levers off
 without touching the OOM protection below.
 
+`nix build` is inside that bound too, but not by inheritance: a build delegates to
+the guest's `nix-daemon` (`NIX_REMOTE`), so the builders are the daemon's children
+and inherit *its* affinity, and the daemon is started by the `/nix` prep worker
+rather than by the session. Guest bootstrap therefore confines the daemon at spawn
+(`components/nix/root.rs`), which puts it and every builder it forks on the same
+cores - measured on a default launch: `nix-daemon` `Cpus_allowed_list 0-23` with
+its `oom_score_adj` still `-1000`, and a builder caught mid-build on `0-23` with
+the chain `sh -> nix-daemon(build) -> nix-daemon`. The consequence to know about is
+that everything routed through the daemon is confined, including `nix eval` and
+`nix develop`; a build run without the daemon (local store) was already confined,
+because then the builders are the client's children.
+
 cang also attaches the virtio-balloon device. libkrun implements only the
 balloon's free-page-reporting queue - the inflate/deflate queues are stubs that
 log and drop - so this does not make `--mem` elastic: the guest still sees the

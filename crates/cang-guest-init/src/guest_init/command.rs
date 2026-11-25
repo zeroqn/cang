@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 
 pub(in crate::guest_init) fn require_on_path(name: &str) -> Result<PathBuf> {
     find_on_path(name).ok_or_else(|| anyhow!("required tool '{name}' is not available on PATH"))
@@ -56,19 +56,4 @@ pub(in crate::guest_init) fn output_trimmed(
     }
     let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     Ok((!text.is_empty()).then_some(text))
-}
-
-pub(in crate::guest_init) fn spawn_background_with_env(
-    program: &str,
-    args: &[&str],
-    envs: &[(&str, &str)],
-) -> Result<Child> {
-    let mut command = Command::new(program);
-    command.args(args);
-    for (key, value) in envs {
-        command.env(key, value);
-    }
-    command
-        .spawn()
-        .with_context(|| format!("failed to spawn {program}"))
 }

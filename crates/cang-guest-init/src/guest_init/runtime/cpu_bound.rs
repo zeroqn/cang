@@ -18,7 +18,8 @@
 //! never to the session supervisor or the listener threads, which are the nice
 //! `-20` interactive path this reserve exists to protect.
 
-use anyhow::{Context, Result};
+use std::io;
+use std::path::Path;
 
 /// How many cores the workload may not use, for a guest with `cpus` vCPUs.
 ///
@@ -48,31 +49,111 @@ pub(in crate::guest_init) fn workload_job_count(cpus: usize) -> Option<usize> {
 }
 
 /// The guest's usable vCPU count, as the affinity mask sees it.
-pub(in crate::guest_init) fn guest_cpu_count() -> usize {
-    let count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
-    usize::try_from(count).unwrap_or(0)
-}
+/// The CPUs the guest kernel has online.
+pub(in crate::guest_init) const ONLINE_CPUS_PATH: &str = "/sys/devices/system/cpu/online";
 
-/// Confine the calling process - and every child it later forks or execs - to the
-/// cores the rule leaves it.
+/// The guest's usable vCPU count - the CPUs the kernel has, **not** the ones this
+/// process is allowed to run on.
 ///
-/// Best effort by design: a guest whose workload keeps every CPU still works, it
-/// only competes with the build, so a failure is reported and ignored. This runs
-/// in the child that is about to `exec`, so it must not allocate on the paths
-/// that come from `pre_exec`; the syscall itself is async-signal-safe.
-pub(in crate::guest_init) fn confine_workload() {
-    if !crate::guest_init::components::responsive::enabled() {
-        return;
-    }
-    if let Err(err) = confine_workload_at(guest_cpu_count()) {
-        eprintln!("cang-guest-init: workload CPU bound not applied: {err:#}");
-    }
+/// `sysconf(_SC_NPROCESSORS_ONLN)` is the affinity count on musl, so a process that
+/// is already confined reports its confined count, and deriving a mask from that
+/// reserves another two cores every time it happens. That is not hypothetical: a
+/// live arm caught the default launch reading `0-21` - 0-23 from the session child,
+/// then 22 vCPUs -> `0..22` from the re-derivation inside it
+/// ([note 14](../../../../../docs/wayfinder/guest-responsiveness/notes/14-nix-build-bound.md)).
+/// Read the kernel's own online list instead, and fall back to `sysconf` only if
+/// that file is unreadable.
+///
+/// May allocate (it reads a file), so it belongs in a parent, before the `fork`.
+pub(in crate::guest_init) fn guest_cpu_count() -> usize {
+    online_cpu_count_from(Path::new(ONLINE_CPUS_PATH))
+        .or_else(|| {
+            let count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+            usize::try_from(count).ok()
+        })
+        .unwrap_or(0)
 }
 
-fn confine_workload_at(cpus: usize) -> Result<bool> {
-    let Some((start, end)) = workload_cpu_range(cpus) else {
-        return Ok(false);
+/// Parse a kernel CPU list (`"0-25"`, `"0"`, `"0-3,6-7"`) into a count.
+fn online_cpu_count_from(path: &Path) -> Option<usize> {
+    parse_cpu_list(std::fs::read_to_string(path).ok()?.trim())
+}
+
+/// Count the CPUs a kernel list names. A malformed list is `None` rather than a
+/// guess, so the caller can fall back to `sysconf`.
+fn parse_cpu_list(list: &str) -> Option<usize> {
+    let mut count = 0usize;
+    for item in list.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            return None;
+        }
+        match item.split_once('-') {
+            Some((first, last)) => {
+                let first: usize = first.parse().ok()?;
+                let last: usize = last.parse().ok()?;
+                count = count.checked_add(last.checked_sub(first)?.checked_add(1)?)?;
+            }
+            None => {
+                item.parse::<usize>().ok()?;
+                count = count.checked_add(1)?;
+            }
+        }
+    }
+    (count > 0).then_some(count)
+}
+
+/// Whether this process may already run on every CPU inside `start..end` and on no
+/// other: the idempotence check, one `sched_getaffinity`.
+fn already_within(start: usize, end: usize) -> io::Result<bool> {
+    let mut current: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    // SAFETY: pid 0 is this process and the set is correctly sized.
+    let rc =
+        unsafe { libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut current) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    for cpu in 0..libc::CPU_SETSIZE as usize {
+        // SAFETY: `CPU_ISSET` only reads the set.
+        let set = unsafe { libc::CPU_ISSET(cpu, &current) };
+        let inside = cpu >= start && cpu < end;
+        if set != inside {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Confine the calling process, reporting a failure instead of failing the caller./// The confinement a child should apply, resolved in the parent.
+///
+/// Between `fork` and `exec` only async-signal-safe work is legal, and neither
+/// reading the environment (`responsive::enabled`) nor calling `sysconf` is, so the
+/// parent decides once and the child applies it with [`apply_workload_range`],
+/// which allocates nothing and makes one system call.
+pub(in crate::guest_init) fn planned_workload_range() -> Option<(usize, usize)> {
+    if !crate::guest_init::components::responsive::enabled() {
+        return None;
+    }
+    workload_cpu_range(guest_cpu_count())
+}
+
+/// Confine this process - and every child it later forks or execs - to `range`.
+///
+/// **Idempotent**: a process already inside the range is left alone. The bound is
+/// applied at layered seams (the session's forked child, then whatever that child
+/// execs through), so applying it twice must not reserve cores twice - and a live
+/// arm found exactly that when a re-derivation read its own confined count
+/// ([note 14](../../../../../docs/wayfinder/guest-responsiveness/notes/14-nix-build-bound.md)).
+///
+/// Allocates nothing, so it is legal in a `pre_exec` hook. `None` is the no-op
+/// case: `CANG_GUEST_RESPONSIVE=0`, or a guest with too few vCPUs to reserve one.
+pub(in crate::guest_init) fn apply_workload_range(range: Option<(usize, usize)>) -> io::Result<()> {
+    let Some((start, end)) = range else {
+        return Ok(());
     };
+    if already_within(start, end)? {
+        return Ok(());
+    }
     let mut mask: libc::cpu_set_t = unsafe { std::mem::zeroed() };
     for cpu in start..end {
         // SAFETY: `cpu` is inside the mask's capacity by construction (bounded by
@@ -83,12 +164,9 @@ fn confine_workload_at(cpus: usize) -> Result<bool> {
     // `cpu_set_t`.
     let rc = unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mask) };
     if rc != 0 {
-        return Err(std::io::Error::last_os_error()).context(format!(
-            "failed to confine the workload to CPUs {start}-{}",
-            end.saturating_sub(1)
-        ));
+        return Err(io::Error::last_os_error());
     }
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -125,10 +203,12 @@ mod tests {
     #[test]
     fn confining_this_process_changes_its_affinity_mask() {
         let cpus = guest_cpu_count();
-        if workload_cpu_range(cpus).is_none() {
+        let range = workload_cpu_range(cpus);
+        if range.is_none() {
             // A single-CPU host (a CI runner pinned to one core) has nothing to
-            // reserve; the rule is a no-op there by design.
-            assert!(!confine_workload_at(cpus).unwrap());
+            // reserve; the rule is a no-op there by design, and applying it must
+            // change nothing.
+            assert!(apply_workload_range(None).is_ok());
             return;
         }
 
@@ -140,7 +220,7 @@ mod tests {
         };
         get(&mut before);
 
-        assert!(confine_workload_at(cpus).unwrap(), "the bound applies");
+        apply_workload_range(range).expect("the bound applies");
         get(&mut after);
 
         let (start, end) = workload_cpu_range(cpus).unwrap();
@@ -158,6 +238,30 @@ mod tests {
         );
     }
 
+    /// The split the `pre_exec` seams rely on: the plan is resolved in the parent,
+    /// and applying it in the child allocates nothing.
+    #[test]
+    fn the_planned_range_is_what_the_child_applies() {
+        let planned = planned_workload_range();
+        // Without the environment read here, the property under test is the shape:
+        // a plan is either a real range or the disabled/no-op answer.
+        if let Some((start, end)) = planned {
+            assert!(start < end, "a planned range is never empty");
+            assert_eq!(start, 0, "the workload keeps the low cores");
+            assert_eq!(workload_cpu_range(guest_cpu_count()), planned);
+        }
+        assert!(apply_workload_range(planned).is_ok(), "the plan applies");
+        // Restore: the suite stays on every CPU it started with.
+        let size = std::mem::size_of::<libc::cpu_set_t>();
+        let mut full: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        for cpu in 0..guest_cpu_count() {
+            // SAFETY: bounded by the reported vCPU count.
+            unsafe { libc::CPU_SET(cpu, &mut full) };
+        }
+        // SAFETY: pid 0 is this process and the set is correctly sized.
+        unsafe { assert_eq!(libc::sched_setaffinity(0, size, &full), 0) };
+    }
+
     #[test]
     fn a_refused_syscall_is_reported_rather_than_swallowed() {
         // A mask for a CPU that cannot exist is refused by the kernel, which is
@@ -167,5 +271,84 @@ mod tests {
         let rc =
             unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mask) };
         assert_ne!(rc, 0, "an out-of-range mask must be refused");
+    }
+
+    /// The kernel's CPU-list spellings, as `/sys/devices/system/cpu/online` writes
+    /// them.
+    #[test]
+    fn the_online_cpu_list_is_counted_not_guessed() {
+        assert_eq!(parse_cpu_list("0-25"), Some(26));
+        assert_eq!(parse_cpu_list("0"), Some(1));
+        assert_eq!(parse_cpu_list("0-3,6-7"), Some(6));
+        assert_eq!(parse_cpu_list("0,2,4"), Some(3));
+        // A malformed list is `None` so the caller falls back instead of acting on
+        // a made-up count.
+        assert_eq!(parse_cpu_list(""), None);
+        assert_eq!(parse_cpu_list("0-"), None);
+        assert_eq!(parse_cpu_list("3-1"), None);
+        assert_eq!(parse_cpu_list("x"), None);
+    }
+
+    /// Where the count comes from, and the property arm 14 found broken: it is the
+    /// kernel's CPU *list*, never this process's affinity.
+    ///
+    /// A fixture rather than the real `ONLINE_CPUS_PATH`, because a `nix build`
+    /// check phase runs without `/sys` mounted - a test that asserts the real path
+    /// exists cannot pass in the sandbox CI uses.
+    #[test]
+    fn the_cpu_count_comes_from_the_kernel_list_not_this_process_affinity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let online = dir.path().join("online");
+        std::fs::write(&online, "0-25\n").expect("fixture");
+
+        assert_eq!(online_cpu_count_from(&online), Some(26));
+
+        // Confine this thread to one CPU: the list still answers 26, which is the
+        // whole point (musl's `sysconf` would have answered 1).
+        let size = std::mem::size_of::<libc::cpu_set_t>();
+        let mut before: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        // SAFETY: pid 0 is this thread and the set is correctly sized.
+        unsafe { assert_eq!(libc::sched_getaffinity(0, size, &mut before), 0) };
+        apply_workload_range(Some((0, 1))).expect("confine to one cpu");
+        assert_eq!(online_cpu_count_from(&online), Some(26));
+        // SAFETY: restore this thread's mask.
+        unsafe { assert_eq!(libc::sched_setaffinity(0, size, &before), 0) };
+    }
+
+    /// Applying the bound twice reserves nothing extra: the second call is a no-op
+    /// once the mask is already inside the range.
+    #[test]
+    fn applying_the_bound_twice_does_not_reserve_twice() {
+        let cpus = guest_cpu_count();
+        let Some(range) = workload_cpu_range(cpus) else {
+            return;
+        };
+        let size = std::mem::size_of::<libc::cpu_set_t>();
+        let mut before: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        // SAFETY: pid 0 is this process.
+        unsafe { assert_eq!(libc::sched_getaffinity(0, size, &mut before), 0) };
+
+        apply_workload_range(Some(range)).expect("first application");
+        let mut first: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        // SAFETY: as above.
+        unsafe { assert_eq!(libc::sched_getaffinity(0, size, &mut first), 0) };
+        apply_workload_range(Some(range)).expect("second application");
+        let mut second: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        // SAFETY: as above.
+        unsafe { assert_eq!(libc::sched_getaffinity(0, size, &mut second), 0) };
+
+        for cpu in 0..libc::CPU_SETSIZE as usize {
+            // SAFETY: `CPU_ISSET` only reads the sets.
+            assert_eq!(
+                unsafe { libc::CPU_ISSET(cpu, &first) },
+                unsafe { libc::CPU_ISSET(cpu, &second) },
+                "cpu {cpu} after the second application"
+            );
+        }
+        // And the range itself is what the rule said, not two cores narrower.
+        assert_eq!(range, (0, cpus - reserved_cores(cpus)));
+
+        // SAFETY: restore.
+        unsafe { assert_eq!(libc::sched_setaffinity(0, size, &before), 0) };
     }
 }

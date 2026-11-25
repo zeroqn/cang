@@ -162,6 +162,19 @@ failure. "Reached" means live guests, never a green `cargo test`.
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link for the detail the ticket holds -->
 
+- [nix build is inside the CPU bound](tickets/14-nix-build-inside-the-bound.md):
+  proven on a default launch, five ON boots and one OFF control. `nix-daemon` reads
+  `Cpus_allowed_list 0-23` with `oom_score_adj -1000` still on it, the builder the
+  daemon forks is caught mid-build at `0-23` (318 samples, chain
+  `sh -> nix-daemon(build) -> nix-daemon -> init.krun`), the build produces its
+  output, the supervisor stays `0-25` and `cang exec` stays `0-23`/`rc=0`; the OFF
+  control (`CANG_GUEST_RESPONSIVE=0`) moves daemon and builder to `0-25` and keeps
+  `-1000`. **One regression recorded, not closed**: the same `WorkloadBounds`
+  refactor made the session payload apply the mask twice, so it reads `0-21`
+  (22 vCPUs) in every ON boot while the status file and `CARGO_BUILD_JOBS=24` say
+  `0-23` - a follow-up ticket. Also: the installed host CLI predates the
+  `CANG_GUEST_RESPONSIVE` forwarding, so the OFF arm needed a rebuilt `.#cang`.
+  Detail: [notes/14-nix-build-bound.md](notes/14-nix-build-bound.md).
 - [The default launch takes both bounds, and the early responder fires before the wall](tickets/13-default-bound-and-earlyoom.md):
   both proven, on the **default** launch (no `--root` - the shape a user gets). **A**:
   payload `nproc 24`, `Cpus_allowed_list 0-23`, 4 426 `rustc` mask samples all `0-23`,

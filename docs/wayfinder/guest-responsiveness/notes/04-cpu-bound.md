@@ -19,6 +19,14 @@ from a guest this arm booted; nothing is quoted from another note. Arm kit and r
 `N` = the guest's `nproc` = its vCPU count = **26** here (`resources.rs:8-15` takes
 `available - 2` on a 28-CPU host; the rule therefore gives `jobs = max(1, N-2) = 24`).
 
+> **Correction, 2026-11-25 (later the same day).** The `nix build` gap this note
+> records is closed: the guest confines `nix-daemon` at spawn
+> (`components/nix/root.rs::start_daemon`), so the daemon and every builder it
+> forks for `nix build` run on the workload's cores. Live proof - five ON boots
+> and one OFF control - in [note 14](14-nix-build-bound.md); what it costs
+> (`nix eval`/`nix develop` are confined too) is in
+> [docs/images-and-storage.md](../../../../docs/images-and-storage.md).
+>
 ## 1. Who the bound has to cover, in this checkout's launch shapes
 
 The ticket guessed two shapes and sorted the payload by them. Read against this tree, there are two

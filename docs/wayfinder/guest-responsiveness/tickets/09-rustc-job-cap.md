@@ -6,6 +6,14 @@ blocked_by: ["04-workload-cpu-bound"]
 claimed_by: "pi (agent, 2026-11-25)"
 ---
 
+> **Correction, 2026-11-25 (later the same day).** The `nix build` gap this note
+> records is closed: the guest confines `nix-daemon` at spawn
+> (`components/nix/root.rs::start_daemon`), so the daemon and every builder it
+> forks for `nix build` run on the workload's cores. Live proof - five ON boots
+> and one OFF control - in [note 14](14-nix-build-bound.md); what it costs
+> (`nix eval`/`nix develop` are confined too) is in
+> [docs/images-and-storage.md](../../../../docs/images-and-storage.md).
+>
 ## Question
 
 Ship bob's rule - at least 2 cores free of rustc, `max(1, nproc - 2)`, with

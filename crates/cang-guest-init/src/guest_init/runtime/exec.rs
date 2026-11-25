@@ -112,10 +112,11 @@ fn read_request(client: &mut std::fs::File) -> Result<Option<(Vec<String>, Waypi
 fn prepare_exec_child(
     identity: &DevIdentity,
     permissions: GuestPermissions,
+    bounds: process::WorkloadBounds,
 ) -> std::io::Result<()> {
-    // The same two bounds every workload seam takes, from one call (`pre_exec`
-    // allows only async-signal-safe work, which both writes are).
-    process::become_workload();
+    // Both halves of "this process is the workload", from the bounds the parent
+    // resolved: raw writes only, nothing that allocates between `fork` and `exec`.
+    bounds.apply()?;
     // SAFETY: the caller runs this between `fork` and `exec`, where these
     // async-signal-safe calls are what the child is allowed to do at all.
     unsafe {
@@ -184,8 +185,11 @@ fn handle_client(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let identity = identity.clone();
+    // Resolved here, in the parent: reading the environment and `sysconf` are not
+    // async-signal-safe, and the child may only apply a decision.
+    let bounds = process::WorkloadBounds::prepare();
     unsafe {
-        command.pre_exec(move || prepare_exec_child(&identity, permissions));
+        command.pre_exec(move || prepare_exec_child(&identity, permissions, bounds));
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -403,8 +407,9 @@ mod tests {
             "cat /proc/self/oom_score_adj > {}",
             reset_path.display()
         ));
+        let bounds = process::WorkloadBounds::prepare();
         unsafe {
-            prepared.pre_exec(move || prepare_exec_child(&identity, permissions));
+            prepared.pre_exec(move || prepare_exec_child(&identity, permissions, bounds));
         }
         let prepared_status = prepared.status();
 

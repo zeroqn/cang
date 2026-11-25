@@ -180,18 +180,70 @@ pub(in crate::guest_init) fn is_root() -> bool {
     uid() == 0
 }
 
+/// The bounds a process about to become the workload applies, decided in the
+/// parent so a `pre_exec` hook can apply them without allocating.
+///
+/// [`apply_become_workload`] is the child half and makes two writes: the OOM score
+/// and one `sched_setaffinity`.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::guest_init) struct WorkloadBounds {
+    cpu_range: Option<(usize, usize)>,
+}
+
+impl WorkloadBounds {
+    pub(in crate::guest_init) fn prepare() -> Self {
+        Self {
+            cpu_range: crate::guest_init::runtime::cpu_bound::planned_workload_range(),
+        }
+    }
+
+    /// Apply them in this process: no allocation, so this is legal between `fork`
+    /// and `exec`.
+    pub(in crate::guest_init) fn apply(self) -> std::io::Result<()> {
+        write_workload_oom_score()?;
+        crate::guest_init::runtime::cpu_bound::apply_workload_range(self.cpu_range)
+    }
+}
+
 /// Turn this process into the workload: killable again, and off the cores the
 /// guest reserves for itself.
 ///
-/// Every path that becomes a workload calls this - the raw `enter` exec, the
-/// managed session's PTY child, `as-dev`, and the exec listener's child - because
-/// a live arm found that a seam which applied one half and missed the other
-/// shipped a default launch with no CPU bound at all (`nproc 26`, no idle core,
-/// versus `nproc 24` and two idle cores on the `--root` launch; note 09 §1).
-/// Keeping both halves in one call is what makes the seam list auditable.
+/// Every path that becomes a workload calls this - the raw `enter` exec,
+/// `as-dev`, and the exec listener's child - because a live arm found that a seam
+/// which applied one half and missed the other shipped a default launch with no
+/// CPU bound at all (`nproc 26`, no idle core, versus `nproc 24` and two idle
+/// cores on the `--root` launch; note 09 §1). A caller that is already inside
+/// `pre_exec` uses [`WorkloadBounds`] instead, because this one may allocate.
 pub(in crate::guest_init) fn become_workload() {
-    allow_workload_kill();
-    crate::guest_init::runtime::cpu_bound::confine_workload();
+    WorkloadBounds::prepare()
+        .apply()
+        .unwrap_or_else(|err| eprintln!("cang-guest-init: {err}"));
+}
+
+/// Write [`WORKLOAD_OOM_SCORE_ADJ`] into this process's own score file.
+///
+/// Raw `open`/`write`/`close` with a static buffer, so it is async-signal-safe:
+/// `std::fs::write` with a formatted value is not.
+fn write_workload_oom_score() -> std::io::Result<()> {
+    const PATH: &[u8] = b"/proc/self/oom_score_adj\0";
+    // The zero the workload keeps, as bytes: checked against the named constant so
+    // the two cannot drift.
+    const SCORE: &[u8] = b"0\n";
+    const { assert!(WORKLOAD_OOM_SCORE_ADJ == 0) };
+    // SAFETY: the path is a static NUL-terminated string, the score a static
+    // buffer, and these three calls are async-signal-safe.
+    unsafe {
+        let fd = libc::open(PATH.as_ptr() as *const libc::c_char, libc::O_WRONLY);
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let written = libc::write(fd, SCORE.as_ptr() as *const libc::c_void, SCORE.len());
+        libc::close(fd);
+        if written < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 pub(in crate::guest_init) fn exec_command(command: &[String]) -> Result<()> {
@@ -389,7 +441,7 @@ const OOM_SCORE_ADJ_PATH: &str = "/proc/self/oom_score_adj";
 ///
 /// Nothing in the workload subtree is covered: the shell, `cargo` and `rustc`
 /// keep score [`WORKLOAD_OOM_SCORE_ADJ`] and stay the kernel's victim (see
-/// [`allow_workload_kill`]), or a guest that is out of memory has nobody left to
+/// [`WorkloadBounds`]), or a guest that is out of memory has nobody left to
 /// kill and panics instead of reclaiming. A worker therefore calls this itself,
 /// as its first act, rather than the spawner writing the child's `/proc` entry:
 /// the score then holds from the worker's own first instruction with no window
@@ -412,12 +464,6 @@ fn protect_from_oom_at(path: &str, what: &str) -> Result<()> {
 /// protected score, and an inherited [`PROTECTED_OOM_SCORE_ADJ`] would leave
 /// a memory-hungry workload as unkillable as the supervisor, which ends in the
 /// kernel's "no killable processes" panic.
-pub(in crate::guest_init) fn allow_workload_kill() {
-    if let Err(err) = set_oom_score_adj(OOM_SCORE_ADJ_PATH, WORKLOAD_OOM_SCORE_ADJ) {
-        eprintln!("cang-guest-init: guest workload OOM score not restored: {err:#}");
-    }
-}
-
 fn set_oom_score_adj(path: &str, score: i32) -> Result<()> {
     std::fs::write(path, format!("{score}\n"))
         .with_context(|| format!("failed to write {score} to {path}"))

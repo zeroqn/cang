@@ -657,13 +657,34 @@ pub(in crate::guest_init) fn link_default_daemon_socket(link: &Path, target: &Pa
     })
 }
 
+/// Start the store daemon, on the cores the workload is confined to.
+///
+/// The daemon is why `nix build` was outside the CPU bound: a build delegates to it
+/// over `NIX_REMOTE`, so the builders are its children and inherit *its* affinity,
+/// and it is spawned from prep - not from the session - so it would otherwise keep
+/// every vCPU (note 04 §5.5). Confining it at spawn puts the daemon and every
+/// builder it forks on the reserved-cores side of the mask, and nothing else
+/// changes: a `nix build` run without the daemon (local store) is confined already
+/// because the builders are then the client's children.
+///
+/// The range is resolved here, in the parent, and applied in the `pre_exec` hook,
+/// where only async-signal-safe work is legal. Its OOM score is deliberately left
+/// alone: the daemon inherited the prep worker's protection, and a daemon the
+/// guest could lose mid-build is a worse outcome than a slower build.
 fn start_daemon() -> Result<Child> {
-    command::spawn_background_with_env(
-        "nix-daemon",
-        &["--daemon"],
-        &[(DAEMON_SOCKET_ENV, NIX_DAEMON_SOCKET_PATH)],
-    )
-    .context("failed to start nix-daemon")
+    let cpu_range = crate::guest_init::runtime::cpu_bound::planned_workload_range();
+    let mut command = Command::new("nix-daemon");
+    command
+        .arg("--daemon")
+        .env(DAEMON_SOCKET_ENV, NIX_DAEMON_SOCKET_PATH);
+    // SAFETY: `pre_exec` runs between `fork` and `exec`, where one
+    // `sched_setaffinity` on a pre-resolved range is what the child may do.
+    unsafe {
+        command.pre_exec(move || {
+            crate::guest_init::runtime::cpu_bound::apply_workload_range(cpu_range)
+        });
+    }
+    command.spawn().context("failed to start nix-daemon")
 }
 
 /// A socket node is not a working daemon.

@@ -1513,6 +1513,9 @@ fn spawn_pty_child(
     permissions: GuestPermissions,
     drop_to_identity: bool,
 ) -> Result<libc::pid_t> {
+    // Resolved before the `fork`: the child applies a decision, it does not read
+    // the environment or call `sysconf`.
+    let bounds = process::WorkloadBounds::prepare();
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         bail!(
@@ -1521,9 +1524,12 @@ fn spawn_pty_child(
         );
     }
     if pid == 0 {
-        // The workload subtree inherits the supervisor's OOM score, so it has to
-        // stay killable: the guest needs a victim for the kernel to pick.
-        process::allow_workload_kill();
+        // The workload subtree inherits the supervisor's OOM score and its full CPU
+        // set, so it has to become killable and take the reserved-cores mask: the
+        // guest needs a victim, and the interactive path needs cores.
+        if let Err(err) = bounds.apply() {
+            eprintln!("cang-guest-init: managed session child bounds not applied: {err}");
+        }
         let code = child_main(
             &pty.slave_path,
             command,
