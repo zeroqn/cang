@@ -14,7 +14,7 @@ use crate::runtime::launch::components::mounts;
 use crate::runtime::launch::components::persistent_disks::workspace;
 use crate::runtime::launch::config::{
     AllocatorMode, BindMount, BindMountSourceKind, GuestPermissions, NIX_TARGET, NetworkMode,
-    PulseServer, canonical_mount_target,
+    PulseServer, WORKSPACE_TARGET, canonical_mount_target,
 };
 use crate::runtime::seccomp::{self, AuditMode, SeccompMode};
 use crate::runtime::vm::gpu::GpuMode;
@@ -152,6 +152,7 @@ impl LaunchPlan {
             &options.volumes,
             &workspace_dir,
             bind_mounts.len(),
+            workspace_disk.is_some(),
         )?);
         crate::runtime::launch::config::validate_mounts(&bind_mounts)?;
         let task_rootfs_backend = options
@@ -432,11 +433,14 @@ fn prepare_user_volume_mounts(
     volumes: &[VolumeSpec],
     workspace_dir: &Path,
     tag_start: usize,
+    workspace_disk: bool,
 ) -> Result<Vec<BindMount>> {
     volumes
         .iter()
         .enumerate()
-        .map(|(index, volume)| prepare_user_volume_mount(volume, workspace_dir, tag_start + index))
+        .map(|(index, volume)| {
+            prepare_user_volume_mount(volume, workspace_dir, tag_start + index, workspace_disk)
+        })
         .collect()
 }
 
@@ -444,8 +448,9 @@ fn prepare_user_volume_mount(
     volume: &VolumeSpec,
     workspace_dir: &Path,
     tag_index: usize,
+    workspace_disk: bool,
 ) -> Result<BindMount> {
-    let target = validate_user_volume_target(&volume.target)?;
+    let target = validate_user_volume_target(&volume.target, workspace_disk)?;
     let source = absolute_source_path(&volume.source, workspace_dir);
     let source = fs::canonicalize(&source)
         .with_context(|| format!("failed to inspect volume source '{}'", source.display()))?;
@@ -482,13 +487,25 @@ fn absolute_source_path(source: &Path, workspace_dir: &Path) -> PathBuf {
     }
 }
 
-fn validate_user_volume_target(target: &str) -> Result<String> {
+fn validate_user_volume_target(target: &str, workspace_disk: bool) -> Result<String> {
     let target = canonical_mount_target(target)?;
     if target == NIX_TARGET {
         anyhow::bail!("cang volume target {NIX_TARGET} is reserved");
     }
     if target.contains(".config/codex") {
         anyhow::bail!("cang volume target must not include .config/codex");
+    }
+    // A `--workspace-disk` launch grafts the user volumes into the prepared root
+    // on the host and only then mounts the disk's btrfs tree at
+    // `WORKSPACE_TARGET` inside the guest, so a target there is covered by that
+    // mount and the volume never appears where it was asked for. The host
+    // directory launch is different: its `/workspace` graft is one more entry in
+    // the same list, and a duplicate target is already rejected.
+    let workspace_prefix = format!("{WORKSPACE_TARGET}/");
+    if workspace_disk && (target == WORKSPACE_TARGET || target.starts_with(&workspace_prefix)) {
+        anyhow::bail!(
+            "cang volume target '{target}' is inside {WORKSPACE_TARGET}, which this launch mounts from its workspace disk; the disk mount would cover the volume, so use a target outside {WORKSPACE_TARGET}"
+        );
     }
     Ok(target)
 }
@@ -1399,6 +1416,64 @@ mod tests {
                 "unexpected error for {target}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn launch_plan_rejects_user_volume_targets_the_workspace_disk_would_cover() {
+        let dir = tempfile::tempdir().expect("tempdir should exist");
+        let workspace = dir.path().join("project");
+        let home = dir.path().join("home");
+        let source = dir.path().join("host-dir");
+        let disk = dir.path().join("work.raw");
+        fs::create_dir_all(&workspace).expect("workspace should exist");
+        fs::create_dir_all(&source).expect("source dir");
+        fs::write(&disk, "").expect("image file");
+
+        for target in ["/workspace", "/workspace/config.json"] {
+            let mut options = runtime_options();
+            options.workspace_disk = Some(disk.clone());
+            options.volumes = vec![VolumeSpec {
+                source: source.clone(),
+                target: target.to_owned(),
+                read_only: false,
+            }];
+            let err = LaunchPlan::from_env_values(
+                options,
+                workspace.clone(),
+                Some(dir.path().join("state").as_path()),
+                Some(dir.path().join("config").as_path()),
+                Some(home.as_path()),
+            )
+            .expect_err("a target the workspace disk covers should fail");
+
+            let error = format!("{err:#}");
+            assert!(
+                error.contains("this launch mounts from its workspace disk"),
+                "unexpected error for {target}: {error}"
+            );
+        }
+
+        // The same target is a plain graft on a launch whose `/workspace` is the
+        // host directory, so it must still be accepted there.
+        let mut options = runtime_options();
+        options.volumes = vec![VolumeSpec {
+            source,
+            target: "/workspace/config.json".to_owned(),
+            read_only: false,
+        }];
+        let plan = LaunchPlan::from_env_values(
+            options,
+            workspace,
+            Some(dir.path().join("state").as_path()),
+            Some(dir.path().join("config").as_path()),
+            Some(home.as_path()),
+        )
+        .expect("host-directory launch should accept the target");
+        assert!(
+            plan.bind_mounts
+                .iter()
+                .any(|mount| mount.target == "/workspace/config.json")
+        );
     }
 
     #[test]

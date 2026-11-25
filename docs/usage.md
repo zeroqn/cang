@@ -473,7 +473,13 @@ and `:ro` remounts the bind target read-only after grafting:
 
 User volumes are additive only: they do not replace `/workspace`, `/nix`, or
 the built-in tool config/state, compiler-cache, and container-store mounts, and
-duplicate guest targets are rejected. Cang intentionally does not support Podman SELinux
+duplicate guest targets are rejected. A target at or under `/workspace` is
+refused on a launch that serves `/workspace` from its own disk
+(`--workspace-disk`, and any `cang xxx.raw` spelling of it): the disk's btrfs
+tree is mounted at `/workspace` after the host grafts are in place, so the mount
+would cover the volume and it would never appear. Use a target outside
+`/workspace` for those launches, and `-v SOURCE:/mnt/import:ro` plus a copy
+inside the guest when the files belong in the tree. Cang intentionally does not support Podman SELinux
 suffixes (`:z`, `:Z`), ownership mutation (`:U`), propagation flags, named
 volumes, or anonymous volumes.
 

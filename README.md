@@ -502,7 +502,8 @@ cargo's own `./target`, the cargo home and the writable `/nix` upper all live
 inside it, and the retired build disk (`cang-build.raw`) is neither created nor
 attached. The image grows itself before a `cang workspace serve` mounts it; a
 one-shot launch leaves that to `cang disk resize --workspace-disk PATH SIZE`
-(`docs/usage.md`).
+(`docs/usage.md`). A `-v` target at or under `/workspace` is refused on these
+launches: the disk mount lands after the host grafts and would cover the volume.
 
 Writing a 342 MB / 2136-entry source tree into the same `/workspace` took
 **0.50 s** on the disk against **14.3 s** over the share (warm, same archive,
