@@ -77,9 +77,17 @@ done
 [ -z "$out_dir" ] && out_dir="$repo_root/.smoke/nix-lower-cang/$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$out_dir/logs" "$out_dir/roots"
 root_build() { # root_build <attr> -> the store path, rooted in the output directory
-  local attr="$1" name="${1//\//-}" path
-  path="$(nix build "$repo_root#$attr" -o "$out_dir/roots/$name" --print-out-paths 2>/dev/null || true)"
-  printf '%s\n' "$path"
+  local attr="$1" name="${1//\//-}" path log
+  log="$out_dir/logs/resolve-$name.log"
+  # Keep nix's own output: a resolution that fails (a store lock, a dead
+  # substituter, a flake that will not evaluate) otherwise reaches the caller as an
+  # empty string and is reported as "could not resolve", which says nothing about
+  # why. The log path is named at the point of failure.
+  if path="$(nix build "$repo_root#$attr" -o "$out_dir/roots/$name" --print-out-paths 2>"$log")"; then
+    printf '%s\n' "$path"
+  else
+    printf 'could not build %s#%s (nix output: %s)\n' "$repo_root" "$attr" "$log" >&2
+  fi
 }
 [ -n "$cang_bin" ] || cang_bin="$(root_build cang)"
 [ -n "$cang_bin" ] || die "could not resolve a cang binary; pass --cang <path> or set CANG_BIN"

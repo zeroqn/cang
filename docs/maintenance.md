@@ -519,6 +519,24 @@ task-rootfs backend snapshots the graphroot), so point
 `CANG_RELEASE_SMOKE_DIR` at one when the checkout itself is not:
 `CANG_RELEASE_SMOKE_DIR=/home/dev/disp/release-smoke just release 0.19.2`.
 
+The checkout's own `.smoke/` is on whatever filesystem the repo is, which on a
+typical host is **not** btrfs — the release then dies inside the smoke's
+`podman load` with
+
+```
+Error: configure storage: ".../container-storage/graph/btrfs" is not on a
+btrfs filesystem: prerequisites for driver not satisfied (wrong filesystem?)
+```
+
+(the cang image's `storage.conf` selects the btrfs driver). `findmnt -t btrfs`
+names the candidates; the rootless Podman graphroot is one, and a directory beside
+it works. The smoke needs roughly 10-15 GiB there, and it keeps a container store
+of its own under the out-dir: `du -sh` over-reports its size on btrfs (shared
+extents), while `df` shows what was actually released, and the directory only
+goes away with `podman unshare rm -rf` because its layer subvolumes are read-only.
+When a binary cannot be resolved at all, the smoke's
+`logs/resolve-<attr>.log` holds nix's own output for that build.
+
 The driver never computes the asset SRI locally: it pins
 the hash CI published for the same source, which is why the patchelf question in
 step 2 cannot go wrong with it. `just release-plan <version>` prints the phases
