@@ -31,7 +31,7 @@ resolver = "3"
 exclude = ["deps"]
 
 [workspace.package]
-version = "0.24.0"
+version = "0.24.1"
 edition = "2024"
 
 [workspace.dependencies]
