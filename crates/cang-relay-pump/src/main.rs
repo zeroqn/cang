@@ -161,8 +161,7 @@ fn main() -> Result<()> {
             Err(err) => {
                 report(&args.state_file, &format!("error unmount {err:#}"));
                 eprintln!(
-                    "relay-pump: could not unmount '{}'; run `fusermount3 -u {}` to clear it: {err:#}",
-                    args.mountpoint.display(),
+                    "relay-pump: could not unmount '{}' (a host process still holds it): {err:#}",
                     args.mountpoint.display()
                 );
                 let _ = unsafe { libc::close(fuse_fd) };

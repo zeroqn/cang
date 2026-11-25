@@ -233,6 +233,15 @@ second launch from the same directory is refused as a workspace that already run
 one, and `cang disk resize work.raw` works only from outside it or after the
 launch has exited.
 
+The mount lives exactly as long as the launch. On the way out cang unmounts it;
+when a host process still holds it - a shell that `cd`ed into the tree while the
+mount was up, an editor, a watcher - the plain `fusermount3 -u` is refused
+`EBUSY`, and cang repeats it lazily (`fusermount3 -u -z`) and says so. The
+detached mount leaves the namespace, so the path shows the host tree again
+immediately and nothing has to be cleared by hand; only the shell sitting *inside*
+the old mount keeps the dead superblock, and it has to `cd` out by an absolute
+path (`cd ~`, then back in). `cd ..` does not escape a detached mount.
+
 `--workspace-relay` *forces* that mount instead of taking the default, and
 `--no-workspace-relay` turns it off. The default skips it in two cases:
 
@@ -413,11 +422,12 @@ channel), because the VM is stopped with a signal rather than shut down and its
 uncommitted btrfs transaction would otherwise be dropped - a host write made
 through the mount a second before a stop is lost without it. Then the mount is
 unmounted **while the guest is still serving it**, and only then is the VM
-stopped.
-If `fusermount3 -u` is refused because a host process has its working directory
-inside the mount, the server reports that by name and exits non-zero instead of
-looping; leave the directory and either restart the server or run `fusermount3 -u
-PATH` yourself.
+stopped. A host process whose working directory or open file is inside the mount
+makes `fusermount3 -u` fail `EBUSY`; the unmount is then repeated lazily
+(`fusermount3 -u -z`) and reported by name, so the served directory is the host
+tree again as soon as the server stops and a shell that was inside the old mount
+has to `cd` out by an absolute path. Only when both forms are refused does the
+server exit non-zero, naming the refusals and the command to run by hand.
 
 The server keeps its managed session but attaches *no* terminal to it, on
 purpose: an attach client puts the host terminal into raw mode, `^C` would then

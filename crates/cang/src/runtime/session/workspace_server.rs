@@ -513,7 +513,7 @@ pub(crate) struct ShutdownReport {
     /// The guest could not be told to flush its workspace filesystem: host
     /// writes made through the mount may not have reached the image.
     pub(crate) flush_failure: Option<String>,
-    /// The mount is still there: `fusermount3 -u` was refused.
+    /// The mount is still there: the plain and the lazy unmount were both refused.
     pub(crate) mount_failure: Option<String>,
     /// The VM could not be stopped (or its process could not be found).
     pub(crate) vm_failure: Option<String>,
@@ -911,8 +911,9 @@ fn run_stop_at(path: &Path, disk: &Path) -> Result<String> {
     }
     if is_mountpoint(&record.mountpoint) {
         bail!(
-            "the cang workspace server for '{}' exited, but its mount at '{}' is still there: `fusermount3 -u {}` was refused, so a host process with its working directory or an open file inside the mount keeps it busy - leave that directory and run `fusermount3 -u {}` yourself",
+            "the cang workspace server for '{}' exited, but its mount at '{}' is still there: `fusermount3 -u {}` and its lazy form `fusermount3 -u -z {}` were both refused, so a host process with its working directory or an open file inside the mount keeps it busy - leave that directory and run `fusermount3 -u {}` yourself",
             disk.display(),
+            record.mountpoint.display(),
             record.mountpoint.display(),
             record.mountpoint.display(),
             record.mountpoint.display()

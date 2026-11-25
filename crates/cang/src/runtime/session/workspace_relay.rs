@@ -13,7 +13,9 @@
 //!   while the task runs (cang is blocked in the supervisor by then, so the
 //!   report comes from a watcher thread reading the pump's state file);
 //! * unmount when cang exits, and only then: a serving guest's death keeps the
-//!   mount, answering `EIO` (ticket 23 decision 4(a)).
+//!   mount, answering `EIO` (ticket 23 decision 4(a));
+//! * at that exit, repeat a refused unmount lazily, so a host process that holds
+//!   the mount cannot leave the launch directory unusable - see [`detach`].
 //!
 //! `cang` moves its own working directory out of the launch directory as soon as
 //! the pump is started. A process whose cwd is inside a FUSE mount pins that
@@ -282,7 +284,11 @@ enum RelayTeardown {
     PumpUnmounted,
     /// The pump could not unmount it, so cang removed the mount itself.
     FallbackUnmounted,
-    /// The mount is still there: something holds it busy.
+    /// A host process held it, so cang detached it (`fusermount3 -u -z`): the
+    /// path is the host tree again while the holder keeps the dead superblock.
+    Detached,
+    /// The mount is still there: both the plain and the lazy unmount were
+    /// refused.
     Busy(String),
 }
 
@@ -300,7 +306,11 @@ impl WorkspaceRelayGuard {
     pub(crate) fn shutdown(&mut self) -> Result<()> {
         match self.teardown() {
             RelayTeardown::Busy(message) => Err(anyhow::anyhow!("{message}")),
-            RelayTeardown::PumpUnmounted | RelayTeardown::FallbackUnmounted => Ok(()),
+            // A detached mount is gone from the namespace, which is what this
+            // asks for; a holder keeps the dead superblock, not the path.
+            RelayTeardown::PumpUnmounted
+            | RelayTeardown::FallbackUnmounted
+            | RelayTeardown::Detached => Ok(()),
         }
     }
 
@@ -322,28 +332,35 @@ impl WorkspaceRelayGuard {
             RelayTeardown::PumpUnmounted
         } else {
             // The pump could not unmount (it is gone, or it reported a failure):
-            // cang tries once itself, and names a mount something still holds.
+            // cang tries once itself, then detaches the mount lazily rather than
+            // leaving a path nothing can use until somebody clears it by hand.
             match unmount(&self.fusermount, &self.mountpoint) {
                 Ok(()) => RelayTeardown::FallbackUnmounted,
                 // The unmount failing while the mount is already gone (a race
                 // with the pump) is a success.
                 Err(_) if !is_mountpoint(&self.mountpoint) => RelayTeardown::PumpUnmounted,
-                Err(err) => RelayTeardown::Busy(format!(
-                    "the workspace mount at '{}' is still mounted: `fusermount3 -u {}` was refused \
-                     ({err:#}); a host process whose working directory or open file is inside the \
-                     mount keeps it busy, so `fusermount3 -u {}` from another directory is what \
-                     clears it",
-                    self.mountpoint.display(),
-                    self.mountpoint.display(),
-                    self.mountpoint.display()
-                )),
+                Err(busy) => match detach(&self.fusermount, &self.mountpoint) {
+                    Ok(()) => RelayTeardown::Detached,
+                    Err(lazy) => RelayTeardown::Busy(busy_message(&self.mountpoint, &busy, &lazy)),
+                },
             }
         };
-        if teardown == RelayTeardown::FallbackUnmounted {
-            eprintln!(
+        match &teardown {
+            RelayTeardown::FallbackUnmounted => eprintln!(
                 "cang: unmounted the workspace relay at '{}'",
                 self.mountpoint.display()
-            );
+            ),
+            // The mount's job is over, so the path must be the host tree again:
+            // a lazy detach does that even while a host process holds it.
+            RelayTeardown::Detached => eprintln!(
+                "cang: detached the workspace mount at '{}' lazily, because a host process still \
+                 holds it; '{}' shows the host tree again - a shell whose working directory is \
+                 inside the old mount must `cd` to an absolute path outside it (for example \
+                 `cd ~`) and back, because `cd ..` does not escape a detached mount",
+                self.mountpoint.display(),
+                self.mountpoint.display()
+            ),
+            RelayTeardown::PumpUnmounted | RelayTeardown::Busy(_) => {}
         }
         self.teardown = Some(teardown.clone());
         teardown
@@ -465,20 +482,57 @@ pub(crate) fn fusermount_program() -> OsString {
 
 /// Unmount the workspace relay, if it is still mounted.
 pub(crate) fn unmount(program: &OsString, mountpoint: &Path) -> Result<()> {
-    let output = Command::new(program)
-        .arg("-u")
-        .arg(mountpoint)
-        .output()
-        .with_context(|| format!("failed to run {program:?} -u"))?;
+    unmount_with(program, mountpoint, false)
+}
+
+/// Detach the workspace relay lazily, which `umount2(2)` does with `MNT_DETACH`:
+/// the mount leaves the namespace even while a host process holds it, so the
+/// pathname is the host tree again at once and nothing has to be cleared by
+/// hand. A holder keeps the dead FUSE superblock until it leaves, and gets `EIO`
+/// from it, so its shell has to `cd` out by an absolute path (`cd ..` stays
+/// inside a detached mount).
+///
+/// This is the *exit* path only. During a launch a stale mount must keep
+/// answering `EIO` (ticket 23 decision 4(a)), so a detach would replace a
+/// failure the user can see with a silently empty directory.
+pub(crate) fn detach(program: &OsString, mountpoint: &Path) -> Result<()> {
+    unmount_with(program, mountpoint, true)
+}
+
+fn unmount_with(program: &OsString, mountpoint: &Path, lazy: bool) -> Result<()> {
+    let mut command = Command::new(program);
+    command.arg("-u");
+    if lazy {
+        command.arg("-z");
+    }
+    let output = command.arg(mountpoint).output().with_context(|| {
+        format!(
+            "failed to run {program:?} -u{}",
+            if lazy { " -z" } else { "" }
+        )
+    })?;
     if !output.status.success() {
         bail!(
-            "{:?} -u {} failed: {}",
+            "{:?} -u{} {} failed: {}",
             program,
+            if lazy { " -z" } else { "" },
             mountpoint.display(),
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
     Ok(())
+}
+
+/// The line for a mount that neither the plain nor the lazy unmount removed,
+/// naming both refusals and the one command that still clears it.
+fn busy_message(mountpoint: &Path, busy: &anyhow::Error, lazy: &anyhow::Error) -> String {
+    let path = mountpoint.display();
+    format!(
+        "the workspace mount at '{path}' is still mounted: `fusermount3 -u {path}` was refused \
+         ({busy:#}) and so was the lazy form `fusermount3 -u -z {path}` ({lazy:#}); a host process \
+         whose working directory or open file is inside the mount keeps it busy, so \
+         `fusermount3 -u {path}` from another directory is what clears it"
+    )
 }
 
 /// Is anything mounted on `path`?
@@ -675,6 +729,78 @@ exit 1"#,
         let message = format!("{err:#}");
         assert!(message.contains("relay pump"), "{message}");
         assert!(message.contains("CANG_RELAY_PUMP"), "{message}");
+    }
+
+    /// A `fusermount3` that records its argv and refuses the plain unmount, the
+    /// way libfuse's helper does when a host process holds the mount; it exits
+    /// `lazy_exit` for the lazy form.
+    fn fake_fusermount(dir: &Path, log: &Path, lazy_exit: u8) -> OsString {
+        let path = dir.join("fake-fusermount3");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\ncase \"$*\" in\n  *-z*) exit \
+                 {lazy_exit};;\nesac\necho 'failed to unmount: Device or resource busy' >&2\n\
+                 exit 1\n",
+                log = log.display()
+            ),
+        )
+        .expect("script");
+        let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).expect("permissions");
+        OsString::from(path.to_str().expect("utf8"))
+    }
+
+    /// A mount a host process holds cannot be unmounted, and its path must still
+    /// end up usable: the lazy detach is what does that, and it is asked for with
+    /// `-u -z` (the plain attempt first, unchanged).
+    #[test]
+    fn a_held_mount_is_cleared_by_the_lazy_detach() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = dir.path().join("argv.log");
+        let mountpoint = dir.path().join("workspace");
+        std::fs::create_dir(&mountpoint).expect("mountpoint");
+        let program = fake_fusermount(dir.path(), &log, 0);
+
+        let busy = unmount(&program, &mountpoint).expect_err("a held mount is refused");
+        assert!(
+            format!("{busy:#}").contains("Device or resource busy"),
+            "{busy:#}"
+        );
+        detach(&program, &mountpoint).expect("the lazy detach clears the path");
+
+        let calls = std::fs::read_to_string(&log).expect("argv log");
+        let plain = format!("-u {}", mountpoint.display());
+        let lazy = format!("-u -z {}", mountpoint.display());
+        assert_eq!(
+            calls.lines().collect::<Vec<_>>(),
+            vec![plain.as_str(), lazy.as_str()],
+            "the detach must be the lazy form, after a plain attempt"
+        );
+    }
+
+    /// When even the detach is refused the launch says so by name, naming both
+    /// the refusals and the one command a human can run.
+    #[test]
+    fn a_mount_that_refuses_both_forms_is_named_with_the_manual_command() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = dir.path().join("argv.log");
+        let mountpoint = dir.path().join("workspace");
+        std::fs::create_dir(&mountpoint).expect("mountpoint");
+        let program = fake_fusermount(dir.path(), &log, 1);
+
+        let busy = unmount(&program, &mountpoint).expect_err("plain is refused");
+        let lazy = detach(&program, &mountpoint).expect_err("the detach is refused too");
+        let message = busy_message(&mountpoint, &busy, &lazy);
+        assert!(
+            message.contains("`fusermount3 -u -z "),
+            "the refusal must name the lazy form too: {message}"
+        );
+        assert!(
+            message.contains("from another directory is what clears it"),
+            "the refusal must keep the manual remedy: {message}"
+        );
     }
 
     #[test]

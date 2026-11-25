@@ -39,6 +39,16 @@ Binary `/nix/store/413b9amf0x2d7pw34v1hdbqqrl915sga-cang-0.22.0/bin/cang`, image
 | restart | mount up in **~10 s**, showing `from-task-1795251500` - the file the task wrote while the server was stopped |
 | EBUSY stop (a `sleep` with cwd inside the mount) | **exit 1** with both named messages, mount left for `fusermount3 -u`; after killing the holder, a manual `fusermount3 -u` clears it and `cang workspace stop` then correctly reports no server |
 
+**Changed 2026-11-25** (from a `cang xxx.raw` report: "after exit the mounted path
+cannot be accessed again"): the EBUSY row above is no longer the behaviour. A
+refused plain `fusermount3 -u` is repeated lazily (`fusermount3 -u -z`) at exit,
+so the mount leaves the namespace and the path is the host tree again; only the
+holder keeps the dead superblock, and its shell has to `cd` out by an absolute
+path (`cd ..` does not escape a detached mount). Live arm, cang 0.23.6: a
+`sleep` with cwd inside the mount -> two refusal lines, mount left; then
+`fusermount3 -u -z` -> rc=0, mountinfo empty, `stat` on the path back to the host
+inode (`dev=46 ino=13515174`, was `dev=70 ino=256` through the mount).
+
 Two input-error paths worth knowing: `--mount-at` at a directory that does not
 exist fails with *"failed to canonicalize cang workspace mount: No such
 Directory"* (the directory must exist), and a `--mount-at` that is already mounted

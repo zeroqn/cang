@@ -145,6 +145,11 @@ in place, so path-based tools stop failing loudly and start reporting an empty
 workspace. Note 62 §7(b) recorded `-u -z` as "the only escape hatch"; it is the one
 action that must **not** be in the supervisor's death path for v1.
 
+**Scope (2026-11-25):** this hazard is the *live* phase, where a dead guest must keep
+answering `EIO`. When cang itself exits the mount's job is over and the directory is
+not empty - it is the host's own tree - so a refused unmount is completed as a lazy
+detach; see [note 65](65-workspace-server-verified.md)'s change block.
+
 ## 3. ARM B - the 4 KiB write cap, lifted
 
 ### 3.1 Where the cap is decided (not in the transport)

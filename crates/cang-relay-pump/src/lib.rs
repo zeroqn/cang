@@ -30,6 +30,13 @@
 //! reporting an empty workspace. The mount is unmounted only when cang itself
 //! exits: the pump unmounts on `SIGTERM`, which is what cang sends after the
 //! task ends.
+//!
+//! That exit is where a mount a host process holds is *detached* instead: a plain
+//! `fusermount3 -u` is refused `EBUSY` by a process whose working directory or
+//! open file is inside the mount, and cang repeats it lazily (`-u -z`) so the
+//! pathname is the host tree again rather than a dead end somebody has to clear
+//! by hand. The mount's job is over at that point, so the detach cannot hide a
+//! dead guest - only a holder's shell, which has to `cd` out by an absolute path.
 
 pub mod fusermount;
 pub mod mount;
