@@ -29,7 +29,6 @@ const PREPARED_ROOT_TARGETS: &[&str] = &[
     "/home/dev/.zvec-grep",
     "/home/dev/.local/share/cortexkit",
     "/home/dev/.cargo",
-    "/home/dev/.cache/sccache",
 ];
 
 #[cfg(test)]
@@ -202,10 +201,10 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     profiler.measure("export-shell-env", || {
         crate::guest_init::components::shell::env::export(&shell_env)
     });
-    profiler.measure("export-sccache-env", || {
-        // Every cargo build in the guest goes through the cache cang already
-        // mounts, or the cache why it is mounted there at all.
-        crate::guest_init::components::sccache::export_if_available();
+    profiler.measure("export-kache-env", || {
+        // Every cargo build in the guest goes through the cache the cargo home
+        // already carries, or the cache why it is pointed there at all.
+        crate::guest_init::components::kache::export_if_available();
     });
     profiler.measure("export-gpu-env", || {
         crate::guest_init::components::wayland::export_mesa_if_enabled(env_contract.cang.gpu_drm)

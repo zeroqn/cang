@@ -238,7 +238,6 @@ pub(crate) fn run(options: RuntimeOptions, profile_scope: RuntimeProfileScope) -
         rootfs_backend = %plan.task_rootfs_backend,
         state_root = %plan.state_layout.root_dir().display(),
         image_cache = %plan.image_cache_dir.display(),
-        sccache = %plan.sccache_dir.display(),
         mounts = plan.bind_mounts.len(),
         workspace_slug = %plan.workspace_slug,
         config = %plan.config_diagnostics.config_path.display(),

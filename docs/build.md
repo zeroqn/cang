@@ -71,7 +71,13 @@ The image sets that linker, `RUST_SRC_PATH` and `LIBCLANG_PATH` in its `Env`
 guest - cang forwards only an allowlist of image environment, so a variable that
 is not on it exists for the image's own processes but not for a `cargo build`
 inside a task. A guest build therefore links with `wild` and sees the pinned
-toolchain's `rust-src`; `RUSTC_WRAPPER` (`sccache`) stays host-only on purpose.
+toolchain's `rust-src`. The compiler cache is the exception: the image names
+`kache` as its `RUSTC_WRAPPER` and puts its C/C++ shims on `PATH`
+(`nix/image/config.nix`), and the guest bootstrap
+(`crates/cang-guest-init/src/guest_init/components/kache.rs`) exports the
+wrapper, `KACHE_CACHE_DIR=~/.cargo/kache` and the daemon's `/tmp/kache`
+runtime directory itself, because the allowlist is what a `cargo build` inside
+a task actually sees.
 
 ### Cargo's output location
 

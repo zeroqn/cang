@@ -402,8 +402,7 @@ mod tests {
         BindMount, CARGO_TAG, CARGO_TARGET, CODEX_TAG, CODEX_TARGET, CORTEXKIT_TAG,
         CORTEXKIT_TARGET, DIRGE_CONFIG_TAG, DIRGE_CONFIG_TARGET, DIRGE_DATA_TAG, DIRGE_DATA_TARGET,
         DIRGE_HOME_TAG, DIRGE_HOME_TARGET, GuestInitOverrideMount, LaunchSpec, NetworkMode,
-        OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET, SCCACHE_TAG, SCCACHE_TARGET, WORKSPACE_TAG,
-        WORKSPACE_TARGET,
+        OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET, WORKSPACE_TAG, WORKSPACE_TARGET,
     };
     use std::cell::RefCell;
     use std::path::Path;
@@ -515,7 +514,6 @@ mod tests {
             ),
             BindMount::directory(root.join("home/.dirge"), DIRGE_HOME_TAG, DIRGE_HOME_TARGET),
             BindMount::directory(root.join("state/cargo"), CARGO_TAG, CARGO_TARGET),
-            BindMount::directory(root.join("state/sccache"), SCCACHE_TAG, SCCACHE_TARGET),
         ]
     }
 
@@ -585,7 +583,6 @@ mod tests {
             "home/.local/share/dirge",
             "home/.dirge",
             "state/cargo",
-            "state/sccache",
         ] {
             fs::create_dir_all(dir.path().join(path)).expect("source dir");
         }
@@ -621,14 +618,7 @@ mod tests {
                 root.join("home/dev/.codex").display().to_string()
             )
         );
-        assert_eq!(
-            calls[21],
-            Call::Bind(
-                dir.path().join("state/sccache").display().to_string(),
-                root.join("home/dev/.cache/sccache").display().to_string()
-            )
-        );
-        assert_eq!(calls[22], Call::RuntimeEtc(root.display().to_string()));
+        assert_eq!(calls[20], Call::RuntimeEtc(root.display().to_string()));
     }
 
     #[test]
@@ -645,7 +635,6 @@ mod tests {
             "home/.local/share/dirge",
             "home/.dirge",
             "state/cargo",
-            "state/sccache",
         ] {
             fs::create_dir_all(dir.path().join(path)).expect("source dir");
         }
@@ -672,7 +661,7 @@ mod tests {
         let calls = commands.calls.borrow();
         let root = state.join(PREPARED_ROOT_DIR);
         assert_eq!(
-            calls[22],
+            calls[20],
             Call::CreateFile(
                 root.join("nix/store/hash-cang/bin/cang-guest-init")
                     .display()
@@ -680,7 +669,7 @@ mod tests {
             )
         );
         assert_eq!(
-            calls[23],
+            calls[21],
             Call::Bind(
                 override_path.display().to_string(),
                 root.join("nix/store/hash-cang/bin/cang-guest-init")
@@ -689,14 +678,14 @@ mod tests {
             )
         );
         assert_eq!(
-            calls[24],
+            calls[22],
             Call::ReadOnly(
                 root.join("nix/store/hash-cang/bin/cang-guest-init")
                     .display()
                     .to_string()
             )
         );
-        assert_eq!(calls[25], Call::RuntimeEtc(root.display().to_string()));
+        assert_eq!(calls[23], Call::RuntimeEtc(root.display().to_string()));
     }
 
     #[test]
@@ -713,7 +702,6 @@ mod tests {
             "home/.local/share/dirge",
             "home/.dirge",
             "state/cargo",
-            "state/sccache",
             "host-read-only-dir",
         ] {
             fs::create_dir_all(dir.path().join(path)).expect("source dir");
@@ -798,7 +786,6 @@ mod tests {
         for target in [
             root.join("workspace/config.json"),
             root.join("nix/store/hash-cang/bin/cang-guest-init"),
-            root.join("home/dev/.cache/sccache"),
         ] {
             let position = unmounts
                 .iter()

@@ -24,10 +24,6 @@ impl StateLayout {
         self.app_dir.join("microvm").join("images")
     }
 
-    pub(crate) fn sccache_dir(&self) -> PathBuf {
-        self.app_dir.join("sccache")
-    }
-
     fn new(app_dir: PathBuf, root_dir: PathBuf) -> Self {
         Self { app_dir, root_dir }
     }
@@ -98,10 +94,6 @@ mod tests {
 
         assert_eq!(layout.root_dir(), Path::new("/tmp/xdg-state/cang/project"));
         assert_eq!(
-            layout.sccache_dir(),
-            Path::new("/tmp/xdg-state/cang/sccache")
-        );
-        assert_eq!(
             layout.image_cache_dir(),
             Path::new("/tmp/xdg-state/cang/microvm/images")
         );
@@ -121,10 +113,6 @@ mod tests {
         assert_eq!(
             layout.root_dir(),
             Path::new("/tmp/custom-root/cang/project")
-        );
-        assert_eq!(
-            layout.sccache_dir(),
-            Path::new("/tmp/custom-root/cang/sccache")
         );
     }
 

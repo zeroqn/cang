@@ -3,6 +3,7 @@
   rustToolchain,
   cargoDeny,
   wild,
+  kache,
   piCodingAgent,
   herdrPrebuilt,
   montyPrebuilt,
@@ -31,6 +32,7 @@ let
       rustToolchain
       cargoDeny
       wild
+      kache
       piCodingAgent
       herdrPrebuilt
       montyPrebuilt
@@ -601,6 +603,23 @@ let
         test -x ${layers.rustToolchainImageLayer}/bin/rustc
         test -x ${layers.rustToolchainImageLayer}/bin/cargo
         test -x ${layers.rustToolchainImageLayer}/bin/clippy-driver
+        # The guest's compiler cache is kache, wired in exactly two image
+        # facts: the rustc wrapper the image names, and its C/C++ shims ahead
+        # of the real compilers on `PATH` (kache has no `CMAKE_*_LAUNCHER`
+        # mode). The daemon needs no boot step - the first compiler invocation
+        # starts it - and the store lives in the cargo home mount rather than a
+        # cache mount of its own.
+        test -x ${layers.kache}/bin/kache
+        test -x ${layers.kache}/bin/kache-engine
+        # `configSourceFile` is the nix source, so the wrapper is the
+        # unexpanded reference there and the store path in the image config.
+        grep -F 'RUSTC_WRAPPER=${"$"}{layers.kache}/bin/kache' ${configSourceFile}
+        grep -F 'RUSTC_WRAPPER=${layers.kache}/bin/kache' ${imageConfigFile}
+        grep -F 'KACHE_CACHE_DIR=/home/dev/.cargo/kache' ${imageConfigFile}
+        grep -F 'KACHE_RUNTIME_DIR=/tmp/kache' ${imageConfigFile}
+        test -x ${layers.kacheShims}/kache-shims/bin/cc
+        test -f ${layers.kacheShims}/kache-shims/bin/.kache-shims
+        grep -F ':${layers.kacheShims}/kache-shims/bin:${layers.imagePath}:' ${imageConfigFile}
         grep -F '${rustToolchain.toolchain}/bin/rustc' ${layers.rustcCommandCompat}/bin/rustc
         grep -F 'rustToolchain.toolchain' ${layersSourceFile}
         # RUST_SRC_PATH points at /share/rust-src, which has to be the pinned

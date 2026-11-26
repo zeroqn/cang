@@ -310,6 +310,7 @@
                 rustToolchain
                 cargoDeny
                 wild
+                kache
 
                 piCodingAgent
                 herdrPrebuilt
@@ -341,6 +342,13 @@
           # wrapper, which adds about a second to every link (see
           # `nix/lib/clang-wild-wrapper.nix`).
           wild = zgPkgs.wild-unwrapped;
+          # The guest's compiler cache. kache keys whole compiler invocations
+          # and restores their outputs as content-addressed blobs, which is what
+          # sccache cannot do (its per-crate objects leave the link and the
+          # build script to run again), and it ships a `shims` output that adds
+          # C and C++ to the same cache. nixpkgs-unstable is where the package
+          # lives, so it comes from the same input as `cargo-deny` and `wild`.
+          kache = zgPkgs.kache;
           cangImage = mkImage rustPackages.cangMuslPackage;
           cangImageCiSccache = mkImage rustPackagesCiSccache.cangMuslPackage;
         in
@@ -439,12 +447,16 @@
           # bintools wrapper around `wild` costs a second per link).
           cargoDeny = unstablePkgs.cargo-deny;
           wild = unstablePkgs.wild-unwrapped;
+          # The image's compiler cache, from the same input (see `packages`
+          # below); the checks have to see the package the image ships.
+          kache = unstablePkgs.kache;
           cangImageChecks = import ./nix/image/checks.nix {
             inherit
               pkgs
               rustToolchain
               cargoDeny
               wild
+              kache
               ;
             bun = bun;
             piCodingAgent = packages.pi-coding-agent;

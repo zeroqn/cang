@@ -746,10 +746,7 @@ pub(crate) fn list_records(app_dir: &Path) -> Result<Vec<ActiveTaskRecord>> {
 }
 
 fn is_non_workspace_state_dir(name: Option<&OsStr>) -> bool {
-    matches!(
-        name.and_then(OsStr::to_str),
-        Some("microvm") | Some("sccache")
-    )
+    matches!(name.and_then(OsStr::to_str), Some("microvm"))
 }
 
 fn render_task_table(rows: &[TaskRow]) -> String {
@@ -1232,7 +1229,6 @@ mod tests {
         let task_dir = app_dir.join("workspace-a/tasks/task-a");
         write_active_task_record(&record("task-a", task_dir)).expect("write task record");
         fs::create_dir_all(app_dir.join("microvm/tasks/ignored")).expect("support dir");
-        fs::create_dir_all(app_dir.join("sccache/tasks/ignored")).expect("support dir");
 
         let records = list_records(&app_dir).expect("list records");
 

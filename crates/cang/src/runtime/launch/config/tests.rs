@@ -30,7 +30,6 @@ fn test_mounts() -> Vec<BindMount> {
         ),
         BindMount::directory("/home/host/.dirge", DIRGE_HOME_TAG, DIRGE_HOME_TARGET),
         BindMount::directory("/state/project/cargo", CARGO_TAG, CARGO_TARGET),
-        BindMount::directory("/state/sccache", SCCACHE_TAG, SCCACHE_TARGET),
     ]
 }
 
@@ -99,7 +98,7 @@ fn launch_config_defaults_to_guest_init_enter_fish_shell() {
     assert_eq!(config.mounts[0].source, Path::new("/workspace-src"));
     assert_eq!(config.mounts[0].tag, "cang-workspace");
     assert_eq!(config.mounts[0].target, "/workspace");
-    assert_eq!(config.mounts.len(), 10);
+    assert_eq!(config.mounts.len(), 9);
     assert_eq!(config.ram_mib, 4096);
     assert_eq!(config.vcpus, 2);
     assert_eq!(config.log_level, LogLevel::Debug);
@@ -126,7 +125,6 @@ fn launch_config_defaults_to_guest_init_enter_fish_shell() {
                 || key == "CANG_WORKSPACE_TAG"
                 || key == "CANG_WORKSPACE_TARGET")
     );
-    assert!(config.guest_config_env_contains("SCCACHE_DIR", "/home/dev/.cache/sccache"));
     assert!(config.guest_config_env_contains("CANG_GUEST_PROFILE", "1"));
     assert!(config.guest_config_env_contains("CANG_GUEST_DEBUG", "1"));
     assert!(config.guest_config_env_contains("CANG_GPU_DRM", "1"));
@@ -1552,7 +1550,7 @@ fn libkrun_envp_stays_tiny_while_guest_config_env_is_allowlisted() {
             "PATH=/ignored/first".to_owned(),
             "PATH=/nix/store/fish/bin".to_owned(),
             "OMX_API_BIN=/nix/store/host-only".to_owned(),
-            "RUSTC_WRAPPER=/nix/store/sccache/bin/sccache".to_owned(),
+            "RUSTC_WRAPPER=/nix/store/kache/bin/kache".to_owned(),
             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/nix/store/clang-wild-wrapper/bin/clang_wild_wrapper"
                 .to_owned(),
             "RUST_SRC_PATH=/nix/store/rust-src-image/share/rust-src".to_owned(),

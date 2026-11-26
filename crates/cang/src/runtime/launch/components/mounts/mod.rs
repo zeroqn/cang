@@ -16,7 +16,6 @@ mod cortexkit;
 mod dirge;
 mod omp;
 mod pi;
-mod sccache;
 mod workspace;
 mod zvec_grep;
 
@@ -46,7 +45,6 @@ pub(crate) fn prepare_dev_mounts(
     // the guest seeds the tree's cargo home from, and only then does the guest
     // bind the tree's own `cargo/` over it.
     mounts.push(cargo::prepare(state_layout)?);
-    mounts.push(sccache::prepare(state_layout)?);
     validate_mounts(&mounts)?;
     Ok(mounts)
 }
@@ -63,14 +61,13 @@ pub(crate) fn resolve_dir(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
     use crate::runtime::launch::config::{
         CARGO_TAG, CARGO_TARGET, CODEX_TAG, CODEX_TARGET, CORTEXKIT_TAG, CORTEXKIT_TARGET,
         DIRGE_CONFIG_TAG, DIRGE_CONFIG_TARGET, DIRGE_DATA_TAG, DIRGE_DATA_TARGET, DIRGE_HOME_TAG,
-        DIRGE_HOME_TARGET, OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET, SCCACHE_TAG, SCCACHE_TARGET,
-        WORKSPACE_TAG, WORKSPACE_TARGET, ZVEC_GREP_TAG, ZVEC_GREP_TARGET,
+        DIRGE_HOME_TARGET, OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET, WORKSPACE_TAG, WORKSPACE_TARGET,
+        ZVEC_GREP_TAG, ZVEC_GREP_TARGET,
     };
     use crate::state;
 
@@ -91,7 +88,7 @@ mod tests {
         let mounts = prepare_dev_mounts(&workspace, &home, &state_layout, true)
             .expect("mounts should prepare");
 
-        assert_eq!(mounts.len(), 11);
+        assert_eq!(mounts.len(), 10);
         assert_mount(&mounts[0], &workspace, WORKSPACE_TAG, WORKSPACE_TARGET);
         assert_mount(&mounts[1], &home.join(".codex"), CODEX_TAG, CODEX_TARGET);
         assert_mount(&mounts[2], &home.join(".omp"), OMP_TAG, OMP_TARGET);
@@ -132,12 +129,6 @@ mod tests {
             CARGO_TAG,
             CARGO_TARGET,
         );
-        assert_mount(
-            &mounts[10],
-            &state_layout.sccache_dir(),
-            SCCACHE_TAG,
-            SCCACHE_TARGET,
-        );
         assert!(home.join(".codex").is_dir());
         assert!(home.join(".omp").is_dir());
         assert!(home.join(".pi").is_dir());
@@ -147,14 +138,6 @@ mod tests {
         assert!(home.join(".local/share/dirge").is_dir());
         assert!(home.join(".dirge").is_dir());
         assert!(state_layout.root_dir().join("cargo").is_dir());
-        assert_eq!(
-            fs::metadata(state_layout.sccache_dir())
-                .expect("sccache metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
     }
 
     fn assert_mount(mount: &BindMount, source: &Path, tag: &str, target: &str) {

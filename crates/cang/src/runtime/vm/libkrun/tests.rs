@@ -3,8 +3,8 @@ use crate::runtime::launch::config::{
     BindMount, CARGO_TAG, CARGO_TARGET, CODEX_TAG, CODEX_TARGET, CORTEXKIT_TAG, CORTEXKIT_TARGET,
     DIRGE_CONFIG_TAG, DIRGE_CONFIG_TARGET, DIRGE_DATA_TAG, DIRGE_DATA_TARGET, DIRGE_HOME_TAG,
     DIRGE_HOME_TARGET, DiskAttachment, LaunchConfig, LaunchSpec, ManagedSessionConfig, NetworkMode,
-    OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET, PulseBridgeConfig, SCCACHE_TAG, SCCACHE_TARGET,
-    WORKSPACE_TAG, WORKSPACE_TARGET, WaypipeConfig,
+    OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET, PulseBridgeConfig, WORKSPACE_TAG, WORKSPACE_TARGET,
+    WaypipeConfig,
 };
 use crate::runtime::seccomp::{AuditMode, SeccompMode};
 use crate::runtime::vm::gpu::GpuMode;
@@ -648,7 +648,6 @@ fn test_mounts() -> Vec<BindMount> {
         ),
         BindMount::directory("/home/host/.dirge", DIRGE_HOME_TAG, DIRGE_HOME_TARGET),
         BindMount::directory("/state/project/cargo", CARGO_TAG, CARGO_TARGET),
-        BindMount::directory("/state/sccache", SCCACHE_TAG, SCCACHE_TARGET),
     ]
 }
 

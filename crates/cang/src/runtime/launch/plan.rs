@@ -33,7 +33,6 @@ pub(crate) struct LaunchPlan {
     pub(crate) hostname: String,
     pub(crate) state_layout: StateLayout,
     pub(crate) image_cache_dir: PathBuf,
-    pub(crate) sccache_dir: PathBuf,
     pub bind_mounts: Vec<BindMount>,
     pub(crate) image_selection: ImageSelection,
     pub(crate) task_rootfs_backend: TaskRootfsBackend,
@@ -123,7 +122,6 @@ impl LaunchPlan {
         let workspace_slug = derive_workspace_slug(&workspace_dir);
         let hostname = derive_runtime_hostname(&workspace_slug);
         let image_cache_dir = state_layout.image_cache_dir();
-        let sccache_dir = state_layout.sccache_dir();
         let home_dir = home_dir.ok_or_else(|| {
             anyhow::anyhow!("HOME is not set; cang cannot prepare built-in home/tool bind mounts")
         })?;
@@ -176,7 +174,6 @@ impl LaunchPlan {
             hostname,
             state_layout,
             image_cache_dir,
-            sccache_dir,
             bind_mounts,
             image_selection: ImageSelection::from_runtime_options(
                 options.image,
@@ -552,7 +549,6 @@ impl ImageSelection {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
 
@@ -1005,7 +1001,7 @@ mod tests {
                 .find(|mount| mount.target == target)
                 .expect("mount should exist")
         };
-        assert_eq!(plan.bind_mounts.len(), 11);
+        assert_eq!(plan.bind_mounts.len(), 10);
         assert_eq!(mount("/workspace").source, workspace);
         assert_eq!(mount("/home/dev/.codex").source, home.join(".codex"));
         assert_eq!(mount("/home/dev/.omp").source, home.join(".omp"));
@@ -1031,10 +1027,6 @@ mod tests {
             mount("/home/dev/.cargo").source,
             plan.state_layout.root_dir().join("cargo")
         );
-        assert_eq!(
-            mount("/home/dev/.cache/sccache").source,
-            plan.state_layout.sccache_dir()
-        );
         assert!(home.join(".codex").is_dir());
         assert!(home.join(".omp").is_dir());
         assert!(home.join(".pi").is_dir());
@@ -1045,14 +1037,6 @@ mod tests {
         assert!(home.join(".dirge").is_dir());
         assert!(plan.state_layout.root_dir().join("cargo").is_dir());
         assert!(!plan.state_layout.root_dir().join("containers").exists());
-        assert_eq!(
-            fs::metadata(plan.state_layout.sccache_dir())
-                .expect("sccache metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
         assert!(
             !plan
                 .bind_mounts
@@ -1355,7 +1339,7 @@ mod tests {
             .find(|mount| mount.target == "/guest/dir")
             .expect("dir volume mount");
         assert_eq!(dir_mount.source, source_dir);
-        assert_eq!(dir_mount.tag, "cang-user-volume-11");
+        assert_eq!(dir_mount.tag, "cang-user-volume-10");
         assert_eq!(dir_mount.source_kind, BindMountSourceKind::Directory);
         assert!(!dir_mount.read_only);
 
@@ -1365,7 +1349,7 @@ mod tests {
             .find(|mount| mount.target == "/guest/file")
             .expect("file volume mount");
         assert_eq!(file_mount.source, source_file);
-        assert_eq!(file_mount.tag, "cang-user-volume-12");
+        assert_eq!(file_mount.tag, "cang-user-volume-11");
         assert_eq!(file_mount.source_kind, BindMountSourceKind::File);
         assert!(file_mount.read_only);
     }

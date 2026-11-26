@@ -15,9 +15,9 @@ pub(crate) use model::{
     DIRGE_HOME_TAG, DIRGE_HOME_TARGET, DiskAttachment, ExecConfig, GuestInitOverrideMount,
     GuestPermissions, HostNixOverlay, LaunchConfig, LaunchSpec, MANAGED_GUEST_KERNEL_CONSOLE_LOG,
     ManagedSessionConfig, NIX_TARGET, NetworkMode, OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET,
-    PulseBridgeConfig, PulseServer, SCCACHE_TAG, SCCACHE_TARGET, WORKSPACE_DISK_ID,
-    WORKSPACE_RELAY_ROOT, WORKSPACE_TAG, WORKSPACE_TARGET, WaypipeConfig, WorkspaceRelayConfig,
-    ZVEC_GREP_TAG, ZVEC_GREP_TARGET, canonical_mount_target, workspace_relay_port,
+    PulseBridgeConfig, PulseServer, WORKSPACE_DISK_ID, WORKSPACE_RELAY_ROOT, WORKSPACE_TAG,
+    WORKSPACE_TARGET, WaypipeConfig, WorkspaceRelayConfig, ZVEC_GREP_TAG, ZVEC_GREP_TARGET,
+    canonical_mount_target, workspace_relay_port,
 };
 
 #[cfg(test)]

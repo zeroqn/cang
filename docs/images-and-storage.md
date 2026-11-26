@@ -237,9 +237,10 @@ data reads are what the host's page cache wins.
 
 When `--mem` is omitted, cang now sizes the direct-libkrun VM to 80% of host
 memory rounded down to whole GiB, matching the libkrun VM memory policy. Pass
-`cang --mem <GiB>` to override that default. Guest bootstrap also sets
-`SCCACHE_DIR=/home/dev/.cache/sccache`, backed by cang's shared state
-`sccache` bind mount.
+`cang --mem <GiB>` to override that default. Guest bootstrap also points the compiler cache
+(`KACHE_CACHE_DIR`) at `/home/dev/.cargo/kache`, inside the cargo home cang
+already mounts; the daemon's socket and locks stay in the guest's
+`/tmp/kache`.
 
 Guest bootstrap also reserves CPU cores for the session itself. The workload -
 the shell's children, every `cang exec` command, and every `rustc` they start -

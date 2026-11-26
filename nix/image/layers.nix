@@ -3,6 +3,7 @@
   rustToolchain,
   cargoDeny,
   wild,
+  kache,
   piCodingAgent,
   herdrPrebuilt,
   montyPrebuilt,
@@ -258,7 +259,7 @@ let
   # (`nix/lib/rust-toolchain.nix`) - the same rustc/cargo/clippy/rustfmt a
   # `cargo build` in `nix develop` and a `nix build .#cang` use, so a build
   # inside a cang guest cannot fail on a compiler the project does not build
-  # with. `rust-analyzer`, `wild` and `sccache` are not part of the Rust release
+  # with. `rust-analyzer`, `wild` and `kache` are not part of the Rust release
   # and stay on nixpkgs; `wild` is its unwrapped build, because the bintools
   # wrapper nixpkgs puts around it costs about a second on every link.
   stableRustToolchainPackages = [
@@ -266,8 +267,23 @@ let
     clangWildWrapper
     wild
     pkgs.rust-analyzer
-    pkgs.sccache
+    kache
   ];
+
+  # kache's C/C++ shims: a separate output, a separate PATH entry, and a
+  # directory of its own inside the image. The `cc`/`gcc`/`clang` links have to
+  # precede the real compilers, but they cannot live in the image's merged
+  # `/bin` (that is where `pkgs.gcc` already puts `cc`), so they are relaid out
+  # under `$out/kache-shims/bin` - the same names and the same `.kache-shims`
+  # marker as the package's own `${kache.shims}/bin`, which is how kache knows
+  # to skip this directory when it resolves the real compiler behind a link.
+  kacheShims = pkgs.runCommand "cang-kache-shims" { } ''
+    mkdir -p "$out/kache-shims/bin"
+    for name in cc c++ gcc g++ clang clang++ cargo rustdoc; do
+      ln -s ${kache}/bin/kache "$out/kache-shims/bin/$name"
+    done
+    touch "$out/kache-shims/bin/.kache-shims"
+  '';
 
   muslBin = pkgs.lib.getBin pkgs.musl;
 
@@ -570,6 +586,7 @@ let
     imagePackages
     ++ [
       rustSourceImage
+      kacheShims
       usrBinEnvCompat
       binInterpreterCompat
       fishConfig
@@ -757,6 +774,8 @@ in
     cangAsDevCommandCompat
     rustcCommandCompat
     rustAnalyzerCommandCompat
+    kache
+    kacheShims
     grapheneHardenedMalloc
     hardeningRun
     mimallocLib
