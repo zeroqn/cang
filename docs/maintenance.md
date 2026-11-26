@@ -111,7 +111,7 @@ are per-system assets of one `pi-v<version>` release of
 `tui/nix/manifest.nix`, so cang takes them as one pinned pair
 (`piAotRelease` in `nix/pins.nix`) rather than building pi from source. The pin
 lists exactly the systems that manifest lists - x86_64-linux alone for
-`pi-v1.6.0`, which publishes no aarch64 asset - and a system without an entry
+`pi-v1.6.1`, which publishes no aarch64 asset - and a system without an entry
 makes `pi`/`bun` refuse to build instead of pairing artifacts the release does
 not ship:
 
@@ -861,7 +861,7 @@ hash and the digest GitHub reports for the asset, and then builds `.#bun` from
 the new pin to read the canary's answers:
 
 ```bash
-nix develop --command ./scripts/update-pi-aot.sh --tag pi-v1.6.0
+nix develop --command ./scripts/update-pi-aot.sh --tag pi-v1.6.1
 ```
 
 Nothing is compiled from pi's source tree any more: the host is the released

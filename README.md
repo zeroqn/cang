@@ -669,7 +669,7 @@ The container provides:
   sandboxed Python kernel
 - cargo-deny and Symposium (`cargo-agents`, invoked as `cargo agents`)
 - Python 3 (`PyYAML`, Tree-sitter, Tree-sitter Rust parser), Node.js
-- `bun` 1.4.6 (the upstream canary `1.4.6-canary.1+bd92f9bef`), the release
+- `bun` 1.4.6 (the upstream canary `1.4.6-canary.1+e13b16bc7`), the release
   whose embedded root store rejects the compromised eMudhra/emSign intermediates
   (`CVE-2026-111943`); it is the archive the `pi` above was compiled with, so
   the two are the paired assets of one pinned release (`nix/pins.nix`,
@@ -880,7 +880,7 @@ cang.packages.${pkgs.system}.waypipe-bin
 ```
 
 The image's `bun` is a package output too. It is the upstream canary that
-compiled the image's `pi` (`1.4.6-canary.1+bd92f9bef`), which is both the only
+compiled the image's `pi` (`1.4.6-canary.1+e13b16bc7`), which is both the only
 Bun line with `bun build --compile --aot` and newer than every release whose
 embedded root store trusts the compromised eMudhra/emSign intermediates
 (`CVE-2026-111943`), so a host can take the same binary the image ships instead

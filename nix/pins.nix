@@ -26,19 +26,19 @@ in
   piAotRelease = {
     owner = "zeroqn";
     repo = "pi";
-    tag = "pi-v1.6.0";
-    version = "1.6.0";
+    tag = "pi-v1.6.1";
+    version = "1.6.1";
     bunVersion = "1.4.6";
-    bunRevision = "1.4.6-canary.1+bd92f9bef";
+    bunRevision = "1.4.6-canary.1+e13b16bc7";
     systems = {
       x86_64-linux = {
         piAot = {
-          asset = "pi-aot-1.6.0-x86_64-linux.tar.gz";
-          hash = "sha256-cT8sBg1hKCYCmHodAMxVYsEvgFb7giNPNv3SRZmddqE=";
+          asset = "pi-aot-1.6.1-x86_64-linux.tar.gz";
+          hash = "sha256-D8OAl3ZzYzeYBVrT4R2tpLfVVd3tN3It3vioa9ww2x4=";
         };
         bunAot = {
-          asset = "bun-aot-canary-20261124-x86_64-linux.zip";
-          hash = "sha256-S1LWNwfyYaqu8rGfPXzept5sHucg6G9zfl6UzrIqDIs=";
+          asset = "bun-aot-canary-20261126-x86_64-linux.zip";
+          hash = "sha256-eKKdLzzTlEJEVGaa3PJPwHTj/etk6ytaoHdSD1WmzZA=";
         };
       };
     };
