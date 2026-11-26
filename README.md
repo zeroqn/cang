@@ -513,9 +513,14 @@ command in: the shell's working directory is the mounted btrfs root, so `.` is
 the tree rather than the empty rootfs directory the mount covers. A bare
 positional argument is that same setting, so `cang ./work.raw` is `cang
 --workspace-disk ./work.raw`. Sources,
-cargo's own `./target`, the cargo home and the writable `/nix` upper all live
-inside it, and the retired build disk (`cang-build.raw`) is neither created nor
-attached. The image grows itself before a `cang workspace serve` mounts it; a
+cargo's own `./target`, the cargo home, magic-context's store and the writable
+`/nix` upper all live inside it, and the retired build disk (`cang-build.raw`)
+is neither created nor attached. The store is a tree path of its own:
+`cargo/magic-context/` is bound over `~/.local/share/cortexkit/magic-context`,
+seeded once from the share's copy (the database through `sqlite3 .backup`,
+everything else copied as it is), because the agent rewrites that SQLite database
+and its `-wal` constantly and the tree's btrfs takes those writes without a FUSE
+round trip. The image grows itself before a `cang workspace serve` mounts it; a
 one-shot launch leaves that to `cang disk resize --workspace-disk PATH SIZE`
 (`docs/usage.md`). A `-v` target at or under `/workspace` is refused on these
 launches: the disk mount lands after the host grafts and would cover the volume.

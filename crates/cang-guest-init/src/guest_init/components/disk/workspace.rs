@@ -8,10 +8,16 @@
 //! 3. create the `cargo/` directory inside it, seed it from the registry the
 //!    launch mounted at `~/.cargo` on the first task of a workspace, and bind-mount
 //!    it at `~/.cargo`, so cargo's own default home is the registry on the disk.
+//! 4. create `cargo/magic-context/`, seed it once from the store the cortexkit
+//!    share carries, and bind-mount it over
+//!    `~/.local/share/cortexkit/magic-context`, so the agent's database writes
+//!    land on the btrfs tree instead of the share. Only that one path moves: the
+//!    rest of the share stays mounted where it was.
 //!
 //! The seed has to happen before the bind: `~/.cargo` is the host's registry
 //! until the bind hides it, which is the same copy the build disk made, once
-//! per workspace instead of once per task.
+//! per workspace instead of once per task. The same is true of the cortexkit
+//! share's `magic-context` directory, which the magic-context bind covers.
 //!
 //! A failure here is fatal, unlike the build disk's: a guest whose `/workspace`
 //! is an empty directory would run the command against nothing, and every
@@ -31,6 +37,20 @@ pub(in crate::guest_init) const CARGO_HOME_TARGET: &str = "/home/dev/.cargo";
 /// The registry the launch mounted; the seed source, read before the bind hides
 /// it. (`~/.cargo` is the same path, which is why the order matters.)
 const MOUNTED_CARGO_HOME: &str = "/home/dev/.cargo";
+
+/// The magic-context store inside the tree, and the path of the mounted
+/// cortexkit share it is bound over. The store is a SQLite database with a
+/// `-wal` and `-shm` beside it, rewritten on every turn; over the share each of
+/// those writes is a FUSE round trip, and the tree is where a build already
+/// keeps its `target/`.
+pub(in crate::guest_init) const MAGIC_CONTEXT_DIR: &str = "/workspace/cargo/magic-context";
+pub(in crate::guest_init) const MAGIC_CONTEXT_TARGET: &str =
+    "/home/dev/.local/share/cortexkit/magic-context";
+/// The store's database name. Its `-wal`/`-shm` and the `context.db.corrupt-*`
+/// dumps magic-context keeps beside it all carry this prefix and are all
+/// deliberately not copied: the snapshot replaces the first pair, and the dumps
+/// are the host store's own history of one bad database.
+const MAGIC_CONTEXT_DB: &str = "context.db";
 
 /// Where the tree records what it had free when it was mounted (relative to the
 /// mount point), and the prefix of the line the file holds.
@@ -112,6 +132,27 @@ fn ensure_ready_with(
     ops.create_dir_all(target)?;
     ops.bind_mount(cargo_home, target)
         .context("failed to bind the workspace cargo home at ~/.cargo")?;
+
+    // The agent's store is bound over the share's own `magic-context` directory
+    // rather than in place of the whole cortexkit mount: it is the one path the
+    // agent writes to constantly, and everything else the share carries is
+    // read-mostly.
+    let magic_context = Path::new(MAGIC_CONTEXT_DIR);
+    ops.create_dir_all(magic_context)?;
+    ops.chown(magic_context, identity.uid, identity.gid)?;
+    // The share's directory is the seed's source and the mount point the bind
+    // covers. It is created only when missing, so a host that has never run
+    // magic-context seeds nothing and the guest starts a fresh store.
+    let shared_magic_context = Path::new(MAGIC_CONTEXT_TARGET);
+    ops.create_dir_all(shared_magic_context)?;
+    if ops.is_empty(magic_context)? {
+        ops.seed_magic_context(shared_magic_context, magic_context)?;
+        // The snapshot is written by this root process, and magic-context runs
+        // as the developer identity.
+        ops.chown_tree(magic_context, identity.uid, identity.gid)?;
+    }
+    ops.bind_mount(magic_context, shared_magic_context)
+        .context("failed to bind the tree's magic-context store over the share")?;
 
     // What this mount found free, for the host's next decision. Written after the
     // seed so it measures the tree the next run will actually start from, and
@@ -234,6 +275,10 @@ trait WorkspaceDiskOps {
     fn unmount(&self, path: &Path) -> Result<()>;
     fn is_empty(&self, path: &Path) -> Result<bool>;
     fn seed_cargo_home(&self, from: &Path, to: &Path) -> Result<()>;
+    /// Seed the tree's magic-context store from the copy the share carries.
+    fn seed_magic_context(&self, from: &Path, to: &Path) -> Result<()>;
+    /// Hand a seeded tree to the developer identity.
+    fn chown_tree(&self, path: &Path, uid: u32, gid: u32) -> Result<()>;
     /// Expand the filesystem to the disk's current device size.
     fn resize_max(&self, mount: &Path) -> Result<()>;
     /// Make this process's cwd the mounted tree, so the command it `exec`s (or
@@ -293,6 +338,57 @@ impl WorkspaceDiskOps for SystemWorkspaceDiskOps {
         crate::guest_init::command::run("cp", &["-a", "-T", path_str(from)?, path_str(to)?])
     }
 
+    /// The tree's copy of the share's store.
+    ///
+    /// `context.db` goes through SQLite's own backup API rather than a copy: the
+    /// host's agent may hold that database open and be writing to it while this
+    /// runs, and a file copy of a live database together with its `-wal` moves a
+    /// transaction that is still in flight. `.backup` reads through the store's
+    /// locking and writes one consolidated database, so the sidecars are not
+    /// copied at all (see `MAGIC_CONTEXT_DB`).
+    fn seed_magic_context(&self, from: &Path, to: &Path) -> Result<()> {
+        // The store is the agent's private history: the share's copy is a 0700
+        // directory with a 0600 database, and the tree's copy keeps that rather
+        // than whatever a directory created under `cargo/` gets from this
+        // process's umask.
+        crate::guest_init::fs::chmod(to, 0o700)?;
+        let database = from.join(MAGIC_CONTEXT_DB);
+        if database.is_file() {
+            let snapshot = to.join(MAGIC_CONTEXT_DB);
+            crate::guest_init::command::run(
+                "sqlite3",
+                &[
+                    path_str(&database)?,
+                    &format!(".backup {}", path_str(&snapshot)?),
+                ],
+            )
+            .with_context(|| format!("failed to snapshot '{}' for the tree", database.display()))?;
+            crate::guest_init::fs::chmod(&snapshot, 0o600)?;
+        }
+        for entry in std::fs::read_dir(from)
+            .with_context(|| format!("failed to read '{}'", from.display()))?
+        {
+            let entry = entry
+                .with_context(|| format!("failed to read an entry of '{}'", from.display()))?;
+            let name = entry.file_name();
+            if is_magic_context_database_file(&name.to_string_lossy()) {
+                continue;
+            }
+            let source = entry.path();
+            let target = to.join(&name);
+            crate::guest_init::command::run(
+                "cp",
+                &["-a", "-T", path_str(&source)?, path_str(&target)?],
+            )
+            .with_context(|| format!("failed to copy '{}' into the tree", source.display()))?;
+        }
+        Ok(())
+    }
+
+    fn chown_tree(&self, path: &Path, uid: u32, gid: u32) -> Result<()> {
+        crate::guest_init::fs::chown_tree_skipping_symlinks(path, uid, gid)
+    }
+
     fn resize_max(&self, mount: &Path) -> Result<()> {
         crate::guest_init::command::run("btrfs", &["filesystem", "resize", "max", path_str(mount)?])
     }
@@ -313,6 +409,12 @@ impl WorkspaceDiskOps for SystemWorkspaceDiskOps {
         // own reading of the number a dead end.
         crate::guest_init::fs::chown(&file, uid, gid)
     }
+}
+
+/// Everything derived from the store's database file: the database itself, its
+/// `-wal`/`-shm`, and the `context.db.corrupt-*` dumps magic-context keeps.
+fn is_magic_context_database_file(name: &str) -> bool {
+    name.starts_with(MAGIC_CONTEXT_DB)
 }
 
 fn path_str(path: &Path) -> Result<&str> {
@@ -348,6 +450,7 @@ mod tests {
         operations: RefCell<Vec<String>>,
         mount_error: RefCell<Option<String>>,
         cargo_home_empty: bool,
+        magic_context_empty: bool,
     }
 
     impl FakeWorkspaceDiskOps {
@@ -355,6 +458,7 @@ mod tests {
             Self {
                 disk: PathBuf::from("/dev/vdb"),
                 cargo_home_empty: true,
+                magic_context_empty: true,
                 ..Self::default()
             }
         }
@@ -422,13 +526,33 @@ mod tests {
             self.operations
                 .borrow_mut()
                 .push(format!("is_empty:{}", path.display()));
-            Ok(self.cargo_home_empty)
+            if path == Path::new(MAGIC_CONTEXT_DIR) {
+                Ok(self.magic_context_empty)
+            } else {
+                Ok(self.cargo_home_empty)
+            }
         }
 
         fn seed_cargo_home(&self, from: &Path, to: &Path) -> Result<()> {
             self.operations
                 .borrow_mut()
                 .push(format!("seed:{}:{}", from.display(), to.display()));
+            Ok(())
+        }
+
+        fn seed_magic_context(&self, from: &Path, to: &Path) -> Result<()> {
+            self.operations.borrow_mut().push(format!(
+                "seed-store:{}:{}",
+                from.display(),
+                to.display()
+            ));
+            Ok(())
+        }
+
+        fn chown_tree(&self, path: &Path, uid: u32, gid: u32) -> Result<()> {
+            self.operations
+                .borrow_mut()
+                .push(format!("chown-tree:{}:{uid}:{gid}", path.display()));
             Ok(())
         }
 
@@ -478,6 +602,13 @@ mod tests {
                 "findmnt:/home/dev/.cargo",
                 "mkdir:/home/dev/.cargo",
                 "bind:/workspace/cargo:/home/dev/.cargo",
+                "mkdir:/workspace/cargo/magic-context",
+                "chown:/workspace/cargo/magic-context:1000:1001",
+                "mkdir:/home/dev/.local/share/cortexkit/magic-context",
+                "is_empty:/workspace/cargo/magic-context",
+                "seed-store:/home/dev/.local/share/cortexkit/magic-context:/workspace/cargo/magic-context",
+                "chown-tree:/workspace/cargo/magic-context:1000:1001",
+                "bind:/workspace/cargo/magic-context:/home/dev/.local/share/cortexkit/magic-context",
                 "free-bytes:/workspace",
             ]
         );
@@ -503,8 +634,12 @@ mod tests {
         assert!(unmount < bind, "unmount first, then bind");
         assert_eq!(
             ops.mounted.borrow().as_slice(),
-            ["/workspace", "/home/dev/.cargo"],
-            "exactly one mount remains at the path, and it is the tree's"
+            [
+                "/workspace",
+                "/home/dev/.cargo",
+                "/home/dev/.local/share/cortexkit/magic-context",
+            ],
+            "exactly one mount remains at each path, and both are the tree's"
         );
     }
 
@@ -520,6 +655,72 @@ mod tests {
                 .iter()
                 .any(|op| op.starts_with("seed:"))
         );
+    }
+
+    /// The store moves to the tree, and the share keeps serving everything else
+    /// (the cortexkit mount itself is not replaced, only this path under it).
+    #[test]
+    fn the_magic_context_store_is_bound_over_the_share_path() {
+        let ops = FakeWorkspaceDiskOps::new();
+        ensure_ready_with(&contract(), &identity(), &ops).expect("should mount");
+
+        let operations = ops.operations.borrow();
+        let cargo_bind = operations
+            .iter()
+            .position(|op| op == "bind:/workspace/cargo:/home/dev/.cargo")
+            .expect("the cargo home is bound");
+        let create = operations
+            .iter()
+            .position(|op| op == "mkdir:/workspace/cargo/magic-context")
+            .expect("the store directory is inside the tree");
+        let bind = operations
+            .iter()
+            .position(|op| {
+                op == "bind:/workspace/cargo/magic-context:/home/dev/.local/share/cortexkit/magic-context"
+            })
+            .expect("the store is bound over the share's copy");
+        assert!(cargo_bind < create, "the tree comes first: {operations:?}");
+        assert!(create < bind, "the store exists before it is bound");
+    }
+
+    #[test]
+    fn a_populated_magic_context_store_is_not_seeded_again() {
+        let mut ops = FakeWorkspaceDiskOps::new();
+        ops.magic_context_empty = false;
+        ensure_ready_with(&contract(), &identity(), &ops).expect("should mount");
+
+        let operations = ops.operations.borrow();
+        assert!(!operations.iter().any(|op| op.starts_with("seed-store:")));
+        assert!(!operations.iter().any(|op| op.starts_with("chown-tree:")));
+        assert!(operations.iter().any(|op| {
+            op == "bind:/workspace/cargo/magic-context:/home/dev/.local/share/cortexkit/magic-context"
+        }));
+    }
+
+    /// The snapshot replaces the database and its write-ahead log, so those are
+    /// the only store entries never copied - and the corrupt dumps beside them
+    /// are the host store's, not the tree's.
+    #[test]
+    fn the_store_s_database_sidecars_and_dumps_are_not_copied() {
+        for name in [
+            "context.db",
+            "context.db-wal",
+            "context.db-shm",
+            "context.db.corrupt-backup-20261124T164253330Z",
+            "context.db.corrupt-original-20261124T164437051Z",
+        ] {
+            assert!(is_magic_context_database_file(name), "{name}");
+        }
+        for name in [
+            "models",
+            "lkg-recovery-fences",
+            "pi-served-array-digests",
+            "pi-served-tag-numbers",
+            "project-identities",
+            "last_announced_version",
+        ] {
+            assert!(!is_magic_context_database_file(name), "{name}");
+        }
     }
 
     #[test]
