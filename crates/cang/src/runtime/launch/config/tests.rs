@@ -10,8 +10,6 @@ use tempfile::tempdir;
 fn test_mounts() -> Vec<BindMount> {
     vec![
         BindMount::directory("/workspace-src", WORKSPACE_TAG, WORKSPACE_TARGET),
-        BindMount::directory("/home/host/.codex", CODEX_TAG, CODEX_TARGET),
-        BindMount::directory("/home/host/.omp", OMP_TAG, OMP_TARGET),
         BindMount::directory("/home/host/.pi", PI_TAG, PI_TARGET),
         BindMount::directory(
             "/home/host/.local/share/cortexkit",
@@ -98,7 +96,7 @@ fn launch_config_defaults_to_guest_init_enter_fish_shell() {
     assert_eq!(config.mounts[0].source, Path::new("/workspace-src"));
     assert_eq!(config.mounts[0].tag, "cang-workspace");
     assert_eq!(config.mounts[0].target, "/workspace");
-    assert_eq!(config.mounts.len(), 9);
+    assert_eq!(config.mounts.len(), 7);
     assert_eq!(config.ram_mib, 4096);
     assert_eq!(config.vcpus, 2);
     assert_eq!(config.log_level, LogLevel::Debug);

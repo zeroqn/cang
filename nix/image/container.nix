@@ -100,7 +100,6 @@ let
         ./etc/containers \
         ./etc/nix \
         ./home/dev/.cache \
-        ./home/dev/.codex \
         ./home/dev/.terminfo/x \
         ./root \
         ./tmp \

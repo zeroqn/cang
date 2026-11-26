@@ -492,8 +492,6 @@ live in the topic docs:
 Each run ensures these host-backed paths and grafts them into the prepared root:
 
 - current workspace -> `/workspace`
-- `~/.codex` -> `/home/dev/.codex`
-- `~/.omp` -> `/home/dev/.omp`
 - `~/.pi` -> `/home/dev/.pi`
 - `~/.zvec-grep` -> `/home/dev/.zvec-grep`
 - `~/.local/share/cortexkit` -> `/home/dev/.local/share/cortexkit`

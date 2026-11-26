@@ -13,7 +13,7 @@ let
     "USER=dev"
     "SHELL=${pkgs.fish}/bin/fish"
     "LIBCLANG_PATH=${pkgs.libclang.lib}/lib"
-    "PATH=/home/dev/.codex/bin:/home/dev/.nix-profile/bin:/nix/var/nix/profiles/default/bin:${layers.libcGetconf}/bin:${layers.imagePath}:${cangMuslPackage}/bin"
+    "PATH=/home/dev/.nix-profile/bin:/nix/var/nix/profiles/default/bin:${layers.libcGetconf}/bin:${layers.imagePath}:${cangMuslPackage}/bin"
     "NIX_CONFIG=${nixConfig.env}"
     "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
     "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"

@@ -399,10 +399,10 @@ mod tests {
     use super::*;
     use crate::logging::LogLevel;
     use crate::runtime::launch::config::{
-        BindMount, CARGO_TAG, CARGO_TARGET, CODEX_TAG, CODEX_TARGET, CORTEXKIT_TAG,
-        CORTEXKIT_TARGET, DIRGE_CONFIG_TAG, DIRGE_CONFIG_TARGET, DIRGE_DATA_TAG, DIRGE_DATA_TARGET,
-        DIRGE_HOME_TAG, DIRGE_HOME_TARGET, GuestInitOverrideMount, LaunchSpec, NetworkMode,
-        OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET, WORKSPACE_TAG, WORKSPACE_TARGET,
+        BindMount, CARGO_TAG, CARGO_TARGET, CORTEXKIT_TAG, CORTEXKIT_TARGET, DIRGE_CONFIG_TAG,
+        DIRGE_CONFIG_TARGET, DIRGE_DATA_TAG, DIRGE_DATA_TARGET, DIRGE_HOME_TAG, DIRGE_HOME_TARGET,
+        GuestInitOverrideMount, LaunchSpec, NetworkMode, PI_TAG, PI_TARGET, WORKSPACE_TAG,
+        WORKSPACE_TARGET,
     };
     use std::cell::RefCell;
     use std::path::Path;
@@ -494,8 +494,6 @@ mod tests {
     fn test_mounts(root: &Path) -> Vec<BindMount> {
         vec![
             BindMount::directory(root.join("workspace-src"), WORKSPACE_TAG, WORKSPACE_TARGET),
-            BindMount::directory(root.join("home/.codex"), CODEX_TAG, CODEX_TARGET),
-            BindMount::directory(root.join("home/.omp"), OMP_TAG, OMP_TARGET),
             BindMount::directory(root.join("home/.pi"), PI_TAG, PI_TARGET),
             BindMount::directory(
                 root.join("home/.local/share/cortexkit"),
@@ -575,8 +573,6 @@ mod tests {
         for path in [
             "task/rootfs",
             "workspace-src",
-            "home/.codex",
-            "home/.omp",
             "home/.pi",
             "home/.local/share/cortexkit",
             "home/.config/dirge",
@@ -614,11 +610,11 @@ mod tests {
         assert_eq!(
             calls[5],
             Call::Bind(
-                dir.path().join("home/.codex").display().to_string(),
-                root.join("home/dev/.codex").display().to_string()
+                dir.path().join("home/.pi").display().to_string(),
+                root.join("home/dev/.pi").display().to_string()
             )
         );
-        assert_eq!(calls[20], Call::RuntimeEtc(root.display().to_string()));
+        assert_eq!(calls[16], Call::RuntimeEtc(root.display().to_string()));
     }
 
     #[test]
@@ -627,8 +623,6 @@ mod tests {
         for path in [
             "task/rootfs/nix/store/hash-cang/bin",
             "workspace-src",
-            "home/.codex",
-            "home/.omp",
             "home/.pi",
             "home/.local/share/cortexkit",
             "home/.config/dirge",
@@ -661,7 +655,7 @@ mod tests {
         let calls = commands.calls.borrow();
         let root = state.join(PREPARED_ROOT_DIR);
         assert_eq!(
-            calls[20],
+            calls[16],
             Call::CreateFile(
                 root.join("nix/store/hash-cang/bin/cang-guest-init")
                     .display()
@@ -669,7 +663,7 @@ mod tests {
             )
         );
         assert_eq!(
-            calls[21],
+            calls[17],
             Call::Bind(
                 override_path.display().to_string(),
                 root.join("nix/store/hash-cang/bin/cang-guest-init")
@@ -678,14 +672,14 @@ mod tests {
             )
         );
         assert_eq!(
-            calls[22],
+            calls[18],
             Call::ReadOnly(
                 root.join("nix/store/hash-cang/bin/cang-guest-init")
                     .display()
                     .to_string()
             )
         );
-        assert_eq!(calls[23], Call::RuntimeEtc(root.display().to_string()));
+        assert_eq!(calls[19], Call::RuntimeEtc(root.display().to_string()));
     }
 
     #[test]
@@ -694,8 +688,6 @@ mod tests {
         for path in [
             "task/rootfs",
             "workspace-src",
-            "home/.codex",
-            "home/.omp",
             "home/.pi",
             "home/.local/share/cortexkit",
             "home/.config/dirge",

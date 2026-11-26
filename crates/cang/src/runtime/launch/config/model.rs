@@ -28,16 +28,12 @@ pub(crate) const WORKSPACE_TAG: &str = "cang-workspace";
 /// mount, because the guest mounts that disk instead.
 pub const WORKSPACE_DISK_ID: &str = "cang-workspace";
 pub(crate) const WORKSPACE_TARGET: &str = "/workspace";
-pub const CODEX_TAG: &str = "cang-codex";
-pub const CODEX_TARGET: &str = "/home/dev/.codex";
 pub const PI_TAG: &str = "cang-pi";
 pub const PI_TARGET: &str = "/home/dev/.pi";
 pub const ZVEC_GREP_TAG: &str = "cang-zvec-grep";
 pub const ZVEC_GREP_TARGET: &str = "/home/dev/.zvec-grep";
 pub const CORTEXKIT_TAG: &str = "cang-cortexkit";
 pub const CORTEXKIT_TARGET: &str = "/home/dev/.local/share/cortexkit";
-pub const OMP_TAG: &str = "cang-omp";
-pub const OMP_TARGET: &str = "/home/dev/.omp";
 pub const DIRGE_CONFIG_TAG: &str = "cang-dirge-config";
 pub const DIRGE_CONFIG_TARGET: &str = "/home/dev/.config/dirge";
 pub const DIRGE_DATA_TAG: &str = "cang-dirge-data";

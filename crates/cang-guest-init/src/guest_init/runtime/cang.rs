@@ -23,8 +23,6 @@ const PULSE_SERVER_ENV: &str = "CANG_PULSE_SERVER";
 const PULSE_BRIDGE_PORT_ENV: &str = "CANG_PULSE_BRIDGE_PORT";
 const PREPARED_ROOT_TARGETS: &[&str] = &[
     "/workspace",
-    "/home/dev/.codex",
-    "/home/dev/.omp",
     "/home/dev/.pi",
     "/home/dev/.zvec-grep",
     "/home/dev/.local/share/cortexkit",

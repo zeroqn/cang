@@ -10,14 +10,14 @@ pub(crate) use components::mounts::validate_mounts;
 pub(crate) use components::resources::resolve_cpu_count;
 pub(crate) use model::{
     AllocatorMode, BindMount, BindMountSourceKind, CANG_KRUN_CONFIG_PATH, CARGO_TAG, CARGO_TARGET,
-    CODEX_TAG, CODEX_TARGET, CORTEXKIT_TAG, CORTEXKIT_TARGET, DEFAULT_PULSE_BRIDGE_PORT,
-    DEFAULT_WAYPIPE_PORT, DIRGE_CONFIG_TAG, DIRGE_CONFIG_TARGET, DIRGE_DATA_TAG, DIRGE_DATA_TARGET,
-    DIRGE_HOME_TAG, DIRGE_HOME_TARGET, DiskAttachment, ExecConfig, GuestInitOverrideMount,
-    GuestPermissions, HostNixOverlay, LaunchConfig, LaunchSpec, MANAGED_GUEST_KERNEL_CONSOLE_LOG,
-    ManagedSessionConfig, NIX_TARGET, NetworkMode, OMP_TAG, OMP_TARGET, PI_TAG, PI_TARGET,
-    PulseBridgeConfig, PulseServer, WORKSPACE_DISK_ID, WORKSPACE_RELAY_ROOT, WORKSPACE_TAG,
-    WORKSPACE_TARGET, WaypipeConfig, WorkspaceRelayConfig, ZVEC_GREP_TAG, ZVEC_GREP_TARGET,
-    canonical_mount_target, workspace_relay_port,
+    CORTEXKIT_TAG, CORTEXKIT_TARGET, DEFAULT_PULSE_BRIDGE_PORT, DEFAULT_WAYPIPE_PORT,
+    DIRGE_CONFIG_TAG, DIRGE_CONFIG_TARGET, DIRGE_DATA_TAG, DIRGE_DATA_TARGET, DIRGE_HOME_TAG,
+    DIRGE_HOME_TARGET, DiskAttachment, ExecConfig, GuestInitOverrideMount, GuestPermissions,
+    HostNixOverlay, LaunchConfig, LaunchSpec, MANAGED_GUEST_KERNEL_CONSOLE_LOG,
+    ManagedSessionConfig, NIX_TARGET, NetworkMode, PI_TAG, PI_TARGET, PulseBridgeConfig,
+    PulseServer, WORKSPACE_DISK_ID, WORKSPACE_RELAY_ROOT, WORKSPACE_TAG, WORKSPACE_TARGET,
+    WaypipeConfig, WorkspaceRelayConfig, ZVEC_GREP_TAG, ZVEC_GREP_TARGET, canonical_mount_target,
+    workspace_relay_port,
 };
 
 #[cfg(test)]
