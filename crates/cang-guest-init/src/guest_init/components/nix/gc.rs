@@ -1,29 +1,26 @@
 //! `cang-guest-init internal nix gc`: reclaim a disk from `/nix` upper generations
 //! the workspace no longer needs.
 //!
-//! The writable `/nix` upper lives on a guest-mounted disk - the build disk's btrfs
-//! image for a host-directory launch, or the workspace tree for a
-//! `--workspace-disk` one - neither of which the host can mount rootless, so
-//! reclaiming it needs a guest. The rule is the seed's own: the generation the
-//! workspace used last is the cache, and every other completed generation is dead
-//! weight. `--all` drops the cache as well, so the next launch starts from an empty
-//! upper.
+//! The writable `/nix` upper lives in the workspace image's tree, which the host
+//! cannot mount rootless, so reclaiming it needs a guest. The rule is the seed's
+//! own: the generation the workspace used last is the cache, and every other
+//! completed generation is dead weight. `--all` drops the cache as well, so the
+//! next launch starts from an empty upper.
+//!
+//! Which disk and where its generations are come from the host, which alone knows
+//! the image path: `--mount`, `--generations-dir`, `--disk-label` and `--disk-id`
+//! are all required together, and there is no default disk to fall back to.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::guest_init::command;
-use crate::guest_init::components::disk::build;
-use crate::guest_init::components::env::CangEnv;
 use crate::guest_init::components::nix::block_upper::{SEEDED_SENTINEL, UPPER_DIR};
 
-/// Where the generations live inside the build disk: `<mount>/nix-overlay/<digest>`.
-const BUILD_DISK_GENERATIONS_DIR: &str = "nix-overlay";
-
 /// The layout one gc run collects: the disk to mount and the directory that holds
-/// its generations. The host names both, because only it knows whether this
-/// workspace's `/nix` upper is the build disk's or the workspace tree's.
+/// its generations. The host names both, because only it knows the image this
+/// workspace's `/nix` upper lives in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::guest_init) struct GcLayout {
     /// Where the disk is mounted inside this maintenance VM.
@@ -31,13 +28,12 @@ pub(in crate::guest_init) struct GcLayout {
     /// The generations directory, either absolute (already inside a mounted
     /// filesystem) or relative to `mount`.
     pub(in crate::guest_init) generations_dir: PathBuf,
-    /// The btrfs label and the cang disk id to find: the build disk's for a
-    /// host-directory launch, the workspace image's for `--workspace-disk`.
+    /// The btrfs label and the cang disk id of the image to find.
     pub(in crate::guest_init) disk_label: String,
     pub(in crate::guest_init) disk_id: String,
 }
 
-/// A generation directory on the build disk.
+/// A generation directory on the guest disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Generation {
     name: String,
@@ -47,19 +43,8 @@ struct Generation {
     bytes: u64,
 }
 
-pub(in crate::guest_init) fn run(
-    all: bool,
-    dry_run: bool,
-    layout: Option<&GcLayout>,
-) -> Result<()> {
-    let env = CangEnv::from_process_env()?;
-    let layout = layout.cloned().unwrap_or_else(|| GcLayout {
-        mount: PathBuf::from(build::MOUNT_POINT),
-        generations_dir: PathBuf::from(BUILD_DISK_GENERATIONS_DIR),
-        disk_label: env.build_disk_label.clone(),
-        disk_id: env.build_disk_id.clone(),
-    });
-    run_with_ops(all, dry_run, &layout, &SystemGcOps)
+pub(in crate::guest_init) fn run(all: bool, dry_run: bool, layout: &GcLayout) -> Result<()> {
+    run_with_ops(all, dry_run, layout, &SystemGcOps)
 }
 
 fn run_with_ops(all: bool, dry_run: bool, layout: &GcLayout, ops: &impl GcOps) -> Result<()> {
@@ -157,7 +142,7 @@ struct SystemGcOps;
 
 impl GcOps for SystemGcOps {
     fn find_disk(&self, label: &str, id: &str) -> Result<PathBuf> {
-        build::find_disk(label, id)
+        crate::guest_init::components::disk::btrfs::find_labeled_disk(label, id)
     }
 
     fn create_dir_all(&self, path: &Path) -> Result<()> {

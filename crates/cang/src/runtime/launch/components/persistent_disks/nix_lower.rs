@@ -1384,10 +1384,10 @@ mod tests {
         );
     }
 
-    /// A launch that asks for the block lower gets the build disk's upper too:
-    /// both layers land on one filesystem, and the guest is told the paths.
+    /// A launch that asks for the block lower keeps the upper in the workspace
+    /// tree: both layers land on one filesystem, and the guest is told the paths.
     #[test]
-    fn the_block_pair_puts_both_layers_on_the_build_disk() {
+    fn the_block_pair_puts_both_layers_on_the_guest_disk() {
         let temp = tempfile::tempdir().expect("tempdir");
         let nix_dir = cache_entry(&temp, &["aaaa-one"]);
         let root = generation_root(&temp);

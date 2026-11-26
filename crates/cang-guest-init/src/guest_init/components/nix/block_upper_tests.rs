@@ -8,13 +8,16 @@ use crate::guest_init::components::nix::block_upper::{
     CloneKind, IMAGE_DB_DIR, PREVIOUS_DB_DIR, SEEDED_SENTINEL, SeedOutcome, seed_block_upper_with,
 };
 
-/// One workspace generation on the build disk:
+/// One workspace generation on the guest-mounted workspace disk:
 /// `<root>/<generation>/{upper,work}`, with the read-only lower beside it. The
 /// generation directory is the btrfs subvolume; `upper` and `work` are plain
 /// directories inside it, which is the only shape overlayfs can compose.
 struct Harness {
     _tempdir: tempfile::TempDir,
     root: PathBuf,
+    /// The guest-mounted disk the generations sit on. A path, not a mount: the
+    /// fake filesystem is what answers whether it is mounted.
+    mount: PathBuf,
     generation: PathBuf,
     upper: PathBuf,
     work: PathBuf,
@@ -26,6 +29,7 @@ impl Harness {
     fn new() -> Self {
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
         let root = tempdir.path().join("nix-overlay");
+        let mount = tempdir.path().join("workspace");
         let generation = root.join("sha256-current");
         let upper = generation.join("upper");
         let work = generation.join("work");
@@ -36,6 +40,7 @@ impl Harness {
         Self {
             _tempdir: tempdir,
             root,
+            mount,
             generation,
             upper,
             work,
@@ -99,7 +104,14 @@ impl Harness {
     }
 
     fn seed_with_import(&self, import: Option<&Path>) -> anyhow::Result<SeedOutcome> {
-        seed_block_upper_with(&self.upper, &self.work, &self.lower, import, &self.ops)
+        seed_block_upper_with(
+            &self.upper,
+            &self.work,
+            &self.lower,
+            import,
+            &self.mount,
+            &self.ops,
+        )
     }
 
     /// A host-seeded upper from before `/nix` moved onto the disk: a store with one
@@ -690,29 +702,27 @@ fn an_unmounted_disk_fails_the_seed() {
     );
 }
 
-/// The disk the upper lives on follows the upper's own path: a generation inside
-/// the workspace tree asks about the workspace mount, not the build disk's.
+/// A generation inside the workspace tree is the guest's to seed; the host-share
+/// upper it composes over is not, and neither is anything else.
 #[test]
-fn a_generation_in_the_workspace_tree_checks_the_workspace_mount() {
-    let harness = Harness::new();
+fn only_the_workspace_tree_counts_as_the_guests_own_disk() {
     let upper = Path::new(crate::guest_init::components::disk::workspace::MOUNT_POINT)
         .join(".cang/nix/sha256-current/upper");
-    let work = upper.with_file_name("work");
 
     assert_eq!(
         super::guest_disk_mount_point(&upper),
         Some(crate::guest_init::components::disk::workspace::MOUNT_POINT),
-        "the workspace mount, not the build disk, carries this generation"
+        "the workspace mount carries this generation"
     );
     assert_eq!(
-        super::guest_disk_mount_point(Path::new("/home/dev/.cache/cang-build/nix-overlay/x/upper")),
-        Some("/home/dev/.cache/cang-build")
+        super::guest_disk_mount_point(Path::new("/run/cang/nix-overlay/upper")),
+        None,
+        "the host-composed overlay's upper is the host's to seed"
     );
     assert_eq!(
         super::guest_disk_mount_point(Path::new("/elsewhere/upper")),
         None
     );
-    let _ = (&harness, work);
 }
 
 /// The work dir is created as part of the generation, so one named outside the
@@ -727,6 +737,7 @@ fn a_work_dir_outside_the_generation_is_refused() {
         &elsewhere,
         &harness.lower,
         None,
+        &harness.mount,
         &harness.ops,
     )
     .expect_err("a work dir outside the generation must be refused");
@@ -947,9 +958,9 @@ impl super::SeedOps for FakeSeedOps {
     }
 }
 
-/// The build disk's `nix-overlay/` parent is not the host's to create: the first
-/// generation of a workspace may be the first thing that ever writes there, so the
-/// seed makes the whole path.
+/// The `nix-overlay/` parent inside the workspace tree is not the host's to
+/// create: the first generation of a workspace may be the first thing that ever
+/// writes there, so the seed makes the whole path.
 #[test]
 fn a_missing_generation_parent_is_created() {
     let harness = Harness::new();

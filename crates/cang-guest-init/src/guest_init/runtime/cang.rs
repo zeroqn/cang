@@ -7,10 +7,6 @@ use crate::guest_init::components::env::{
     nix_remote_uri,
 };
 
-/// The host names the build disk's label and id together, so one of the two is
-/// enough to know a disk was attached. The build disk is retired (nothing
-/// attaches one), which is why "absent" is a statement and not a default.
-const BUILD_DISK_LABEL_ENV: &str = "CANG_BUILD_DISK_LABEL";
 use crate::guest_init::components::home::identity::{DevIdentity, validate_host_identity};
 use crate::guest_init::runtime::exec::ExecConfig;
 use crate::guest_init::runtime::session::{self, ManagedSessionConfig};
@@ -104,11 +100,6 @@ enum PulseEndpoint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EnterEnv {
     enter_as_root: bool,
-    /// `true` only when the host named a build disk. No launch attaches one
-    /// any more (cargo's `target/` and home live in the workspace tree), so a
-    /// launch that names none must not probe `/dev` for it: the probe is a btrfs
-    /// label scan that always fails and always costs ~100 ms on the boot path.
-    build_disk_requested: bool,
     host_uid: Option<u32>,
     host_gid: Option<u32>,
     cang: CangEnv,
@@ -211,29 +202,6 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
     profiler.measure("export-shell-env", || {
         crate::guest_init::components::shell::env::export(&shell_env)
     });
-    profiler.measure_result("mount-build-target", || {
-        // `CARGO_TARGET_DIR` arrives from the host pointing at the disk it
-        // attached; mounting it here is what makes that path the disk. A failure
-        // removes the variable, so a build falls back to the workspace instead of
-        // filling a rootfs directory that dies with the task.
-        if !env_contract.build_disk_requested {
-            return Ok(());
-        }
-        let mount = crate::guest_init::components::disk::build::ensure_ready(
-            &env_contract.cang.build_disk_label,
-            &env_contract.cang.build_disk_id,
-            &identity,
-        );
-        match mount {
-            Ok(_mount) => Ok(()),
-            Err(err) => {
-                eprintln!(
-                    "cang-guest-init: build target disk unavailable, cargo builds onto the workspace: {err:#}"
-                );
-                Ok(())
-            }
-        }
-    })?;
     profiler.measure("export-sccache-env", || {
         // Every cargo build in the guest goes through the cache cang already
         // mounts, or the cache why it is mounted there at all.
@@ -466,7 +434,6 @@ impl EnterEnv {
     fn from_env(env: &impl EnvSource) -> Result<Self> {
         Ok(Self {
             enter_as_root: env_flag(env, ENTER_AS_ROOT_ENV),
-            build_disk_requested: env.var(BUILD_DISK_LABEL_ENV).is_some(),
             host_uid: parse_optional_u32(env, HOST_UID_ENV)?,
             host_gid: parse_optional_u32(env, HOST_GID_ENV)?,
             cang: cang_env_from(env)?,
@@ -588,12 +555,6 @@ fn cang_env_from(env: &impl EnvSource) -> Result<CangEnv> {
         containers_disk_label: env.var("CANG_CONTAINERS_DISK_LABEL").unwrap_or_else(|| {
             crate::guest_init::components::env::RAW_CONTAINER_DISK_LABEL.to_owned()
         }),
-        build_disk_id: env
-            .var("CANG_BUILD_DISK_ID")
-            .unwrap_or_else(|| crate::guest_init::components::env::RAW_BUILD_DISK_ID.to_owned()),
-        build_disk_label: env
-            .var("CANG_BUILD_DISK_LABEL")
-            .unwrap_or_else(|| crate::guest_init::components::env::RAW_BUILD_DISK_LABEL.to_owned()),
         nix_lower: crate::guest_init::components::env::NixLowerContract::from_lookup(|name| {
             env.var(name)
         })?,
@@ -1074,21 +1035,6 @@ mod tests {
             !prepared_root_targets(&_raw)
                 .contains(&crate::guest_init::components::disk::containers::MOUNT_POINT)
         );
-    }
-
-    #[test]
-    fn a_build_disk_probe_runs_only_when_the_host_named_one() {
-        // No launch attaches a build disk any more, and an unnamed disk used to
-        // reach a btrfs label scan on every boot: ~100 ms that always failed.
-        let plain = EnterEnv::from_env(&env(&[])).expect("env should parse");
-        assert!(!plain.build_disk_requested);
-
-        let named = EnterEnv::from_env(&env(&[
-            ("CANG_BUILD_DISK_LABEL", "CANG_BUILD"),
-            ("CANG_BUILD_DISK_ID", "cang-build"),
-        ]))
-        .expect("build disk env should parse");
-        assert!(named.build_disk_requested);
     }
 
     #[test]

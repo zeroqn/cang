@@ -491,25 +491,26 @@ fn mount_block_lower(
     // with the host-composed overlay that already holds the same upper: the host
     // therefore writes a second work dir beside it for this mount.
     //
-    // Both directories must exist before the mount, and for a build-disk upper
-    // neither does: that generation, `upper` and `work` are all the seed's to
-    // create, as one unit (a subvolume cannot be made over an existing
-    // directory), so this step only prepares the host-share pair.
-    let on_guest_disk = block_upper::guest_disk_mount_point(&contract.upperdir).is_some();
+    // Both directories must exist before the mount, and for an upper on the
+    // guest's own disk neither does: that generation, `upper` and `work` are all
+    // the seed's to create, as one unit (a subvolume cannot be made over an
+    // existing directory), so this step only prepares the host-share pair.
+    let guest_disk = block_upper::guest_disk_mount_point(&contract.upperdir);
     profiler.measure_result(PROFILE_PREPARE_BLOCK_DIRS, || {
-        if !on_guest_disk {
+        if guest_disk.is_none() {
             fs::create_dir_all(&contract.workdir)?;
             fs::create_dir_all(&contract.upperdir)?;
         }
         Ok(())
     })?;
-    if on_guest_disk {
+    if let Some(guest_disk) = guest_disk {
         let outcome = profiler.measure_result(PROFILE_SEED_BLOCK_UPPER, || {
             block_upper::seed_block_upper(
                 &contract.upperdir,
                 &contract.workdir,
                 mount,
                 contract.import_upper.as_deref(),
+                Path::new(guest_disk),
             )
         })?;
         eprintln!(

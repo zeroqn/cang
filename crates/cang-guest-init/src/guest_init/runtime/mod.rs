@@ -65,33 +65,16 @@ pub(in crate::guest_init) fn run(command: GuestInitCommand) -> Result<()> {
                     NixSubcommand::Wait => {
                         crate::guest_init::components::nix::user::wait_for_prep()
                     }
-                    NixSubcommand::Gc(gc) => {
-                        let layout = match (gc.mount, gc.generations_dir, gc.disk_label, gc.disk_id)
-                        {
-                            (None, None, None, None) => None,
-                            (
-                                Some(mount),
-                                Some(generations_dir),
-                                Some(disk_label),
-                                Some(disk_id),
-                            ) => Some(crate::guest_init::components::nix::gc::GcLayout {
-                                mount,
-                                generations_dir,
-                                disk_label,
-                                disk_id,
-                            }),
-                            _ => {
-                                return Err(anyhow::anyhow!(
-                                    "--mount, --generations-dir, --disk-label and --disk-id name the gc layout together; pass all four or none (none means the build disk)"
-                                ));
-                            }
-                        };
-                        crate::guest_init::components::nix::gc::run(
-                            gc.all,
-                            gc.dry_run,
-                            layout.as_ref(),
-                        )
-                    }
+                    NixSubcommand::Gc(gc) => crate::guest_init::components::nix::gc::run(
+                        gc.all,
+                        gc.dry_run,
+                        &crate::guest_init::components::nix::gc::GcLayout {
+                            mount: gc.mount,
+                            generations_dir: gc.generations_dir,
+                            disk_label: gc.disk_label,
+                            disk_id: gc.disk_id,
+                        },
+                    ),
                 },
                 InternalSubcommand::Podman(podman) => match podman.command {
                     PodmanSubcommand::Prep => {
@@ -188,7 +171,20 @@ mod tests {
     fn maintenance_and_client_commands_stay_killable() {
         let cases: &[&[&str]] = &[
             &["cang-guest-init", "internal", "nix", "wait"],
-            &["cang-guest-init", "internal", "nix", "gc"],
+            &[
+                "cang-guest-init",
+                "internal",
+                "nix",
+                "gc",
+                "--mount",
+                "/run/cang/gc",
+                "--generations-dir",
+                "nix-overlay",
+                "--disk-label",
+                "CANG_WORKSPACE",
+                "--disk-id",
+                "cang-workspace",
+            ],
             &["cang-guest-init", "internal", "podman", "wait"],
             &["cang-guest-init", "internal", "podman", "service-wait"],
             &["cang-guest-init", "internal", "resize", "nix"],

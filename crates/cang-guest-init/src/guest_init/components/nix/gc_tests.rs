@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use super::{GcLayout, GcOps, Generation, collect, run_with_ops};
 
-/// A build disk on the host side of the fake: real directories under a tempdir,
+/// A guest disk on the host side of the fake: real directories under a tempdir,
 /// with only the mount, the disk lookup and `du`/`btrfs` faked.
 struct Harness {
     _tempdir: tempfile::TempDir,
@@ -16,7 +16,7 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
-        let mount = tempdir.path().join("cang-build");
+        let mount = tempdir.path().join("workspace-disk");
         fs::create_dir_all(mount.join("nix-overlay")).expect("generations dir");
         Self {
             _tempdir: tempdir,
@@ -43,8 +43,8 @@ impl Harness {
         GcLayout {
             mount: self.mount.clone(),
             generations_dir: self.mount.join("nix-overlay"),
-            disk_label: "cang-build".to_owned(),
-            disk_id: "cang-build-disk".to_owned(),
+            disk_label: "cang-workspace".to_owned(),
+            disk_id: "cang-workspace-disk".to_owned(),
         }
     }
 
@@ -220,7 +220,7 @@ fn a_dry_run_collects_nothing() {
 /// An empty disk is not an error: a workspace that never launched with a block
 /// upper has nothing to collect.
 #[test]
-fn an_empty_build_disk_collects_nothing() {
+fn an_empty_disk_collects_nothing() {
     let harness = Harness::new();
 
     harness.collect(false, false).expect("gc should succeed");
@@ -230,7 +230,7 @@ fn an_empty_build_disk_collects_nothing() {
 
 /// The subcommand mounts the disk it collects from, and unmounts it again.
 #[test]
-fn the_command_mounts_the_build_disk_and_unmounts_it() {
+fn the_command_mounts_the_disk_it_collects_and_unmounts_it() {
     let harness = Harness::new();
     harness.generation("sha256-older", true, 1_000);
 

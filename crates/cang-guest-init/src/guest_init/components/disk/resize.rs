@@ -56,10 +56,6 @@ impl ResizeOps for SystemResizeOps {
                 &env.containers_disk_label,
                 &env.containers_disk_id,
             ),
-            ResizeTarget::Build => crate::guest_init::components::disk::build::find_disk(
-                &env.build_disk_label,
-                &env.build_disk_id,
-            ),
             ResizeTarget::Workspace => {
                 let contract = env.workspace_disk.as_ref().ok_or_else(|| {
                     anyhow!(
@@ -105,7 +101,6 @@ impl ResizeTarget {
         match self {
             Self::Nix => "/nix",
             Self::Containers => "container storage",
-            Self::Build => "build disk cache",
             Self::Workspace => "workspace tree",
         }
     }
@@ -114,7 +109,6 @@ impl ResizeTarget {
         match self {
             Self::Nix => Path::new("/run/cang/resize-nix"),
             Self::Containers => Path::new("/run/cang/resize-containers"),
-            Self::Build => Path::new("/run/cang/resize-build"),
             Self::Workspace => Path::new("/run/cang/resize-workspace"),
         }
     }
@@ -124,8 +118,8 @@ impl ResizeTarget {
 mod tests {
     use super::*;
     use crate::guest_init::components::env::{
-        ContainerStoreBackend, RAW_BUILD_DISK_ID, RAW_BUILD_DISK_LABEL, RAW_CONTAINER_DISK_ID,
-        RAW_CONTAINER_DISK_LABEL, RAW_NIX_DISK_ID, RAW_NIX_DISK_LABEL,
+        ContainerStoreBackend, RAW_CONTAINER_DISK_ID, RAW_CONTAINER_DISK_LABEL, RAW_NIX_DISK_ID,
+        RAW_NIX_DISK_LABEL,
     };
     use std::cell::RefCell;
 
@@ -159,26 +153,6 @@ mod tests {
                 "mkdir:/run/cang/resize-containers",
                 "findmnt:/run/cang/resize-containers",
                 "resize:/run/cang/resize-containers",
-            ]
-        );
-    }
-
-    /// The build disk resizes through its own mount point, found by the id and
-    /// label the host sends on the maintenance VM.
-    #[test]
-    fn resize_mounts_the_build_disk_at_the_build_mount_point() {
-        let ops = FakeResizeOps::new(false);
-        run_with_ops(ResizeTarget::Build, &test_env(), &ops).unwrap();
-
-        assert_eq!(
-            ops.operations.borrow().as_slice(),
-            [
-                "find:build",
-                "mkdir:/run/cang/resize-build",
-                "findmnt:/run/cang/resize-build",
-                "mount:/dev/vdc:/run/cang/resize-build",
-                "resize:/run/cang/resize-build",
-                "umount:/run/cang/resize-build",
             ]
         );
     }
@@ -237,10 +211,6 @@ mod tests {
                     self.record("find:containers");
                     Ok(PathBuf::from("/dev/vdb"))
                 }
-                ResizeTarget::Build => {
-                    self.record("find:build");
-                    Ok(PathBuf::from("/dev/vdc"))
-                }
                 ResizeTarget::Workspace => {
                     self.record("find:workspace");
                     Ok(PathBuf::from("/dev/vdd"))
@@ -292,8 +262,6 @@ mod tests {
             workspace_relay: None,
             containers_disk_id: RAW_CONTAINER_DISK_ID.to_owned(),
             containers_disk_label: RAW_CONTAINER_DISK_LABEL.to_owned(),
-            build_disk_id: RAW_BUILD_DISK_ID.to_owned(),
-            build_disk_label: RAW_BUILD_DISK_LABEL.to_owned(),
             workspace_disk: None,
             nix_lower: None,
         }

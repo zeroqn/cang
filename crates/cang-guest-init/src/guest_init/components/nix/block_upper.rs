@@ -1,4 +1,4 @@
-//! The guest-seeded `/nix` upper on the build disk.
+//! The guest-seeded `/nix` upper on the guest-mounted workspace disk.
 //!
 //! A workspace `/nix` overlays one image generation's store with a writable upper
 //! that outlives that image, and the objects the upper accumulates are what stop
@@ -60,7 +60,6 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::guest_init::components::disk::build;
 use crate::guest_init::fs;
 
 /// Written at the upper's root once the generation is seeded. Its presence in the
@@ -83,16 +82,12 @@ const LIVE_DB_RELATIVE: &str = "var/nix/db";
 /// have left beside it, and the schema the database was created with.
 const DB_FILES: [&str; 4] = ["db.sqlite", "db.sqlite-wal", "db.sqlite-shm", "schema"];
 
-/// Which guest-mounted disk carries a path, when one does: the build disk's mount
-/// point or the workspace disk's, longest prefix first so a workspace tree that
-/// happens to sit under `/workspace` is never mistaken for the other.
+/// Which guest-mounted disk carries a path, when one does: the workspace disk's
+/// mount point. It is the only disk a `/nix` upper lives on, and the check is what
+/// tells the guest whether that upper is its to seed.
 pub(in crate::guest_init) fn guest_disk_mount_point(path: &Path) -> Option<&'static str> {
-    [
-        crate::guest_init::components::disk::workspace::MOUNT_POINT,
-        build::MOUNT_POINT,
-    ]
-    .into_iter()
-    .find(|mount| path.starts_with(Path::new(mount)))
+    let mount = crate::guest_init::components::disk::workspace::MOUNT_POINT;
+    path.starts_with(Path::new(mount)).then_some(mount)
 }
 
 /// What one seed did, for the profile log and the tests.
@@ -123,14 +118,16 @@ pub(in crate::guest_init) enum CloneKind {
 /// Seed this generation from a sibling generation and the image's lower.
 ///
 /// `upper` and `work` are the two overlayfs directories the host named; the
-/// generation directory is their parent.
+/// generation directory is their parent, and `mount` is the guest-mounted disk
+/// that carries it.
 pub(in crate::guest_init) fn seed_block_upper(
     upper: &Path,
     work: &Path,
     lower: &Path,
     import_upper: Option<&Path>,
+    mount: &Path,
 ) -> Result<SeedOutcome> {
-    seed_block_upper_with(upper, work, lower, import_upper, &SystemSeedOps)
+    seed_block_upper_with(upper, work, lower, import_upper, mount, &SystemSeedOps)
 }
 
 fn seed_block_upper_with(
@@ -138,22 +135,18 @@ fn seed_block_upper_with(
     work: &Path,
     lower: &Path,
     import_upper: Option<&Path>,
+    mount: &Path,
     ops: &impl SeedOps,
 ) -> Result<SeedOutcome> {
     // Seeding is only ever useful on the disk it is meant for: on an unmounted
     // guest-disk path the upper would be a task-rootfs directory that looks like a
     // cache and loses every object at exit, so a missing mount is a failure and not
-    // a quiet fallback. Which disk that is follows the upper's own path - the build
-    // disk of a launch that has one, or the workspace disk whose tree holds the
-    // upper for a `--workspace-disk` launch.
-    // A path under no known disk keeps the original requirement - the build disk -
-    // so an older host that named one there still gets the check it always got.
-    let mount = guest_disk_mount_point(upper).unwrap_or(build::MOUNT_POINT);
-    if !ops.is_mounted(Path::new(mount))? {
+    // a quiet fallback.
+    if !ops.is_mounted(mount)? {
         bail!(
             "the /nix upper '{}' is on the disk mounted at '{}', which is not mounted",
             upper.display(),
-            mount
+            mount.display()
         );
     }
     let generation = upper.parent().ok_or_else(|| {
@@ -640,7 +633,7 @@ fn remove_dir_if_present(path: &Path, ops: &impl SeedOps) -> Result<()> {
 }
 
 /// The filesystem and command seam, so the seeding decisions are testable without
-/// btrfs or a mounted build disk.
+/// btrfs or a mounted guest disk.
 trait SeedOps {
     fn create_dir_all(&self, path: &Path) -> Result<()>;
     /// `btrfs subvolume create`: `Ok(false)` when the filesystem or the tool does

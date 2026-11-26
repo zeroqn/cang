@@ -141,7 +141,7 @@ pub(in crate::guest_init) struct NixCommand {
 pub(in crate::guest_init) enum NixSubcommand {
     Prep,
     Wait,
-    /// Reclaim the build disk from `/nix` upper generations the workspace no
+    /// Reclaim the workspace image from `/nix` upper generations the workspace no
     /// longer needs. Runs in a maintenance VM, because the upper lives inside a
     /// raw image the host cannot mount.
     Gc(GcCommand),
@@ -162,27 +162,27 @@ pub(in crate::guest_init) struct GcCommand {
     #[arg(
         long = "mount",
         value_name = "PATH",
-        help = "Where this maintenance VM mounts the disk that holds the /nix upper generations; omit for the build disk"
+        help = "Where this maintenance VM mounts the disk that holds the /nix upper generations"
     )]
-    pub(in crate::guest_init) mount: Option<PathBuf>,
+    pub(in crate::guest_init) mount: PathBuf,
     #[arg(
         long = "generations-dir",
         value_name = "PATH",
         help = "The generations directory inside that disk: relative to --mount, or absolute when the guest already mounted it"
     )]
-    pub(in crate::guest_init) generations_dir: Option<PathBuf>,
+    pub(in crate::guest_init) generations_dir: PathBuf,
     #[arg(
         long = "disk-label",
         value_name = "LABEL",
-        help = "The btrfs label of the disk that holds them; required with --mount"
+        help = "The btrfs label of the disk that holds them"
     )]
-    pub(in crate::guest_init) disk_label: Option<String>,
+    pub(in crate::guest_init) disk_label: String,
     #[arg(
         long = "disk-id",
         value_name = "ID",
-        help = "The cang disk id of that disk; required with --mount"
+        help = "The cang disk id of that disk"
     )]
-    pub(in crate::guest_init) disk_id: Option<String>,
+    pub(in crate::guest_init) disk_id: String,
 }
 
 #[derive(Debug, Args, Clone, PartialEq, Eq)]
@@ -424,7 +424,6 @@ pub(in crate::guest_init) struct ResizeCommand {
 pub(in crate::guest_init) enum ResizeTarget {
     Nix,
     Containers,
-    Build,
     /// The tree `/workspace` is mounted from: `cang disk resize --workspace-disk`
     /// grows the host file, and this expands the filesystem inside it to fit.
     Workspace,

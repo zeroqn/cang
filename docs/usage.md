@@ -544,12 +544,13 @@ the only disk with a recreate path), and no launch refuses to delete one: the
 reclaim below is the only thing that removes it, plus `rm` if you would rather not
 wait for the next launch.
 
-The guest also stops looking for one. Its `enter` path used to scan `/dev` for a
-btrfs disk labelled `CANG_BUILD` on every boot, and, with no such disk attached,
-spend ~100 ms failing and then print `cang-guest-init: build target disk
-unavailable, cargo builds onto the workspace`. The scan now runs only when the
-host names a build disk (`CANG_BUILD_DISK_LABEL`), which no launch does, so
-neither the probe nor that line appears.
+The guest has no build-disk path left either. Its `enter` path used to scan
+`/dev` for a btrfs disk labelled `CANG_BUILD` on every boot, and, with no such
+disk attached, spend ~100 ms failing and then print `cang-guest-init: build
+target disk unavailable, cargo builds onto the workspace`; the scan, that line,
+the `CANG_BUILD_DISK_*` contract, the cargo-home seed and the guest's
+`internal resize build` are all gone. Nothing names that disk, so neither the
+probe nor the line can appear.
 
 A launch that finds a build disk from an earlier cang reclaims it, and says so on
 one line with the bytes it recovered:

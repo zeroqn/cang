@@ -33,8 +33,6 @@ pub(in crate::guest_init) const PODMAN_LOG_PATH: &str = "/run/cang/podman-prep.l
 pub(in crate::guest_init) const PODMAN_WAIT_TIMEOUT_SECS: u64 = 120;
 pub(in crate::guest_init) const RAW_NIX_DISK_ID: &str = "cang-nix";
 pub(in crate::guest_init) const RAW_NIX_DISK_LABEL: &str = "CANG_NIX";
-pub(in crate::guest_init) const RAW_BUILD_DISK_ID: &str = "cang-build";
-pub(in crate::guest_init) const RAW_BUILD_DISK_LABEL: &str = "CANG_BUILD";
 pub(in crate::guest_init) const RAW_CONTAINER_DISK_ID: &str = "cang-containers";
 pub(in crate::guest_init) const RAW_CONTAINER_DISK_LABEL: &str = "CANG_CONTAINERS";
 /// The read-only `/nix` lower disk, and the host-written overlay directories the
@@ -190,8 +188,6 @@ pub(in crate::guest_init) struct CangEnv {
     pub(in crate::guest_init) nix_disk_label: String,
     pub(in crate::guest_init) containers_disk_id: String,
     pub(in crate::guest_init) containers_disk_label: String,
-    pub(in crate::guest_init) build_disk_id: String,
-    pub(in crate::guest_init) build_disk_label: String,
     /// `Some` only for a `--workspace-disk` launch: the guest mounts that btrfs
     /// tree at `/workspace` itself and binds its cargo home onto `~/.cargo`.
     pub(in crate::guest_init) workspace_disk: Option<WorkspaceDiskContract>,
@@ -285,7 +281,7 @@ pub(in crate::guest_init) struct NixLowerContract {
     pub(in crate::guest_init) upperdir: PathBuf,
     pub(in crate::guest_init) workdir: PathBuf,
     /// The host-seeded upper on the share, when there is one: a fresh generation
-    /// on the build disk imports it once instead of starting empty, so moving
+    /// on the guest disk imports it once instead of starting empty, so moving
     /// `/nix` onto the disk does not re-substitute a cache that already exists.
     pub(in crate::guest_init) import_upper: Option<PathBuf>,
 }
@@ -353,10 +349,6 @@ impl CangEnv {
                 .unwrap_or_else(|_| RAW_CONTAINER_DISK_ID.to_owned()),
             containers_disk_label: env::var("CANG_CONTAINERS_DISK_LABEL")
                 .unwrap_or_else(|_| RAW_CONTAINER_DISK_LABEL.to_owned()),
-            build_disk_id: env::var("CANG_BUILD_DISK_ID")
-                .unwrap_or_else(|_| RAW_BUILD_DISK_ID.to_owned()),
-            build_disk_label: env::var("CANG_BUILD_DISK_LABEL")
-                .unwrap_or_else(|_| RAW_BUILD_DISK_LABEL.to_owned()),
             workspace_disk: WorkspaceDiskContract::from_lookup(|name| {
                 env::var(name).ok().filter(|value| !value.is_empty())
             })?,

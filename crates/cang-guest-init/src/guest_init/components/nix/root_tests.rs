@@ -474,18 +474,17 @@ fn block_overlay_options_put_the_block_lower_first() {
 
 /// A failed guest composition is fatal whenever nothing stands in for `/nix`:
 /// the host grafted no overlay for this launch (the both-block pairing), or the
-/// upper is the build disk's and the host therefore never seeded one. Only a
+/// upper is the guest disk's and the host therefore never seeded one. Only a
 /// host-share upper beside a grafted overlay may keep it.
 #[test]
 fn block_upper_failures_are_fatal_without_a_host_overlay_or_a_host_share_upper() {
-    let build_disk_upper =
-        PathBuf::from("/home/dev/.cache/cang-build/nix-overlay/sha256-abc/upper");
+    let guest_disk_upper = PathBuf::from("/workspace/.cang/nix/sha256-abc/upper");
     let host_share_upper = PathBuf::from("/run/cang/nix-overlay/upper");
 
     assert_eq!(
-        block_lower_failure_policy(build_disk_upper.as_path(), true),
+        block_lower_failure_policy(guest_disk_upper.as_path(), true),
         BlockLowerFailure::Fatal,
-        "a build-disk upper has no host-seeded overlay underneath either"
+        "a guest-disk upper has no host-seeded overlay underneath either"
     );
     assert_eq!(
         block_lower_failure_policy(host_share_upper.as_path(), false),
@@ -513,7 +512,7 @@ fn a_fatal_block_upper_failure_reaches_the_status_file_by_name() {
     .expect("running status should be written");
 
     let message = format!(
-        "{NO_HOST_OVERLAY_REASON} (upperdir '/home/dev/.cache/cang-build/nix-overlay/sha256-abc/upper', lowerdir '/run/cang/nix-lower')"
+        "{NO_HOST_OVERLAY_REASON} (upperdir '/workspace/.cang/nix/sha256-abc/upper', lowerdir '/run/cang/nix-lower')"
     );
     status::mark_failed_for_pid(&path, pid, message).expect("failure should be recorded");
 
