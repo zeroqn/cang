@@ -83,15 +83,16 @@ const ROOTFS_DIR: &str = "rootfs";
 /// composes a second overlay over the same upper, and two overlay instances may
 /// not share one work directory, so the guest gets its own (empty) one.
 pub(crate) const GUEST_WORK_DIR_NAME: &str = "work-guest";
-/// Where the writable upper lives when it is on the workspace's block disk
-/// instead of the share: a sibling of `cargo/` and `target/` in the build disk's
-/// filesystem, one directory per image generation.
+/// Where the writable upper lives when the launch runs on the workspace's own
+/// disk instead of the share: inside that disk's tree, one directory per image
+/// generation.
 ///
-/// The path is under the build disk's guest mount point
-/// (`persistent_disks::build::GUEST_MOUNT_POINT`), so the guest has it as a
-/// local btrfs filesystem by the time nix-prep runs, and the overlay's upper and
-/// work are one mount, on a filesystem that is not the lower's - the placement
-/// rule overlayfs needs (notes 02 of the nix-upper-on-block map).
+/// The path is under the workspace disk's guest mount point (`/workspace`), so
+/// the guest has it as a local btrfs filesystem by the time nix-prep runs, and
+/// the overlay's upper and work are one mount, on a filesystem that is not the
+/// lower's - the placement rule overlayfs needs (notes 02 of the nix-upper-on-
+/// block map). The retired build disk used to hold this instead; the launch no
+/// longer creates, attaches or exports it (`retired_build_disk`).
 /// The `/nix` upper inside the workspace disk's tree. The guest creates it after
 /// it mounts the disk (the host cannot see that filesystem), one directory per
 /// image generation, each a btrfs subvolume whose `upper`/`work` are plain
@@ -196,16 +197,16 @@ pub(crate) struct NixLowerDisk {
 /// carries `upper`/`work` to the guest, and the env that names them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NixLowerBlock {
+    /// The image's own `/nix` store as a read-only block file, so a guest never
+    /// reads the store across the share.
     disk: NixLowerDisk,
-    /// Whether the writable upper is the build disk's, beside the lower, instead
-    /// of the host-directory share. Set from the guest binary's capability: an
-    /// image whose `cang-guest-init` predates the seeding step cannot serve it.
-    /// The image generation's own name on the build disk.
+    /// The image generation's own directory name inside the workspace disk's
+    /// tree.
     ///
-    /// One block-disk upper per image digest, not one per workspace: the guest
-    /// seeds a fresh generation by cloning the previous one, and a constant name
-    /// would let the old generation's sentinel say "already seeded" so an image
-    /// move would silently keep the previous image's Nix DB.
+    /// One upper per image digest, not one per workspace: the guest seeds a
+    /// fresh generation by cloning the previous one, and a constant name would
+    /// let the old generation's sentinel say "already seeded" so an image move
+    /// would silently keep the previous image's Nix DB.
     generation: String,
     /// Kept for the whole launch: the image cannot be rebuilt underneath it.
     _lock: ImageLock,
@@ -223,8 +224,8 @@ impl NixLowerBlock {
     /// `(upperdir, workdir)` for the guest's overlay.
     ///
     /// Both are on one filesystem either way, which is overlayfs's rule; what
-    /// changes is *which* filesystem. On the build disk they are a btrfs
-    /// subvolume inside the disk's image, beside `cargo/` and `target/`.
+    /// changes is *which* filesystem. On the workspace disk they are a btrfs
+    /// subvolume inside that image's tree, under `/workspace/.cang/nix`.
     pub(crate) fn guest_upper_dirs(&self) -> (String, String) {
         let root = format!("{WORKSPACE_UPPER_ROOT}/{}", self.generation);
         (format!("{root}/upper"), format!("{root}/work"))
@@ -1328,8 +1329,8 @@ mod tests {
         assert_eq!(env[BLOCK_MODE_ENV], "1");
         assert_eq!(env["CANG_NIX_LOWER_DISK_ID"], ID);
         assert_eq!(env["CANG_NIX_LOWER_DISK_LABEL"], LABEL);
-        // Both layers of the pair are on the build disk, in the generation's own
-        // directory: the share carries the host's own bookkeeping, not the
+        // Both layers of the pair are on the workspace disk, in the generation's
+        // own directory: the share carries the host's own bookkeeping, not the
         // guest's upper.
         // The generation's name is the image digest, not the workspace's
         // constant `nix-overlay` directory: two image generations must not share
@@ -1453,7 +1454,7 @@ mod tests {
         assert!(two.ends_with("/sha256-otherimage/upper"), "{two}");
         assert!(
             one.starts_with(WORKSPACE_UPPER_ROOT),
-            "both live under the build disk's nix-overlay parent"
+            "both live under the workspace disk's /nix upper parent"
         );
     }
 
