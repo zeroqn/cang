@@ -1262,6 +1262,28 @@ mod tests {
     }
 
     #[test]
+    fn packaged_default_seccomp_policy_allows_virtio_rtc_syscalls() {
+        // The virtio-rtc device is attached on every launch. Constructing it
+        // asks `clock_getres` for UTC, TAI and monotonic (TAI is not a vDSO
+        // clock, so that one is a real syscall) and creates the alarm `timerfd`;
+        // a guest that sets an alarm drives `timerfd_settime`. Without these the
+        // enforced default policy kills the VM worker with SIGSYS during the
+        // launch, before the guest exists.
+        let policy: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../../assets/seccomp/default.json"))
+                .expect("default seccomp policy should parse");
+        let syscalls =
+            allowed_syscalls_from_policy_value(&policy).expect("default policy should inspect");
+
+        for syscall in ["clock_getres", "timerfd_create", "timerfd_settime"] {
+            assert!(
+                syscalls.contains(syscall),
+                "the default policy must allow {syscall} for the virtio-rtc device"
+            );
+        }
+    }
+
+    #[test]
     fn packaged_default_seccomp_policy_allows_clock_nanosleep() {
         let policy: serde_json::Value =
             serde_json::from_slice(include_bytes!("../../assets/seccomp/default.json"))

@@ -65,6 +65,47 @@ area) rather than CPU, which matters because cang sizes guest RAM at 80% of the
 host. The virtio-balloon's free-page reporting `madvise(MADV_DONTNEED)`s the
 ranges the guest hands back, which splits the huge pages covering them again.
 
+## Guest clock
+
+cang attaches the virtio-rtc device on every launch: libkrun's own in-process
+port of rust-vmm's `vhost-device-rtc`, device ID 17, with its two queues of
+1024. It is not a vhost-user backend and it asks for no shared memory, so it
+costs the guest an MMIO slot and nothing else.
+
+The pinned kernel carries the driver (`CONFIG_VIRTIO_RTC`,
+`CONFIG_VIRTIO_RTC_PTP`, `CONFIG_VIRTIO_RTC_CLASS` in the x86_64 libkrunfw
+config), so a booted guest has:
+
+- `/dev/rtc0` (char `251:0`) - the UTC (`CLOCK_REALTIME`) clock, with the wire
+  protocol's alarm queue behind `wakealarm`, and the kernel's own boot lines
+  registering it and setting the system clock from it;
+- three PTP clocks - UTC, TAI and monotonic - as `/dev/ptp0`, `/dev/ptp1` and
+  `/dev/ptp2` (`cat /sys/class/ptp/ptp*/clock_name` reads e.g.
+  `Virtio PTP type 1/variant 0`).
+
+A guest booted from this tree reports exactly that: `virtio_rtc virtio6` as
+`/sys/class/rtc/rtc0/name`, the three `ptp*` clocks, and `since_epoch` matching
+the host's `date +%s`, with the packaged seccomp policy enforced.
+
+What the guest previously had was kvmclock alone: an x86 microVM has no CMOS
+RTC, and libkrun registers a legacy PL031 RTC only on aarch64/riscv64 (a
+`RtcDevice` replaces it instead of joining it). kvmclock gives a wall clock
+anchored at boot and frequencies from the host TSC; the RTC is what answers
+`hwclock`, the TAI clock, and a settable alarm.
+
+Two consequences worth knowing when changing launch code:
+
+- The device is constructed inside the VM worker *after* its seccomp policy is
+  applied, and it creates the alarm `timerfd` and asks `clock_getres` for each
+  clock (TAI is not a vDSO clock, so that is a real syscall). The packaged
+  `assets/seccomp/default.json` therefore names `clock_getres`,
+  `timerfd_create` and `timerfd_settime`; removing them turns every launch into
+  a SIGSYS in the worker.
+- It is attached before the balloon, which stays the last device registered
+  (`configure_balloon` in `crates/cang/src/runtime/vm/libkrun/launcher.rs`):
+  the MMIO device manager numbers slots in registration order, and
+  `console=hvc0` plus the tagged root filesystem depend on that order.
+
 ## Guest entry contract
 
 `cang-guest-init enter` reads only `CANG_*` guest contract variables, validates

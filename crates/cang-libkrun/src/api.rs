@@ -112,6 +112,23 @@ pub trait LibkrunApi {
     /// to the host; it never changes the VM's configured RAM size.
     fn balloon_device_new(&mut self) -> Result<Handle>;
 
+    /// `krun_rtc_device_new`: virtio-rtc, attached on every launch.
+    ///
+    /// The device offers the guest the host's UTC (`CLOCK_REALTIME`, with an
+    /// alarm), TAI and monotonic clocks; the guest's pinned kernel has the
+    /// driver (`CONFIG_VIRTIO_RTC`/`_PTP`/`_CLASS`), so the clocks appear as
+    /// `/dev/rtc0` (alarm-capable) and `/dev/ptp0`. It replaces a legacy RTC
+    /// rather than joining one, which matters only on an aarch64/riscv64 host:
+    /// an x86 microVM has no CMOS RTC to begin with, so the guest's wall clock
+    /// otherwise comes from kvmclock alone, anchored at boot.
+    ///
+    /// This is libkrun's own port of rust-vmm's `vhost-device-rtc`, running
+    /// in-process: no backend daemon, no vhost-user feature, and therefore no
+    /// file-backed guest RAM. It creates a `timerfd` and asks `clock_getres`
+    /// for each clock, so the VM worker's seccomp allowlist has to name
+    /// `timerfd_create`, `timerfd_settime` and `clock_getres`.
+    fn rtc_device_new(&mut self) -> Result<Handle>;
+
     // VMM builder and run.
     fn vmm_builder_new(&mut self) -> Result<Handle>;
     fn vmm_builder_vcpus(&mut self, builder: Handle, vcpus: u8) -> Result<Handle>;

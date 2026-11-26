@@ -32,6 +32,7 @@ const VSOCK: usize = 7;
 const ROOTFS: usize = 8;
 const NET_DEVICE: usize = 9;
 const BALLOON_DEVICE: usize = 11;
+const RTC_DEVICE: usize = 12;
 const VMM: usize = 50;
 const CONSOLE_BUILDER_BASE: usize = 20;
 const CONSOLE_DEVICE_BASE: usize = 30;
@@ -65,6 +66,7 @@ enum Call {
     BlockDeviceNew(usize, String, String, bool),
     NetDeviceNewUnixstreamFd(i32, u32, u32),
     BalloonDeviceNew,
+    RtcDeviceNew,
     VsockDeviceNew(u64, u32),
     VsockDeviceAddUnixPort(usize, u32, String, bool),
     VsockDeviceAddPortForward(usize, String),
@@ -368,6 +370,12 @@ impl LibkrunApi for FakeLibkrunApi {
         self.record(Call::BalloonDeviceNew);
         self.checked("krun_balloon_device_new")?;
         Ok(BALLOON_DEVICE)
+    }
+
+    fn rtc_device_new(&mut self) -> Result<usize> {
+        self.record(Call::RtcDeviceNew);
+        self.checked("krun_rtc_device_new")?;
+        Ok(RTC_DEVICE)
     }
 
     fn console_device_builder(&mut self) -> Result<usize> {
@@ -743,6 +751,8 @@ fn fake_api_records_direct_libkrun_v2_call_order() {
             Call::MmioDeviceManagerAdd(DEVICES, BLOCK_DEVICE_BASE + 1),
             Call::VsockDeviceNew(3, 1),
             Call::MmioDeviceManagerAdd(DEVICES, VSOCK),
+            Call::RtcDeviceNew,
+            Call::MmioDeviceManagerAdd(DEVICES, RTC_DEVICE),
             Call::BalloonDeviceNew,
             Call::MmioDeviceManagerAdd(DEVICES, BALLOON_DEVICE),
             Call::VmmBuilderPayload(VMM_BUILDER + 4, PAYLOAD),

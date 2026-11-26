@@ -22,6 +22,9 @@
         "syscall": "capset"
       },
       {
+        "syscall": "clock_getres"
+      },
+      {
         "syscall": "clock_gettime"
       },
       {
@@ -290,6 +293,12 @@
       },
       {
         "syscall": "tgkill"
+      },
+      {
+        "syscall": "timerfd_create"
+      },
+      {
+        "syscall": "timerfd_settime"
       },
       {
         "syscall": "umask"

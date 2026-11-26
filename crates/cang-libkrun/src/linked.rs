@@ -26,7 +26,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use krun::{
     BalloonDevice, BlockDevice, ConsoleBuilder, ConsoleDevice, DiskFormat, FsDevice, FsOverlay,
     GpuDevice, LogLevel, LogOptions, LogStyle, MmioDeviceManager, NetDevice, NetFlags, Payload,
-    TsiFlags, VirglRendererFlags, Vmm, VmmBuilder, VsockDevice,
+    RtcDevice, TsiFlags, VirglRendererFlags, Vmm, VmmBuilder, VsockDevice,
 };
 use krun_init::{Builder as InitBuilder, Config as InitConfig};
 
@@ -47,6 +47,7 @@ enum Slot {
     ConsoleDevice(ConsoleDevice<'static>),
     GpuDevice(GpuDevice),
     BalloonDevice(BalloonDevice),
+    RtcDevice(RtcDevice),
     Devices(MmioDeviceManager<'static>),
     VmmBuilder(VmmBuilder<'static>),
     Vmm(Vmm<'static>),
@@ -162,6 +163,9 @@ fn attach_device(manager: &mut MmioDeviceManager<'static>, slot: Slot) -> Result
             manager.add(device);
         }
         Slot::BalloonDevice(device) => {
+            manager.add(device);
+        }
+        Slot::RtcDevice(device) => {
             manager.add(device);
         }
         _ => bail!("libkrun device manager add was given a non-device object"),
@@ -544,6 +548,10 @@ impl LibkrunApi for LinkedLibkrunApi {
 
     fn balloon_device_new(&mut self) -> Result<Handle> {
         Ok(self.push(Slot::BalloonDevice(BalloonDevice::new()?)))
+    }
+
+    fn rtc_device_new(&mut self) -> Result<Handle> {
+        Ok(self.push(Slot::RtcDevice(RtcDevice::new()?)))
     }
 
     fn vmm_builder_new(&mut self) -> Result<Handle> {

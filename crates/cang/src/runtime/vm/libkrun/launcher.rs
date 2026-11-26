@@ -532,6 +532,7 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
 
         self.configure_vsock(devices, config)?;
         self.configure_network(devices, config)?;
+        self.configure_rtc(devices)?;
         self.configure_balloon(devices)?;
 
         if let Some(profile_path) = profile_path {
@@ -928,6 +929,29 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
         // ABI 2's device manager takes ownership of the device, so every port has
         // to be registered on it first.
         add_device(&mut self.api, devices, vsock)?;
+        Ok(())
+    }
+
+    /// Attach the virtio-rtc, so the guest has a real time clock and not just
+    /// kvmclock.
+    ///
+    /// libkrun's device is its own port of rust-vmm's `vhost-device-rtc`, run
+    /// in-process: the guest sees `/dev/rtc0` (UTC, with `wakealarm`) and
+    /// `/dev/ptp0` (UTC, TAI and monotonic), and the guest kernel sets its
+    /// system clock from it at boot. It is unconditional, so it is also the
+    /// launch's hardware contract: the pinned kernel has the driver
+    /// (`CONFIG_VIRTIO_RTC`/`_PTP`/`_CLASS`), and the worker's seccomp
+    /// allowlist names the `timerfd`/`clock_getres` syscalls the device uses.
+    ///
+    /// Attached before the balloon, which has to stay the last device (see
+    /// `configure_balloon`): appending a device after it would move the balloon's
+    /// MMIO slot, and the boot contract depends on the order the devices were
+    /// registered in.
+    fn configure_rtc(&mut self, devices: Handle) -> Result<()> {
+        tracing::debug!("krun_rtc_device_new: begin");
+        let device = setup("krun_rtc_device_new", self.api.rtc_device_new())?;
+        add_device(&mut self.api, devices, device)?;
+        tracing::debug!(device, "krun_rtc_device_new: complete");
         Ok(())
     }
 
