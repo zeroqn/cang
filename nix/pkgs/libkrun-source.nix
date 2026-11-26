@@ -23,7 +23,7 @@ let
     name = "krun-init-cargo-deps";
     src = libkrunSrc;
     cargoRoot = "init/init-binary";
-    hash = "sha256-0Qjy3te+nAzRLASyqrhpl9QsSwCZcn0HAN7Ia/3jRjs=";
+    hash = "sha256-Ig1KuxBRq0LAF8B3a0icH7QVWgfaraboeKwCzkE4s6o=";
   };
 
   muslTarget =
@@ -49,11 +49,13 @@ let
     cargoRoot = "init/init-binary";
     cargoDeps = krunInitCargoDeps;
     CARGO_BUILD_TARGET = muslTarget;
+    # No `--features timesync`: the fork dropped upstream PR 840, so its host
+    # half is macOS-only again and a Linux guest would spawn a clock worker that
+    # can never receive a sync message. A virtio RTC device (upstream
+    # `vhost-device-rtc`) is the intended replacement for the guest clock.
     cargoBuildFlags = [
       "--manifest-path"
       "init/init-binary/Cargo.toml"
-      "--features"
-      "timesync"
     ];
     doCheck = false;
     installPhase = ''

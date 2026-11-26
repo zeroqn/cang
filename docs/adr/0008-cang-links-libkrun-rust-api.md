@@ -4,8 +4,8 @@ Status: accepted
 
 Cang binds libkrun through libkrun's **Rust API**: the `cang-libkrun` crate
 depends on `deps/libkrun` (the `zeroqn/libkrun` fork submodule) by path, enables
-the `blk`, `net`, `gpu`, `input` and `timesync` features, and uses
-`krun-init-blob`'s `direct` feature for the guest init. libkrun is compiled by
+the `blk`, `net`, `gpu` and `input` features, and uses `krun-init-blob`'s
+`krun` feature for the guest init. libkrun is compiled by
 cang's own rustc inside cang's build. No `libkrun.so` or `libkrun_init.so` is
 loaded at run time, there is no `CANG_LIBKRUN_LIBRARY` override, and the pinned
 prebuilt C-ABI library, its pin and its updater are gone.
@@ -86,8 +86,11 @@ has to provide that library.
 enrols libkrun's own crates as workspace members and runs their test targets.
 
 Upstream's static-linking test configuration only enables `blk` and `net`, so
-cang is the first static consumer of `gpu`, `input` and `timesync`: the Chromium
-GPU smoke, not the test suite, is what proves those still work.
+cang is the first static consumer of `gpu` and `input`: the Chromium GPU smoke,
+not the test suite, is what proves those still work. The `timesync` feature is
+not enabled: the fork does not carry upstream PR 840, so on Linux it would build
+no host device for a guest clock worker that then never syncs (a virtio RTC
+device is the intended replacement).
 
 ## Considered options
 

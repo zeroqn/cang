@@ -22,11 +22,11 @@
     "libkrun-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1795523183,
-        "narHash": "sha256-rHKlVIVvcdArf4hb2HPBPbBvu04wbfvBWqpO0mO1+F4=",
+        "lastModified": 1795697100,
+        "narHash": "sha256-msImsn9scSdCsqWuaNGFeeodrX6SdqpPQ4rDeAi3BEM=",
         "owner": "zeroqn",
         "repo": "libkrun",
-        "rev": "8401d56677a78e2606ff901a676c78361e41b29a",
+        "rev": "f1d3f099087bd892981588979338a1da32a9e56b",
         "type": "github"
       },
       "original": {
