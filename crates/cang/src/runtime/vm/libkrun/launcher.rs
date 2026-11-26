@@ -420,6 +420,7 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             config.zero_copy_shm,
         )?;
         self.configure_nested_virt(builder)?;
+        self.configure_transparent_huge_pages(builder)?;
         let console_log = self.configure_console(devices, config)?;
 
         let overlay = setup("krun_fs_overlay_new", self.api.fs_overlay_new())?;
@@ -627,6 +628,24 @@ impl<A: LibkrunApi> DirectLibkrunLauncher<A> {
             self.api.vmm_builder_nested_virt(*builder, true),
         )?;
         tracing::debug!("krun_vmm_builder_nested_virt: complete");
+        Ok(())
+    }
+
+    /// Ask for transparent-huge-page-backed guest RAM.
+    ///
+    /// `krun_vmm_builder_transparent_huge_pages` advises `MADV_HUGEPAGE` on every
+    /// guest memory region before the payload is loaded, so a host with THP set
+    /// to `madvise` - the default on most distributions - backs guest RAM with
+    /// 2 MiB pages instead of 4 KiB ones, at the same RSS. With THP set to
+    /// `never` the advice is ignored; a host kernel built without THP support
+    /// fails the build, which is upstream's contract.
+    fn configure_transparent_huge_pages(&mut self, builder: &mut Handle) -> Result<()> {
+        tracing::debug!("krun_vmm_builder_transparent_huge_pages: begin");
+        *builder = setup(
+            "krun_vmm_builder_transparent_huge_pages",
+            self.api.vmm_builder_transparent_huge_pages(*builder, true),
+        )?;
+        tracing::debug!("krun_vmm_builder_transparent_huge_pages: complete");
         Ok(())
     }
 

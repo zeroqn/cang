@@ -568,6 +568,19 @@ impl LibkrunApi for LinkedLibkrunApi {
         Ok(handle)
     }
 
+    fn vmm_builder_transparent_huge_pages(
+        &mut self,
+        handle: Handle,
+        enabled: bool,
+    ) -> Result<Handle> {
+        let builder = self.take_kind(handle, "vmm builder", as_vmm_builder)?;
+        self.put(
+            handle,
+            Slot::VmmBuilder(builder.transparent_huge_pages(enabled)?),
+        );
+        Ok(handle)
+    }
+
     fn vmm_builder_payload(&mut self, builder: Handle, payload: Handle) -> Result<Handle> {
         let value = self.take_kind(builder, "vmm builder", as_vmm_builder)?;
         let payload = self.take_kind(payload, "payload", as_payload)?;

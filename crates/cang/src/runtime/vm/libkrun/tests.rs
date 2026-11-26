@@ -77,6 +77,7 @@ enum Call {
     VmmBuilderVcpus(usize, u8),
     VmmBuilderRamMib(usize, u32),
     VmmBuilderNestedVirt(usize, bool),
+    VmmBuilderTransparentHugePages(usize, bool),
     VmmBuilderPayload(usize, usize),
     VmmBuilderDevices(usize, usize),
     VmmBuilderDestroy(usize),
@@ -451,6 +452,16 @@ impl LibkrunApi for FakeLibkrunApi {
         Ok(builder + 1)
     }
 
+    fn vmm_builder_transparent_huge_pages(
+        &mut self,
+        builder: usize,
+        enabled: bool,
+    ) -> Result<usize> {
+        self.record(Call::VmmBuilderTransparentHugePages(builder, enabled));
+        self.checked("krun_vmm_builder_transparent_huge_pages")?;
+        Ok(builder + 1)
+    }
+
     fn vmm_builder_payload(&mut self, builder: usize, payload: usize) -> Result<usize> {
         self.record(Call::VmmBuilderPayload(builder, payload));
         self.checked("krun_vmm_builder_payload")?;
@@ -677,6 +688,7 @@ fn fake_api_records_direct_libkrun_v2_call_order() {
             Call::MmioDeviceManagerNew,
             Call::CheckNestedVirt,
             Call::VmmBuilderNestedVirt(VMM_BUILDER + 2, true),
+            Call::VmmBuilderTransparentHugePages(VMM_BUILDER + 3, true),
             Call::ConsoleDeviceBuilder,
             Call::ConsoleBuilderAddDefaultConsole(CONSOLE_BUILDER_BASE, 0, 1, 2),
             Call::ConsoleBuilderBuild(CONSOLE_BUILDER_BASE),
@@ -733,9 +745,9 @@ fn fake_api_records_direct_libkrun_v2_call_order() {
             Call::MmioDeviceManagerAdd(DEVICES, VSOCK),
             Call::BalloonDeviceNew,
             Call::MmioDeviceManagerAdd(DEVICES, BALLOON_DEVICE),
-            Call::VmmBuilderPayload(VMM_BUILDER + 3, PAYLOAD),
-            Call::VmmBuilderDevices(VMM_BUILDER + 4, DEVICES),
-            Call::VmmBuilderBuild(VMM_BUILDER + 5),
+            Call::VmmBuilderPayload(VMM_BUILDER + 4, PAYLOAD),
+            Call::VmmBuilderDevices(VMM_BUILDER + 5, DEVICES),
+            Call::VmmBuilderBuild(VMM_BUILDER + 6),
             Call::VmmRun(VMM),
         ],
         "the launcher must build payload/devices/init and then run, with no port map and no per-bind virtiofs device"
@@ -1534,7 +1546,7 @@ fn profile_setup_runs_after_init_config_and_before_pre_enter_hook() {
     assert_eq!(
         calls[set_profile_index],
         Call::SetProfilePath(
-            VMM_BUILDER + 3,
+            VMM_BUILDER + 4,
             "/tmp/vm-worker-host-profile.tsv".to_owned()
         )
     );

@@ -117,6 +117,15 @@ pub trait LibkrunApi {
     fn vmm_builder_vcpus(&mut self, builder: Handle, vcpus: u8) -> Result<Handle>;
     fn vmm_builder_ram_mib(&mut self, builder: Handle, ram_mib: u32) -> Result<Handle>;
     fn vmm_builder_nested_virt(&mut self, builder: Handle, enabled: bool) -> Result<Handle>;
+    /// `krun_vmm_builder_transparent_huge_pages`: advise `MADV_HUGEPAGE` on every
+    /// guest memory region, so a host with THP set to `madvise` backs guest RAM
+    /// with 2 MiB pages. Upstream fails the build when the host kernel has no THP
+    /// support at all; with THP set to `never` the advice is ignored.
+    fn vmm_builder_transparent_huge_pages(
+        &mut self,
+        builder: Handle,
+        enabled: bool,
+    ) -> Result<Handle>;
     fn vmm_builder_payload(&mut self, builder: Handle, payload: Handle) -> Result<Handle>;
     fn vmm_builder_devices(&mut self, builder: Handle, devices: Handle) -> Result<Handle>;
     /// Release a builder that was never consumed by `vmm_builder_build`.
