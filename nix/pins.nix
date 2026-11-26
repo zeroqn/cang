@@ -245,14 +245,13 @@ in
   # ("unsupported protocol version 6 (server supports protocol versions 7 to 9,
   # try updating to a newer client version)"). The `@pydantic/monty` JS client
   # the RLM / code-mode / skill-bridge extensions install must therefore stay
-  # inside that window; they moved to 1.7.0-beta.1 (protocol 9) with this
-  # bump.
+  # inside that window; they moved to 1.7.0 (protocol 9) with this bump.
   montyPrebuiltRelease = {
-    version = "1.7.0-beta.1";
+    version = "1.7.0";
     systems = {
       x86_64-linux = {
-        asset = "monty-linux-x64-gnu-1.7.0-beta.1.tgz";
-        hash = "sha256-4q8F/XiUTXKrTRQoXV2WBsoHE8uoSjbKschdxKJJ+ec=";
+        asset = "monty-linux-x64-gnu-1.7.0.tgz";
+        hash = "sha256-n+SqEkMgLA0PKhP6YgBrVNgvgxUn6wGcL+YizyulObo=";
       };
     };
   };
