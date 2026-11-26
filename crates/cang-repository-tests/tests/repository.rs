@@ -1221,27 +1221,38 @@ fn image_includes_hardening_run_for_foreign_binary_allocator_opt_in() {
 }
 
 #[test]
-fn rust_tool_wrappers_mask_nix_loader_preload() {
+fn rust_tool_wrappers_mask_nix_loader_preload_only_when_it_is_not_mimalloc() {
+    // The mask is what keeps the Rust tools off `hardened_malloc`; the image's
+    // default preload is mimalloc, which rustc was measured working under, and
+    // the mask costs a bubblewrap namespace that a plain container cannot
+    // create. So the mask stays for every preload except mimalloc (and no
+    // preload at all, which is `--alloc=glibc`), and the plain `exec` is the
+    // allowlisted branch.
     for required in [
-        "rustcCommandCompat",
-        r#"pkgs.writeShellScriptBin "rustc""#,
+        "rustToolCommandCompat =",
+        r#"rustcCommandCompat = rustToolCommandCompat "rustc" "${rustToolchain.toolchain}/bin/rustc";"#,
+        r#"rustToolCommandCompat "rust-analyzer" "${pkgs.rust-analyzer}/bin/rust-analyzer""#,
+        "preload=$(cat /etc/ld-nix.so.preload",
+        "libmimalloc.so",
+        r#"exec ${binary} "$@""#,
         "cang-empty-ld-nix-so-preload",
         "--ro-bind ${emptyLdNixSoPreload} /etc/ld-nix.so.preload",
         "--unsetenv LD_PRELOAD",
         "--unsetenv NSS_WRAPPER_PASSWD",
         "--unsetenv NSS_WRAPPER_GROUP",
-        r#"${rustToolchain.toolchain}/bin/rustc "$@""#,
-        "rustAnalyzerCommandCompat",
-        r#"pkgs.writeShellScriptBin "rust-analyzer""#,
-        "cang-empty-ld-nix-so-preload",
-        "--ro-bind ${emptyLdNixSoPreload} /etc/ld-nix.so.preload",
-        "--unsetenv LD_PRELOAD",
-        "--unsetenv NSS_WRAPPER_PASSWD",
-        "--unsetenv NSS_WRAPPER_GROUP",
-        r#"${pkgs.rust-analyzer}/bin/rust-analyzer "$@""#,
     ] {
         assert!(LAYERS.contains(required), "missing {required}");
     }
+    // The allowlist must be the empty preload and mimalloc only: everything
+    // else - hardened_malloc included - has to reach the masking branch.
+    assert!(
+        LAYERS.contains(r#"if [ -z "$name" ] || [ "$name" = libmimalloc.so ]; then"#),
+        "the plain-exec branch should be the mimalloc/empty allowlist"
+    );
+    assert!(
+        !LAYERS.contains("pkgs.writeShellScriptBin \"rustc\""),
+        "both Rust tools should be built by the one gated wrapper"
+    );
 }
 
 #[test]

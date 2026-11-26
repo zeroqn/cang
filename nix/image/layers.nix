@@ -77,28 +77,44 @@ let
 
     exec "$@"
   '';
-  rustcCommandCompat = pkgs.writeShellScriptBin "rustc" ''
-    unset LD_PRELOAD NSS_WRAPPER_PASSWD NSS_WRAPPER_GROUP
-    exec ${pkgs.bubblewrap}/bin/bwrap \
-      --dev-bind / / \
-      --ro-bind ${emptyLdNixSoPreload} /etc/ld-nix.so.preload \
-      --unsetenv LD_PRELOAD \
-      --unsetenv NSS_WRAPPER_PASSWD \
-      --unsetenv NSS_WRAPPER_GROUP \
-      -- \
-      ${rustToolchain.toolchain}/bin/rustc "$@"
-  '';
-  rustAnalyzerCommandCompat = pkgs.writeShellScriptBin "rust-analyzer" ''
-    unset LD_PRELOAD NSS_WRAPPER_PASSWD NSS_WRAPPER_GROUP
-    exec ${pkgs.bubblewrap}/bin/bwrap \
-      --dev-bind / / \
-      --ro-bind ${emptyLdNixSoPreload} /etc/ld-nix.so.preload \
-      --unsetenv LD_PRELOAD \
-      --unsetenv NSS_WRAPPER_PASSWD \
-      --unsetenv NSS_WRAPPER_GROUP \
-      -- \
-      ${pkgs.rust-analyzer}/bin/rust-analyzer "$@"
-  '';
+  # The Rust tools keep the pinned toolchain's binary on `PATH`, and mask the
+  # allocator preload only when the preload is not the one they were verified
+  # against.
+  #
+  # The mask was written for `hardened_malloc` (commit a7dc9344: rustc's
+  # allocation behaviour under it). The image's default preload is mimalloc
+  # (`nix/lib/mimalloc-cang.nix`), and rustc 1.100.0 was measured in a cang
+  # guest compiling a synthetic -O workload, running `cargo build`, running
+  # `cargo test` and producing byte-identical output under it - so the default
+  # needs no mask. Every other value, including one this does not recognise,
+  # keeps the mask: the crash the mask prevents is the failure it must not
+  # reintroduce, so the fast path is an allowlist.
+  #
+  # It also matters beyond the allocator: the mask is a bubblewrap namespace,
+  # and a plain container cannot create one (`bwrap: Creating new namespace
+  # failed: Operation not permitted`), which is why the image could not compile
+  # inside `podman run`. Gating on the preload is what lets it, while
+  # `--alloc=hardened` keeps the masking it needs.
+  rustToolCommandCompat =
+    name: binary:
+    pkgs.writeShellScriptBin name ''
+      unset LD_PRELOAD NSS_WRAPPER_PASSWD NSS_WRAPPER_GROUP
+      preload=$(cat /etc/ld-nix.so.preload 2>/dev/null || true)
+      name=''${preload##*/}
+      if [ -z "$name" ] || [ "$name" = libmimalloc.so ]; then
+        exec ${binary} "$@"
+      fi
+      exec ${pkgs.bubblewrap}/bin/bwrap \
+        --dev-bind / / \
+        --ro-bind ${emptyLdNixSoPreload} /etc/ld-nix.so.preload \
+        --unsetenv LD_PRELOAD \
+        --unsetenv NSS_WRAPPER_PASSWD \
+        --unsetenv NSS_WRAPPER_GROUP \
+        -- \
+        ${binary} "$@"
+    '';
+  rustcCommandCompat = rustToolCommandCompat "rustc" "${rustToolchain.toolchain}/bin/rustc";
+  rustAnalyzerCommandCompat = rustToolCommandCompat "rust-analyzer" "${pkgs.rust-analyzer}/bin/rust-analyzer";
   cangNixCommandCompat = pkgs.writeShellScriptBin "nix" ''
     unset LD_PRELOAD
     unset NSS_WRAPPER_PASSWD

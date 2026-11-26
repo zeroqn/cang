@@ -265,8 +265,15 @@ allocator, so the launcher `LD_PRELOAD`s that same shared object into it at
 `execv`. Both sides of the VM boundary thus run one mimalloc version.
 
 `rustc` and `rust-analyzer` are started through wrappers that mask
-`/etc/ld-nix.so.preload` for those processes, which remains useful in mimalloc
-and hardened modes and is redundant in glibc mode.
+`/etc/ld-nix.so.preload` for those processes **only when the preload is not
+mimalloc**: the mask exists to keep the Rust tools off `hardened_malloc`, and
+rustc 1.100.0 was measured compiling, linking and testing under the default
+mimalloc in a cang guest, so the default path execs the toolchain binary
+directly. Every other preload, including an unrecognised one, still gets the
+mask. The plain path matters beyond the allocator: the mask is a bubblewrap
+namespace, and a plain container cannot create one, so gating it is what lets
+the image compile inside `podman run`. `--alloc=hardened` keeps the mask it
+needs, and `--alloc=glibc` needs none.
 
 Foreign/FHS glibc binaries usually read `/etc/ld.so.preload` instead of
 `/etc/ld-nix.so.preload`, while static or musl binaries generally ignore both
@@ -689,7 +696,8 @@ The container provides:
   valid and needs no network; on a btrfs state root a generation is seeded by a
   `btrfs` subvolume snapshot, otherwise by a hardlink clone
 - `rustc` and `rust-analyzer` wrappers that mask `/etc/ld-nix.so.preload` so
-  both tools keep the default allocator
+  both tools stay off `hardened_malloc`, on every preload except the default
+  mimalloc (which rustc was measured working under)
 - a `pi` wrapper that prepends a cang-owned runtime directory holding
   `libstdc++.so.6` and the ONNX Runtime ABI shim under both of its names
   (`libonnxruntime.so.1`, `libonnxrtabi24.so.1`), for prebuilt extension addons

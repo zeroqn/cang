@@ -625,6 +625,12 @@ let
         test -f ${layers.kacheShims}/kache-shims/bin/.kache-shims
         grep -F ':${layers.kacheShims}/kache-shims/bin:${layers.libcGetconf}/bin:${layers.imagePath}:' ${imageConfigFile}
         grep -F '${rustToolchain.toolchain}/bin/rustc' ${layers.rustcCommandCompat}/bin/rustc
+        # The Rust wrappers mask the allocator preload only when it is not mimalloc;
+        # that allowlist is what lets the image compile inside a plain container,
+        # where the mask's bubblewrap namespace cannot be created.
+        grep -F 'libmimalloc.so' ${layers.rustcCommandCompat}/bin/rustc
+        grep -F 'libmimalloc.so' ${layers.rustAnalyzerCommandCompat}/bin/rust-analyzer
+        grep -F 'bubblewrap' ${layers.rustcCommandCompat}/bin/rustc
         grep -F 'rustToolchain.toolchain' ${layersSourceFile}
         # RUST_SRC_PATH points at /share/rust-src, which has to be the pinned
         # toolchain's rust-src component (a `std` tree, not the rustc source).
