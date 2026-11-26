@@ -1952,7 +1952,16 @@ mod tests {
     /// discipline produces. What the session guarantees is that nothing readable is
     /// left behind when it reports the child's exit, so the checks are on the bytes
     /// seen before `Exit`, not on how they were split.
-    fn collect_final_session_frames(child: libc::pid_t, pty: Pty) -> (Vec<u8>, i32, ClientResult) {
+    ///
+    /// `on_data` runs on every `Data` frame with the bytes seen so far, so a test
+    /// can act once a particular piece of output has arrived: the session forwards
+    /// a batch before the final drain it runs straight afterwards, so an action
+    /// taken there is ordered after the drain's own first read.
+    fn collect_final_session_frames(
+        child: libc::pid_t,
+        pty: Pty,
+        mut on_data: impl FnMut(&[u8]),
+    ) -> (Vec<u8>, i32, ClientResult) {
         let temp = tempfile::tempdir().unwrap();
         let unix_listener = UnixListener::bind(temp.path().join("listener.sock")).unwrap();
         let listener = VsockListener {
@@ -1981,7 +1990,10 @@ mod tests {
         let mut forwarded = Vec::new();
         let exit_code = loop {
             match read_frame(&mut client) {
-                Ok(Some(Frame::Data(chunk))) => forwarded.extend_from_slice(&chunk),
+                Ok(Some(Frame::Data(chunk))) => {
+                    forwarded.extend_from_slice(&chunk);
+                    on_data(&forwarded);
+                }
                 Ok(Some(Frame::Exit { code })) => break code,
                 Ok(Some(frame)) => panic!("expected PTY data or Exit, got {frame:?}"),
                 Ok(None) => panic!("the session ended without an Exit frame"),
@@ -2009,7 +2021,7 @@ mod tests {
             unsafe { libc::_exit(code) }
         }
 
-        let (forwarded, exit_code, result) = collect_final_session_frames(child, pty);
+        let (forwarded, exit_code, result) = collect_final_session_frames(child, pty, |_| {});
         assert_eq!(forwarded, b"final-visible\r\n");
         assert_eq!(exit_code, 0);
         assert!(matches!(result, ClientResult::ChildExited(0)));
@@ -2018,31 +2030,45 @@ mod tests {
     /// A writer that closes *after* the session reaped the child must still have
     /// its bytes forwarded before `Exit`.
     ///
-    /// The child writes the line's text, leaves a grandchild holding the slave
-    /// open, and exits at once; the grandchild writes the newline 30 ms later, so
-    /// the drain's first read finds nothing more and only its bounded wait for the
-    /// master covers the gap. Ending the drain on that first `EAGAIN` drops the
-    /// line ending - the shape of a final line the line discipline hands over in a
-    /// second read.
+    /// This test holds the slave open, so the master never reports the hangup that
+    /// ends the drain: the child writes the line's text and exits at once, the
+    /// session forwards those bytes and reaps the child with its own first read of
+    /// the master already empty, and only the drain's bounded wait covers the gap
+    /// to the line ending written here once the text has reached the client.
+    /// Ending the drain on that first `EAGAIN` drops the ending - the shape of a
+    /// final line the line discipline hands over in a second read.
+    ///
+    /// The ending is released by the text arriving rather than by a fixed nap, so
+    /// the test does not spend any of the drain's budget waiting: a nap short
+    /// enough to be timely on an idle machine is the whole budget on a loaded one.
     #[test]
     fn final_pty_output_waits_for_a_late_writer_before_exit() {
         let pty = Pty::open().unwrap();
         let slave = pty_slave_cstring(&pty);
+        // Opened before the `fork`, and before the session reads the master, so the
+        // slave never stands closed: a hangup there would end the drain instead of
+        // leaving it waiting for the ending written below.
+        let late_fd = unsafe { libc::open(slave.as_ptr(), libc::O_RDWR) };
+        assert!(late_fd >= 0, "failed to open the PTY slave");
+        let mut late_writer = Some(unsafe { File::from_raw_fd(late_fd) });
         let child = unsafe { libc::fork() };
         assert!(child >= 0, "fork failed");
         if child == 0 {
             close_inherited_fds();
-            let code = write_then_leave_a_late_writer_on_pty_slave(
-                &slave,
-                b"final-visible",
-                b"\n",
-                Duration::from_millis(30),
-            );
+            let code = write_then_exit_on_pty_slave(&slave, b"final-visible");
             // SAFETY: see `final_pty_output_is_forwarded_after_the_writers_close`.
             unsafe { libc::_exit(code) }
         }
 
-        let (forwarded, exit_code, result) = collect_final_session_frames(child, pty);
+        let (forwarded, exit_code, result) = collect_final_session_frames(child, pty, |data| {
+            // Closing the slave with the ending is what ends the drain; it drops
+            // the descriptor, as the writer that flushed late in the field did.
+            if data.ends_with(b"final-visible")
+                && let Some(mut writer) = late_writer.take()
+            {
+                writer.write_all(b"\n").unwrap();
+            }
+        });
         assert_eq!(forwarded, b"final-visible\r\n");
         assert_eq!(exit_code, 0);
         assert!(matches!(result, ClientResult::ChildExited(0)));
@@ -2802,60 +2828,6 @@ mod tests {
         true
     }
 
-    /// Write `data` to the PTY slave and then hold it open until the test signals
-    /// this child.
-    ///
-    /// Holding it open until a signal - rather than for a fixed nap - keeps the
-    /// client's detach landing while the session is still serving it on a loaded
-    /// machine. Only a setup failure returns, exactly like
-    /// `run_sigwinch_redraw_pty_child`; the parent reaps the child afterwards.
-    ///
-    /// This runs in a forked child of the multi-threaded test harness, so it stays
-    /// syscall-only. `fork()` copies every lock the other harness threads held at
-    /// that instant - including glibc's malloc arenas - so an allocation here can
-    /// block forever and hang the parent's `waitpid`.
-    /// Write `first` to the PTY slave, leave a grandchild that writes `late` on
-    /// its own slave descriptor after `delay` and closes it, and return the code
-    /// the child exits with straight away.
-    ///
-    /// The session therefore reaps the child while a writer still holds the slave
-    /// open, so `late` becomes readable only after the drain's first read.
-    fn write_then_leave_a_late_writer_on_pty_slave(
-        slave: &CStr,
-        first: &[u8],
-        late: &[u8],
-        delay: Duration,
-    ) -> i32 {
-        // SAFETY: opening the PTY slave path read-write for this child only.
-        let fd = unsafe { libc::open(slave.as_ptr(), libc::O_RDWR) };
-        if fd < 0 {
-            return 1;
-        }
-        if !write_all_fd(fd, first) {
-            return 1;
-        }
-        let writer = unsafe { libc::fork() };
-        if writer < 0 {
-            return 1;
-        }
-        if writer == 0 {
-            close_inherited_fds();
-            let fd = unsafe { libc::open(slave.as_ptr(), libc::O_RDWR) };
-            if fd < 0 {
-                unsafe { libc::_exit(1) }
-            }
-            let sleep = libc::timespec {
-                tv_sec: delay.as_secs() as libc::time_t,
-                tv_nsec: delay.subsec_nanos() as libc::c_long,
-            };
-            unsafe { libc::nanosleep(&sleep, std::ptr::null_mut()) };
-            let ok = write_all_fd(fd, late);
-            unsafe { libc::close(fd) };
-            unsafe { libc::_exit(if ok { 0 } else { 1 }) }
-        }
-        0
-    }
-
     /// Write `data` to the PTY slave and return the code the child exits with.
     ///
     /// Syscall-only, like `write_then_wait_on_pty_slave` below: this runs in a
@@ -2872,6 +2844,18 @@ mod tests {
         0
     }
 
+    /// Write `data` to the PTY slave and then hold it open until the test signals
+    /// this child.
+    ///
+    /// Holding it open until a signal - rather than for a fixed nap - keeps the
+    /// client's detach landing while the session is still serving it on a loaded
+    /// machine. Only a setup failure returns, exactly like
+    /// `run_sigwinch_redraw_pty_child`; the parent reaps the child afterwards.
+    ///
+    /// This runs in a forked child of the multi-threaded test harness, so it stays
+    /// syscall-only. `fork()` copies every lock the other harness threads held at
+    /// that instant - including glibc's malloc arenas - so an allocation here can
+    /// block forever and hang the parent's `waitpid`.
     fn write_then_wait_on_pty_slave(slave: &CStr, data: &[u8]) -> i32 {
         // SAFETY: opening the PTY slave path read-write for this child only.
         let fd = unsafe { libc::open(slave.as_ptr(), libc::O_RDWR) };
