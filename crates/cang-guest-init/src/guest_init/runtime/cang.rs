@@ -202,9 +202,10 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         crate::guest_init::components::shell::env::export(&shell_env)
     });
     profiler.measure("export-kache-env", || {
-        // Every cargo build in the guest goes through the cache the cargo home
-        // already carries, or the cache why it is pointed there at all.
-        crate::guest_init::components::kache::export_if_available();
+        // Configuration only: the cache binary (and its `RUSTC_WRAPPER`) belongs
+        // to a project's own `nix develop` shell, but the store, the daemon's
+        // runtime directory and the budget are the guest's.
+        crate::guest_init::components::kache::export_configuration();
     });
     profiler.measure("export-gpu-env", || {
         crate::guest_init::components::wayland::export_mesa_if_enabled(env_contract.cang.gpu_drm)

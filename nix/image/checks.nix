@@ -3,7 +3,6 @@
   rustToolchain,
   cargoDeny,
   wild,
-  kache,
   piCodingAgent,
   herdrPrebuilt,
   montyPrebuilt,
@@ -32,7 +31,6 @@ let
       rustToolchain
       cargoDeny
       wild
-      kache
       piCodingAgent
       herdrPrebuilt
       montyPrebuilt
@@ -603,28 +601,18 @@ let
         test -x ${layers.rustToolchainImageLayer}/bin/rustc
         test -x ${layers.rustToolchainImageLayer}/bin/cargo
         test -x ${layers.rustToolchainImageLayer}/bin/clippy-driver
-        # The guest's compiler cache is kache, wired in exactly two image
-        # facts: the rustc wrapper the image names, and its C/C++ shims ahead
-        # of the real compilers on `PATH` (kache has no `CMAKE_*_LAUNCHER`
-        # mode). The daemon needs no boot step - the first compiler invocation
-        # starts it - and the store lives in the cargo home mount rather than a
-        # cache mount of its own.
-        test -x ${layers.kache}/bin/kache
-        test -x ${layers.kache}/bin/kache-engine
-        # `configSourceFile` is the nix source, so the wrapper is the
-        # unexpanded reference there and the store path in the image config.
-        grep -F 'RUSTC_WRAPPER=${"$"}{layers.kache}/bin/kache' ${configSourceFile}
-        grep -F 'RUSTC_WRAPPER=${layers.kache}/bin/kache' ${imageConfigFile}
+        # The cache binary is not shipped (a project adds it to its own dev
+        # shell), but the configuration it needs is: the store, the daemon's
+        # runtime directory and the budget are image env, re-exported by
+        # guest-init because cang filters image env to an allowlist.
         grep -F 'KACHE_CACHE_DIR=/home/dev/.cargo/kache' ${imageConfigFile}
         grep -F 'KACHE_RUNTIME_DIR=/tmp/kache' ${imageConfigFile}
-        # kache's GNU libc fingerprint comes from `getconf`, which the image
-        # did not carry at all; without it every rustc unit is uncacheable.
+        grep -F 'KACHE_MAX_SIZE=60GiB' ${imageConfigFile}
+        # `getconf` is what kache fingerprints the libc with; without it every
+        # rustc unit is uncacheable and a store never fills.
         test -x ${layers.libcGetconf}/bin/getconf
-        grep -F ':${layers.libcGetconf}/bin:' ${imageConfigFile}
-        test -x ${layers.kacheShims}/kache-shims/bin/cc
-        test -f ${layers.kacheShims}/kache-shims/bin/.kache-shims
-        grep -F ':${layers.kacheShims}/kache-shims/bin:${layers.libcGetconf}/bin:${layers.imagePath}:' ${imageConfigFile}
-        grep -F '${rustToolchain.toolchain}/bin/rustc' ${layers.rustcCommandCompat}/bin/rustc
+        grep -F ':${layers.libcGetconf}/bin:${layers.imagePath}:' ${imageConfigFile}
+        grep -F ':${layers.libcGetconf}/bin:${layers.imagePath}:' ${imageConfigFile}
         # The Rust wrappers mask the allocator preload only when it is not mimalloc;
         # that allowlist is what lets the image compile inside a plain container,
         # where the mask's bubblewrap namespace cannot be created.

@@ -3,7 +3,6 @@
   rustToolchain,
   cargoDeny,
   wild,
-  kache,
   piCodingAgent,
   herdrPrebuilt,
   montyPrebuilt,
@@ -275,31 +274,21 @@ let
   # (`nix/lib/rust-toolchain.nix`) - the same rustc/cargo/clippy/rustfmt a
   # `cargo build` in `nix develop` and a `nix build .#cang` use, so a build
   # inside a cang guest cannot fail on a compiler the project does not build
-  # with. `rust-analyzer`, `wild` and `kache` are not part of the Rust release
-  # and stay on nixpkgs; `wild` is its unwrapped build, because the bintools
-  # wrapper nixpkgs puts around it costs about a second on every link.
+  # with. `rust-analyzer` and `wild` are not part of the Rust release and stay on
+  # nixpkgs; `wild` is its unwrapped build, because the bintools wrapper nixpkgs
+  # puts around it costs about a second on every link.
+  #
+  # A compiler cache is deliberately not here: a project that wants one adds it
+  # to its own `nix develop` shell, where its `RUSTC_WRAPPER` and C/C++ shims are
+  # configured too. The guest still pre-sets the cache's store and runtime
+  # directory (`components/kache.rs`), so an image without the binary keeps the
+  # plain compiler and a project that adds one finds everything ready.
   stableRustToolchainPackages = [
     rustToolchain.toolchain
     clangWildWrapper
     wild
     pkgs.rust-analyzer
-    kache
   ];
-
-  # kache's C/C++ shims: a separate output, a separate PATH entry, and a
-  # directory of its own inside the image. The `cc`/`gcc`/`clang` links have to
-  # precede the real compilers, but they cannot live in the image's merged
-  # `/bin` (that is where `pkgs.gcc` already puts `cc`), so they are relaid out
-  # under `$out/kache-shims/bin` - the same names and the same `.kache-shims`
-  # marker as the package's own `${kache.shims}/bin`, which is how kache knows
-  # to skip this directory when it resolves the real compiler behind a link.
-  kacheShims = pkgs.runCommand "cang-kache-shims" { } ''
-    mkdir -p "$out/kache-shims/bin"
-    for name in cc c++ gcc g++ clang clang++ cargo rustdoc; do
-      ln -s ${kache}/bin/kache "$out/kache-shims/bin/$name"
-    done
-    touch "$out/kache-shims/bin/.kache-shims"
-  '';
 
   # `getconf`, for kache's cache key: on a GNU toolchain it fingerprints the
   # runtime libc with `getconf GNU_LIBC_VERSION` and falls back to `ldd
@@ -623,7 +612,6 @@ let
     imagePackages
     ++ [
       rustSourceImage
-      kacheShims
       usrBinEnvCompat
       binInterpreterCompat
       fishConfig
@@ -811,8 +799,6 @@ in
     cangAsDevCommandCompat
     rustcCommandCompat
     rustAnalyzerCommandCompat
-    kache
-    kacheShims
     libcGetconf
     grapheneHardenedMalloc
     hardeningRun

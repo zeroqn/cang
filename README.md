@@ -633,19 +633,23 @@ location = "/home/dev/xxx/"
 
 This makes the base `/home/dev/xxx/cang`.
 
-The guest's compiler cache is [kache](https://github.com/kunobi-ninja/kache)
-and it stores into the cargo home above:
+An image does not ship a compiler cache: a project that wants one adds
+[kache](https://github.com/kunobi-ninja/kache) to its own `nix develop` shell,
+which is also where that shell sets `RUSTC_WRAPPER` and puts kache's C/C++
+shims on `PATH`. The guest does pre-configure the cache, so an added one works
+without further setup:
 
 ```text
-/home/dev/.cargo/kache
+KACHE_CACHE_DIR=/home/dev/.cargo/kache   # the store, in the cargo home cang mounts
+KACHE_RUNTIME_DIR=/tmp/kache             # the daemon's socket, locks and state
+KACHE_MAX_SIZE=60GiB                     # kache's default is 5% of the disk, floored at 5 GiB
 ```
 
-That is the directory cang already mounts, so no cache mount of its own is
-grafted; a `--workspace-disk` launch binds `~/.cargo` to the tree's own
-`cargo/`, where the store then lives on btrfs and a restore can clone blocks
-instead of copying them. The daemon's socket, locks and session state stay in
-the guest's `/tmp/kache`, and nothing starts the daemon at boot: kache's client
-starts it on the first cache-enabled compile.
+`~/.cargo` is the directory cang already mounts, so the store needs no mount of
+its own; a `--workspace-disk` launch binds it to the tree's own `cargo/`, where
+the store then lives on btrfs and a restore can clone blocks instead of copying
+them. Nothing starts a cache daemon at boot: kache's client starts it on the
+first cache-enabled compile, so a guest that never builds never runs one.
 
 ---
 
@@ -675,7 +679,7 @@ The container provides:
   so does the host it compiled)
 - Rust toolchain (`cargo`, `rustc`, `clippy`, `rustfmt` from fenix's current
   stable - the same one the repository's dev shell and `nix build` use -
-  plus `rust-analyzer`, `kache` and `wild`)
+  plus `rust-analyzer` and `wild`)
 - `gcc`, `musl`, `clang`
 - `mimalloc` enabled by default for Nix-linked dynamic binaries through `/etc/ld-nix.so.preload`; cang selects the task allocator with `--alloc=mimalloc`, `--alloc=hardened`, or `--alloc=glibc`, and `hardening-run` remains the per-command foreign/FHS `LD_PRELOAD` opt-in. `cang` and `cang-guest-init` link mimalloc themselves (`rustfs-mimalloc`) rather than relying on that preload
 - RTK (`rtk`)
@@ -713,11 +717,10 @@ The container provides:
   `clang_wild_wrapper` helper, which drives the `wild` linker, for the
   `x86_64-unknown-linux-gnu` target
 - `LIBCLANG_PATH` preset to the bundled Nix `libclang` library directory
-- `RUSTC_WRAPPER` preset to the bundled `kache`, and its `cc`/`gcc`/`clang`
-  shims ahead of the real compilers on `PATH` so native compiles reach the same
-  cache (kache has no `CMAKE_*_LAUNCHER` mode)
 - `KACHE_CACHE_DIR=/home/dev/.cargo/kache`, inside the mounted cargo home,
-  with `KACHE_RUNTIME_DIR=/tmp/kache` and a 60 GiB budget
+  with `KACHE_RUNTIME_DIR=/tmp/kache` and a 60 GiB budget - the configuration a
+  compiler cache needs, without the cache itself: a project adds kache (and its
+  `RUSTC_WRAPPER`) to its own `nix develop` shell
 - `/usr/bin/env` compatibility for common env-based shebangs such as
   `#!/usr/bin/env bash`
 - narrow hardcoded-interpreter compatibility for `/bin/sh`, `/bin/bash`,

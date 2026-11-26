@@ -13,32 +13,27 @@ let
     "USER=dev"
     "SHELL=${pkgs.fish}/bin/fish"
     "LIBCLANG_PATH=${pkgs.libclang.lib}/lib"
-    # kache's C/C++ shims come first, ahead of the real `cc`/`gcc`/`clang`
-    # that `layers.imagePath` carries, so a native compile reaches the cache.
-    # kache recognises its own directory by the `.kache-shims` marker inside it
-    # and skips it when it resolves the real compiler.
-    "PATH=/home/dev/.codex/bin:/home/dev/.nix-profile/bin:/nix/var/nix/profiles/default/bin:${layers.kacheShims}/kache-shims/bin:${layers.libcGetconf}/bin:${layers.imagePath}:${cangMuslPackage}/bin"
+    "PATH=/home/dev/.codex/bin:/home/dev/.nix-profile/bin:/nix/var/nix/profiles/default/bin:${layers.libcGetconf}/bin:${layers.imagePath}:${cangMuslPackage}/bin"
     "NIX_CONFIG=${nixConfig.env}"
     "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
     "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
     "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=${layers.clangWildWrapper}/bin/clang_wild_wrapper"
     "RUST_SRC_PATH=${layers.rustSourceImage}/share/rust-src"
-    # The compiler cache: `RUSTC_WRAPPER` routes every rustc invocation through
-    # kache, which keys the whole invocation and stores its outputs as
-    # content-addressed blobs; the C/C++ half is the shims directory on `PATH`
-    # above, because kache has no launcher mode to put in `CMAKE_*_LAUNCHER`.
-    # The store sits inside the cargo home, which is the mount that is already
-    # shared with the host (`<state-root>/cargo`), so no cache mount of its own
-    # is grafted any more; `~/.cargo/kache` is a workspace-local btrfs directory
-    # on a `--workspace-disk` launch, where restores can clone blocks.
-    "RUSTC_WRAPPER=${layers.kache}/bin/kache"
+    # A compiler cache is not shipped: a project that wants one adds it to its
+    # own `nix develop` shell, which is where its `RUSTC_WRAPPER` and C/C++ shims
+    # are configured. What the guest does carry is the cache's configuration, so
+    # an added cache finds its store, its runtime directory and its budget ready.
+    # The store sits inside the cargo home, the mount already shared with the
+    # host (`<state-root>/cargo`); `~/.cargo/kache` is a workspace-local btrfs
+    # directory on a `--workspace-disk` launch, where restores can clone blocks.
     "KACHE_CACHE_DIR=/home/dev/.cargo/kache"
     # The daemon's socket, locks, logs and session state are machine-local, so
     # they stay off the shared store (a unix socket has no business on a
     # virtio-fs mount) and in the guest's own `/tmp`.
     "KACHE_RUNTIME_DIR=/tmp/kache"
     # kache's default budget is 5% of the store's disk floored at 5 GiB, which a
-    # Rust workspace fills; sccache's cap was raised to 60G for the same reason.
+    # Rust workspace fills; the retired sccache wiring was raised to 60G for the
+    # same reason.
     "KACHE_MAX_SIZE=60GiB"
   ]
   ++ montyEnv;
