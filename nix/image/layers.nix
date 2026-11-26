@@ -285,6 +285,23 @@ let
     touch "$out/kache-shims/bin/.kache-shims"
   '';
 
+  # `getconf`, for kache's cache key: on a GNU toolchain it fingerprints the
+  # runtime libc with `getconf GNU_LIBC_VERSION` and falls back to `ldd
+  # --version`. The image had neither - no `getconf` at all, and its `ldd` is
+  # musl's, which answers "musl libc" and so fails kache's family check. Without
+  # this every rustc unit is `skipped: uncacheable: ... unable to identify
+  # native Linux gnu-libc (tried getconf/ldd)` and the guest's cache never fills
+  # (measured in a live guest; `kache explain --all` is the record).
+  #
+  # One symlink rather than `pkgs.glibc.bin` on PATH: that output would also
+  # publish glibc's `ldd` next to musl's and shadow tooling that wants the musl
+  # one. A separate directory for a single non-colliding name is the cheaper
+  # contract.
+  libcGetconf = pkgs.runCommand "cang-libc-getconf" { } ''
+    mkdir -p "$out/bin"
+    ln -s ${pkgs.glibc.bin}/bin/getconf "$out/bin/getconf"
+  '';
+
   muslBin = pkgs.lib.getBin pkgs.musl;
 
   cToolchainPathPackages = [
@@ -536,6 +553,9 @@ let
       pkgs.scx.full
       waypipe
       wl-cross-domain-proxy
+      # Named by the image's PATH (see `libcGetconf`), so the image DB has to
+      # carry it as well as the merged tree.
+      libcGetconf
     ];
   imagePathPackages =
     baseImagePackages
@@ -557,6 +577,7 @@ let
       pkgs.scx.full
       waypipe
       wl-cross-domain-proxy
+      libcGetconf
     ];
   imagePath = pkgs.lib.makeBinPath (
     [
@@ -776,6 +797,7 @@ in
     rustAnalyzerCommandCompat
     kache
     kacheShims
+    libcGetconf
     grapheneHardenedMalloc
     hardeningRun
     mimallocLib

@@ -17,7 +17,7 @@ let
     # that `layers.imagePath` carries, so a native compile reaches the cache.
     # kache recognises its own directory by the `.kache-shims` marker inside it
     # and skips it when it resolves the real compiler.
-    "PATH=/home/dev/.codex/bin:/home/dev/.nix-profile/bin:/nix/var/nix/profiles/default/bin:${layers.kacheShims}/kache-shims/bin:${layers.imagePath}:${cangMuslPackage}/bin"
+    "PATH=/home/dev/.codex/bin:/home/dev/.nix-profile/bin:/nix/var/nix/profiles/default/bin:${layers.kacheShims}/kache-shims/bin:${layers.libcGetconf}/bin:${layers.imagePath}:${cangMuslPackage}/bin"
     "NIX_CONFIG=${nixConfig.env}"
     "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
     "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"

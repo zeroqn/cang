@@ -617,9 +617,13 @@ let
         grep -F 'RUSTC_WRAPPER=${layers.kache}/bin/kache' ${imageConfigFile}
         grep -F 'KACHE_CACHE_DIR=/home/dev/.cargo/kache' ${imageConfigFile}
         grep -F 'KACHE_RUNTIME_DIR=/tmp/kache' ${imageConfigFile}
+        # kache's GNU libc fingerprint comes from `getconf`, which the image
+        # did not carry at all; without it every rustc unit is uncacheable.
+        test -x ${layers.libcGetconf}/bin/getconf
+        grep -F ':${layers.libcGetconf}/bin:' ${imageConfigFile}
         test -x ${layers.kacheShims}/kache-shims/bin/cc
         test -f ${layers.kacheShims}/kache-shims/bin/.kache-shims
-        grep -F ':${layers.kacheShims}/kache-shims/bin:${layers.imagePath}:' ${imageConfigFile}
+        grep -F ':${layers.kacheShims}/kache-shims/bin:${layers.libcGetconf}/bin:${layers.imagePath}:' ${imageConfigFile}
         grep -F '${rustToolchain.toolchain}/bin/rustc' ${layers.rustcCommandCompat}/bin/rustc
         grep -F 'rustToolchain.toolchain' ${layersSourceFile}
         # RUST_SRC_PATH points at /share/rust-src, which has to be the pinned
