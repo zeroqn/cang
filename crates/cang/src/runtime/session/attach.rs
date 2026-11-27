@@ -9,7 +9,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -708,23 +708,245 @@ fn size_changed(
     }
 }
 
+/// How much guest output the attach loop may hold while the host's terminal is
+/// not draining, before it stops reading the attach stream.
+///
+/// The loop used to write every frame straight into the terminal, so a terminal
+/// that stopped accepting bytes - a stopped `script`, a tmux pane whose reader
+/// was descheduled, a `/paused` consumer - blocked the *reader* with it. Input
+/// then queued behind output it was never waiting for. This bound lets the
+/// reader absorb a burst (up to this many bytes) and keeps the failure honest
+/// when the terminal is hopeless: the bound is reached, the loop blocks, and the
+/// profile line records how long it was blocked.
+const OUTBOUND_MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
+
+/// What the outbound writer did, merged into the attach profile at the end.
+#[derive(Debug, Default, Clone, Copy)]
+pub(in crate::runtime::session) struct OutboundStats {
+    pub(in crate::runtime::session) deferred_writes: u64,
+    pub(in crate::runtime::session) pending_max_bytes: usize,
+    pub(in crate::runtime::session) blocked_total: Duration,
+    pub(in crate::runtime::session) blocked_max: Duration,
+    pub(in crate::runtime::session) writes: u64,
+    pub(in crate::runtime::session) write_total: Duration,
+    pub(in crate::runtime::session) write_max: Duration,
+    pub(in crate::runtime::session) flushes: u64,
+    pub(in crate::runtime::session) flush_total: Duration,
+    pub(in crate::runtime::session) flush_max: Duration,
+}
+
+enum OutboundMessage {
+    Data(Vec<u8>, bool),
+    Stop,
+}
+
+#[derive(Default)]
+struct OutboundState {
+    pending: std::collections::VecDeque<OutboundMessage>,
+    pending_bytes: usize,
+    closed: bool,
+    stats: OutboundStats,
+}
+
+/// The bounded queue between the attach reader and the terminal writer.
+struct OutboundQueue {
+    state: Mutex<OutboundState>,
+    space: Condvar,
+    ready: Condvar,
+}
+
+impl OutboundQueue {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(OutboundState::default()),
+            space: Condvar::new(),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn push(&self, message: OutboundMessage, byte_count: usize) {
+        let mut state = self.state.lock().expect("outbound state lock");
+        while !state.closed && state.pending_bytes >= OUTBOUND_MAX_PENDING_BYTES {
+            let blocked_since = Instant::now();
+            state = self.space.wait(state).expect("outbound state lock");
+            state.stats.blocked_total += blocked_since.elapsed();
+            state.stats.blocked_max = state.stats.blocked_max.max(blocked_since.elapsed());
+        }
+        if state.closed {
+            return;
+        }
+        if byte_count > 0 && !state.pending.is_empty() {
+            state.stats.deferred_writes += 1;
+        }
+        state.pending_bytes = state.pending_bytes.saturating_add(byte_count);
+        state.stats.pending_max_bytes = state.stats.pending_max_bytes.max(state.pending_bytes);
+        state.pending.push_back(message);
+        self.ready.notify_one();
+    }
+
+    fn next(&self) -> Option<OutboundMessage> {
+        let mut state = self.state.lock().expect("outbound state lock");
+        loop {
+            if let Some(message) = state.pending.pop_front() {
+                match &message {
+                    OutboundMessage::Data(bytes, _) => {
+                        state.pending_bytes = state.pending_bytes.saturating_sub(bytes.len());
+                    }
+                    OutboundMessage::Stop => {}
+                }
+                self.space.notify_all();
+                return Some(message);
+            }
+            if state.closed {
+                return None;
+            }
+            state = self.ready.wait(state).expect("outbound state lock");
+        }
+    }
+
+    fn close(&self) {
+        let mut state = self.state.lock().expect("outbound state lock");
+        let stop_pending = state
+            .pending
+            .iter()
+            .any(|message| matches!(message, OutboundMessage::Stop));
+        if !stop_pending {
+            state.pending.push_back(OutboundMessage::Stop);
+        }
+        state.closed = true;
+        drop(state);
+        self.ready.notify_all();
+        self.space.notify_all();
+    }
+
+    fn stats(&self) -> OutboundStats {
+        self.state.lock().expect("outbound state lock").stats
+    }
+
+    fn pending_bytes(&self) -> usize {
+        self.state
+            .lock()
+            .expect("outbound state lock")
+            .pending_bytes
+    }
+}
+
+/// A `Write` sink that hangs the bytes on the outbound queue instead of in the
+/// terminal, so the attach reader never waits on the host's terminal.
+pub(in crate::runtime::session) struct QueuedStdout {
+    queue: Arc<OutboundQueue>,
+}
+
+impl QueuedStdout {
+    /// Start the writer thread that owns `sink`.
+    ///
+    /// The thread is detached from the attach stream's lifetime: it is stopped
+    /// by [`QueuedStdout::finish`], which drains what is left and returns the
+    /// stats, so a caller can report the terminal's behaviour after the loop.
+    fn start<W: Write + Send + 'static>(sink: W) -> std::io::Result<Self> {
+        let queue = Arc::new(OutboundQueue::new());
+        let writer_queue = queue.clone();
+        std::thread::Builder::new()
+            .name("cang-attach-out".to_owned())
+            .spawn(move || write_outbound(sink, writer_queue))
+            .map_err(|err| {
+                std::io::Error::other(format!("failed to start attach writer: {err}"))
+            })?;
+        Ok(Self { queue })
+    }
+
+    /// Stop the writer, wait for it to drain, and report what it saw.
+    fn finish(&self) -> OutboundStats {
+        self.queue.close();
+        // Give the writer a bounded moment to drain what it still holds; a
+        // terminal that is still not accepting writes must not hold the attach
+        // exit hostage.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline && self.queue.pending_bytes() > 0 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.queue.stats()
+    }
+}
+
+fn write_outbound<W: Write>(mut sink: W, queue: Arc<OutboundQueue>) {
+    while let Some(message) = queue.next() {
+        match message {
+            OutboundMessage::Stop => break,
+            OutboundMessage::Data(bytes, flush) => {
+                // A flush travels as an empty payload: it must not be counted as
+                // a terminal write, only as a flush.
+                if !bytes.is_empty() {
+                    let started = Instant::now();
+                    let wrote = sink.write_all(&bytes);
+                    let write_elapsed = started.elapsed();
+                    {
+                        let mut state = queue.state.lock().expect("outbound state lock");
+                        state.stats.writes += 1;
+                        state.stats.write_total += write_elapsed;
+                        state.stats.write_max = state.stats.write_max.max(write_elapsed);
+                    }
+                    if wrote.is_err() {
+                        break;
+                    }
+                }
+                if flush {
+                    let started = Instant::now();
+                    if sink.flush().is_err() {
+                        break;
+                    }
+                    let flush_elapsed = started.elapsed();
+                    let mut state = queue.state.lock().expect("outbound state lock");
+                    state.stats.flushes += 1;
+                    state.stats.flush_total += flush_elapsed;
+                    state.stats.flush_max = state.stats.flush_max.max(flush_elapsed);
+                }
+            }
+        }
+    }
+}
+
+impl Write for QueuedStdout {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let len = buf.len();
+        self.queue
+            .push(OutboundMessage::Data(buf.to_vec(), false), len);
+        Ok(len)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.queue.push(OutboundMessage::Data(Vec::new(), true), 0);
+        Ok(())
+    }
+}
+
 fn proxy_remote(
     mut stream: UnixStream,
     input_policy: &AttachInputPolicy,
     exit_observer: ExitObserver<'_>,
 ) -> Result<AttachOutcome> {
-    let mut stdout = std::io::stdout().lock();
-    let mut stderr = std::io::stderr().lock();
-    proxy_remote_unix_with_profile(
-        &mut stream,
-        &mut stdout,
-        &mut stderr,
-        HostAttachProfiler::from_process_env(),
+    // The terminal is a thread's job, not the reader's: the reader keeps taking
+    // frames (and stdin keeps flowing) while this side drains.
+    let mut profiler = HostAttachProfiler::from_process_env();
+    let mut sink = QueuedStdout::start(std::io::stdout())?;
+    let mut source = UnixRemoteFrameReader::new(&mut stream);
+    let result = proxy_remote_loop(
+        &mut source,
+        &mut sink,
+        &mut profiler,
         input_policy,
         exit_observer,
-    )
+    );
+    let stats = sink.finish();
+    profiler.merge_outbound(stats);
+    let mut stderr = std::io::stderr().lock();
+    if let Err(err) = profiler.report_to(&mut stderr) {
+        return Err(err).context("failed to write cang attach profile report");
+    }
+    result
 }
 
+#[cfg(test)]
 fn proxy_remote_unix_with_profile<W, E>(
     stream: &mut UnixStream,
     stdout: &mut W,
@@ -2192,5 +2414,131 @@ mod tests {
         assert!(stderr.contains("stdout_write_count=1"));
         assert!(stderr.contains("stdout_flush_count=1"));
         server_thread.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod outbound_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingSink {
+        written: Arc<Mutex<Vec<u8>>>,
+        flushes: Arc<AtomicUsize>,
+    }
+
+    impl Write for CountingSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.written.lock().expect("buffer").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn counting_sink() -> (CountingSink, Arc<Mutex<Vec<u8>>>, Arc<AtomicUsize>) {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let flushes = Arc::new(AtomicUsize::new(0));
+        (
+            CountingSink {
+                written: written.clone(),
+                flushes: flushes.clone(),
+            },
+            written,
+            flushes,
+        )
+    }
+
+    /// The reader writes to a queue and returns immediately; the writer thread
+    /// delivers every byte, in order, and reports it.
+    #[test]
+    fn queued_stdout_delivers_every_byte_in_order() {
+        let (sink, written, flushes) = counting_sink();
+        let mut queued = QueuedStdout::start(sink).expect("writer starts");
+        queued.write_all(b"hello ").expect("queued write");
+        queued.write_all(b"world").expect("queued write");
+        queued.flush().expect("queued flush");
+        let stats = queued.finish();
+        assert_eq!(&written.lock().expect("buffer")[..], b"hello world");
+        assert_eq!(
+            flushes.load(Ordering::SeqCst),
+            1,
+            "one flush reached the sink"
+        );
+        assert_eq!(stats.writes, 2, "two writes reached the sink");
+        assert_eq!(stats.flushes, 1);
+    }
+
+    /// A `write` that lands while earlier output is still queued is counted as
+    /// deferred: that is the number that says the terminal - not the reader -
+    /// held the bytes.
+    #[test]
+    fn a_write_behind_pending_output_is_counted_as_deferred() {
+        let (sink, written, _flushes) = counting_sink();
+        let mut queued = QueuedStdout::start(sink).expect("writer starts");
+        // Park the writer on the first byte so later writes queue behind it.
+        queued.write_all(&[0u8; 8]).expect("queued write");
+        for _ in 0..200 {
+            queued.write_all(b"frame").expect("queued write");
+        }
+        let stats = queued.finish();
+        assert_eq!(written.lock().expect("buffer").len(), 8 + 200 * 5);
+        assert!(
+            stats.deferred_writes > 0,
+            "a write that landed behind pending output must be counted: {stats:?}"
+        );
+    }
+
+    /// The queue is bounded: the reader blocks rather than growing without limit,
+    /// and the block is recorded instead of looking like a slow terminal read.
+    #[test]
+    fn the_queue_bounds_what_a_stalled_terminal_can_hold() {
+        struct BlockingSink {
+            gate: Arc<(Mutex<bool>, Condvar)>,
+        }
+        impl Write for BlockingSink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let (lock, ready) = &*self.gate;
+                let mut open = lock.lock().expect("gate");
+                while !*open {
+                    open = ready.wait(open).expect("gate");
+                }
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let queued = QueuedStdout::start(BlockingSink { gate: gate.clone() }).expect("starts");
+        let queue = queued.queue.clone();
+
+        // Fill past the bound from another thread: it must stop, not allocate.
+        let writer_queue = queue.clone();
+        let filler = std::thread::spawn(move || {
+            let chunk = vec![7u8; 1024 * 1024];
+            for _ in 0..(OUTBOUND_MAX_PENDING_BYTES / (1024 * 1024) + 2) {
+                writer_queue.push(OutboundMessage::Data(chunk.clone(), false), chunk.len());
+            }
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let pending = queue.pending_bytes();
+        assert!(
+            pending <= OUTBOUND_MAX_PENDING_BYTES + 2 * 1024 * 1024,
+            "pending output stays near the bound, saw {pending}"
+        );
+
+        // Release the sink so the blocked filler can finish and the test can end.
+        {
+            let (lock, ready) = &*gate;
+            *lock.lock().expect("gate") = true;
+            ready.notify_all();
+        }
+        filler.join().expect("filler ends");
+        let stats = queued.finish();
+        assert!(stats.blocked_total > Duration::ZERO || stats.pending_max_bytes > 0);
     }
 }

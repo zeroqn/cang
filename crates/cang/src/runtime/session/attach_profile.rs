@@ -47,6 +47,10 @@ pub(in crate::runtime::session) struct HostAttachProfiler {
     stdout_flush_total: Duration,
     stdout_flush_max: Duration,
     stdout_flush_count: u64,
+    outbound_deferred_writes: u64,
+    outbound_pending_max_bytes: usize,
+    stdout_blocked_total: Duration,
+    stdout_blocked_max: Duration,
 }
 
 impl HostAttachProfiler {
@@ -125,9 +129,36 @@ impl HostAttachProfiler {
         writer.flush()
     }
 
+    /// Fold the outbound writer's own measurements in.
+    ///
+    /// When the terminal is drained off-loop its write/flush counters come from
+    /// the writer thread rather than the reader, so they merge here; the queue
+    /// counters say how much output had to wait and for how long.
+    pub(in crate::runtime::session) fn merge_outbound(
+        &mut self,
+        stats: super::attach::OutboundStats,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        // Replace, not add: the reader's own numbers measured the queue push, so
+        // the writer thread's terminal timings are the ones that count.
+        self.stdout_write_count = stats.writes;
+        self.stdout_write_total = stats.write_total;
+        self.stdout_write_max = stats.write_max;
+        self.stdout_flush_count = stats.flushes;
+        self.stdout_flush_total = stats.flush_total;
+        self.stdout_flush_max = stats.flush_max;
+        self.outbound_deferred_writes += stats.deferred_writes;
+        self.outbound_pending_max_bytes =
+            self.outbound_pending_max_bytes.max(stats.pending_max_bytes);
+        self.stdout_blocked_total += stats.blocked_total;
+        self.stdout_blocked_max = self.stdout_blocked_max.max(stats.blocked_max);
+    }
+
     fn summary_line(&self) -> String {
         format!(
-            "cang attach profile role=host frames={} bytes={} frame_max_bytes={} frame_avg_bytes={} frame_read_total_us={} frame_read_max_us={} stdout_batches={} stdout_batch_frames_max={} stdout_batch_bytes_max={} stdout_batch_frames_avg={} stdout_write_count={} stdout_write_total_us={} stdout_write_max_us={} stdout_flush_count={} stdout_flush_total_us={} stdout_flush_max_us={}",
+            "cang attach profile role=host frames={} bytes={} frame_max_bytes={} frame_avg_bytes={} frame_read_total_us={} frame_read_max_us={} stdout_batches={} stdout_batch_frames_max={} stdout_batch_bytes_max={} stdout_batch_frames_avg={} stdout_write_count={} stdout_write_total_us={} stdout_write_max_us={} stdout_flush_count={} stdout_flush_total_us={} stdout_flush_max_us={} outbound_deferred_writes={} outbound_pending_max_bytes={} stdout_blocked_us={} stdout_blocked_max_us={}",
             self.frames,
             self.bytes,
             self.frame_max_bytes,
@@ -144,6 +175,10 @@ impl HostAttachProfiler {
             self.stdout_flush_count,
             duration_micros(self.stdout_flush_total),
             duration_micros(self.stdout_flush_max),
+            self.outbound_deferred_writes,
+            self.outbound_pending_max_bytes,
+            duration_micros(self.stdout_blocked_total),
+            duration_micros(self.stdout_blocked_max),
         )
     }
 }
@@ -199,6 +234,30 @@ mod tests {
         assert!(output.contains("stdout_write_total_us=11"));
         assert!(output.contains("stdout_flush_count=1"));
         assert!(output.contains("stdout_flush_total_us=13"));
+    }
+
+    #[test]
+    fn the_summary_reports_what_the_outbound_writer_saw() {
+        let mut profiler = HostAttachProfiler::new(true);
+        profiler.merge_outbound(super::super::attach::OutboundStats {
+            deferred_writes: 3,
+            pending_max_bytes: 4096,
+            blocked_total: Duration::from_micros(900),
+            blocked_max: Duration::from_micros(700),
+            writes: 2,
+            write_total: Duration::from_micros(11),
+            write_max: Duration::from_micros(9),
+            flushes: 2,
+            flush_total: Duration::from_micros(13),
+            flush_max: Duration::from_micros(8),
+        });
+        let line = profiler.summary_line();
+        assert!(line.contains("outbound_deferred_writes=3"), "{line}");
+        assert!(line.contains("outbound_pending_max_bytes=4096"), "{line}");
+        assert!(line.contains("stdout_blocked_us=900"), "{line}");
+        assert!(line.contains("stdout_blocked_max_us=700"), "{line}");
+        // The terminal's own writes now come from the writer thread.
+        assert!(line.contains("stdout_write_count=2"), "{line}");
     }
 
     #[test]
