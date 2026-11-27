@@ -399,6 +399,10 @@ let
     grep -F 'ONNXRUNTIME_NODE_INSTALL=skip' ${imageConfigFile}
     grep -F 'ONNXRUNTIME_LIB_PATH=${onnxruntimeShim.onnxruntimeLibDir}' ${imageConfigFile}
     grep -F '"ONNXRUNTIME_LIB_PATH",' ${guestEnvModelFile}
+    # The install-time hint beside it: filtered out of the guest env, a guest
+    # `npm install onnxruntime-node` would fetch the CUDA/TensorRT files this
+    # image never uses.
+    grep -F '"ONNXRUNTIME_NODE_INSTALL",' ${guestEnvModelFile}
   '';
 
   rootCargoAbsent = pkgs.runCommand "cang-image-root-cargo-absent-check" { } ''

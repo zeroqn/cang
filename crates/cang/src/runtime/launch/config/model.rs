@@ -87,6 +87,12 @@ pub(super) const IMAGE_CANG_ENV_ALLOWLIST: &[&str] = &[
     "CANG_ZG_MODELS_DIR",
     "MONTY_BIN",
     "ONNXRUNTIME_LIB_PATH",
+    // An install-time hint rather than a runtime choice: a guest `npm install`
+    // of the published `onnxruntime-node` runs its `postinstall`, which fetches
+    // the CUDA/TensorRT files nothing in this image uses unless this says
+    // `skip` (the image's own build installs dependencies with
+    // `--ignore-scripts`, so only a later in-guest install asks).
+    "ONNXRUNTIME_NODE_INSTALL",
     // The image's Rust build environment: the linker its `cargo` links with
     // (`clang_wild_wrapper`, which drives `wild`) and the `rust-src` tree the
     // image's rust-analyzer reads. Both are set in the image's `Env`
