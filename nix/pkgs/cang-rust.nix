@@ -58,7 +58,7 @@ let
   # (`nix flake update fenix`) from re-hashing it.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-dU6UjiER4Vjepiuvb6EB445lz6+smiT80D+ld52OFVQ=";
+    hash = "sha256-F7S7MmJ/x2Iys+S67qdHudbPV0BBlUWvV2gUTESz0v4=";
   };
 
   # `mimalloc-sys`'s build script compiles the C sources at the root of
