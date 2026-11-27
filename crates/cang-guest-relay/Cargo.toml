@@ -12,7 +12,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true
-rustfs-mimalloc.workspace = true
+mimalloc.workspace = true
 # The guest half of the reverse share, from a git tree rather than the crates.io
 # release cang used to vendor: the git tree carries the `async-io` path (and the
 # `fusedev-uring` transport) the registered 0.12.1 does not, and pinning a

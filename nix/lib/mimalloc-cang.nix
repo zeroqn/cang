@@ -17,7 +17,9 @@
 # (the C++ locale) reaches an allocator that is not ready - and the guest's `zg`
 # died with a SIGSEGV before `main`. 3.5.3 does not, with nothing else changed
 # (docs/wayfinder/pi-native-addons/notes/10-raw-preload-early-call.md). The
-# headless pin carries 3.6.1; the source fallback keeps the version guard so the
+# headless pin carries 3.7.1, the release cang's own binaries link (Cargo.toml
+# `tag = "v3.7.1"`), so the launcher, the render server and the guest preload run
+# one mimalloc version; the source fallback keeps the version guard so the
 # shim retires itself once the inputs catch up.
 { pkgs, pins }:
 let

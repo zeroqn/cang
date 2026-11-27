@@ -25,7 +25,7 @@ let
   # cannot be created inside the sandbox, and sccache treats that as fatal -- the
   # C compiler is routed through it too, because cc-rs wraps `CC` with the
   # `RUSTC_WRAPPER` when that is sccache or ccache, which fails
-  # `rustfs-mimalloc-sys`'s build script with `Permission denied` and exit 254.
+  # `mimalloc-sys`'s build script with `Permission denied` and exit 254.
   # Use the shared directory when it is actually writable and a build-local one
   # otherwise; the cache never affects the output bytes.
   ciSccachePreBuild = pkgs.lib.optionalString enableCiSccache ''
@@ -46,9 +46,11 @@ let
   # the vendored set is what is left over from the registry, produced by
   # `fetchCargoVendor` running `cargo vendor` over this tree. A libkrun or
   # rutabaga bump refreshes this hash in the same commit as the submodule
-  # pointers and the matching flake inputs, and so does a bump of the guest
-  # relay's git-pinned `fuse-backend-rs` (`crates/cang-guest-relay/Cargo.toml`),
-  # which is vendored like a registry crate.
+  # pointers and the matching flake inputs, and so does a bump of either
+  # git-pinned crate - the guest relay's `fuse-backend-rs`
+  # (`crates/cang-guest-relay/Cargo.toml`) and the workspace's `mimalloc`
+  # (`https://github.com/microsoft/mimalloc`, the official bindings in that
+  # tree's `contrib/rust`) - which are vendored like registry crates.
   #
   # This deliberately stays on nixpkgs' `rustPlatform` and not the pinned
   # toolchain's: the hash is a function of the lock file and the crate sources,
@@ -56,7 +58,24 @@ let
   # (`nix flake update fenix`) from re-hashing it.
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-tElru/MWK5+oQxY/f8BfVXRhl5Ekndu5qOSFP+Oh9ic=";
+    hash = "sha256-i3BOJLw4Fnd+a7fkikI4E8Kqhz6/AISRj/YzW9ZcPH4=";
+  };
+
+  # `mimalloc-sys`'s build script compiles the C sources at the root of
+  # Microsoft's repository, finding them through `MIMALLOC_SRC_DIR` or the git
+  # checkout's own tree. `cargo vendor` unpacks a git source into one directory per crate, which
+  # leaves those sources behind, so the Nix build names the tree explicitly - the
+  # same release the workspace's `mimalloc` dependency pins by `tag`. The crate's
+  # own `mimalloc::version()` assertion runs in the check phase, so a tag that
+  # disagrees with these sources fails there rather than at runtime.
+  mimallocSrc = pkgs.fetchFromGitHub {
+    owner = "microsoft";
+    repo = "mimalloc";
+    tag = "v3.7.1";
+    hash = "sha256-dtRITXT07ZdJdvmh+rPNacid82bT7I1EdFPGCstEbD8=";
+  };
+  mimallocEnv = {
+    MIMALLOC_SRC_DIR = "${mimallocSrc}";
   };
 
   # Building libkrun is what needs clang/libclang (krun-display and krun-input
@@ -104,7 +123,7 @@ let
           pkgs.python3
         ];
       buildInputs = libkrunBuildInputs;
-      env = libkrunEnv;
+      env = libkrunEnv // mimallocEnv;
 
       # `cargoCheckHook` runs the test binaries, and cang links libkrun and
       # therefore `libvirglrenderer.so.1`, which a build shell does not put on
@@ -186,6 +205,7 @@ let
 
       nativeBuildInputs = ciSccacheNativeBuildInputs;
 
+      env = mimallocEnv;
       CARGO_BUILD_TARGET = muslTarget;
       # The workspace reverse share's guest half ships in the same store path as
       # the bootstrap, so `cang-guest-init` resolves it as a sibling

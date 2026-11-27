@@ -12,7 +12,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true
-rustfs-mimalloc.workspace = true
+mimalloc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -46,6 +46,19 @@ with a fixed cargo means a toolchain bump (`nix flake update fenix`) does not
 re-hash it. `.#cang-musl` likewise keeps `pkgsStatic`'s rust platform, which is
 what carries a rustc and std for its musl target.
 
+`mimalloc` is a git dependency (`https://github.com/microsoft/mimalloc`, the
+official bindings under that tree's `contrib/rust`, pinned by `tag`), and
+`fetchCargoVendor` vendors it like any other crate - one directory per package,
+`mimalloc-sys` among them. That layout loses the C sources the crate compiles:
+`mimalloc-sys`'s build script looks for them beside itself, else at the checkout
+root (`MIMALLOC_SRC_DIR`), and the vendored directory has neither, so
+`nix/pkgs/cang-rust.nix` names the same release's tree as `MIMALLOC_SRC_DIR` for
+both packages. A `tag` bump therefore moves four things together: the workspace
+dependency, `cargoDeps.hash`, that `mimallocSrc` tag and hash, and the image's
+prebuilt preload pin (`nix/pins.nix`) - the crate's own `mimalloc::version()`
+assertion runs in the check phase, so a C tree that disagrees with the crate
+fails the build rather than at runtime.
+
 The Rust linker is `clang_wild_wrapper` (`nix/lib/clang-wild-wrapper.nix`):
 `clang "$@" -fuse-ld=<wild>/bin/wild`, with `wild-unwrapped` from
 nixpkgs-unstable. The image presets it as

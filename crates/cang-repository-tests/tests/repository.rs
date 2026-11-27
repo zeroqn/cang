@@ -1130,7 +1130,7 @@ fn image_preloads_a_mimalloc_that_survives_early_initialisation() {
     for required in [
         "mimallocPrebuiltRelease",
         r#"repo = "headless";"#,
-        r#"asset = "mimalloc-3.6.1-x86_64-linux.tar.gz";"#,
+        r#"asset = "mimalloc-3.7.1-x86_64-linux.tar.gz";"#,
     ] {
         assert!(PINS_NIX.contains(required), "missing {required}");
     }
@@ -2845,40 +2845,62 @@ fn nix_generation_smoke_scores_the_snapshot_switch() {
 }
 
 #[test]
-fn cang_binaries_link_the_rustfs_mimalloc_global_allocator() {
+fn cang_binaries_link_the_official_mimalloc_global_allocator() {
     // The launcher and the in-guest bootstrap allocate through mimalloc
     // themselves (README "Task allocator") instead of relying on a host or
     // image `LD_PRELOAD`. Dropping the dependency or the attribute would still
-    // build, so it is pinned here.
+    // build, so it is pinned here - including that the allocator comes from
+    // Microsoft's own tree at the release the image preloads is pinned to,
+    // rather than from a crates.io wrapper.
     const CANG_MANIFEST: &str = include_str!("../../../crates/cang/Cargo.toml");
     const CANG_LIB: &str = include_str!("../../../crates/cang/src/lib.rs");
     const GUEST_MANIFEST: &str = include_str!("../../../crates/cang-guest-init/Cargo.toml");
     const GUEST_LIB: &str = include_str!("../../../crates/cang-guest-init/src/lib.rs");
     const README: &str = include_str!("../../../README.md");
+    const CANG_RUST_NIX: &str = include_str!("../../../nix/pkgs/cang-rust.nix");
 
-    assert!(
-        CARGO_TOML.contains("rustfs-mimalloc = "),
-        "the workspace must declare the rustfs-mimalloc dependency"
-    );
+    for required in [
+        "mimalloc = { git = \"https://github.com/microsoft/mimalloc\", tag = \"v3.7.1\"",
+        "\"secure\"",
+    ] {
+        assert!(
+            CARGO_TOML.contains(required),
+            "the workspace must declare the official mimalloc crate: {required}"
+        );
+    }
     for (label, manifest, source) in [
         ("crates/cang", CANG_MANIFEST, CANG_LIB),
         ("crates/cang-guest-init", GUEST_MANIFEST, GUEST_LIB),
     ] {
         assert!(
-            manifest.contains("rustfs-mimalloc.workspace = true"),
-            "{label} must depend on the workspace rustfs-mimalloc"
+            manifest.contains("mimalloc.workspace = true"),
+            "{label} must depend on the workspace mimalloc"
         );
         assert!(
             source.contains("#[global_allocator]"),
             "{label} must declare the global allocator"
         );
         assert!(
-            source.contains("rustfs_mimalloc::MiMalloc"),
-            "{label} must install the rustfs mimalloc allocator"
+            source.contains("mimalloc::MiMalloc = mimalloc::MiMalloc"),
+            "{label} must install the official mimalloc allocator"
+        );
+        assert!(
+            !source.contains("rustfs_mimalloc"),
+            "{label} must not install the crates.io rustfs wrapper"
         );
     }
     assert!(
-        README.contains("`rustfs-mimalloc`"),
+        README.contains("`mimalloc` crate"),
         "README.md should record that cang's own binaries link mimalloc"
     );
+    // `cargo vendor` unpacks a git source into one directory per crate, so the C
+    // sources `mimalloc-sys` compiles are not beside the vendored crate: the Nix
+    // build names the same release's tree. The crate's own `version()` assertion
+    // is what proves the two agree.
+    for required in ["MIMALLOC_SRC_DIR", "tag = \"v3.7.1\";"] {
+        assert!(
+            CANG_RUST_NIX.contains(required),
+            "nix/pkgs/cang-rust.nix must name mimalloc's C sources: {required}"
+        );
+    }
 }

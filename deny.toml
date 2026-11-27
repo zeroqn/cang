@@ -35,4 +35,12 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # path cang wants. The tree is `zeroqn/fuse-backend-rs` @ `cang`, which is
 # upstream plus one commit that opens the parent inode above the `set_creds`
 # scope in `mkdir`/`symlink` (see that crate's manifest for why).
-allow-git = ["https://github.com/zeroqn/fuse-backend-rs"]
+#
+# `mimalloc` and `mimalloc-sys` come from Microsoft's own mimalloc tree too
+# (`contrib/rust`), pinned by `tag = "v3.7.1"`: no release of that official
+# crate is published to crates.io, and one tag pins the C sources and the
+# bindings together (see the workspace manifest).
+allow-git = [
+  "https://github.com/zeroqn/fuse-backend-rs",
+  "https://github.com/microsoft/mimalloc",
+]

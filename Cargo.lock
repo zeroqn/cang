@@ -173,7 +173,7 @@ dependencies = [
  "clap",
  "landlock",
  "libc",
- "rustfs-mimalloc",
+ "mimalloc",
  "seccompiler",
  "serde",
  "serde_json",
@@ -205,7 +205,7 @@ dependencies = [
  "cang-exec-protocol",
  "clap",
  "libc",
- "rustfs-mimalloc",
+ "mimalloc",
  "tempfile",
  "vt100",
 ]
@@ -218,7 +218,7 @@ dependencies = [
  "clap",
  "fuse-backend-rs",
  "libc",
- "rustfs-mimalloc",
+ "mimalloc",
  "tempfile",
 ]
 
@@ -240,7 +240,7 @@ dependencies = [
  "anyhow",
  "clap",
  "libc",
- "rustfs-mimalloc",
+ "mimalloc",
  "tempfile",
 ]
 
@@ -1060,6 +1060,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mimalloc"
+version = "3.7.1"
+source = "git+https://github.com/microsoft/mimalloc?tag=v3.7.1#1c842769cd1ef35f044f659804806505b58f0b48"
+dependencies = [
+ "mimalloc-sys",
+ "rustversion",
+]
+
+[[package]]
+name = "mimalloc-sys"
+version = "3.7.1"
+source = "git+https://github.com/microsoft/mimalloc?tag=v3.7.1#1c842769cd1ef35f044f659804806505b58f0b48"
+dependencies = [
+ "cc",
+ "rustversion",
+]
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1335,24 +1353,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rustfs-mimalloc"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "216ecfc9341b5d6e2506d47ce57c9232ae1b8020bb10264ea05286fb234286e7"
-dependencies = [
- "rustfs-mimalloc-sys",
-]
-
-[[package]]
-name = "rustfs-mimalloc-sys"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb16ad68f96883407a75cdb88252b43dc2ea592428f0fc54ff7885756de4b814"
-dependencies = [
- "cc",
 ]
 
 [[package]]

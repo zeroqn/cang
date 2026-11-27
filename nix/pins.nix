@@ -144,11 +144,11 @@ in
     owner = "zeroqn";
     repo = "headless";
     tag = "main-build";
-    version = "3.6.1";
+    version = "3.7.1";
     systems = {
       x86_64-linux = {
-        asset = "mimalloc-3.6.1-x86_64-linux.tar.gz";
-        hash = "sha256-tm2yM6Jul1lexSP5jnRkKsSYErwN76YqLnr41Qdaw0s=";
+        asset = "mimalloc-3.7.1-x86_64-linux.tar.gz";
+        hash = "sha256-E3Pgbk6ibAvNiCg5r1wU27kob7W9c26F5I5hLCsvCSs=";
       };
     };
   };

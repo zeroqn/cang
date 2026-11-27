@@ -33,7 +33,7 @@ use cang_guest_relay::vsock::VsockListener;
 use cang_guest_relay::watch::{self, WatchThread};
 
 #[global_allocator]
-static ALLOC: rustfs_mimalloc::MiMalloc = rustfs_mimalloc::MiMalloc;
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Debug, Parser)]
 #[command(

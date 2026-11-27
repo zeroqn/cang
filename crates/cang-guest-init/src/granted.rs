@@ -136,14 +136,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn guest_binaries_build_mimalloc_without_allocation_profiling() {
+    fn guest_binaries_link_mimalloc_3_7_1() {
         // The bootstrap and `cang-granted` are the musl-static binaries the
-        // image runs; they share the workspace allocator features (`no_profile`,
-        // `secure`), so a guest never pays sampling on the allocation fast path.
-        assert!(
-            !rustfs_mimalloc::MiMalloc::profiling_enabled(),
-            "cang-guest-init builds mimalloc with no_profile"
-        );
+        // image runs; they link the workspace dependency's mimalloc release
+        // (v3.7.1 -> 30701), the same allocator the image preloads, so a guest
+        // pays one allocator's behaviour across the VM boundary.
+        assert_eq!(mimalloc::version(), 30701);
     }
 
     #[test]

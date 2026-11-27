@@ -28,7 +28,7 @@ use cang_relay_pump::mount;
 use cang_relay_pump::pump::{self, Stats};
 
 #[global_allocator]
-static ALLOC: rustfs_mimalloc::MiMalloc = rustfs_mimalloc::MiMalloc;
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// The switch for the pump's own progress lines.
 ///

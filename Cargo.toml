@@ -39,7 +39,16 @@ anyhow = "1.0"
 clap = { version = "4.6", features = ["derive", "env"] }
 libc = "0.2"
 landlock = "0.4"
-rustfs-mimalloc = { version = "0.7", features = [ "no_profile", "secure" ] }
+# mimalloc, taken from Microsoft's own repository rather than a crates.io
+# wrapper: the bindings live at `contrib/rust` of the mimalloc tree (`mimalloc`
+# + `mimalloc-sys`), so one `tag` pins the C sources and the Rust API
+# together, and the linked allocator is the same release the guest image
+# preloads (`nix/lib/mimalloc-cang.nix`).
+#
+# `secure` is the C library's `MI_SECURE=ON`. Its `MI_PROFILE` default (1,
+# "fast, can be enabled always" - `include/mimalloc/config.h`) is left in
+# place: cang never registers a profiler, so no sample is ever taken.
+mimalloc = { git = "https://github.com/microsoft/mimalloc", tag = "v3.7.1", features = [ "secure" ] }
 cang-attach-protocol = { path = "crates/cang-attach-protocol" }
 cang-libkrun = { path = "crates/cang-libkrun" }
 cang-exec-protocol = { path = "crates/cang-exec-protocol" }

@@ -10,11 +10,10 @@ use std::time::Instant;
 // instead of glibc's on the host. Declared in the library rather than in
 // `main.rs` so every binary of the crate gets it.
 //
-// Features chosen in the workspace dependency: `secure` (metadata guard pages,
-// checked frees, encoded free lists) and `no_profile` (no sampled heap-profile
-// sampling on the allocation fast path, which cang never reads).
+// The workspace dependency selects the C library's `secure` build
+// (`MI_SECURE=ON`: metadata guard pages, checked frees, encoded free lists).
 #[global_allocator]
-static GLOBAL_ALLOCATOR: rustfs_mimalloc::MiMalloc = rustfs_mimalloc::MiMalloc;
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod cli;
 mod config;
@@ -313,17 +312,13 @@ mod tests {
     use crate::cli::Cli;
 
     #[test]
-    fn global_allocator_is_mimalloc_without_allocation_profiling() {
+    fn global_allocator_is_mimalloc_3_7_1() {
         // The guest image preloads mimalloc for its Nix-linked binaries; cang's
         // own binaries link it so a run does not mix allocators across the VM
-        // boundary. `no_profile` and `secure` are selected in the workspace
-        // dependency, and feature unification means a dependency cannot quietly
-        // turn allocation profiling back on.
-        assert_eq!(rustfs_mimalloc::MiMalloc::version() / 10000, 3);
-        assert!(
-            !rustfs_mimalloc::MiMalloc::profiling_enabled(),
-            "cang builds mimalloc with no_profile: the allocation fast path must not sample"
-        );
+        // boundary. The linked C library is the one the workspace dependency's
+        // git `tag` points at (`mimalloc` is v3.7.1 -> 30701), which is also
+        // what `nix/lib/mimalloc-cang.nix` preloads for the image.
+        assert_eq!(mimalloc::version(), 30701);
     }
 
     #[test]
