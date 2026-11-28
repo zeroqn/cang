@@ -294,19 +294,19 @@ in
     # release payloads. Each system entry carries the release's two assets: the
     # `cang` ELF and `relayPumpAsset`/`relayPumpHash`, the workspace relay's host
     # half (`cang-relay-pump-*`). The updater pins them together or not at all.
-    tag = "v0.26.2";
+    tag = "v0.26.3";
     systems = {
       x86_64-linux = {
-        asset = "cang-v0.26.2-x86_64-unknown-linux-gnu";
+        asset = "cang-v0.26.3-x86_64-unknown-linux-gnu";
         # The bytes CI published for the source this pin sits on: `just release
         # <version>` reads the hash from the main push's own release run, whose
         # alpha asset is the same file the tag publishes. Never pin a locally
         # normalized asset - which patchelf normalized it decides the byte
         # stream, and v0.15.1 shipped a pin for the wrong one. See the cang
         # release scheme in docs/maintenance.md.
-        hash = "sha256-yoYG2Z8mPVX8L1U93FgnspjpagMOWFkbDXccZk9tIxo=";
-        relayPumpAsset = "cang-relay-pump-v0.26.2-x86_64-unknown-linux-gnu";
-        relayPumpHash = "sha256-/aosR116kLVpMFsydsazI1/n1ddb9FRmdtIr2FCNSVk=";
+        hash = "sha256-C6hfS1JJLuduHZjbObpymhIRYKf0zwNcX+n8uhXPDJ8=";
+        relayPumpAsset = "cang-relay-pump-v0.26.3-x86_64-unknown-linux-gnu";
+        relayPumpHash = "sha256-+Y0Y9lLIcuVtTPF9G2qV1WtgI6aMBU3/kI5/FWkZzgU=";
       };
     };
   };
