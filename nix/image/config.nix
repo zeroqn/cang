@@ -13,18 +13,22 @@ let
     "USER=dev"
     "SHELL=${pkgs.fish}/bin/fish"
     "LIBCLANG_PATH=${pkgs.libclang.lib}/lib"
-    "PATH=/home/dev/.nix-profile/bin:/nix/var/nix/profiles/default/bin:${layers.libcGetconf}/bin:${layers.imagePath}:${cangMuslPackage}/bin"
+    "PATH=/home/dev/.nix-profile/bin:/nix/var/nix/profiles/default/bin:${layers.kacheShims}/kache-shims/bin:${layers.libcGetconf}/bin:${layers.imagePath}:${cangMuslPackage}/bin"
     "NIX_CONFIG=${nixConfig.env}"
     "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
     "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
     "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=${layers.clangWildWrapper}/bin/clang_wild_wrapper"
     "RUST_SRC_PATH=${layers.rustSourceImage}/share/rust-src"
-    # A compiler cache is not shipped: a project that wants one adds it to its
-    # own `nix develop` shell, which is where its `RUSTC_WRAPPER` and C/C++ shims
-    # are configured. What the guest does carry is the cache's configuration, so
-    # an added cache finds its store, its runtime directory and its budget ready.
-    # The store sits inside the cargo home, the mount already shared with the
-    # host (`<state-root>/cargo`); `~/.cargo/kache` is a workspace-local btrfs
+    # The compiler cache: `RUSTC_WRAPPER` routes every rustc invocation through
+    # kache, which keys the whole invocation and restores its outputs from
+    # content-addressed blobs; the C/C++ half is the shims directory on `PATH`
+    # above, because kache has no launcher mode to put in `CMAKE_*_LAUNCHER`.
+    # cang filters image env to an allowlist, so guest-init re-exports the
+    # wrapper too (`components/kache.rs`).
+    "RUSTC_WRAPPER=${layers.kache}/bin/kache"
+    # The cache's own configuration, which guest-init re-exports as well. The
+    # store sits inside the cargo home, the mount already shared with the host
+    # (`<state-root>/cargo`); `~/.cargo/kache` is a workspace-local btrfs
     # directory on a `--workspace-disk` launch, where restores can clone blocks.
     "KACHE_CACHE_DIR=/home/dev/.cargo/kache"
     # The daemon's socket, locks, logs and session state are machine-local, so

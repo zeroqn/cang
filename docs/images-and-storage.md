@@ -237,11 +237,12 @@ data reads are what the host's page cache wins.
 
 When `--mem` is omitted, cang now sizes the direct-libkrun VM to 80% of host
 memory rounded down to whole GiB, matching the libkrun VM memory policy. Pass
-`cang --mem <GiB>` to override that default. Guest bootstrap also points a
-project's compiler cache (`KACHE_CACHE_DIR`) at `/home/dev/.cargo/kache`, inside
-the cargo home cang already mounts, with its daemon's socket and locks in the
-guest's `/tmp/kache`; the image ships no cache binary, so a project that wants
-one adds it to its `nix develop` shell.
+`cang --mem <GiB>` to override that default. The image ships the compiler cache
+[kache](https://github.com/kunobi-ninja/kache) as `RUSTC_WRAPPER` (upstream's
+pinned static-musl release assets, `nix/pkgs/kache-prebuilt.nix`), and guest
+bootstrap points it (`KACHE_CACHE_DIR`) at `/home/dev/.cargo/kache`, inside the
+cargo home cang already mounts, with the daemon's socket and locks in the
+guest's `/tmp/kache`.
 
 Guest bootstrap also reserves CPU cores for the session itself. The workload -
 the shell's children, every `cang exec` command, and every `rustc` they start -

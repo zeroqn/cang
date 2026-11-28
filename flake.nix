@@ -310,6 +310,7 @@
                 rustToolchain
                 cargoDeny
                 wild
+                kache
 
                 piCodingAgent
                 herdrPrebuilt
@@ -341,6 +342,12 @@
           # wrapper, which adds about a second to every link (see
           # `nix/lib/clang-wild-wrapper.nix`).
           wild = zgPkgs.wild-unwrapped;
+          # The guest's compiler cache. nixpkgs' `pkgs.kache` is a source build
+          # whose version follows a channel (`nixos-unstable` still says 2.2.0),
+          # so the image takes upstream's own static musl release assets instead,
+          # pinned in `nix/pins.nix` and refreshed by
+          # scripts/update-kache-prebuilt.sh.
+          kache = import ./nix/pkgs/kache-prebuilt.nix { inherit pkgs pins; };
           cangImage = mkImage rustPackages.cangMuslPackage;
           cangImageCiSccache = mkImage rustPackagesCiSccache.cangMuslPackage;
         in
@@ -374,6 +381,7 @@
           # preload (nix/lib/mimalloc-cang.nix).
           mimalloc = mimallocCang;
           waypipe-bin = waypipe;
+          kache-prebuilt = kache;
           dolt-prebuilt = doltPrebuilt;
           beads-prebuilt = beadsPrebuilt;
           fresh-prebuilt = freshPrebuilt;
@@ -434,6 +442,8 @@
           # The checks must see the same bun the image does; taking it from the
           # packages output is what keeps them in step.
           bun = packages.bun;
+          # Same for the guest's compiler cache: the pinned release asset package.
+          kache = packages.kache-prebuilt;
           # The image ships nixpkgs-unstable's cargo-deny and its wild linker,
           # so these contracts resolve the same packages (`wild-unwrapped`: the
           # bintools wrapper around `wild` costs a second per link).
@@ -445,6 +455,7 @@
               rustToolchain
               cargoDeny
               wild
+              kache
               ;
             bun = bun;
             piCodingAgent = packages.pi-coding-agent;

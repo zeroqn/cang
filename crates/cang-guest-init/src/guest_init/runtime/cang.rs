@@ -200,10 +200,11 @@ pub(in crate::guest_init) fn enter(command: Vec<String>) -> Result<()> {
         crate::guest_init::components::shell::env::export(&shell_env)
     });
     profiler.measure("export-kache-env", || {
-        // Configuration only: the cache binary (and its `RUSTC_WRAPPER`) belongs
-        // to a project's own `nix develop` shell, but the store, the daemon's
-        // runtime directory and the budget are the guest's.
-        crate::guest_init::components::kache::export_configuration();
+        // Every cargo build in the guest goes through the cache the image ships
+        // and the cargo home already carries, or the cache why it is pointed
+        // there at all. The image's `RUSTC_WRAPPER` is filtered out of the
+        // guest environment, so this is what actually routes a compile.
+        crate::guest_init::components::kache::export_if_available();
     });
     profiler.measure("export-gpu-env", || {
         crate::guest_init::components::wayland::export_mesa_if_enabled(env_contract.cang.gpu_drm)

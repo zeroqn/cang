@@ -22,7 +22,7 @@ the binary. Host tool lookup follows the same wrapper-free pattern: per-tool ove
 prepares a crun-style root export inside that same rootless namespace, and attaches that single prepared
 root plus the writable persistent container-store disk. The prepared root is a
 bind-mounted view of the task rootfs with the workspace, tool state, Cargo
-(whose home is also where a project's compiler cache stores), and host-prepared `/nix`
+(which also carries the `kache` compiler cache), and host-prepared `/nix`
 overlay directories grafted into their final guest paths before
 `krun_set_root`. Cang
 intentionally does not register one `krun_add_virtiofs3` device per developer

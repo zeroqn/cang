@@ -3,6 +3,7 @@
   rustToolchain,
   cargoDeny,
   wild,
+  kache,
   piCodingAgent,
   herdrPrebuilt,
   montyPrebuilt,
@@ -31,6 +32,7 @@ let
       rustToolchain
       cargoDeny
       wild
+      kache
       piCodingAgent
       herdrPrebuilt
       montyPrebuilt
@@ -605,13 +607,29 @@ let
         test -x ${layers.rustToolchainImageLayer}/bin/rustc
         test -x ${layers.rustToolchainImageLayer}/bin/cargo
         test -x ${layers.rustToolchainImageLayer}/bin/clippy-driver
-        # The cache binary is not shipped (a project adds it to its own dev
-        # shell), but the configuration it needs is: the store, the daemon's
-        # runtime directory and the budget are image env, re-exported by
-        # guest-init because cang filters image env to an allowlist.
+        # The guest's compiler cache is kache, wired in exactly two image
+        # facts: the rustc wrapper the image names, and its C/C++ shims ahead
+        # of the real compilers on `PATH` (kache has no `CMAKE_*_LAUNCHER`
+        # mode). The daemon needs no boot step - the first compiler invocation
+        # starts it - and the store lives in the cargo home mount rather than a
+        # cache mount of its own.
+        test -x ${kache}/bin/kache
+        # `kache` execs the engine beside itself, so a package that ships only
+        # the client cannot compile anything through the cache.
+        test -x ${kache}/bin/kache-engine
+        test -x ${kache}/bin/kache-cl
+        # `configSourceFile` is the nix source, so the wrapper is the
+        # unexpanded reference there and the store path in the image config.
+        grep -F 'RUSTC_WRAPPER=${"$"}{layers.kache}/bin/kache' ${configSourceFile}
+        grep -F 'RUSTC_WRAPPER=${layers.kache}/bin/kache' ${imageConfigFile}
         grep -F 'KACHE_CACHE_DIR=/home/dev/.cargo/kache' ${imageConfigFile}
         grep -F 'KACHE_RUNTIME_DIR=/tmp/kache' ${imageConfigFile}
         grep -F 'KACHE_MAX_SIZE=60GiB' ${imageConfigFile}
+        test -x ${layers.kacheShims}/kache-shims/bin/cc
+        test -x ${layers.kacheShims}/kache-shims/bin/clang
+        test -x ${layers.kacheShims}/kache-shims/bin/cargo
+        test -f ${layers.kacheShims}/kache-shims/bin/.kache-shims
+        grep -F ':${layers.kacheShims}/kache-shims/bin:${layers.libcGetconf}/bin:' ${imageConfigFile}
         # `getconf` is what kache fingerprints the libc with; without it every
         # rustc unit is uncacheable and a store never fills.
         test -x ${layers.libcGetconf}/bin/getconf

@@ -3,6 +3,7 @@
   rustToolchain,
   cargoDeny,
   wild,
+  kache,
   piCodingAgent,
   herdrPrebuilt,
   montyPrebuilt,
@@ -31,6 +32,7 @@ let
       rustToolchain
       cargoDeny
       wild
+      kache
       piCodingAgent
       herdrPrebuilt
       montyPrebuilt
@@ -67,6 +69,7 @@ let
       rustToolchain
       cargoDeny
       wild
+      kache
       piCodingAgent
       herdrPrebuilt
       montyPrebuilt

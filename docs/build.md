@@ -84,15 +84,15 @@ The image sets that linker, `RUST_SRC_PATH` and `LIBCLANG_PATH` in its `Env`
 guest - cang forwards only an allowlist of image environment, so a variable that
 is not on it exists for the image's own processes but not for a `cargo build`
 inside a task. A guest build therefore links with `wild` and sees the pinned
-toolchain's `rust-src`. A compiler cache is the exception, and it is not
-shipped: a project that wants one adds `kache` to its own `nix develop` shell,
-where the wrapper and the C/C++ shims are set up too. What the guest does set is
-the cache's configuration - `nix/image/config.nix` names
-`KACHE_CACHE_DIR=~/.cargo/kache`, `KACHE_RUNTIME_DIR=/tmp/kache` and the 60 GiB
-budget, and the guest bootstrap
-(`crates/cang-guest-init/src/guest_init/components/kache.rs`) re-exports those
-three, because the allowlist is what a `cargo build` inside a task actually
-sees.
+toolchain's `rust-src`. The compiler cache is the exception: the image names
+`kache` as its `RUSTC_WRAPPER` - upstream's pinned static-musl release assets
+(`nix/pkgs/kache-prebuilt.nix`) - and puts its C/C++ shims on `PATH`
+(`nix/image/config.nix`), and the guest bootstrap
+(`crates/cang-guest-init/src/guest_init/components/kache.rs`) exports the
+wrapper itself (resolved from `PATH`, so an image without kache keeps the plain
+compiler) together with `KACHE_CACHE_DIR=~/.cargo/kache` and the daemon's
+`/tmp/kache` runtime directory, because the allowlist is what a `cargo build`
+inside a task actually sees.
 
 ### Cargo's output location
 

@@ -382,4 +382,31 @@ in
       };
     };
   };
+
+  # The guest's compiler cache: upstream `kunobi-ninja/kache` release assets,
+  # not nixpkgs' `pkgs.kache`. nixpkgs carries the package as a source build
+  # whose version follows a channel - `nixos-unstable` still says 2.2.0 - while
+  # upstream publishes static musl tarballs with a `.sha256` beside each one, the
+  # same shape the other prebuilt pins here take. `nix/pkgs/kache-prebuilt.nix`
+  # installs the four binaries of the tarball (`kache`, the `kache-engine` it
+  # runs beside, and the `kache-cl`/`kache-clang-cl` C/C++ shims).
+  #
+  # Refreshed by scripts/update-kache-prebuilt.sh, which hashes the asset bytes
+  # and refuses a pin whose `.sha256` sidecar disagrees with them.
+  kachePrebuiltRelease = {
+    owner = "kunobi-ninja";
+    repo = "kache";
+    tag = "v2.4.0";
+    version = "2.4.0";
+    systems = {
+      x86_64-linux = {
+        asset = "kache-x86_64-unknown-linux-musl.tar.gz";
+        hash = "sha256-bcX+sv3MmCU4hpvA0PY60NosjxosImSedwf/TrTbqrc=";
+      };
+      aarch64-linux = {
+        asset = "kache-aarch64-unknown-linux-musl.tar.gz";
+        hash = "sha256-Bh4CIyuhtfZKC7O44c25fNLf8SkyoVImZuMmcfgYKq4=";
+      };
+    };
+  };
 }
